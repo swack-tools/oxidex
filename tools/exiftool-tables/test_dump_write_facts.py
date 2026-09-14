@@ -222,6 +222,10 @@ class NativeWriteFacts(unittest.TestCase):
         self.assertRegex(context["loaded_closure"]["sha256"], r"^[0-9a-f]{64}$")
         self.assertTrue(context["loaded_closure"]["modules"])
         self.assertIn("Image/ExifTool.pm", {item["inc"] for item in context["loaded_closure"]["modules"]})
+        self.assertEqual(doc["native_find_tag_info_warmup"], {
+            "warmed": True, "query_name_count": 1,
+            "query_names_sha256": hashlib.sha256(b'["hostcomputer"]').hexdigest(),
+        })
         table = self.sidecar(doc)
         host = table["rows"]["316"]
         controls = host["write_controls"]

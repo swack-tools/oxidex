@@ -2,7 +2,7 @@
 import unittest
 
 from setnewvalue_address_rust_codegen import generate
-from test_setnewvalue_addressing import observations, source
+from test_setnewvalue_addressing import observations, refresh_find_tag_info_warmup, source
 
 
 class SetNewValueAddressRustCodegenTests(unittest.TestCase):
@@ -50,6 +50,7 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         row = changed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
         row["properties"]["Name"]["value"] = "NewName"
         row["effective_properties"]["Name"]["value"] = "NewName"
+        refresh_find_tag_info_warmup(changed)
         addressing, _ = compile_addressing(changed)
         rust, report = generate(changed, observations(addressing.rows, addressing=addressing),
                                 prior_ledger=prior)

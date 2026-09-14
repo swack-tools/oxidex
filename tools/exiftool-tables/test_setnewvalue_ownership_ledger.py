@@ -4,13 +4,14 @@ import unittest
 
 from checkexif_recipes import RecipeRefused
 from setnewvalue_ownership_ledger import build_ledger, owned_names, qualified_ownership, validate_ledger
-from test_setnewvalue_addressing import source
+from test_setnewvalue_addressing import refresh_find_tag_info_warmup, source
 
 
 def rename(document, name):
     row = document["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
     row["properties"]["Name"]["value"] = name
     row["effective_properties"]["Name"]["value"] = name
+    refresh_find_tag_info_warmup(document)
 
 
 class SetNewValueOwnershipLedgerTests(unittest.TestCase):
@@ -51,6 +52,7 @@ class SetNewValueOwnershipLedgerTests(unittest.TestCase):
         first = self.bootstrap()
         removed = source()
         del removed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
+        refresh_find_tag_info_warmup(removed)
         ledger = build_ledger(removed, first, bootstrap=False)
         entry = qualified_ownership(ledger)[0]
         self.assertTrue(entry.removed)

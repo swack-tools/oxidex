@@ -47,7 +47,21 @@ def source():
         "exiftool_version": "13.59",
         "loaded_closure": closure_manifest(),
     }
+    value["native_find_tag_info_warmup"] = {
+        "warmed": True, "query_name_count": 1,
+        "query_names_sha256": hashlib.sha256(b'["noallowlist"]').hexdigest(),
+    }
     return value
+
+
+def refresh_find_tag_info_warmup(value):
+    """Model a fresh native capture after changing source-owned names."""
+    from setnewvalue_addressing import _owned_names, _query_names_digest
+    names = frozenset(_owned_names(value))
+    value["native_find_tag_info_warmup"] = {
+        "warmed": True, "query_name_count": len(names),
+        "query_names_sha256": _query_names_digest(names),
+    }
 
 
 def observations(rows, *, external=False, addressing=None):
@@ -147,6 +161,7 @@ class SetNewValueAddressingTests(unittest.TestCase):
         raw = document["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
         raw["properties"]["Name"]["value"] = "Software"
         raw["effective_properties"]["Name"]["value"] = "Software"
+        refresh_find_tag_info_warmup(document)
         addressing, _ = compile_addressing(document)
         native = observations(addressing.rows, external=True, addressing=addressing)
         self.assertEqual(resolve(addressing, native, "EXIF:Software").state, "resolved")
@@ -184,6 +199,7 @@ class SetNewValueAddressingTests(unittest.TestCase):
         raw = doc["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
         raw["properties"]["Name"]["value"] = "ChangedName"
         raw["effective_properties"]["Name"]["value"] = "ChangedName"
+        refresh_find_tag_info_warmup(doc)
         addressing, _report = compile_addressing(doc)
         self.assertEqual(addressing.rows[0].name, "ChangedName")
         self.assertEqual(addressing.rows[0].raw_id, "raw-not-name")
@@ -219,6 +235,7 @@ class SetNewValueAddressingTests(unittest.TestCase):
         raw = changed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
         raw["properties"]["Name"]["value"] = "ChangedName"
         raw["effective_properties"]["Name"]["value"] = "ChangedName"
+        refresh_find_tag_info_warmup(changed)
         changed_addressing, _ = compile_addressing(changed)
         stale = observations(addressing.rows)
         with self.assertRaisesRegex(RecipeRefused, "source rows/helpers"):

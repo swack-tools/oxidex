@@ -23,6 +23,12 @@ generated row after the optional `EXIF:` or `IFD0:` filter. This prevents an
 unqualified partial row set from treating native `Software` as unique when
 TagLookup has XMP, PNG, QuickTime, and other candidates.
 
+Before sealing the dump closure, the sidecar warms `FindTagInfo` with the same
+authenticated ordinary source-name set that the probe will query. A missing or
+mismatched warmup is refused. This captures TagLookup's lazy module loads in
+the manifest rather than treating a post-capture autoload as an authenticated
+lookup result.
+
 `owned_unsupported` is terminal for a future public writer router. It covers
 source-owned rows omitted from a final recipe, a missing lookup observation,
 external candidates, ambiguity, unsupported spelling or qualifier, and

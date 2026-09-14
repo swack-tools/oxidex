@@ -1219,6 +1219,36 @@ sub final_native_write_format_registry {
     };
 }
 
+# FindTagInfo lazily loads parts of TagLookup's registry for queried names.
+# Seal the capture closure only after exercising the exact, source-derived
+# Exif/Main ownership spelling set that the addressing probe will query.  This
+# does not touch the detached read projection and has no name allowlist: names
+# come from the already captured native row facts.
+sub warm_find_tag_info_closure {
+    my ($tables, $helpers) = @_;
+    my $find = $helpers->{find_tag_info};
+    return { warmed => JSON::PP::false, reason => 'find_tag_info_unavailable' }
+        unless ref($find) eq 'HASH' && $find->{resolved};
+    my $main = eval { $tables->{Exif}{Main} };
+    return { warmed => JSON::PP::false, reason => 'exif_main_unavailable' }
+        unless ref($main) eq 'HASH' && ref($main->{rows}) eq 'HASH';
+    my %names;
+    for my $row (values %{$main->{rows}}) {
+        next unless ref($row) eq 'HASH';
+        my $properties = $row->{effective_properties} // $row->{properties};
+        next unless ref($properties) eq 'HASH' && ref($properties->{Name}) eq 'HASH';
+        my $name = $properties->{Name};
+        next unless $name->{present} && defined($name->{value}) && !ref($name->{value});
+        next unless $name->{value} =~ /^[A-Za-z0-9_]+$/;
+        $names{lc($name->{value})} = 1;
+    }
+    for my $name (sort keys %names) {
+        Image::ExifTool::TagLookup::FindTagInfo($name);
+    }
+    return { warmed => JSON::PP::true, query_name_count => scalar(keys %names),
+             query_names_sha256 => sha256_hex(JSON::PP->new->canonical->utf8->encode([ sort keys %names ])) };
+}
+
 sub dump_tag_entry {
     my ($entry) = @_;
     my $r = ref $entry;
@@ -1451,6 +1481,7 @@ for my $full_name (sort keys %write_tables) {
 # Capture helper facts in the same settled state as the table callbacks above.
 # This does not alter the read projection or route a native writer.
 my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+my $find_tag_info_warmup = warm_find_tag_info_closure(\%native_write_tables, $native_write_helpers);
 my $native_capture_context = native_capture_context($EXIFTOOL_LIB_ABS);
 
 # The registry is intentionally captured after the writer helpers have settled
@@ -1486,6 +1517,7 @@ print $json->encode({
     native_write_helpers => $native_write_helpers,
     native_write_format_registry => $native_write_format_registry,
     native_capture_context => $native_capture_context,
+    native_find_tag_info_warmup => $find_tag_info_warmup,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
     native_runtime_contracts => { utf8 => {

@@ -162,6 +162,15 @@ def _query_names_digest(names: frozenset[str] | set[str]) -> str:
     return _digest(sorted(names))
 
 
+def _find_tag_info_warmup(document: Mapping[str, Any], names: frozenset[str]) -> None:
+    warmup = _mapping(document.get("native_find_tag_info_warmup"), "native_find_tag_info_warmup")
+    if warmup.get("warmed") is not True or warmup.get("query_name_count") != len(names):
+        raise RecipeRefused("FindTagInfo closure warmup is absent or incomplete")
+    digest = warmup.get("query_names_sha256")
+    if not isinstance(digest, str) or digest != _query_names_digest(names):
+        raise RecipeRefused("FindTagInfo closure warmup names disagree with source ownership")
+
+
 def _table_groups(document: Mapping[str, Any], row: Row) -> tuple[str, str]:
     tables = _mapping(document.get("native_write_tables"), "native_write_tables")
     table = _mapping(_mapping(tables.get(row.module), f"native_write_tables.{row.module}").get(row.table),
@@ -237,6 +246,7 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
                               "reason": str(error)})
     address_rows = tuple(address_rows)
     owned_names = frozenset(_owned_names(document))
+    _find_tag_info_warmup(document, owned_names)
     result = Addressing(address_rows, owned_names,
                        source_file, source_sha256, body_sha256,
                        setnew_file, setnew_sha256, setnew_body_sha256,
