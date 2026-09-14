@@ -131,3 +131,19 @@ The Artist/IFD1 native-table filter is integrated in `8ff6d4ef`. Pinned `SetNewV
 The separate fresh hydrated capture passes the independent catalog audit: 1,512 tables, 35,886 variants, zero unresolved references, and all 33,487 catalog/source records retain identical semantic joins. Only the dump digest/size and dump-producer digest changed in the audit profile. These are inventory results, not additional observed read/write support.
 
 Remaining carried review checkboxes are intentionally open pending complete regeneration, combined gates, and native evidence. Linux timeout/zombie behavior remains unverified. The registry distribution regression is being updated to count authenticated generated replacements alongside the manual registry, without using YAML fallback or duplicate directory aliases to inflate the count.
+
+### Address regeneration and focused runtime verification
+
+The native probe now authenticates and replays the captured loaded module closure
+before comparing exact helper identities. This fixes the dump/probe XMP deparse
+context mismatch without weakening body or source authentication. Against the
+fresh canonical dump, address codegen emits 191 rows and 1,261 candidates. The
+public planner now preserves a proven foreign source-table namespace and refuses
+an unmapped same-table candidate.
+
+`cargo clippy --lib -- -D warnings` passes; `cargo test --lib writers::` reports
+219 passed, 0 failed, 2 ignored. The exact registry distribution test passes, as
+do 18 native mandatory-default tests and six native address-probe tests using
+Perl 5.38.2 and ExifTool 13.59. Full regeneration still stops at the Nikon
+encrypted-callback contract; these focused checks do not replace the combined
+workspace/native matrix gate or resolve its pending review evidence.

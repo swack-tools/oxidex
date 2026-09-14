@@ -18,6 +18,13 @@ pub(crate) struct StaticNativeLookupCandidate {
     pub name: &'static str,
     pub row_index: Option<usize>,
     pub source_identity_present: bool,
+    pub module: Option<&'static str>,
+    pub table: Option<&'static str>,
+    pub full_name: Option<&'static str>,
+    pub raw_id: &'static str,
+    pub writable: Option<&'static str>,
+    pub permanent: bool,
+    pub write_group: Option<&'static str>,
     pub groups: &'static [StaticNativeLookupFamily],
 }
 pub(crate) struct StaticSetNewValueQualifierScope {
@@ -2145,6 +2152,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "acceleration",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37892",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2171,7 +2185,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "acceleration",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "Acceleration",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2199,6 +2220,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "activearea",
         row_index: Some(112),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50829",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2226,6 +2254,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ambienttemperature",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37888",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2252,7 +2287,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "20",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2279,7 +2321,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "80",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2306,7 +2355,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "58",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2333,7 +2389,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "96",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2360,7 +2423,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("UltraFire"),
+        full_name: Some("Image::ExifTool::Reconyx::UltraFire"),
+        raw_id: "70",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2387,7 +2457,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9402"),
+        full_name: Some("Image::ExifTool::Sony::Tag9402"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2414,7 +2491,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ambienttemperature",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "Temperature",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2442,6 +2526,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "analogbalance",
         row_index: Some(92),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50727",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2469,6 +2560,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "antialiasstrength",
         row_index: Some(103),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50738",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2495,7 +2593,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "aperturevalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("ExposureInfo"),
+        full_name: Some("Image::ExifTool::CanonRaw::ExposureInfo"),
+        raw_id: "2",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2523,6 +2628,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "aperturevalue",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37378",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2549,7 +2661,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "aperturevalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4098",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2576,7 +2695,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "aperturevalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "1025",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2603,7 +2729,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "aperturevalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ApertureValue",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2631,6 +2764,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "applicationnotes",
         row_index: Some(190),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "700",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2657,7 +2797,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "applicationnotes",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "700",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2685,6 +2832,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "artist",
         row_index: Some(36),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "315",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2711,7 +2865,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("TextualData"),
+        full_name: Some("Image::ExifTool::PNG::TextualData"),
+        raw_id: "Artist",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2738,7 +2899,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "315",
+        writable: Some("string"),
+        permanent: true,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2765,7 +2933,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "558",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2792,7 +2967,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("ItemList"),
+        full_name: Some("Image::ExifTool::QuickTime::ItemList"),
+        raw_id: "©ART",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2819,7 +3001,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "artist",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2846,7 +3035,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "©ART",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2873,7 +3069,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Artist",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2900,7 +3103,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "artist",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmpDM"),
+        full_name: Some("Image::ExifTool::XMP::xmpDM"),
+        raw_id: "artist",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2928,6 +3138,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "asshoticcprofile",
         row_index: Some(114),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50831",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2955,6 +3172,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "asshotneutral",
         row_index: Some(93),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50728",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -2982,6 +3206,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "asshotpreprofilematrix",
         row_index: Some(115),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50832",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3009,6 +3240,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "asshotprofilename",
         row_index: Some(125),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50934",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3036,6 +3274,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "asshotwhitexy",
         row_index: Some(94),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50729",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3063,6 +3308,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "baselineexposure",
         row_index: Some(95),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50730",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3090,6 +3342,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "baselineexposureoffset",
         row_index: Some(152),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51109",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3117,6 +3376,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "baselinenoise",
         row_index: Some(96),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50731",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3144,6 +3410,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "baselinesharpness",
         row_index: Some(97),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50732",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3170,7 +3443,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "56",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3197,7 +3477,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "81",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3224,7 +3511,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("ExtraInfo"),
+        full_name: Some("Image::ExifTool::Sony::ExtraInfo"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3251,7 +3545,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("ExtraInfo2"),
+        full_name: Some("Image::ExifTool::Sony::ExtraInfo2"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3278,7 +3579,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("ExtraInfo3"),
+        full_name: Some("Image::ExifTool::Sony::ExtraInfo3"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3305,7 +3613,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9406"),
+        full_name: Some("Image::ExifTool::Sony::Tag9406"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3332,7 +3647,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "batterylevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9406b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9406b"),
+        raw_id: "5",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3360,6 +3682,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "bayergreensplit",
         row_index: Some(98),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50733",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3387,6 +3716,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "bestqualityscale",
         row_index: Some(108),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50780",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3414,6 +3750,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "bitspersample",
         row_index: Some(9),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "258",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3440,7 +3783,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "bitspersample",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "10",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3467,7 +3817,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "bitspersample",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "BitsPerSample",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3495,6 +3852,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "blacklevel",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "29456",
+        writable: Some("int16u"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3522,6 +3886,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "blacklevel",
         row_index: Some(81),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50714",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3548,7 +3919,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("ColorBalanceC"),
+        full_name: Some("Image::ExifTool::Nikon::ColorBalanceC"),
+        raw_id: "32",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3575,7 +3953,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "61",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3602,7 +3987,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "1025",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3629,7 +4021,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4114",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3656,7 +4055,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "541",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3683,7 +4089,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("SR2SubIFD"),
+        full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
+        raw_id: "29440",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3710,7 +4123,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "blacklevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("SR2SubIFD"),
+        full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
+        raw_id: "29456",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3738,6 +4158,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "blackleveldeltah",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50715",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3765,6 +4192,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "blackleveldeltav",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50716",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3792,6 +4226,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "blacklevelrepeatdim",
         row_index: Some(80),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50713",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3819,6 +4260,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "brightness",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65107",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3845,7 +4293,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "Brightness",
+        writable: Some("int8s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3872,7 +4327,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Microsoft"),
+        table: Some("MP1"),
+        full_name: Some("Image::ExifTool::Microsoft::MP1"),
+        raw_id: "Brightness",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3899,7 +4361,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "44",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3926,7 +4395,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl"),
+        raw_id: "52",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3953,7 +4429,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl2"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
+        raw_id: "57",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -3980,7 +4463,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl3"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
+        raw_id: "65",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4007,7 +4497,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "player.movie.visual.brightness",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4034,7 +4531,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "37",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4061,7 +4565,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "84",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4088,7 +4599,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "62",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4115,7 +4633,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "100",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4142,7 +4667,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "34",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4169,7 +4701,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8199",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4196,7 +4735,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Brightness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4223,7 +4769,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Brightness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4251,6 +4804,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "brightnessvalue",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37379",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4277,7 +4837,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "1681",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4304,7 +4871,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "18883",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4331,7 +4905,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4099",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4358,7 +4939,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4385,7 +4973,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010a"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010a"),
+        raw_id: "4416",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4412,7 +5007,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010b"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010b"),
+        raw_id: "4416",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4439,7 +5041,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010c"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010c"),
+        raw_id: "4380",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4466,7 +5075,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010d"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010d"),
+        raw_id: "4504",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4493,7 +5109,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "4468",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4520,7 +5143,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010f"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010f"),
+        raw_id: "4140",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4547,7 +5177,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010g"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010g"),
+        raw_id: "548",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4574,7 +5211,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010h"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010h"),
+        raw_id: "548",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4601,7 +5245,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010i"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010i"),
+        raw_id: "537",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4628,7 +5279,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "brightnessvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "BrightnessValue",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4656,6 +5314,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cacheversion",
         row_index: Some(156),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51114",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD2"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4683,6 +5348,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "calibrationilluminant1",
         row_index: Some(106),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50778",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4710,6 +5382,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "calibrationilluminant2",
         row_index: Some(107),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50779",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4737,6 +5416,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "calibrationilluminant3",
         row_index: Some(167),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52529",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4764,6 +5450,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameracalibration1",
         row_index: Some(88),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50723",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4791,6 +5484,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameracalibration2",
         row_index: Some(89),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50724",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4818,6 +5518,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameracalibration3",
         row_index: Some(168),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52530",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4845,6 +5552,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameracalibrationsig",
         row_index: Some(122),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50931",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4872,6 +5586,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameraelevationangle",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37893",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4898,7 +5619,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "cameraelevationangle",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "CameraElevationAngle",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4926,6 +5654,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "camerafirmware",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42041",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4952,7 +5687,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "camerafirmware",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "CameraFirmware",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -4980,6 +5722,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameralabel",
         row_index: Some(149),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51105",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5006,7 +5755,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "cameralabel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmpDM"),
+        full_name: Some("Image::ExifTool::XMP::xmpDM"),
+        raw_id: "cameraLabel",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5034,6 +5790,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cameraserialnumber",
         row_index: Some(100),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50735",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5060,7 +5823,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "cameraserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Microsoft"),
+        table: Some("XMP"),
+        full_name: Some("Image::ExifTool::Microsoft::XMP"),
+        raw_id: "CameraSerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5087,7 +5857,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "cameraserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("GettyImages"),
+        full_name: Some("Image::ExifTool::XMP::GettyImages"),
+        raw_id: "CameraSerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5115,6 +5892,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "celllength",
         row_index: Some(14),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "265",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5142,6 +5926,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cellwidth",
         row_index: Some(13),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "264",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5169,6 +5960,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cfapattern",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41730",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5195,7 +5993,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "cfapattern",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "9",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5222,7 +6027,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "cfapattern",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "CFAPattern",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5250,6 +6062,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cfapattern2",
         row_index: Some(46),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33422",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5277,6 +6096,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "cfarepeatpatterndim",
         row_index: Some(45),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33421",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5304,6 +6130,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "chromablurradius",
         row_index: Some(102),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50737",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5331,6 +6164,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "chromaticaberrationcorrection",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28724",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5358,6 +6198,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "chromaticaberrationcorrection",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42000",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5384,7 +6231,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("LensCorr"),
+        full_name: Some("Image::ExifTool::Pentax::LensCorr"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5411,7 +6265,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("SonyIDC"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::SonyIDC::Main"),
+        raw_id: "36877",
+        writable: Some("int32s"),
+        permanent: true,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5439,6 +6300,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "chromaticaberrationcorrparams",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28725",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5465,7 +6333,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405a"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405a"),
+        raw_id: "1642",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5492,7 +6367,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "892",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5519,7 +6401,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "900",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5546,7 +6435,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "924",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5573,7 +6469,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "944",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5600,7 +6503,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "chromaticaberrationcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "952",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5628,6 +6538,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "colorimetricreference",
         row_index: Some(118),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50879",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5655,6 +6572,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "colormatrix1",
         row_index: Some(86),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50721",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5681,7 +6605,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colormatrix1",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "262",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5709,6 +6640,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "colormatrix2",
         row_index: Some(87),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50722",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5735,7 +6673,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colormatrix2",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("RawInfo"),
+        full_name: Some("Image::ExifTool::Olympus::RawInfo"),
+        raw_id: "512",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5762,7 +6707,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colormatrix2",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "550",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5790,6 +6742,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "colormatrix3",
         row_index: Some(169),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52531",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5816,7 +6775,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorsequence",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("IPTC"),
+        table: Some("NewsPhoto"),
+        full_name: Some("Image::ExifTool::IPTC::NewsPhoto"),
+        raw_id: "65",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5843,7 +6809,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ColorInfo"),
+        full_name: Some("Image::ExifTool::Canon::ColorInfo"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5870,7 +6843,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "180",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5897,7 +6877,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::CanonRaw::Main"),
+        raw_id: "4276",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5925,6 +6912,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "colorspace",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40961",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5951,7 +6945,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Jpeg2000"),
+        table: Some("ColorSpec"),
+        full_name: Some("Image::ExifTool::Jpeg2000::ColorSpec"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -5978,7 +6979,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Image"),
+        full_name: Some("Image::ExifTool::MIE::Image"),
+        raw_id: "ColorSpace",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6005,7 +7013,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "47",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6032,7 +7047,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "37",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6059,7 +7081,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "23",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6086,7 +7115,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "30",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6113,7 +7149,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
+        raw_id: "1287",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6140,7 +7183,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "55",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6167,7 +7217,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40977",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6194,7 +7251,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6221,7 +7285,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "27",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6248,7 +7319,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "131",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6275,7 +7353,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings3"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
+        raw_id: "14",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6302,7 +7387,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6329,7 +7421,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "colorspace",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ColorSpace",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6357,6 +7456,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "columninterleavefactor",
         row_index: Some(178),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52547",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6384,6 +7490,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "componentsconfiguration",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37121",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6410,7 +7523,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "componentsconfiguration",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Image"),
+        full_name: Some("Image::ExifTool::MIE::Image"),
+        raw_id: "Components",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6437,7 +7557,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "componentsconfiguration",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ComponentsConfiguration",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6465,6 +7592,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "compositeimage",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42080",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6491,7 +7625,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "compositeimage",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "CompositeImage",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6519,6 +7660,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "compositeimagecount",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42081",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6545,7 +7693,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "compositeimagecount",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "CompositeImageCount",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6573,6 +7728,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "compositeimageexposuretimes",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42082",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6599,7 +7761,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "compositeimageexposuretimes",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "CompositeImageExposureTimes",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6627,6 +7796,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "compressedbitsperpixel",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37122",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6653,7 +7829,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "compressedbitsperpixel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "CompressedBitsPerPixel",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6681,6 +7864,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "compression",
         row_index: Some(10),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "259",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6707,7 +7897,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "compression",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "11",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6734,7 +7931,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "compression",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Compression",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6761,7 +7965,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "115",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6788,7 +7999,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "117",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6815,7 +8033,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Canon::CameraSettings"),
+        raw_id: "13",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6842,61 +8067,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "contrast",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "contrast",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Casio::Main"),
+        raw_id: "12",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6924,6 +8102,81 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "contrast",
         row_index: None,
         source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "12306",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "contrast",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "32",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "contrast",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41992",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6951,6 +8204,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "contrast",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65108",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -6977,7 +8237,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4100",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7004,7 +8271,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4102",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7031,7 +8305,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "Contrast",
+        writable: Some("int8s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7058,7 +8339,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Microsoft"),
+        table: Some("MP1"),
+        full_name: Some("Image::ExifTool::Microsoft::MP1"),
+        raw_id: "Contrast",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7085,7 +8373,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "32",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7112,7 +8407,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "49",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7139,7 +8441,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "39",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7166,7 +8475,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "25",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7193,7 +8509,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MinoltaRaw"),
+        table: Some("RIF"),
+        full_name: Some("Image::ExifTool::MinoltaRaw::RIF"),
+        raw_id: "2",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7220,7 +8543,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl"),
+        raw_id: "51",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7247,7 +8577,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl2"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
+        raw_id: "55",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7274,7 +8611,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl3"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
+        raw_id: "63",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7301,7 +8645,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4137",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7328,7 +8679,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "57",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7355,7 +8713,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Subdir"),
+        full_name: Some("Image::ExifTool::Panasonic::Subdir"),
+        raw_id: "12298",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7382,7 +8747,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "32",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7409,7 +8781,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Pentax::Type2"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7436,7 +8815,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "player.movie.visual.contrast",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7463,7 +8849,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "36",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7490,7 +8883,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "82",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7517,7 +8917,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "60",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7544,7 +8951,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "98",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7571,7 +8985,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4114",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7598,7 +9019,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "13",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7625,7 +9053,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "13",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7652,7 +9087,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "29",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7679,7 +9121,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "26",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7706,7 +9155,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8196",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7733,7 +9189,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Contrast",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7760,7 +9223,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Contrast",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7787,7 +9257,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "contrast",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "Contrast",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7815,6 +9292,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "converter",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65101",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7841,7 +9325,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "converter",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Nikon::Type2"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7868,7 +9359,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "converter",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Converter",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7895,7 +9393,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "converter",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Converter",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7922,7 +9427,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("APP12"),
+        table: Some("Ducky"),
+        full_name: Some("Image::ExifTool::APP12::Ducky"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7950,6 +9462,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "copyright",
         row_index: Some(47),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33432",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -7976,7 +9495,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Doc"),
+        full_name: Some("Image::ExifTool::MIE::Doc"),
+        raw_id: "Copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8003,7 +9529,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("TextualData"),
+        full_name: Some("Image::ExifTool::PNG::TextualData"),
+        raw_id: "Copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8030,7 +9563,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "33432",
+        writable: Some("string"),
+        permanent: true,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8057,7 +9597,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "559",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8084,7 +9631,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PostScript"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PostScript::Main"),
+        raw_id: "Copyright",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8111,7 +9665,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("ItemList"),
+        full_name: Some("Image::ExifTool::QuickTime::ItemList"),
+        raw_id: "cprt",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8138,7 +9699,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("ItemList"),
+        full_name: Some("Image::ExifTool::QuickTime::ItemList"),
+        raw_id: "©cpy",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8165,7 +9733,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8192,7 +9767,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "cprt",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8219,7 +9801,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "©cpy",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8246,7 +9835,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8273,7 +9869,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8300,7 +9903,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("pdf"),
+        full_name: Some("Image::ExifTool::XMP::pdf"),
+        raw_id: "Copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8327,7 +9937,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("pur"),
+        full_name: Some("Image::ExifTool::XMP::pur"),
+        raw_id: "copyright",
+        writable: Some("lang-alt"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8354,7 +9971,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Copyright",
+        writable: Some("lang-alt"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8381,7 +10005,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "copyright",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmpDM"),
+        full_name: Some("Image::ExifTool::XMP::xmpDM"),
+        raw_id: "copyright",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8409,6 +10040,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "createdate",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36868",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8435,7 +10073,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "createdate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Doc"),
+        full_name: Some("Image::ExifTool::MIE::Doc"),
+        raw_id: "CreateDate",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8462,7 +10107,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "createdate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PDF"),
+        table: Some("Info"),
+        full_name: Some("Image::ExifTool::PDF::Info"),
+        raw_id: "CreationDate",
+        writable: Some("date"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8489,7 +10141,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "createdate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("TextualData"),
+        full_name: Some("Image::ExifTool::PNG::TextualData"),
+        raw_id: "create-date",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8516,7 +10175,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "createdate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PostScript"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PostScript::Main"),
+        raw_id: "CreationDate",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8543,7 +10209,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "createdate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("MovieHeader"),
+        full_name: Some("Image::ExifTool::QuickTime::MovieHeader"),
+        raw_id: "1",
+        writable: Some("1"),
+        permanent: true,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8570,7 +10243,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "createdate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "CreateDate",
+        writable: Some("date"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8598,6 +10278,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "currenticcprofile",
         row_index: Some(116),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50833",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8625,6 +10312,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "currentpreprofilematrix",
         row_index: Some(117),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50834",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8652,6 +10346,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "customrendered",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41985",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8678,7 +10379,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "customrendered",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Motorola"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Motorola::Main"),
+        raw_id: "25632",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8705,7 +10413,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "customrendered",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "CustomRendered",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8732,7 +10447,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("TimeStamp"),
+        full_name: Some("Image::ExifTool::CanonRaw::TimeStamp"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8760,6 +10482,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "datetimeoriginal",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36867",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8786,7 +10515,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type9"),
+        full_name: Some("Image::ExifTool::Kodak::Type9"),
+        raw_id: "20",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8813,7 +10549,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Doc"),
+        full_name: Some("Image::ExifTool::MIE::Doc"),
+        raw_id: "OriginalDate",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8840,7 +10583,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::QuickTime::Main"),
+        raw_id: "IDIT",
+        writable: Some("1"),
+        permanent: true,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8867,7 +10617,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "date",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8894,7 +10651,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8921,7 +10685,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "62",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8948,7 +10719,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "47",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -8975,7 +10753,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "78",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9002,7 +10787,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("UltraFire"),
+        full_name: Some("Image::ExifTool::Reconyx::UltraFire"),
+        raw_id: "59",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9029,7 +10821,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "datetimeoriginal",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "DateTimeOriginal",
+        writable: Some("date"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9057,6 +10856,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "defaultblackrender",
         row_index: Some(153),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51110",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9084,6 +10890,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "defaultcroporigin",
         row_index: Some(84),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50719",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9111,6 +10924,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "defaultcropsize",
         row_index: Some(85),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50720",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9138,6 +10958,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "defaultscale",
         row_index: Some(83),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50718",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9165,6 +10992,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "defaultusercrop",
         row_index: Some(157),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51125",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9192,6 +11026,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "depthfar",
         row_index: Some(160),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51179",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9219,6 +11060,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "depthformat",
         row_index: Some(158),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51177",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9246,6 +11094,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "depthmeasuretype",
         row_index: Some(162),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51181",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9273,6 +11128,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "depthnear",
         row_index: Some(159),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51178",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9300,6 +11162,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "depthunits",
         row_index: Some(161),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51180",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9327,6 +11196,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "developmenttype",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41997",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9354,6 +11230,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "developmenttypedescription",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41998",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9380,7 +11263,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "devicesettingdescription",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "DeviceSettingDescription",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9408,6 +11298,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "digitalzoomratio",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41988",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9434,7 +11331,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010c"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010c"),
+        raw_id: "512",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9461,7 +11365,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "540",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9488,7 +11399,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "digitalzoomratio",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "DigitalZoomRatio",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9515,7 +11433,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("VignettingCorr"),
+        full_name: Some("Image::ExifTool::Canon::VignettingCorr"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9542,7 +11467,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonVRD"),
+        table: Some("DR4"),
+        full_name: Some("Image::ExifTool::CanonVRD::DR4"),
+        raw_id: "132869",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9569,7 +11501,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonVRD"),
+        table: Some("Ver2"),
+        full_name: Some("Image::ExifTool::CanonVRD::Ver2"),
+        raw_id: "103",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9597,6 +11536,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "distortioncorrection",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28726",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9624,6 +11570,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "distortioncorrection",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41999",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9650,7 +11603,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("DistortionInfo"),
+        full_name: Some("Image::ExifTool::Nikon::DistortionInfo"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9677,7 +11637,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
+        raw_id: "1291",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9704,7 +11671,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("DistortionInfo"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::DistortionInfo"),
+        raw_id: "7.1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9731,7 +11705,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("LensCorr"),
+        full_name: Some("Image::ExifTool::Pentax::LensCorr"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9758,7 +11739,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405a"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405a"),
+        raw_id: "1537",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9785,7 +11773,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "91",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9813,6 +11808,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "distortioncorrparams",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28727",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9839,7 +11841,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010b"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010b"),
+        raw_id: "6691",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9866,7 +11875,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "6256",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9893,7 +11909,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010g"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010g"),
+        raw_id: "6300",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9920,7 +11943,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010h"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010h"),
+        raw_id: "6348",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9947,7 +11977,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010i"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010i"),
+        raw_id: "6096",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -9974,7 +12011,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405a"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405a"),
+        raw_id: "1738",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10001,7 +12045,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "distortioncorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "100",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10029,6 +12080,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "dngbackwardversion",
         row_index: Some(74),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50707",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10056,6 +12114,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "dnglensinfo",
         row_index: Some(101),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50736",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10083,6 +12148,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "dngversion",
         row_index: Some(73),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50706",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10110,6 +12182,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "documentname",
         row_index: Some(16),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "269",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10137,6 +12216,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "enhanceparams",
         row_index: Some(163),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51182",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10164,6 +12250,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exifimageheight",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40963",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10190,7 +12283,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exifimageheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "PixelYDimension",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10218,6 +12318,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exifimagewidth",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40962",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10244,7 +12351,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exifimagewidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "PixelXDimension",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10272,6 +12386,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exifversion",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36864",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10298,7 +12419,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exifversion",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ExifVersion",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10326,6 +12454,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exposure",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65105",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10352,7 +12487,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposure",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Exposure",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10379,7 +12521,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposure",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Exposure",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10406,7 +12555,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ShotInfo"),
+        full_name: Some("Image::ExifTool::Canon::ShotInfo"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10433,7 +12589,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("ExposureInfo"),
+        full_name: Some("Image::ExifTool::CanonRaw::ExposureInfo"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10461,6 +12624,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exposurecompensation",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37380",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10487,7 +12657,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "36",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10514,7 +12691,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "ExposureComp",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10541,7 +12725,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Microsoft"),
+        table: Some("MP1"),
+        full_name: Some("Image::ExifTool::Microsoft::MP1"),
+        raw_id: "ExposureCompensation",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10568,7 +12759,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "13",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10595,7 +12793,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "83",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10622,7 +12827,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10649,7 +12861,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "18880",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10676,7 +12895,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4102",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10703,7 +12929,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "22",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10730,7 +12963,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "22",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10757,7 +12997,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "1026",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10784,7 +13031,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40979",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10811,7 +13065,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10838,7 +13099,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "53",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10865,7 +13133,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "71",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10892,7 +13167,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "77",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10919,7 +13201,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010a"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010a"),
+        raw_id: "4428",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10946,7 +13235,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010b"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010b"),
+        raw_id: "4428",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -10973,7 +13269,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010c"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010c"),
+        raw_id: "4392",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11000,7 +13303,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "4480",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11027,7 +13337,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010f"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010f"),
+        raw_id: "4152",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11054,7 +13371,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010g"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010g"),
+        raw_id: "560",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11081,7 +13405,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010h"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010h"),
+        raw_id: "560",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11108,7 +13439,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010i"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010i"),
+        raw_id: "547",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11135,7 +13473,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposurecompensation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ExposureBiasValue",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11163,6 +13508,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exposureindex",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41493",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11189,7 +13541,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureindex",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ExposureIndex",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11217,6 +13576,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exposuremode",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41986",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11243,7 +13609,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "ExposureMode",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11270,7 +13643,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11297,7 +13677,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "10",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11324,7 +13711,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11351,7 +13745,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11378,7 +13779,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "52",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11405,7 +13813,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
+        raw_id: "512",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11432,7 +13847,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica5"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica5"),
+        raw_id: "1037",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11459,7 +13881,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "8",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11486,7 +13915,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "45121",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11513,7 +13949,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuremode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ExposureMode",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11541,6 +13984,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exposureprogram",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34850",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11567,7 +14017,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4097",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11594,7 +14051,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("AFInfo"),
+        full_name: Some("Image::ExifTool::Sony::AFInfo"),
+        raw_id: "382",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11621,7 +14085,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("AFInfo"),
+        full_name: Some("Image::ExifTool::Sony::AFInfo"),
+        raw_id: "67",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11648,7 +14119,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "60",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11675,7 +14153,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "60",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11702,7 +14187,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings3"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
+        raw_id: "5",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11729,7 +14221,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("ExtraInfo3"),
+        full_name: Some("Image::ExifTool::Sony::ExtraInfo3"),
+        raw_id: "20",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11756,7 +14255,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("FocusInfo"),
+        full_name: Some("Image::ExifTool::Sony::FocusInfo"),
+        raw_id: "63",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11783,7 +14289,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "2",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11810,7 +14323,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010a"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010a"),
+        raw_id: "4469",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11837,7 +14357,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010b"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010b"),
+        raw_id: "4473",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11864,7 +14391,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010c"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010c"),
+        raw_id: "4437",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11891,7 +14425,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010d"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010d"),
+        raw_id: "4561",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11918,7 +14459,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "4525",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11945,7 +14493,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010f"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010f"),
+        raw_id: "4197",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11972,7 +14527,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010g"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010g"),
+        raw_id: "605",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -11999,7 +14561,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010h"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010h"),
+        raw_id: "605",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12026,7 +14595,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010i"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010i"),
+        raw_id: "588",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12053,7 +14629,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9404a"),
+        full_name: Some("Image::ExifTool::Sony::Tag9404a"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12080,7 +14663,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9404b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9404b"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12107,7 +14697,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9404c"),
+        full_name: Some("Image::ExifTool::Sony::Tag9404c"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12134,7 +14731,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "72",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12161,7 +14765,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposureprogram",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ExposureProgram",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12188,709 +14799,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "exposuretime",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1000D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12918,6 +14834,897 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "exposuretime",
         row_index: None,
         source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DX"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIV"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo40D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo500D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo50D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo550D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo600D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo60D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo650D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo6D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo70D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo750D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo7D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo80D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoPowerShot"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoPowerShot2"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot2"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ShotInfo"),
+        full_name: Some("Image::ExifTool::Canon::ShotInfo"),
+        raw_id: "22",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ShotInfo"),
+        full_name: Some("Image::ExifTool::Canon::ShotInfo"),
+        raw_id: "22",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "exposuretime",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33434",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12944,7 +15751,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("CameraInfo"),
+        full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
+        raw_id: "64773",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12971,7 +15785,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "32",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -12998,7 +15819,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64036",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13025,7 +15853,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD2"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD2"),
+        raw_id: "61700",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13052,7 +15887,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type10"),
+        full_name: Some("Image::ExifTool::Kodak::Type10"),
+        raw_id: "18",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13079,7 +15921,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type3"),
+        full_name: Some("Image::ExifTool::Kodak::Type3"),
+        raw_id: "56",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13106,7 +15955,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type5"),
+        full_name: Some("Image::ExifTool::Kodak::Type5"),
+        raw_id: "20",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13133,7 +15989,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type6"),
+        full_name: Some("Image::ExifTool::Kodak::Type6"),
+        raw_id: "16",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13160,7 +16023,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type9"),
+        full_name: Some("Image::ExifTool::Kodak::Type9"),
+        raw_id: "16",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13187,7 +16057,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "ExposureTime",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13214,7 +16091,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "9",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13241,7 +16125,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "53",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13268,7 +16159,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "72",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13295,7 +16193,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "8",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13322,7 +16227,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "18872",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13349,7 +16261,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "18",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13376,7 +16295,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40984",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13403,7 +16329,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "50",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13430,7 +16363,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "74",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13457,7 +16397,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13484,7 +16431,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13511,7 +16465,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "33",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13538,7 +16499,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13565,7 +16533,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "39",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13592,7 +16567,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "16",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13619,7 +16601,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "exposuretime",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ExposureTime",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13647,6 +16636,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "filesource",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41728",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13673,7 +16669,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "filesource",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "32768",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13700,7 +16703,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "filesource",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FileSource",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13728,6 +16738,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "fillorder",
         row_index: Some(15),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "266",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13755,6 +16772,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "flash",
         row_index: None,
         source_identity_present: false,
+        module: None,
+        table: None,
+        full_name: None,
+        raw_id: "XMP-Flash",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13782,6 +16806,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "flash",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37385",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13808,7 +16839,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type6"),
+        full_name: Some("Image::ExifTool::Kodak::Type6"),
+        raw_id: "34",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13835,7 +16873,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "31",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13862,7 +16907,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "21",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13889,7 +16941,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "90",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13916,7 +16975,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "68",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13943,7 +17009,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "106",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13970,7 +17043,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flash",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "Flash",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -13998,6 +17078,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "flashenergy",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41483",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14024,7 +17111,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flashenergy",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FlashEnergy",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14052,6 +17146,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "flashpixversion",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40960",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14078,7 +17179,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "flashpixversion",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FlashpixVersion",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14105,601 +17213,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Image",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "fnumber",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1000D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14727,6 +17248,761 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "fnumber",
         row_index: None,
         source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DX"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIV"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo40D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo500D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo50D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo550D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo600D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo60D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo650D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo6D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo70D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo750D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo7D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo80D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoPowerShot"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot"),
+        raw_id: "5",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoPowerShot2"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot2"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ShotInfo"),
+        full_name: Some("Image::ExifTool::Canon::ShotInfo"),
+        raw_id: "21",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Image",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "fnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33437",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14753,7 +18029,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("CameraInfo"),
+        full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
+        raw_id: "64772",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14780,7 +18063,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14807,7 +18097,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64035",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14834,7 +18131,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD2"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD2"),
+        raw_id: "61699",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14861,7 +18165,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type10"),
+        full_name: Some("Image::ExifTool::Kodak::Type10"),
+        raw_id: "19",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14888,7 +18199,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type3"),
+        full_name: Some("Image::ExifTool::Kodak::Type3"),
+        raw_id: "60",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14915,7 +18233,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type5"),
+        full_name: Some("Image::ExifTool::Kodak::Type5"),
+        raw_id: "28",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14942,7 +18267,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type6"),
+        full_name: Some("Image::ExifTool::Kodak::Type6"),
+        raw_id: "24",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14969,7 +18301,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type9"),
+        full_name: Some("Image::ExifTool::Kodak::Type9"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -14996,7 +18335,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type9"),
+        full_name: Some("Image::ExifTool::Kodak::Type9"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15023,7 +18369,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Lens"),
+        full_name: Some("Image::ExifTool::MIE::Lens"),
+        raw_id: "FNumber",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15050,7 +18403,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "10",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15077,7 +18437,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "54",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15104,7 +18471,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "71",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15131,7 +18505,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "9",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15158,7 +18539,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "18887",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15185,7 +18573,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0800"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0800"),
+        raw_id: "56",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15212,7 +18607,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica9"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica9"),
+        raw_id: "858",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15239,7 +18641,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "19",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15266,7 +18675,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40985",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15293,7 +18709,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "49",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15320,7 +18743,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "73",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15347,7 +18777,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15374,7 +18811,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15401,7 +18845,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "32",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15428,7 +18879,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "34",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15455,7 +18913,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "38",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15482,7 +18947,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "fnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FNumber",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15509,7 +18981,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1000D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
+        raw_id: "29",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15536,7 +19015,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
+        raw_id: "10",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15563,7 +19049,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DX"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15590,7 +19083,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "9",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15617,7 +19117,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
+        raw_id: "29",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15644,7 +19151,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "9",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15671,7 +19185,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIV"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15698,7 +19219,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo40D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
+        raw_id: "29",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15725,7 +19253,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "29",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15752,7 +19287,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo500D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15779,7 +19321,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo50D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15806,7 +19355,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo550D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15833,7 +19389,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
+        raw_id: "40",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15860,7 +19423,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15887,7 +19457,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15914,7 +19491,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo600D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15941,7 +19525,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo60D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15968,7 +19559,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo650D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -15995,7 +19593,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo6D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16022,7 +19627,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo70D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16049,7 +19661,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo750D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16076,7 +19695,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo7D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16103,7 +19729,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo80D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
+        raw_id: "35",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16130,7 +19763,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("FocalLength"),
+        full_name: Some("Image::ExifTool::Canon::FocalLength"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16157,7 +19797,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("LevelInfo"),
+        full_name: Some("Image::ExifTool::Canon::LevelInfo"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16184,7 +19831,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "29",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16212,6 +19866,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "focallength",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37386",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16238,7 +19899,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type10"),
+        full_name: Some("Image::ExifTool::Kodak::Type10"),
+        raw_id: "29",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16265,7 +19933,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Lens"),
+        full_name: Some("Image::ExifTool::MIE::Lens"),
+        raw_id: "FocalLength",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16292,7 +19967,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "18",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16319,7 +20001,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData01"),
+        full_name: Some("Image::ExifTool::Nikon::LensData01"),
+        raw_id: "10",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16346,7 +20035,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0204"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0204"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16373,7 +20069,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0800"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0800"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16400,7 +20103,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0800"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0800"),
+        raw_id: "60",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16427,7 +20137,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("FocusInfo"),
+        full_name: Some("Image::ExifTool::Panasonic::FocusInfo"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16454,7 +20171,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "29",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16481,7 +20205,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "29",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16508,7 +20239,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "1027",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16535,7 +20273,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "5376",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16562,7 +20307,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraInfo3"),
+        full_name: Some("Image::ExifTool::Sony::CameraInfo3"),
+        raw_id: "14",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16589,7 +20341,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "4728",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16616,7 +20375,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010f"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010f"),
+        raw_id: "4404",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16643,7 +20409,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010g"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010g"),
+        raw_id: "812",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16670,7 +20443,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010h"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010h"),
+        raw_id: "812",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16697,7 +20477,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010i"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010i"),
+        raw_id: "778",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16724,7 +20511,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallength",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FocalLength",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16752,6 +20546,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "focallengthin35mmformat",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41989",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16778,7 +20579,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("VideoKeys"),
+        full_name: Some("Image::ExifTool::QuickTime::VideoKeys"),
+        raw_id: "camera.focal_length.35mm_equivalent",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16805,7 +20613,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40986",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16832,7 +20647,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focallengthin35mmformat",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FocalLengthIn35mmFilm",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16860,6 +20682,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "focalplaneresolutionunit",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41488",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16886,7 +20715,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focalplaneresolutionunit",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FocalPlaneResolutionUnit",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16914,6 +20750,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "focalplanexresolution",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41486",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16940,7 +20783,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focalplanexresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FocalPlaneXResolution",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16968,6 +20818,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "focalplaneyresolution",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41487",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -16994,7 +20851,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "focalplaneyresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "FocalPlaneYResolution",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17022,6 +20886,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "forwardmatrix1",
         row_index: Some(131),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50964",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17049,6 +20920,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "forwardmatrix2",
         row_index: Some(132),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50965",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17076,6 +20954,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "forwardmatrix3",
         row_index: Some(170),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52532",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17102,7 +20987,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "framerate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("MovieInfo"),
+        full_name: Some("Image::ExifTool::Canon::MovieInfo"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17129,7 +21021,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "framerate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("MovieInfo"),
+        full_name: Some("Image::ExifTool::Canon::MovieInfo"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17157,6 +21056,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "framerate",
         row_index: Some(143),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51044",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17183,7 +21089,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "framerate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "14368",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17211,6 +21124,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "gaincontrol",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41991",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17237,7 +21157,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "gaincontrol",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "GainControl",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17265,6 +21192,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "gamma",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42240",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17291,7 +21225,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "gamma",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("IFD"),
+        full_name: Some("Image::ExifTool::Kodak::IFD"),
+        raw_id: "2302",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17318,7 +21259,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "gamma",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PNG::Main"),
+        raw_id: "gAMA",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17345,7 +21293,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "gamma",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "284",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17372,7 +21327,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "gamma",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "Gamma",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17399,7 +21361,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "gamma",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("hdrgm"),
+        full_name: Some("Image::ExifTool::XMP::hdrgm"),
+        raw_id: "Gamma",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17427,6 +21396,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "gdalmetadata",
         row_index: Some(70),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42112",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17454,6 +21430,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "gdalnodata",
         row_index: Some(71),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42113",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17481,6 +21464,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "geotiffasciiparams",
         row_index: Some(60),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34737",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17508,6 +21498,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "geotiffdirectory",
         row_index: Some(58),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34735",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17535,6 +21532,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "geotiffdoubleparams",
         row_index: Some(59),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34736",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17562,6 +21566,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "googleplusuploadcode",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36873",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17589,6 +21600,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "grayresponseunit",
         row_index: Some(31),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "290",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17616,6 +21634,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "halftonehints",
         row_index: Some(41),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "321",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17643,6 +21668,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "hostcomputer",
         row_index: Some(37),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "316",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17670,6 +21702,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "humidity",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37889",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17696,7 +21735,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "humidity",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "Humidity",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17724,6 +21770,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "icc_profile",
         row_index: None,
         source_identity_present: false,
+        module: None,
+        table: None,
+        full_name: None,
+        raw_id: "ICC_Profile",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17750,7 +21803,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "icc_profile",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("GIF"),
+        table: Some("Extensions"),
+        full_name: Some("Image::ExifTool::GIF::Extensions"),
+        raw_id: "ICCRGBG1/012",
+        writable: Some("2"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17778,6 +21838,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "illuminantdata1",
         row_index: Some(171),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52533",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17805,6 +21872,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "illuminantdata2",
         row_index: Some(172),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52534",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17832,6 +21906,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "illuminantdata3",
         row_index: Some(173),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52535",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17859,6 +21940,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagedescription",
         row_index: Some(17),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "270",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17885,7 +21973,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagedescription",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "ImageDescription",
+        writable: Some("lang-alt"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17913,6 +22008,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imageeditingsoftware",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42043",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17939,7 +22041,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageeditingsoftware",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ImageEditingSoftware",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17967,6 +22076,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imageeditor",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42040",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -17993,7 +22109,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageeditor",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ImageEditor",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18021,6 +22144,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imageheight",
         row_index: Some(8),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "257",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18047,7 +22177,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Google"),
+        table: Some("GDepth"),
+        full_name: Some("Image::ExifTool::Google::GDepth"),
+        raw_id: "ImageHeight",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18074,7 +22211,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MinoltaRaw"),
+        table: Some("PRD"),
+        full_name: Some("Image::ExifTool::MinoltaRaw::PRD"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18101,7 +22245,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "269",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18128,7 +22279,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "ImageLength",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18156,6 +22314,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagehistory",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37395",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18182,7 +22347,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagehistory",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("digiKam"),
+        full_name: Some("Image::ExifTool::XMP::digiKam"),
+        raw_id: "ImageHistory",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18210,6 +22382,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagenumber",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37393",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18236,7 +22415,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "ImageNumber",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18263,7 +22449,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "174",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18290,7 +22483,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "94",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18317,7 +22517,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "275",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18344,7 +22551,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "155",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18371,7 +22585,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings3"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
+        raw_id: "1024",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18398,7 +22619,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings3"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
+        raw_id: "276.1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18425,7 +22653,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings3"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
+        raw_id: "788",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18452,7 +22687,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagenumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("aux"),
+        full_name: Some("Image::ExifTool::XMP::aux"),
+        raw_id: "ImageNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18480,6 +22722,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagesequenceinfo",
         row_index: Some(179),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52548",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18507,6 +22756,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagesourcedata",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37724",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18534,6 +22790,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagestats",
         row_index: Some(180),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52550",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18561,6 +22824,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagetitle",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42038",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18587,7 +22857,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagetitle",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ImageTitle",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18614,7 +22891,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagetype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("IPTC"),
+        table: Some("ApplicationRecord"),
+        full_name: Some("Image::ExifTool::IPTC::ApplicationRecord"),
+        raw_id: "130",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18641,7 +22925,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagetype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PLUS"),
+        table: Some("XMP"),
+        full_name: Some("Image::ExifTool::PLUS::XMP"),
+        raw_id: "ImageType",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18668,7 +22959,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Apple"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Apple::Main"),
+        raw_id: "21",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18695,7 +22993,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "40",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18723,6 +23028,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imageuniqueid",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42016",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18749,7 +23061,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("digiKam"),
+        full_name: Some("Image::ExifTool::XMP::digiKam"),
+        raw_id: "ImageUniqueID",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18776,7 +23095,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ImageUniqueID",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18803,7 +23129,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imageuniqueid",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ImageUniqueID",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18831,6 +23164,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "imagewidth",
         row_index: Some(7),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "256",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18857,7 +23197,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagewidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Google"),
+        table: Some("GDepth"),
+        full_name: Some("Image::ExifTool::Google::GDepth"),
+        raw_id: "ImageWidth",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18884,7 +23231,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagewidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MinoltaRaw"),
+        table: Some("PRD"),
+        full_name: Some("Image::ExifTool::MinoltaRaw::PRD"),
+        raw_id: "14",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18911,7 +23265,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagewidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "268",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18938,7 +23299,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "imagewidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "ImageWidth",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18966,6 +23334,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "inkset",
         row_index: Some(44),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "332",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -18993,6 +23368,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "intergraphmatrix",
         row_index: Some(51),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33920",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19020,6 +23402,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "interopindex",
         row_index: Some(0),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "1",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("InteropIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19046,7 +23435,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "interopindex",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "InteroperabilityIndex",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19074,6 +23470,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "interopversion",
         row_index: Some(4),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "2",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("InteropIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19100,7 +23503,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1000D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19127,7 +23537,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DX"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19154,7 +23571,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "117",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19181,7 +23605,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19208,7 +23639,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "121",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19235,7 +23673,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIV"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19262,7 +23707,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo40D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19289,7 +23741,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19316,7 +23775,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo500D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19343,7 +23809,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo50D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19370,7 +23843,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo550D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19397,7 +23877,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19424,7 +23911,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19451,7 +23945,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19478,7 +23979,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo600D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19505,7 +24013,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo60D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo60D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19532,7 +24047,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo650D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19559,7 +24081,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo6D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19586,7 +24115,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo70D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo70D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19613,7 +24149,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo750D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19640,7 +24183,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo7D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19667,7 +24217,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo80D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo80D"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19694,7 +24251,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoPowerShot"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19721,7 +24285,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoPowerShot2"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoPowerShot2"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19748,61 +24319,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "iso",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "iso",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Casio::Main"),
+        raw_id: "20",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19830,6 +24354,81 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "iso",
         row_index: None,
         source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "12308",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "iso",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "20",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "iso",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34855",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19856,7 +24455,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("CameraInfo"),
+        full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
+        raw_id: "64774",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19883,7 +24489,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("IFD"),
+        full_name: Some("Image::ExifTool::Kodak::IFD"),
+        raw_id: "6020",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19910,7 +24523,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "96",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19937,7 +24557,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64046",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19964,7 +24591,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64070",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -19991,7 +24625,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD1"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD1"),
+        raw_id: "39",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20018,7 +24659,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD1"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD1"),
+        raw_id: "40",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20045,7 +24693,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD2"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD2"),
+        raw_id: "61701",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20072,7 +24727,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type10"),
+        full_name: Some("Image::ExifTool::Kodak::Type10"),
+        raw_id: "20",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20099,7 +24761,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type3"),
+        full_name: Some("Image::ExifTool::Kodak::Type3"),
+        raw_id: "78",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20126,7 +24795,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type5"),
+        full_name: Some("Image::ExifTool::Kodak::Type5"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20153,7 +24829,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type6"),
+        full_name: Some("Image::ExifTool::Kodak::Type6"),
+        raw_id: "26",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20180,7 +24863,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type9"),
+        full_name: Some("Image::ExifTool::Kodak::Type9"),
+        raw_id: "52",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20207,7 +24897,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "ISO",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20234,7 +24931,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "8",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20261,7 +24965,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("WBInfoA100"),
+        full_name: Some("Image::ExifTool::Minolta::WBInfoA100"),
+        raw_id: "18874",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20288,7 +24999,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("ISOInfo"),
+        full_name: Some("Image::ExifTool::Nikon::ISOInfo"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20315,7 +25033,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "2",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20342,7 +25067,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "209",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20369,7 +25101,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "23",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20396,7 +25135,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "55",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20423,7 +25169,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "139",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20450,7 +25203,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "20",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20477,7 +25237,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Pentax::Type2"),
+        raw_id: "20",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20504,7 +25271,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "261",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20531,7 +25305,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40980",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20558,7 +25339,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "134",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20585,7 +25373,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("FocusInfo"),
+        full_name: Some("Image::ExifTool::Sony::FocusInfo"),
+        raw_id: "111",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20612,7 +25407,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "31",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20639,7 +25441,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "33",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20666,7 +25475,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "37",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20693,7 +25509,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "iso",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ISOSpeedRatings",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20721,6 +25544,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "isospeed",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34867",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20747,7 +25577,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "isospeed",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ISOSpeed",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20775,6 +25612,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "isospeedlatitudeyyy",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34868",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20801,7 +25645,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "isospeedlatitudeyyy",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ISOSpeedLatitudeyyy",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20829,6 +25680,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "isospeedlatitudezzz",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34869",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20855,7 +25713,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "isospeedlatitudezzz",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "ISOSpeedLatitudezzz",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20882,7 +25747,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "jpegquality",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "102",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20909,7 +25781,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "jpegquality",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "67",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20936,7 +25815,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "jpegquality",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Subdir"),
+        full_name: Some("Image::ExifTool::Panasonic::Subdir"),
+        raw_id: "12340",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20963,7 +25849,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "jpegquality",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "45127",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -20991,6 +25884,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "jxldecodespeed",
         row_index: Some(185),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52555",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21018,6 +25918,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "jxldistance",
         row_index: Some(183),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52553",
+        writable: Some("float"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21045,6 +25952,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "jxleffort",
         row_index: Some(184),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52554",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21072,6 +25986,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "learningoptoutin",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37511",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21099,6 +26020,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "lensinfo",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42034",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21125,7 +26053,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensinfo",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("LensInfoQ"),
+        full_name: Some("Image::ExifTool::Pentax::LensInfoQ"),
+        raw_id: "42",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21152,7 +26087,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensinfo",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("aux"),
+        full_name: Some("Image::ExifTool::XMP::aux"),
+        raw_id: "LensInfo",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21179,7 +26121,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensinfo",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "LensSpecification",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21207,6 +26156,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "lensmake",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42035",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21233,7 +26189,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmake",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Lens"),
+        full_name: Some("Image::ExifTool::MIE::Lens"),
+        raw_id: "Make",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21260,7 +26223,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmake",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "LensMake",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21287,88 +26257,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "lensmodel",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "lensmodel",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "lensmodel",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1000D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
+        raw_id: "2359",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21396,6 +26292,115 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "lensmodel",
         row_index: None,
         source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo40D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
+        raw_id: "2347",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "lensmodel",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "2355",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "lensmodel",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "149",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "lensmodel",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42036",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21422,7 +26427,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Lens"),
+        full_name: Some("Image::ExifTool::MIE::Lens"),
+        raw_id: "Model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21449,7 +26461,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Microsoft"),
+        table: Some("XMP"),
+        full_name: Some("Image::ExifTool::Microsoft::XMP"),
+        raw_id: "LensModel",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21476,7 +26495,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0400"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0400"),
+        raw_id: "394",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21503,7 +26529,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0402"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0402"),
+        raw_id: "395",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21530,7 +26563,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("LensData0403"),
+        full_name: Some("Image::ExifTool::Nikon::LensData0403"),
+        raw_id: "684",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21557,7 +26597,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Equipment"),
+        full_name: Some("Image::ExifTool::Olympus::Equipment"),
+        raw_id: "515",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21584,7 +26631,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("LensInfoQ"),
+        full_name: Some("Image::ExifTool::Pentax::LensInfoQ"),
+        raw_id: "12",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21611,7 +26665,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "1042",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21638,7 +26699,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("VideoKeys"),
+        full_name: Some("Image::ExifTool::QuickTime::VideoKeys"),
+        raw_id: "camera.lens_model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21665,7 +26733,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensmodel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "LensModel",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21692,61 +26767,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "lensserialnumber",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Canon",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "lensserialnumber",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
+        raw_id: "356",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21774,6 +26802,81 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "lensserialnumber",
         row_index: None,
         source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfoUnknown"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfoUnknown"),
+        raw_id: "363",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "lensserialnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("LensInfo"),
+        full_name: Some("Image::ExifTool::Canon::LensInfo"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Canon",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "lensserialnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42037",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21800,7 +26903,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Lens"),
+        full_name: Some("Image::ExifTool::MIE::Lens"),
+        raw_id: "SerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21827,7 +26937,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Equipment"),
+        full_name: Some("Image::ExifTool::Olympus::Equipment"),
+        raw_id: "514",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21854,7 +26971,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica6"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica6"),
+        raw_id: "801",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21881,7 +27005,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "82",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21908,7 +27039,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "LENS",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21935,7 +27073,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("SerialInfo"),
+        full_name: Some("Image::ExifTool::Ricoh::SerialInfo"),
+        raw_id: "48",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21962,7 +27107,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("aux"),
+        full_name: Some("Image::ExifTool::XMP::aux"),
+        raw_id: "LensSerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -21989,7 +27141,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lensserialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "LensSerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22017,6 +27176,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "lightsource",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37384",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22043,7 +27209,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lightsource",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "144",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22070,7 +27243,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lightsource",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("RawInfo"),
+        full_name: Some("Image::ExifTool::Olympus::RawInfo"),
+        raw_id: "4096",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22097,7 +27277,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "lightsource",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "LightSource",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22125,6 +27312,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "linearizationtable",
         row_index: Some(79),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50712",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22152,6 +27346,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "linearresponselimit",
         row_index: Some(99),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50734",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22179,6 +27380,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "localizedcameramodel",
         row_index: Some(76),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50709",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22205,7 +27413,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("MakeModel"),
+        full_name: Some("Image::ExifTool::CanonRaw::MakeModel"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22232,7 +27447,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("DJI"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::DJI::Main"),
+        raw_id: "1",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22260,6 +27482,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "make",
         row_index: Some(18),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "271",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22286,7 +27515,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "Make",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22313,7 +27549,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("TextualData"),
+        full_name: Some("Image::ExifTool::PNG::TextualData"),
+        raw_id: "Make",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22340,7 +27583,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "271",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22367,7 +27617,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "make",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22394,7 +27651,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "@mak",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22421,7 +27685,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "©mak",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22448,7 +27719,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("pmi"),
+        full_name: Some("Image::ExifTool::XMP::pmi"),
+        raw_id: "make",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22475,7 +27753,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "make",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Make",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22503,6 +27788,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "makernotesafety",
         row_index: Some(105),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50741",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22530,6 +27822,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "maskedareas",
         row_index: Some(113),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50830",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22557,6 +27856,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "maxaperturevalue",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37381",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22583,7 +27889,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "maxaperturevalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "1044",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22610,7 +27923,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "maxaperturevalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "MaxApertureValue",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22638,6 +27958,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "maxsamplevalue",
         row_index: Some(24),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "281",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22665,6 +27992,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "metadataeditingsoftware",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42044",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22691,7 +28025,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "metadataeditingsoftware",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "MetadataEditingSoftware",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22718,7 +28059,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Canon::CameraSettings"),
+        raw_id: "17",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22746,6 +28094,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "meteringmode",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37383",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22772,7 +28127,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "28",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22799,7 +28161,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22826,7 +28195,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "37",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22853,7 +28229,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "18",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22880,7 +28263,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
+        raw_id: "514",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22907,7 +28297,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "23",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22934,7 +28331,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "9",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22961,7 +28365,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "21",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -22988,7 +28399,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "19",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23015,7 +28433,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings3"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings3"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23042,7 +28467,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("MoreSettings"),
+        full_name: Some("Image::ExifTool::Sony::MoreSettings"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23069,7 +28501,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010a"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010a"),
+        raw_id: "4468",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23096,7 +28535,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010b"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010b"),
+        raw_id: "4472",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23123,7 +28569,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010c"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010c"),
+        raw_id: "4436",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23150,7 +28603,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010d"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010d"),
+        raw_id: "4560",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23177,7 +28637,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010e"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010e"),
+        raw_id: "4524",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23204,7 +28671,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010f"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010f"),
+        raw_id: "4196",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23231,7 +28705,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010g"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010g"),
+        raw_id: "604",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23258,7 +28739,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010h"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010h"),
+        raw_id: "604",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23285,7 +28773,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag2010i"),
+        full_name: Some("Image::ExifTool::Sony::Tag2010i"),
+        raw_id: "587",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23312,7 +28807,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "meteringmode",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "MeteringMode",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23340,6 +28842,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "minsamplevalue",
         row_index: Some(23),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "280",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23366,7 +28875,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("MakeModel"),
+        full_name: Some("Image::ExifTool::CanonRaw::MakeModel"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23394,6 +28910,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "model",
         row_index: Some(19),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "272",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23420,7 +28943,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Google"),
+        table: Some("GDepth"),
+        full_name: Some("Image::ExifTool::Google::GDepth"),
+        raw_id: "Model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23447,7 +28977,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "Model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23474,7 +29011,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("TextualData"),
+        full_name: Some("Image::ExifTool::PNG::TextualData"),
+        raw_id: "Model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23501,7 +29045,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "272",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23528,7 +29079,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "575",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23555,7 +29113,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23582,7 +29147,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "@mod",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23609,7 +29181,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "CNMN",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23636,7 +29215,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "cmnm",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23663,7 +29249,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "©mdl",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23690,7 +29283,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "©mod",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23717,7 +29317,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "132",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23744,7 +29351,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("pmi"),
+        full_name: Some("Image::ExifTool::XMP::pmi"),
+        raw_id: "model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23771,7 +29385,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "model",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Model",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23799,6 +29420,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "modeltiepoint",
         row_index: Some(52),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33922",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23826,6 +29454,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "modeltransform",
         row_index: Some(54),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34264",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23853,6 +29488,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "modifydate",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "306",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23879,7 +29521,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "modifydate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Doc"),
+        full_name: Some("Image::ExifTool::MIE::Doc"),
+        raw_id: "ModifyDate",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23906,7 +29555,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "modifydate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PDF"),
+        table: Some("Info"),
+        full_name: Some("Image::ExifTool::PDF::Info"),
+        raw_id: "ModDate",
+        writable: Some("date"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23933,7 +29589,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "modifydate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PNG::Main"),
+        raw_id: "tIME",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23960,7 +29623,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "modifydate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PostScript"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PostScript::Main"),
+        raw_id: "ModDate",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -23987,7 +29657,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "modifydate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("MovieHeader"),
+        full_name: Some("Image::ExifTool::QuickTime::MovieHeader"),
+        raw_id: "2",
+        writable: Some("1"),
+        permanent: true,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24014,7 +29691,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "modifydate",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "ModifyDate",
+        writable: Some("date"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24042,6 +29726,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "moirefilter",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65112",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24068,7 +29759,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "moirefilter",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "MoireFilter",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24095,7 +29793,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "moirefilter",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "MoireFilter",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24123,6 +29828,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "newrawimagedigest",
         row_index: Some(154),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51111",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24150,6 +29862,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "noiseprofile",
         row_index: Some(141),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51041",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24177,6 +29896,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "noisereduction",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42002",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24203,7 +29929,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4107",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24230,7 +29963,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4110",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24257,7 +29997,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "176",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24284,7 +30031,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "96",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24311,7 +30065,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "63",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24338,7 +30099,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "149",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24365,7 +30133,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("NikonCapture"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::NikonCapture::Main"),
+        raw_id: "1966984128",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24392,7 +30167,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("NikonCapture"),
+        table: Some("NoiseReduction"),
+        full_name: Some("Image::ExifTool::NikonCapture::NoiseReduction"),
+        raw_id: "23",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24419,7 +30201,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Olympus::CameraSettings"),
+        raw_id: "1290",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24446,7 +30235,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4154",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24473,7 +30269,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "45",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24500,7 +30303,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "73",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24527,7 +30337,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4111",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24554,7 +30371,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "noisereduction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Subdir"),
+        full_name: Some("Image::ExifTool::Ricoh::Subdir"),
+        raw_id: "42",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24582,6 +30406,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "noisereductionapplied",
         row_index: Some(126),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50935",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24609,6 +30440,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "offsetschema",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "59933",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24636,6 +30474,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "offsettime",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36880",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24663,6 +30508,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "offsettimedigitized",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36882",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24690,6 +30542,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "offsettimeoriginal",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "36881",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24717,6 +30576,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "oldsubfiletype",
         row_index: Some(6),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "255",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24744,6 +30610,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "opcodelist1",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51008",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24771,6 +30644,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "opcodelist2",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51009",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24798,6 +30678,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "opcodelist3",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51022",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24825,6 +30712,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "orientation",
         row_index: Some(20),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "274",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24851,7 +30745,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "orientation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "274",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24878,7 +30779,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "orientation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("pmi"),
+        full_name: Some("Image::ExifTool::XMP::pmi"),
+        raw_id: "orientation",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24905,7 +30813,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "orientation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Orientation",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24933,6 +30848,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "originalbestqualitysize",
         row_index: Some(147),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51090",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24960,6 +30882,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "originaldefaultcropsize",
         row_index: Some(148),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51091",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -24987,6 +30916,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "originaldefaultfinalsize",
         row_index: Some(146),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51089",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25013,7 +30949,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "originalfilename",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::CanonRaw::Main"),
+        raw_id: "2070",
+        writable: Some("string[32]"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25040,7 +30983,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "originalfilename",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("IFD"),
+        full_name: Some("Image::ExifTool::Kodak::IFD"),
+        raw_id: "1001",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25067,7 +31017,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "originalfilename",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type4"),
+        full_name: Some("Image::ExifTool::Kodak::Type4"),
+        raw_id: "32",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25094,7 +31051,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "originalfilename",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica5"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica5"),
+        raw_id: "1031",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25121,7 +31085,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "originalfilename",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("GettyImages"),
+        full_name: Some("Image::ExifTool::XMP::GettyImages"),
+        raw_id: "OriginalFilename",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25149,6 +31120,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "originalrawfiledata",
         row_index: Some(111),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50828",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25176,6 +31154,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "originalrawfiledigest",
         row_index: Some(139),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50973",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25203,6 +31188,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "originalrawfilename",
         row_index: Some(110),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50827",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25229,7 +31221,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "271",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25256,7 +31255,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
+        raw_id: "398",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25283,7 +31289,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "9",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25310,7 +31323,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::CanonRaw::Main"),
+        raw_id: "2064",
+        writable: Some("string[32]"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25338,6 +31358,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ownername",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42032",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25365,6 +31392,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ownername",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65000",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25391,7 +31425,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "OwnerName",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25418,7 +31459,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("aux"),
+        full_name: Some("Image::ExifTool::XMP::aux"),
+        raw_id: "OwnerName",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25445,7 +31493,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ownername",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "CameraOwnerName",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25473,6 +31528,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "padding",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "59932",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25500,6 +31562,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "pagename",
         row_index: Some(28),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "285",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25527,6 +31596,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "pagenumber",
         row_index: Some(33),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "297",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25554,6 +31630,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "panasonictitle",
         row_index: Some(120),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50898",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25581,6 +31664,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "panasonictitle2",
         row_index: Some(121),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50899",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25608,6 +31698,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "photographer",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42039",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25634,7 +31731,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "photographer",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "Photographer",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25662,6 +31766,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "photometricinterpretation",
         row_index: Some(11),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "262",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25688,7 +31799,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "photometricinterpretation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "PhotometricInterpretation",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25716,6 +31834,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "pixelscale",
         row_index: Some(48),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "33550",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25742,7 +31867,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "pixelsperunitx",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("PhysicalPixel"),
+        full_name: Some("Image::ExifTool::PNG::PhysicalPixel"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25769,7 +31901,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "pixelsperunity",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("PhysicalPixel"),
+        full_name: Some("Image::ExifTool::PNG::PhysicalPixel"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25796,7 +31935,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "pixelunits",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("PhysicalPixel"),
+        full_name: Some("Image::ExifTool::PNG::PhysicalPixel"),
+        raw_id: "8",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25824,6 +31970,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "planarconfiguration",
         row_index: Some(27),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "284",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25850,7 +32003,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "planarconfiguration",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "PlanarConfiguration",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25878,6 +32038,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "predictor",
         row_index: Some(38),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "317",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25905,6 +32072,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "pressure",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37890",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25931,7 +32105,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "pressure",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "Pressure",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25959,6 +32140,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "previewapplicationname",
         row_index: Some(133),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50966",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -25986,6 +32174,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "previewapplicationversion",
         row_index: Some(134),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50967",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26013,6 +32208,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "previewcolorspace",
         row_index: Some(137),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50970",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26040,6 +32242,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "previewdatetime",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50971",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26067,6 +32276,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "previewsettingsdigest",
         row_index: Some(136),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50969",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26094,6 +32310,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "previewsettingsname",
         row_index: Some(135),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50968",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26121,6 +32344,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "primarychromaticities",
         row_index: Some(40),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "319",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26147,7 +32377,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "primarychromaticities",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "PrimaryChromaticities",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26175,6 +32412,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "printim",
         row_index: Some(72),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50341",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26202,6 +32446,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "processingsoftware",
         row_index: Some(1),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "11",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26229,6 +32480,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilecalibrationsig",
         row_index: Some(123),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50932",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26256,6 +32514,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilecopyright",
         row_index: Some(130),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50942",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26283,6 +32548,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profiledynamicrange",
         row_index: Some(181),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52551",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26310,6 +32582,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profileembedpolicy",
         row_index: Some(129),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50941",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26337,6 +32616,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilegaintablemap",
         row_index: Some(164),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52525",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26364,6 +32650,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilegaintablemap2",
         row_index: Some(177),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52544",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26391,6 +32684,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilegroupname",
         row_index: Some(182),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52552",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26418,6 +32718,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilehuesatmapdata1",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50938",
+        writable: Some("float"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26445,6 +32752,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilehuesatmapdata2",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50939",
+        writable: Some("float"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26472,6 +32786,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilehuesatmapdata3",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52537",
+        writable: Some("float"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26499,6 +32820,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilehuesatmapdims",
         row_index: Some(128),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50937",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26526,6 +32854,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilehuesatmapencoding",
         row_index: Some(150),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51107",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26553,6 +32888,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilelooktabledata",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50982",
+        writable: Some("float"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26580,6 +32922,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilelooktabledims",
         row_index: Some(140),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50981",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26607,6 +32956,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilelooktableencoding",
         row_index: Some(151),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51108",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26634,6 +32990,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profilename",
         row_index: Some(127),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50936",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26660,7 +33023,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "profilename",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PNG::Main"),
+        raw_id: "iCCP-name",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26688,6 +33058,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "profiletonecurve",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50940",
+        writable: Some("float"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26714,7 +33091,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "profiletype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Google"),
+        table: Some("Device"),
+        full_name: Some("Image::ExifTool::Google::Device"),
+        raw_id: "ProfilesProfileType",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26741,7 +33125,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonVRD"),
+        table: Some("DR4"),
+        full_name: Some("Image::ExifTool::CanonVRD::DR4"),
+        raw_id: "65792",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26769,6 +33160,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rating",
         row_index: Some(2),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "18246",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26795,7 +33193,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "5169",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26822,7 +33227,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhotoMechanic"),
+        table: Some("SoftEdit"),
+        full_name: Some("Image::ExifTool::PhotoMechanic::SoftEdit"),
+        raw_id: "223",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26849,7 +33261,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("ItemList"),
+        full_name: Some("Image::ExifTool::QuickTime::ItemList"),
+        raw_id: "rtng",
+        writable: Some("int8s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26876,7 +33295,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "rtng",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26903,7 +33329,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8194",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26930,7 +33363,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("acdsee"),
+        full_name: Some("Image::ExifTool::XMP::acdsee"),
+        raw_id: "rating",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26957,7 +33397,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("dex"),
+        full_name: Some("Image::ExifTool::XMP::dex"),
+        raw_id: "rating",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -26984,7 +33431,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("iptcExt"),
+        full_name: Some("Image::ExifTool::XMP::iptcExt"),
+        raw_id: "Rating",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27011,7 +33465,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("prism"),
+        full_name: Some("Image::ExifTool::XMP::prism"),
+        raw_id: "rating",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27038,7 +33499,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rating",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "Rating",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27066,6 +33534,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ratingpercent",
         row_index: Some(3),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "18249",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27092,7 +33567,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ratingpercent",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Microsoft"),
+        table: Some("XMP"),
+        full_name: Some("Image::ExifTool::Microsoft::XMP"),
+        raw_id: "Rating",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27119,7 +33601,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ratingpercent",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("ItemList"),
+        full_name: Some("Image::ExifTool::QuickTime::ItemList"),
+        raw_id: "rate",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27146,7 +33635,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ratingpercent",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "RatingPercent",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27174,6 +33670,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rawdatauniqueid",
         row_index: Some(109),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50781",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27201,6 +33704,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rawdevelopingsoftware",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42042",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27227,7 +33737,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "rawdevelopingsoftware",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "RAWDevelopingSoftware",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27255,6 +33772,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rawfile",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65100",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27282,6 +33806,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rawimagedigest",
         row_index: Some(138),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50972",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27309,6 +33840,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rawtopreviewgain",
         row_index: Some(155),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51112",
+        writable: Some("double"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27336,6 +33874,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "recommendedexposureindex",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34866",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27362,7 +33907,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "recommendedexposureindex",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "RecommendedExposureIndex",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27390,6 +33942,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "reductionmatrix1",
         row_index: Some(90),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50725",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27417,6 +33976,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "reductionmatrix2",
         row_index: Some(91),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50726",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27444,6 +34010,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "reductionmatrix3",
         row_index: Some(175),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52538",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27471,6 +34044,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "reelname",
         row_index: Some(145),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51081",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27497,7 +34077,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "reelname",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "reel",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27525,6 +34112,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "referenceblackwhite",
         row_index: Some(189),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "532",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27551,7 +34145,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "referenceblackwhite",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "ReferenceBlackWhite",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27579,6 +34180,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "relatedimagefileformat",
         row_index: Some(67),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "4096",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("InteropIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27606,6 +34214,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "relatedimageheight",
         row_index: Some(69),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "4098",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("InteropIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27633,6 +34248,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "relatedimagewidth",
         row_index: Some(68),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "4097",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("InteropIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27660,6 +34282,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "relatedsoundfile",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40964",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27686,7 +34315,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "relatedsoundfile",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "RelatedSoundFile",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27714,6 +34350,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "resolutionunit",
         row_index: Some(32),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "296",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27740,7 +34383,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "resolutionunit",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("JFIF"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::JFIF::Main"),
+        raw_id: "2",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27767,7 +34417,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "resolutionunit",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "ResolutionUnit",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27795,6 +34452,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rgbtables",
         row_index: Some(176),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52543",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27822,6 +34486,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "rowsperstrip",
         row_index: Some(22),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "278",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27849,6 +34520,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "samplesperpixel",
         row_index: Some(21),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "277",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27875,7 +34553,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "samplesperpixel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PanasonicRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PanasonicRaw::Main"),
+        raw_id: "8",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27902,7 +34587,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "samplesperpixel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "SamplesPerPixel",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27929,7 +34621,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "110",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27956,7 +34655,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "118",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -27983,7 +34689,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Canon::CameraSettings"),
+        raw_id: "14",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28010,7 +34723,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ColorInfo"),
+        full_name: Some("Image::ExifTool::Canon::ColorInfo"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28037,7 +34757,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("LogInfo"),
+        full_name: Some("Image::ExifTool::Canon::LogInfo"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28064,61 +34791,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "saturation",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "saturation",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Casio::Main"),
+        raw_id: "13",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28146,6 +34826,81 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "saturation",
         row_index: None,
         source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "12307",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "saturation",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "31",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "saturation",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41993",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28173,6 +34928,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "saturation",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65109",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28199,7 +34961,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4099",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28226,7 +34995,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "Saturation",
+        writable: Some("int8s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28253,7 +35029,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "31",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28280,7 +35063,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "50",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28307,7 +35097,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "40",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28334,7 +35131,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "26",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28361,7 +35165,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MinoltaRaw"),
+        table: Some("RIF"),
+        full_name: Some("Image::ExifTool::MinoltaRaw::RIF"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28388,7 +35199,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "170",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28415,7 +35233,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl"),
+        raw_id: "53",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28442,7 +35267,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl2"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
+        raw_id: "59",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28469,7 +35301,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl3"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
+        raw_id: "67",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28496,7 +35335,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "64",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28523,7 +35369,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Subdir"),
+        full_name: Some("Image::ExifTool::Panasonic::Subdir"),
+        raw_id: "12301",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28550,7 +35403,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "31",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28577,7 +35437,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Pentax::Type2"),
+        raw_id: "13",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28604,7 +35471,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "39",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28631,7 +35505,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "88",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28658,7 +35539,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "66",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28685,7 +35573,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "104",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28712,7 +35607,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("ImageInfo"),
+        full_name: Some("Image::ExifTool::Ricoh::ImageInfo"),
+        raw_id: "40",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28739,7 +35641,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4115",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28766,7 +35675,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "16",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28793,7 +35709,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "16",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28820,7 +35743,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "30",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28847,7 +35777,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "27",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28874,7 +35811,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8197",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28901,7 +35845,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Saturation",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28928,7 +35879,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Saturation",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28955,7 +35913,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "saturation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "Saturation",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -28983,6 +35948,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "scenecapturetype",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41990",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29009,7 +35981,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "scenecapturetype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SceneCaptureType",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29037,6 +36016,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "scenetype",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41729",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29063,7 +36049,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "scenetype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SceneType",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29091,6 +36084,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "seal",
         row_index: Some(186),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "52897",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29118,6 +36118,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "securityclassification",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37394",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29145,6 +36152,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "selftimermode",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34859",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29172,6 +36186,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "seminfo",
         row_index: Some(53),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34118",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29199,6 +36220,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sensingmethod",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41495",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29225,7 +36253,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sensingmethod",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SensingMethod",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29253,6 +36288,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sensitivitytype",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34864",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29279,7 +36321,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sensitivitytype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "SensitivityType",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29306,7 +36355,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "12",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29333,7 +36389,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "12",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29360,7 +36423,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Canon::Main"),
+        raw_id: "12",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29387,34 +36457,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "CanonRaw",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "serialnumber",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::CanonRaw::Main"),
+        raw_id: "6155",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29442,6 +36492,47 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "serialnumber",
         row_index: None,
         source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::CanonRaw::Main"),
+        raw_id: "6155",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "CanonRaw",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "serialnumber",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42033",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29469,6 +36560,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "serialnumber",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65001",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29495,7 +36593,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("CameraInfo"),
+        full_name: Some("Image::ExifTool::Kodak::CameraInfo"),
+        raw_id: "64004",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29522,7 +36627,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("KDC_IFD"),
+        full_name: Some("Image::ExifTool::Kodak::KDC_IFD"),
+        raw_id: "64000",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29549,7 +36661,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Meta"),
+        full_name: Some("Image::ExifTool::Kodak::Meta"),
+        raw_id: "50004",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29576,7 +36695,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64025",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29603,7 +36729,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type7"),
+        full_name: Some("Image::ExifTool::Kodak::Type7"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29630,7 +36763,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "SerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29657,7 +36797,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Motorola"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Motorola::Main"),
+        raw_id: "21761",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29684,7 +36831,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "160",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29711,7 +36865,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "29",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29738,7 +36899,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Equipment"),
+        full_name: Some("Image::ExifTool::Olympus::Equipment"),
+        raw_id: "257",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29765,7 +36933,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "1028",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29792,7 +36967,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4122",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29819,7 +37001,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica2"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica2"),
+        raw_id: "771",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29846,7 +37035,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica5"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica5"),
+        raw_id: "773",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29873,7 +37069,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Subdir"),
+        full_name: Some("Image::ExifTool::Panasonic::Subdir"),
+        raw_id: "12547",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29900,7 +37103,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "553",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29927,7 +37137,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "258",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29954,7 +37171,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("SensorCalibration"),
+        full_name: Some("Image::ExifTool::PhaseOne::SensorCalibration"),
+        raw_id: "1031",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -29981,7 +37205,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "SNum",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30008,7 +37239,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("UserData"),
+        full_name: Some("Image::ExifTool::QuickTime::UserData"),
+        raw_id: "slno",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30035,7 +37273,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "21",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30062,7 +37307,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "126",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30089,7 +37341,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "132",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30116,7 +37375,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "140",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30143,7 +37409,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("UltraFire"),
+        full_name: Some("Image::ExifTool::Reconyx::UltraFire"),
+        raw_id: "75",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30170,7 +37443,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "5",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30197,7 +37477,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "40962",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30224,7 +37511,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "2",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30251,7 +37545,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8241",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30278,7 +37579,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("aux"),
+        full_name: Some("Image::ExifTool::XMP::aux"),
+        raw_id: "SerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30305,7 +37613,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "serialnumber",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "BodySerialNumber",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30333,6 +37648,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "shadingcorrection",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "42001",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30360,6 +37682,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "shadows",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65106",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30386,7 +37715,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shadows",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8242",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30413,7 +37749,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shadows",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("aas"),
+        full_name: Some("Image::ExifTool::XMP::aas"),
+        raw_id: "Shadows",
+        writable: Some("real"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30440,7 +37783,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shadows",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Shadows",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30467,7 +37817,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shadows",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Shadows",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30495,6 +37852,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "shadowscale",
         row_index: Some(104),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50739",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30521,7 +37885,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
+        raw_id: "66",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30548,7 +37919,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
+        raw_id: "72",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30575,7 +37953,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "114",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30602,7 +37987,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "116",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30629,7 +38021,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Canon::CameraSettings"),
+        raw_id: "15",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30656,7 +38055,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("LogInfo"),
+        full_name: Some("Image::ExifTool::Canon::LogInfo"),
+        raw_id: "6",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30683,7 +38089,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Processing"),
+        full_name: Some("Image::ExifTool::Canon::Processing"),
+        raw_id: "2",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30710,61 +38123,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "sharpness",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "sharpness",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Casio::Main"),
+        raw_id: "11",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30792,6 +38158,81 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sharpness",
         row_index: None,
         source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "12305",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "sharpness",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "33",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "sharpness",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41994",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30819,6 +38260,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sharpness",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65110",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30845,7 +38293,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4097",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30872,7 +38327,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "107",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30899,7 +38361,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type3"),
+        full_name: Some("Image::ExifTool::Kodak::Type3"),
+        raw_id: "55",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30926,7 +38395,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Camera"),
+        full_name: Some("Image::ExifTool::MIE::Camera"),
+        raw_id: "Sharpness",
+        writable: Some("int8s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30953,7 +38429,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "33",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -30980,7 +38463,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "48",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31007,7 +38497,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "38",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31034,7 +38531,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "24",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31061,7 +38565,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MinoltaRaw"),
+        table: Some("RIF"),
+        full_name: Some("Image::ExifTool::MinoltaRaw::RIF"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31088,7 +38599,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "6",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31115,7 +38633,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl"),
+        raw_id: "50",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31142,7 +38667,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl2"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl2"),
+        raw_id: "51",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31169,7 +38701,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("PictureControl3"),
+        full_name: Some("Image::ExifTool::Nikon::PictureControl3"),
+        raw_id: "57",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31196,7 +38735,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4111",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31223,7 +38769,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "65",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31250,7 +38803,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "33",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31277,7 +38837,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Pentax::Type2"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31304,7 +38871,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire"),
+        raw_id: "38",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31331,7 +38905,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire2"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire2"),
+        raw_id: "86",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31358,7 +38939,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("HyperFire4K"),
+        full_name: Some("Image::ExifTool::Reconyx::HyperFire4K"),
+        raw_id: "64",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31385,7 +38973,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Reconyx"),
+        table: Some("MicroFire"),
+        full_name: Some("Image::ExifTool::Reconyx::MicroFire"),
+        raw_id: "102",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31412,7 +39007,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("ImageInfo"),
+        full_name: Some("Image::ExifTool::Ricoh::ImageInfo"),
+        raw_id: "34",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31439,7 +39041,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4099",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31466,7 +39075,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4116",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31493,7 +39109,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "17",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31520,7 +39143,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "17",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31547,7 +39177,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "28",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31574,7 +39211,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "25",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31601,7 +39245,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8198",
+        writable: Some("int32s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31628,7 +39279,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "82",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31655,7 +39313,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Sharpness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31682,7 +39347,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Sharpness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31709,7 +39381,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "sharpness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "Sharpness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31736,7 +39415,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("ExposureInfo"),
+        full_name: Some("Image::ExifTool::CanonRaw::ExposureInfo"),
+        raw_id: "1",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31764,6 +39450,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "shutterspeedvalue",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37377",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31790,7 +39483,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Olympus"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Olympus::Main"),
+        raw_id: "4096",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31817,7 +39517,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "1024",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31844,7 +39551,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "shutterspeedvalue",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "ShutterSpeedValue",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31872,6 +39586,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "smoothness",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65111",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31898,7 +39619,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "smoothness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "Smoothness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31925,7 +39653,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "smoothness",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "Smoothness",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31953,6 +39688,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "software",
         row_index: Some(35),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "305",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -31979,7 +39721,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Google"),
+        table: Some("GDepth"),
+        full_name: Some("Image::ExifTool::Google::GDepth"),
+        raw_id: "Software",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32006,7 +39755,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Doc"),
+        full_name: Some("Image::ExifTool::MIE::Doc"),
+        raw_id: "Software",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32033,7 +39789,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PNG"),
+        table: Some("TextualData"),
+        full_name: Some("Image::ExifTool::PNG::TextualData"),
+        raw_id: "Software",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32060,7 +39823,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("PhaseOne"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::PhaseOne::Main"),
+        raw_id: "515",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32087,7 +39857,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("QuickTime"),
+        table: Some("Keys"),
+        full_name: Some("Image::ExifTool::QuickTime::Keys"),
+        raw_id: "software",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32114,7 +39891,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "24",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32141,7 +39925,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "software",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "Software",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32169,6 +39960,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sonycropsize",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "29896",
+        writable: Some("int32u"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32196,6 +39994,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sonycroptopleft",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "29895",
+        writable: Some("int32u"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32223,6 +40028,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "sonyrawimagesize",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28728",
+        writable: Some("int32u"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32249,7 +40061,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "spatialfrequencyresponse",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SpatialFrequencyResponse",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32277,6 +40096,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "spectralsensitivity",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34852",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32303,7 +40129,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "spectralsensitivity",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SpectralSensitivity",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32331,6 +40164,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "standardoutputsensitivity",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34865",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32357,7 +40197,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "standardoutputsensitivity",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "StandardOutputSensitivity",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32385,6 +40232,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subfiletype",
         row_index: Some(5),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "254",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32411,7 +40265,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "subfiletype",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MIE"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::MIE::Main"),
+        raw_id: "0Type",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32439,6 +40300,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subjectarea",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37396",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32465,7 +40333,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "subjectarea",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SubjectArea",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32493,6 +40368,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subjectdistance",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37382",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32519,7 +40401,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "subjectdistance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "62",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32546,7 +40435,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "subjectdistance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SubjectDistance",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32574,6 +40470,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subjectdistancerange",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41996",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32600,7 +40503,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "subjectdistancerange",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SubjectDistanceRange",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32628,6 +40538,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subjectlocation",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41492",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32654,7 +40571,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "subjectlocation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "SubjectLocation",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32682,6 +40606,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subsectime",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37520",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32709,6 +40640,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subsectimedigitized",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37522",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32736,6 +40674,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "subsectimeoriginal",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37521",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32763,6 +40708,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "targetprinter",
         row_index: Some(49),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "337",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32790,6 +40742,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "thresholding",
         row_index: Some(12),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "263",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32816,7 +40775,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "thumbnailformat",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "ThumbnailsFormat",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32843,7 +40809,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "thumbnailheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64085",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32870,7 +40843,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "thumbnailheight",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "ThumbnailsHeight",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32898,6 +40878,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "thumbnaillength",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "514",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD1"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32925,6 +40912,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "thumbnaillength",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "514",
+        writable: Some("int32u"),
+        permanent: true,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32952,6 +40946,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "thumbnaillength",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "514",
+        writable: Some("int32u"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -32978,7 +40979,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "thumbnailwidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("SubIFD0"),
+        full_name: Some("Image::ExifTool::Kodak::SubIFD0"),
+        raw_id: "64084",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33005,7 +41013,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "thumbnailwidth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("xmp"),
+        full_name: Some("Image::ExifTool::XMP::xmp"),
+        raw_id: "ThumbnailsWidth",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33033,6 +41048,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "tilelength",
         row_index: Some(43),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "323",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33060,6 +41082,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "tilewidth",
         row_index: Some(42),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "322",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33087,6 +41116,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "timecodes",
         row_index: Some(142),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51043",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33114,6 +41150,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "timezoneoffset",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "34858",
+        writable: Some("int16s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33141,6 +41184,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "transferfunction",
         row_index: Some(34),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "301",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33167,7 +41217,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "transferfunction",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "TransferFunction",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33194,7 +41251,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "transformation",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("panorama"),
+        full_name: Some("Image::ExifTool::XMP::panorama"),
+        raw_id: "Transformation",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33222,6 +41286,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "tstop",
         row_index: Some(144),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "51058",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33249,6 +41320,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "uniquecameramodel",
         row_index: Some(75),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50708",
+        writable: Some("string"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33275,7 +41353,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "usercomment",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("CanonRaw"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::CanonRaw::Main"),
+        raw_id: "2053",
+        writable: Some("string[256]"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33303,6 +41388,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "usercomment",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37510",
+        writable: Some("undef"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33329,7 +41421,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "usercomment",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "UserComment",
+        writable: Some("lang-alt"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33357,6 +41456,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "vignettingcorrection",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28721",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33383,7 +41489,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Samsung"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Samsung::Type2"),
+        raw_id: "41043",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33410,7 +41523,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrection",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "8209",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33438,6 +41558,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "vignettingcorrparams",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "28722",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33464,7 +41591,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405a"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405a"),
+        raw_id: "1610",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33491,7 +41625,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "842",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33518,7 +41659,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "848",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33545,7 +41693,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "860",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33572,7 +41727,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "vignettingcorrparams",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Tag9405b"),
+        full_name: Some("Image::ExifTool::Sony::Tag9405b"),
+        raw_id: "872",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33600,6 +41762,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "waterdepth",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "37891",
+        writable: Some("rational64s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33626,7 +41795,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "waterdepth",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exifEX"),
+        full_name: Some("Image::ExifTool::XMP::exifEX"),
+        raw_id: "WaterDepth",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33654,6 +41830,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "wb_rggblevels",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "29459",
+        writable: Some("int16s"),
+        permanent: true,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33680,7 +41863,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("MinoltaRaw"),
+        table: Some("WBG"),
+        full_name: Some("Image::ExifTool::MinoltaRaw::WBG"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33707,7 +41897,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("ColorBalance2"),
+        full_name: Some("Image::ExifTool::Nikon::ColorBalance2"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33734,7 +41931,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("ColorBalanceB"),
+        full_name: Some("Image::ExifTool::Nikon::ColorBalanceB"),
+        raw_id: "5096",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33761,7 +41965,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("ColorBalanceC"),
+        full_name: Some("Image::ExifTool::Nikon::ColorBalanceC"),
+        raw_id: "56",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33788,7 +41999,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "wb_rggblevels",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("SR2SubIFD"),
+        full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
+        raw_id: "29459",
+        writable: Some("int16s"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33815,7 +42033,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1000D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1000D"),
+        raw_id: "111",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33842,7 +42067,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
+        raw_id: "68",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33869,7 +42101,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1D"),
+        raw_id: "74",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33896,7 +42135,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DX"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DX"),
+        raw_id: "188",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33923,7 +42169,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkII"),
+        raw_id: "54",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33950,7 +42203,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIII"),
+        raw_id: "94",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -33977,7 +42237,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIIN"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIIN"),
+        raw_id: "54",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34004,7 +42271,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo1DmkIV"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo1DmkIV"),
+        raw_id: "120",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34031,7 +42305,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo40D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo40D"),
+        raw_id: "111",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34058,7 +42339,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo450D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo450D"),
+        raw_id: "111",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34085,7 +42373,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo500D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo500D"),
+        raw_id: "115",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34112,7 +42407,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo50D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo50D"),
+        raw_id: "111",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34139,7 +42441,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo550D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo550D"),
+        raw_id: "120",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34166,7 +42475,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5D"),
+        raw_id: "84",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34193,7 +42509,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkII"),
+        raw_id: "111",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34220,7 +42543,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo5DmkIII"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo5DmkIII"),
+        raw_id: "188",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34247,7 +42577,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo600D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo600D"),
+        raw_id: "123",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34274,7 +42611,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo650D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo650D"),
+        raw_id: "188",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34301,7 +42645,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo6D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo6D"),
+        raw_id: "194",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34328,7 +42679,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo750D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo750D"),
+        raw_id: "305",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34355,7 +42713,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("CameraInfo7D"),
+        full_name: Some("Image::ExifTool::Canon::CameraInfo7D"),
+        raw_id: "119",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34382,7 +42747,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("Processing"),
+        full_name: Some("Image::ExifTool::Canon::Processing"),
+        raw_id: "8",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34409,7 +42781,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Canon"),
+        table: Some("ShotInfo"),
+        full_name: Some("Image::ExifTool::Canon::ShotInfo"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34436,61 +42815,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "whitebalance",
-        row_index: None,
-        source_identity_present: false,
-        groups: &[
-            StaticNativeLookupFamily {
-                family: 0,
-                value: "MakerNotes",
-            },
-            StaticNativeLookupFamily {
-                family: 1,
-                value: "Casio",
-            },
-            StaticNativeLookupFamily {
-                family: 2,
-                value: "Camera",
-            },
-            StaticNativeLookupFamily {
-                family: 3,
-                value: "Main",
-            },
-            StaticNativeLookupFamily {
-                family: 4,
-                value: "",
-            },
-        ],
-    },
-    StaticNativeLookupCandidate {
-        name: "whitebalance",
-        row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Casio::Main"),
+        raw_id: "7",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34518,6 +42850,81 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "whitebalance",
         row_index: None,
         source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "25",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "whitebalance",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Casio"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Casio::Type2"),
+        raw_id: "8210",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
+        groups: &[
+            StaticNativeLookupFamily {
+                family: 0,
+                value: "MakerNotes",
+            },
+            StaticNativeLookupFamily {
+                family: 1,
+                value: "Casio",
+            },
+            StaticNativeLookupFamily {
+                family: 2,
+                value: "Camera",
+            },
+            StaticNativeLookupFamily {
+                family: 3,
+                value: "Main",
+            },
+            StaticNativeLookupFamily {
+                family: 4,
+                value: "",
+            },
+        ],
+    },
+    StaticNativeLookupCandidate {
+        name: "whitebalance",
+        row_index: None,
+        source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "41987",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34545,6 +42952,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "whitebalance",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "65102",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34571,7 +42985,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("FujiFilm"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::FujiFilm::Main"),
+        raw_id: "4098",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34598,7 +43019,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("IFD"),
+        full_name: Some("Image::ExifTool::Kodak::IFD"),
+        raw_id: "1020",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34625,7 +43053,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("KDC_IFD"),
+        full_name: Some("Image::ExifTool::Kodak::KDC_IFD"),
+        raw_id: "64013",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34652,7 +43087,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Kodak::Main"),
+        raw_id: "64",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34679,7 +43121,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Kodak"),
+        table: Some("Type5"),
+        full_name: Some("Image::ExifTool::Kodak::Type5"),
+        raw_id: "26",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34706,7 +43155,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings"),
+        raw_id: "3",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34733,7 +43189,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings5D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings5D"),
+        raw_id: "14",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34760,7 +43223,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettings7D"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettings7D"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34787,7 +43257,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("CameraSettingsA100"),
+        full_name: Some("Image::ExifTool::Minolta::CameraSettingsA100"),
+        raw_id: "11",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34814,7 +43291,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Minolta"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Minolta::Main"),
+        raw_id: "277",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34841,7 +43325,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Nikon::Main"),
+        raw_id: "5",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34868,7 +43359,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Nikon"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Nikon::Type2"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34895,7 +43393,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica2"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica2"),
+        raw_id: "772",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34922,7 +43427,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Panasonic::Main"),
+        raw_id: "3",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34949,7 +43461,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Subdir"),
+        full_name: Some("Image::ExifTool::Panasonic::Subdir"),
+        raw_id: "12339",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -34976,7 +43495,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "25",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35003,7 +43529,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Type2"),
+        full_name: Some("Image::ExifTool::Pentax::Type2"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35030,7 +43563,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("ImageInfo"),
+        full_name: Some("Image::ExifTool::Ricoh::ImageInfo"),
+        raw_id: "38",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35057,7 +43597,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Ricoh"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Ricoh::Main"),
+        raw_id: "4099",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35084,7 +43631,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "136",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35111,7 +43665,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "60",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35138,7 +43699,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "7",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35165,7 +43733,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sigma"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sigma::Main"),
+        raw_id: "88",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35192,7 +43767,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings"),
+        raw_id: "15",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35219,7 +43801,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("CameraSettings2"),
+        full_name: Some("Image::ExifTool::Sony::CameraSettings2"),
+        raw_id: "14",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35246,7 +43835,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "277",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35273,7 +43869,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Sony::Main"),
+        raw_id: "45140",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35300,7 +43903,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crd"),
+        full_name: Some("Image::ExifTool::XMP::crd"),
+        raw_id: "WhiteBalance",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35327,7 +43937,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("crs"),
+        full_name: Some("Image::ExifTool::XMP::crs"),
+        raw_id: "WhiteBalance",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35354,7 +43971,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitebalance",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("exif"),
+        full_name: Some("Image::ExifTool::XMP::exif"),
+        raw_id: "WhiteBalance",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35382,6 +44006,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "whitelevel",
         row_index: Some(82),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "50717",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: Some("SubIFD"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35408,7 +44039,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitelevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "126",
+        writable: Some("int32u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35435,7 +44073,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitelevel",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Sony"),
+        table: Some("SR2SubIFD"),
+        full_name: Some("Image::ExifTool::Sony::SR2SubIFD"),
+        raw_id: "30847",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35463,6 +44108,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "whitepoint",
         row_index: Some(39),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "318",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35489,7 +44141,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitepoint",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Panasonic"),
+        table: Some("Leica9"),
+        full_name: Some("Image::ExifTool::Panasonic::Leica9"),
+        raw_id: "861",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35516,7 +44175,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitepoint",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Pentax"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Pentax::Main"),
+        raw_id: "513",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35543,7 +44209,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "whitepoint",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "WhitePoint",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35571,6 +44244,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xiaomimodel",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "39424",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35598,6 +44278,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xiaomisettings",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "39321",
+        writable: Some("string"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35625,6 +44312,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xpauthor",
         row_index: Some(64),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40093",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35652,6 +44346,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xpcomment",
         row_index: Some(63),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40092",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35679,6 +44380,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xpkeywords",
         row_index: Some(65),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40094",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35706,6 +44414,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xposition",
         row_index: Some(29),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "286",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35733,6 +44448,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xpsubject",
         row_index: Some(66),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40095",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35760,6 +44482,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xptitle",
         row_index: Some(62),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "40091",
+        writable: Some("int8u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35787,6 +44516,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "xresolution",
         row_index: Some(25),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "282",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35813,7 +44549,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "xresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("JFIF"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::JFIF::Main"),
+        raw_id: "3",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35840,7 +44583,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "xresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Photoshop"),
+        table: Some("Resolution"),
+        full_name: Some("Image::ExifTool::Photoshop::Resolution"),
+        raw_id: "0",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35867,7 +44617,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "xresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "XResolution",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35895,6 +44652,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ycbcrcoefficients",
         row_index: Some(187),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "529",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35921,7 +44685,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ycbcrcoefficients",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "YCbCrCoefficients",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35949,6 +44720,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ycbcrpositioning",
         row_index: Some(188),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "531",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -35975,7 +44753,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ycbcrpositioning",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "YCbCrPositioning",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36003,6 +44788,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "ycbcrsubsampling",
         row_index: None,
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "530",
+        writable: Some("int16u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36029,7 +44821,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "ycbcrsubsampling",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "YCbCrSubSampling",
+        writable: Some("integer"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36057,6 +44856,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "yposition",
         row_index: Some(30),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "287",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36084,6 +44890,13 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
         name: "yresolution",
         row_index: Some(26),
         source_identity_present: true,
+        module: Some("Exif"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::Exif::Main"),
+        raw_id: "283",
+        writable: Some("rational64u"),
+        permanent: false,
+        write_group: Some("IFD0"),
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36110,7 +44923,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "yresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("JFIF"),
+        table: Some("Main"),
+        full_name: Some("Image::ExifTool::JFIF::Main"),
+        raw_id: "5",
+        writable: Some("1"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36137,7 +44957,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "yresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("Photoshop"),
+        table: Some("Resolution"),
+        full_name: Some("Image::ExifTool::Photoshop::Resolution"),
+        raw_id: "4",
+        writable: None,
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,
@@ -36164,7 +44991,14 @@ pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[
     StaticNativeLookupCandidate {
         name: "yresolution",
         row_index: None,
-        source_identity_present: false,
+        source_identity_present: true,
+        module: Some("XMP"),
+        table: Some("tiff"),
+        full_name: Some("Image::ExifTool::XMP::tiff"),
+        raw_id: "YResolution",
+        writable: Some("rational"),
+        permanent: false,
+        write_group: None,
         groups: &[
             StaticNativeLookupFamily {
                 family: 0,

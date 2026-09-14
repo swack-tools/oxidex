@@ -96,24 +96,6 @@ my $query_digest = sha256_hex($canonical->encode(\@query_names));
 die "probe query-name digest disagrees with capture\n"
     unless defined($capture->{query_names_sha256}) && $capture->{query_names_sha256} eq $query_digest;
 
-my $runtime_find = helper_fact('Image::ExifTool::TagLookup::FindTagInfo');
-my $runtime_setnew = helper_fact('Image::ExifTool::SetNewValue');
-for my $key (qw(find_tag_info set_new_value)) {
-    die "capture helper is not an object: $key\n" unless ref($capture->{$key}) eq 'HASH';
-}
-# The compiler structurally authenticates the two admitted FindTagInfo deparse
-# renderings (the XMP prototype spelling differs by load state).  This probe
-# must not turn that source-proved equivalence into a byte-hash mismatch.
-# Bindings, selected source files and their bytes remain exact here.
-for my $pair ([$runtime_find, $capture->{find_tag_info}, 'FindTagInfo'], [$runtime_setnew, $capture->{set_new_value}, 'SetNewValue']) {
-    my ($live, $saved, $label) = @$pair;
-    die "$label capture is not an object\n" unless ref($saved) eq 'HASH';
-    for my $key (qw(requested_binding actual_name source_file source_sha256)) {
-        die "$label identity differs from supplied dump capture\n"
-            unless defined($live->{$key}) && defined($saved->{$key}) && $live->{$key} eq $saved->{$key};
-    }
-}
-
 my $context = $capture->{native_capture_context};
 die "native capture context is not an object\n" unless ref($context) eq 'HASH';
 my %actual_context = (
@@ -142,6 +124,37 @@ for my $module (@{$captured_closure->{modules}}) {
     die "dump capture closure has duplicate module binding: $module->{inc}\n"
         if exists $captured_by_inc{$module->{inc}};
     $captured_by_inc{$module->{inc}} = $module;
+}
+
+# Replay the authenticated loaded source closure before deparsing helpers.
+# B::Deparse consults prototypes of already-loaded callees, so deparsing a
+# settled dump in a smaller process can change its text without changing code.
+# Check every source file before require; never execute an unverified closure.
+for my $inc (sort keys %captured_by_inc) {
+    my $member = $captured_by_inc{$inc};
+    die "unsupported captured module binding: $inc\n"
+        unless $inc =~ m{\AImage/ExifTool(?:\.pm|/[A-Za-z0-9_/]+\.(?:pm|pl))\z};
+    die "captured module source identity differs: $inc\n"
+        unless $member->{source_file} eq $inc;
+    my $file = File::Spec->catfile($lib_abs, $inc);
+    die "captured module source escaped selected library: $inc\n"
+        unless relative_selected_file($file) eq $inc;
+    die "dump capture module source differs from selected library: $inc\n"
+        unless sha256_hex(read_raw($file)) eq $member->{source_sha256};
+}
+for my $inc (sort keys %captured_by_inc) {
+    require $inc;
+    die "captured module resolved outside selected source: $inc\n"
+        unless relative_selected_file($INC{$inc}) eq $inc;
+}
+my $runtime_find = helper_fact('Image::ExifTool::TagLookup::FindTagInfo');
+my $runtime_setnew = helper_fact('Image::ExifTool::SetNewValue');
+for my $pair ([$runtime_find, $capture->{find_tag_info}, 'FindTagInfo'],
+              [$runtime_setnew, $capture->{set_new_value}, 'SetNewValue']) {
+    my ($live, $saved, $label) = @$pair;
+    die "$label capture is not an object\n" unless ref($saved) eq 'HASH';
+    die "$label identity differs from supplied dump capture\n"
+        unless $canonical->encode($live) eq $canonical->encode($saved);
 }
 
 my %selected;

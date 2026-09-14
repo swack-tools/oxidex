@@ -7461,7 +7461,23 @@ mod tests {
         let mut quicktime_count = 0;
         let mut makernotes_count = 0;
 
-        for descriptor in TAG_REGISTRY.values() {
+        // Public migrations intentionally remove handwritten entries. Count
+        // their authenticated replacement once under its source family name;
+        // neither YAML fallback nor physical-directory aliases can conceal a
+        // missing migrated descriptor in this regression check.
+        let mut descriptors: HashMap<String, &TagDescriptor> = TAG_REGISTRY
+            .iter()
+            .map(|(name, descriptor)| ((*name).to_string(), descriptor))
+            .collect();
+        for fact in generated_scalar_descriptor_fallback::facts()
+            .expect("generated descriptor source captures must compose")
+        {
+            let name = format!("{}:{}", fact.group0, fact.name);
+            let descriptor = generated_scalar_descriptor(&name)
+                .expect("every composed source fact must publish its descriptor");
+            descriptors.insert(name, descriptor);
+        }
+        for descriptor in descriptors.values() {
             match descriptor.format() {
                 FormatFamily::EXIF => exif_count += 1,
                 FormatFamily::GPS => gps_count += 1,

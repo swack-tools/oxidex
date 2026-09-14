@@ -30,9 +30,17 @@ use strict; use warnings; use B (); use B::Deparse; use Cwd qw(abs_path); use Di
 my $lib = abs_path(shift); unshift @INC, $lib; require Image::ExifTool; require 'Image/ExifTool/Writer.pl';
 for my $file (@ARGV) { require $file; }
 Image::ExifTool::GetTagTable('Image::ExifTool::Exif::Main') or die "no Exif Main\n";
+# Match dump_tables.pl: settle the query closure before recording it.
+my @settled = Image::ExifTool::TagLookup::FindTagInfo('HostComputer');
 sub raw { open(my $f, '<:raw', $_[0]) or die $!; local $/; my $x=<$f>; close($f); return $x }
 sub rel { my $a=abs_path($_[0]); die "outside\n" unless index($a, "$lib/")==0; return File::Spec->abs2rel($a,$lib) }
 sub helper { my($n)=@_; no strict 'refs'; my $cv=*{$n}{CODE} or die $n; my $b=B::svref_2object($cv); my $g=$b->GV; my $a=($g->STASH->NAME//'').'::'.($g->NAME//''); my $f=rel($b->FILE); my $body=B::Deparse->new('-p','-sC')->coderef2text($cv); return {requested_binding=>$n,actual_name=>$a,source_file=>$f,source_sha256=>sha256_hex(raw("$lib/$f")),body_sha256=>sha256_hex($body)} }
+# The v3 probe identifies candidate table pointers against the native catalog.
+# Capture that broad load state as well as the selected query state.
+my $lookup = raw("$lib/Image/ExifTool/TagLookup.pm");
+$lookup =~ /my\s+\@tableList\s*=\s*\(\n(.*?)^\);/ms or die "no table list";
+my @tables = ($1 =~ /^\s*'([^']+)'\s*,?\s*(?:#.*)?$/mg);
+Image::ExifTool::GetTagTable($_) for @tables;
 my @m; for my $i (sort keys %INC) { next unless $i eq 'Image/ExifTool.pm' || $i =~ m{^Image/ExifTool/}; my $f=rel($INC{$i}); push @m,{inc=>$i,source_file=>$f,source_sha256=>sha256_hex(raw($INC{$i}))} }
 my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>{schema=>'native_exiftool_capture_context_v1',selected_library=>$lib,perl_path=>(abs_path($^X)//$^X),perl_version=>"$]",exiftool_version=>"$Image::ExifTool::VERSION",loaded_closure=>{sha256=>sha256_hex($j->encode(\@m)),modules=>\@m}},helpers=>{find_tag_info=>helper('Image::ExifTool::TagLookup::FindTagInfo'),set_new_value=>helper('Image::ExifTool::SetNewValue')}});
 '''
@@ -157,12 +165,13 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
         }
         with tempfile.TemporaryDirectory() as directory:
             probe_input = Path(directory) / "probe.json"
-            probe_input.write_text(json.dumps({"schema": "native_setnewvalue_address_probe_input_v2",
+            probe_input.write_text(json.dumps({"schema": "native_setnewvalue_address_probe_input_v3",
                                                 "capture": capture, "rows": rows,
                                                 "query_names": ["hostcomputer"]}), encoding="utf-8")
             result = subprocess.run(
                 [PERL, str(ROOT / "tools/exiftool-tables/setnewvalue_address_probe.pl"),
-                 str(LIB), str(probe_input)], check=True, text=True, capture_output=True)
+                 str(LIB), str(probe_input)], check=False, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
         observed = json.loads(result.stdout)
         self.assertEqual(observed["runtime"]["helpers"]["find_tag_info"], capture["find_tag_info"])
         self.assertEqual(observed["runtime"]["loaded_closure"], capture["native_capture_context"]["loaded_closure"])
@@ -202,7 +211,7 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
                 "query_names_sha256": hashlib.sha256(canonical(["hostcomputer"])).hexdigest(),
             }
             probe_input = Path(directory) / "probe.json"
-            probe_input.write_text(json.dumps({"schema": "native_setnewvalue_address_probe_input_v2",
+            probe_input.write_text(json.dumps({"schema": "native_setnewvalue_address_probe_input_v3",
                                                 "capture": capture, "rows": rows,
                                                 "query_names": ["hostcomputer"]}), encoding="utf-8")
             exif = copied / "Image/ExifTool/Exif.pm"

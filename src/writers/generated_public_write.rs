@@ -49,14 +49,35 @@ fn proven_external(key: &str, rules: &AddressRules<'_>) -> bool {
     let Some((group, name)) = key.split_once(':') else {
         return false;
     };
-    rules.lookup.iter().any(|candidate| {
-        !candidate.source_identity_present
-            && candidate.name.eq_ignore_ascii_case(name)
+    let Some(rows) = rules.rows else {
+        return false;
+    };
+    let mut matched = false;
+    for candidate in rules.lookup.iter().filter(|candidate| {
+        candidate.name.eq_ignore_ascii_case(name)
             && candidate
                 .groups
                 .iter()
                 .any(|native| native.value.eq_ignore_ascii_case(group))
-    })
+    }) {
+        matched = true;
+        // A fully identified native table may still belong to another writer.
+        // An unmapped row in our own table is not evidence for legacy fallback.
+        if candidate.row_index.is_some()
+            || (candidate.source_identity_present
+                && (candidate.module.is_none()
+                    || candidate.table.is_none()
+                    || candidate.full_name.is_none()
+                    || rows.iter().any(|row| {
+                        candidate.module == Some(row.module)
+                            && candidate.table == Some(row.table)
+                            && candidate.full_name == Some(row.full_name)
+                    })))
+        {
+            return false;
+        }
+    }
+    matched
 }
 
 pub(crate) fn resolve_public<'a>(
@@ -400,6 +421,42 @@ mod tests {
         let plan = plan_public_write(&MetadataMap::new(), &desired, &[]).unwrap();
         assert!(plan.generated.is_empty());
         assert_eq!(plan.legacy_metadata, desired);
+    }
+
+    #[test]
+    fn unmapped_same_table_candidate_is_not_a_foreign_namespace() {
+        let mut rules = generated_write_address::generated_rules();
+        let candidate = rules
+            .lookup
+            .iter()
+            .find(|candidate| {
+                candidate.name.eq_ignore_ascii_case("CameraLabel")
+                    && candidate.groups.iter().any(|group| group.value == "XMP")
+            })
+            .unwrap();
+        assert!(candidate.source_identity_present);
+        assert!(proven_external("XMP:CameraLabel", &rules));
+        let source = rules
+            .rows
+            .unwrap()
+            .iter()
+            .find(|row| row.name == "CameraLabel")
+            .unwrap();
+        let lookup = [
+            super::super::generated_setnewvalue_address_rules::StaticNativeLookupCandidate {
+                module: Some(source.module),
+                table: Some(source.table),
+                full_name: Some(source.full_name),
+                row_index: None,
+                ..*candidate
+            },
+        ];
+        rules.lookup = &lookup;
+        assert!(!proven_external("XMP:CameraLabel", &rules));
+        assert!(matches!(
+            resolve_public("XMP:CameraLabel", &rules, PUBLIC_SET_NEW_VALUE_MIGRATIONS),
+            Resolution::Unsupported(_)
+        ));
     }
 
     #[test]

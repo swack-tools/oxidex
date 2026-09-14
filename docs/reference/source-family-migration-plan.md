@@ -1,11 +1,12 @@
 # Source-family baseline and generic readers
 
-Status: active under the renewed full-parity objective on 2026-09-14.
-PR #775 is the first reproducible QuickTime baseline milestone; #776 repairs
-the broader source/artifact inventory. The earlier checkpoint pause is superseded.
+Status: active and incomplete, 2026-09-14. PR #779 is the single consolidated
+integration PR. Earlier writer PRs #771–#774 and follow-ups #780/#781 are
+preserved in its history. Only #779, #682 and #683 remain open; #682/#683 are
+outside this rollup. Further fixes and evidence belong in #779.
 
-This goal starts at `304d6339`, using the repository pin, ExifTool 13.59.
-The earlier writer checkpoints (#771–#774) are unfinished and remain separate.
+The integration base is `b027ce0b`, using the repository pin, ExifTool 13.59.
+The full goal includes every catalog family and both reading and writing.
 
 ## What we are measuring
 
@@ -71,8 +72,9 @@ without adding Rust names or tag lists. Preserve unknown atoms as unknown.
 - Formatting, lint and relevant native/parser tests; all actionable review
   comments addressed before merge.
 
-Land small complete milestones as they pass. Four to six milestones per day is
-a preferred working cadence, not a reason to skip gates or inflate coverage.
+Keep implementation milestones separately reviewable as commits in #779. The
+maintainer requested one consolidated PR to avoid a growing queue. Merge only
+after the combined checks and all actionable review comments are resolved.
 
 ## Full-goal completion criteria
 
@@ -111,17 +113,59 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
   downloadable JSON, Pages report and native regeneration check. It preserves
   33,487 ordinary entries, 21,373 actual case-insensitive entry names, and the
   distinct native legacy counter of 21,437. Container rows remain separate.
-- Full hydrated source-layout capture is incomplete. Two attempts exposed
-  excessive serialization growth; failed-run evidence was retained. Reference
-  interning is implemented, and reader versus writer capture stages are being
-  isolated. A bounded reference test is not a complete-catalog capture.
-- ItemList integration is committed and pushed separately: 92 generated specs
-  in the primary default-locale carrier, 25 behavior fixtures and 50/50 native
-  comparisons. Workspace tests pass. Generated protocol guards cover reader
-  helper bodies and reachable charset mapping data; remaining caller/language
-  work and real-container conformance remain before landing.
-- Writing: no new observed results in these milestones. Writer checkpoints and
-  the complete source-family writing denominator still require completion.
+- Full hydrated source capture now succeeds with canonical Perl 5.38.2 and
+  pinned ExifTool 13.59: 1,512 tables, 34,897 raw keys, 35,886 variants,
+  41,818 interned objects and zero unresolved references. The checked-in audit
+  and source join conserve all 33,487 ordinary catalog entries. This proves
+  source accounting, not runtime support.
+- ItemList's generated reader is in #779: 92 accepted declarations and 304
+  refusals across the 396 selected ItemList/UserData/Keys source records.
+  The recorded behavior suite has 25 fixtures and 50/50 native comparisons;
+  this is bounded evidence, not full-catalog reading parity. The 11-file paired
+  corpus comparison changed matched occurrences from 622 to 620, VALUE from
+  2 to 1, MISSING from 234 to 240, and EXTRA from 114 to 86. Those results are
+  not an aggregate conformance pass.
+- The permanent source join exists, but its generated-artifact and observed
+  read/write joins remain incomplete. A draft QuickTime implementation join
+  still needs complete input validation and reconciliation of hydrated source
+  wrappers with selector inputs before publication. Other protocol families
+  must also be joined; unobserved entries must remain visibly unobserved.
+- Writing fixes, numeric directory selection, Nikon generator recovery and
+  upgrade-rehearsal fixes are consolidated in #779. Full regeneration currently
+  fails at the Nikon encrypted-callback contract. It also exposed a separate
+  native address-probe load-context mismatch; the repaired probe emits 191
+  address rows and 1,261 candidates against the fresh dump, with six native
+  probe tests passing. The focused integrated checks now pass: 219 writer tests
+  (two ignored), the exact registry distribution test, 18 native mandatory-default
+  tests and library lint. Broader workspace/native matrix checks remain pending.
+
+## Next steps and measurable exit checks
+
+1. **Make regeneration reliable.** Finish the Nikon callback diagnosis, then run
+   the sanctioned full regeneration using the recorded Perl and pinned library.
+   Require both generation tiers, their independent native verifiers, and the
+   declared-write-set check to pass. Inspect lost/added rows and refusals before
+   committing generated artifacts; a successful command that emits an empty
+   writer registry is not success.
+2. **Validate the consolidated runtime.** Run the writer, registry and native
+   mandatory-default checks, then the combined workspace and relevant native
+   read/write gates. Record skipped tests separately. Reconcile all 14 carried
+   review threads with their actual fixes and evidence; keep #779 unmerged
+   until the required checks pass.
+3. **Finish the useful baseline.** Join catalog table/key/variant identities to
+   authenticated generated reader/writer artifacts and exact refusal reasons.
+   Publish family counts and remaining shared capability, with explicit input
+   hashes. Require all 33,487 current catalog entries to be classified without
+   treating declarations as observations. Regenerate this denominator on upgrades.
+4. **Connect observations and Pages.** Attach pinned, group-qualified fixture
+   evidence separately for reading and real write/read-back operations. Publish
+   JSON and the human-readable family report, and make CI reject stale artifacts,
+   missing identities or unclassified rows.
+5. **Convert the next whole protocol.** Use the family report's refusal counts to
+   choose shared UserData, Keys or conversion support. Prove that ordinary source
+   row additions enter the generic path after regeneration. Repeat across the
+   full catalog; no per-tag handwritten mappings and no claim of full parity
+   while required protocols or behaviors remain unimplemented.
 
 ## Permanent catalog accounting requirement
 

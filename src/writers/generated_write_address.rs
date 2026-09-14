@@ -419,7 +419,7 @@ mod tests {
         }
     }
 
-    const fn candidate(
+    fn candidate(
         index: Option<usize>,
         groups: &'static [StaticNativeLookupFamily],
     ) -> StaticNativeLookupCandidate {
