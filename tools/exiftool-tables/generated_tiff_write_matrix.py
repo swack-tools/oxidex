@@ -439,7 +439,7 @@ def native_survivor_value(default, entry, byte_order, survivor_encodings):
     The physical record selects the native form during WriteExif cleanup, so
     type/count must come from the survivor rather than the new-directory
     default.  The checked forms are the capture-authenticated TIFF forms used
-    by this release: int16u, int32u, and rational64u.  Every other physical
+    by this release: fixed-width integers and rational64u.  Every other physical
     form is a non-match and therefore retains IFD1.
     """
     value = default["value"]
@@ -448,10 +448,12 @@ def native_survivor_value(default, entry, byte_order, survivor_encodings):
         return None
     admitted = {(item.get("format_name"), item.get("tiff_type"), item.get("width"), item.get("operation"))
                for item in survivor_encodings}
-    if field_type in (3, 4) and (("int16u" if field_type == 3 else "int32u"), field_type, 2 if field_type == 3 else 4, "write_value_scalar") in admitted:
-        if count != 1:
+    integer_forms = {1: ("int8u", 1), 6: ("int8s", 1), 8: ("int16s", 2),
+                     3: ("int16u", 2), 9: ("int32s", 4), 4: ("int32u", 4)}
+    if field_type in integer_forms:
+        format_name, width = integer_forms[field_type]
+        if (format_name, field_type, width, "write_value_scalar") not in admitted or count != 1:
             return None
-        width = 2 if field_type == 3 else 4
         return (value & ((1 << (width * 8)) - 1)).to_bytes(width, byte_order).hex()
     if field_type == 5 and ("rational64u", 5, 8, "write_value_scalar") in admitted:
         if count != 1 or not 0 <= value <= 0xffffffff:

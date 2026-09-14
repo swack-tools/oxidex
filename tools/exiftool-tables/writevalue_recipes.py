@@ -328,6 +328,30 @@ _NUMERIC_BODIES = {
     use strict;
     (return scalar(($_[0] =~ m[^[-+]?\d+/\d+$])));
 }''',
+    'Set8u': r'''(@) {
+    package Image::ExifTool;
+    use strict;
+    (return DoPackStd('C', @_));
+}''',
+    'Set8s': r'''(@) {
+    package Image::ExifTool;
+    use strict;
+    (return DoPackStd('c', @_));
+}''',
+    'Set16s': r'''(@) {
+    package Image::ExifTool;
+    use strict;
+    (my($val) = (shift()));
+    (($val < 0) and ($val += 65536));
+    (return Set16u($val, @_));
+}''',
+    'Set32s': r'''(@) {
+    package Image::ExifTool;
+    use strict;
+    (my($val) = (shift()));
+    (($val < 0) and (($val += 4294967295), (++$val)));
+    (return Set32u($val, @_));
+}''',
     'Set16u': r'''(@) {
     package Image::ExifTool;
     use strict;
@@ -401,13 +425,17 @@ class NumericWriteRecipe:
 
 _NUMERIC_DEPENDENCIES = {
     'WriteValue': ('IsFloat', 'IsHex', 'IsInt', 'IsRational'),
+    'Set8u': ('DoPackStd',),
+    'Set8s': ('DoPackStd',),
+    'Set16s': ('Set16u',),
     'Set16u': ('DoPackStd',),
+    'Set32s': ('Set32u',),
     'Set32u': ('DoPackStd',),
     'SetRational64u': ('Rationalize', 'Set32u'),
     'Rationalize': ('AssembleRational',),
     'AssembleRational': ('AssembleRational',),
 }
-_WRITER_NUMERIC = {'WriteValue', 'SetRational64u', 'Rationalize', 'AssembleRational'}
+_WRITER_NUMERIC = {'WriteValue', 'Set16s', 'Set32s', 'SetRational64u', 'Rationalize', 'AssembleRational'}
 
 
 def _numeric_body(source: Any) -> tuple[str, ...]:
@@ -483,7 +511,7 @@ def compile_numeric_write(helpers: Mapping[str, Any], closure: Mapping[str, Any]
     if hashes.get('resolved') is not True or dispatch.get('resolved') is not True:
         raise RecipeRefused('numeric WriteValue lexical dispatch is unresolved')
     entries = _numeric_mapping(dispatch.get('entries'), 'dispatch entries')
-    for format_name, name in (('int16u', 'Set16u'), ('int32u', 'Set32u'), ('rational64u', 'SetRational64u')):
+    for format_name, name in (('int8u', 'Set8u'), ('int8s', 'Set8s'), ('int16s', 'Set16s'), ('int16u', 'Set16u'), ('int32s', 'Set32s'), ('int32u', 'Set32u'), ('rational64u', 'SetRational64u')):
         _numeric_function(entries.get(format_name), name, closure, generic_closure)
 
     # DoPackStd is not sufficient on its own: its pack template is mutable
@@ -506,4 +534,4 @@ def compile_numeric_write(helpers: Mapping[str, Any], closure: Mapping[str, Any]
         entries = _numeric_mapping(captured.get('entries'), name + ' entries')
         if captured.get('resolved') is not True or any(entries.get(k) != v for k, v in expected.items()):
             raise RecipeRefused('numeric WriteValue byte-order packing templates are unsupported')
-    return NumericWriteRecipe(('int16u', 'int32u', 'rational64u'), (16, 32))
+    return NumericWriteRecipe(('int8u', 'int8s', 'int16s', 'int16u', 'int32s', 'int32u', 'rational64u'), (8, 16, 32))
