@@ -6,7 +6,16 @@ from pathlib import Path
 import json
 import tempfile
 
-from generated_tiff_write_matrix import GeneratedTarget, RULES, compare, compare_carrier, generated_targets
+from generated_tiff_write_matrix import (
+    GeneratedTarget,
+    RULES,
+    compare,
+    compare_carrier,
+    authenticated_ifd1_mandatory_input,
+    generated_targets,
+    native_requested_insert_is_noop,
+    observed_operation,
+)
 from native_write_matrix import parse_tiff
 
 
@@ -19,7 +28,11 @@ class GeneratedTiffComparison(unittest.TestCase):
             return root + bytes(offset - len(root)) + child
         original = parse_tiff(file_at(26), False)
         relocated = parse_tiff(file_at(28), False)
-        compare(original, relocated, original, 0xa001)
+        compare(original, relocated, relocated, 0xa001)
+        wrong_pointer_type = copy.deepcopy(relocated)
+        wrong_pointer_type["tags"]["34665"]["type"] = 3
+        with self.assertRaisesRegex(AssertionError, "pointer type/count"):
+            compare(original, relocated, wrong_pointer_type, 0xa001)
         changed = parse_tiff(file_at(26, 2), False)
         with self.assertRaisesRegex(AssertionError, "type/count/value"):
             compare(original, relocated, changed, 0xa001)
@@ -80,11 +93,128 @@ class GeneratedTiffComparison(unittest.TestCase):
             compare(seed, corrupted, corrupted, 316)
 
 
-    def test_generated_targets_follow_ledger_identities_and_refuse_malformed_or_empty_ledgers(self):
+    def test_source_numeric_case_family_preserves_all_432_string_cases(self):
+        from generated_tiff_write_matrix import case_inputs, predecessor_public_targets
         targets = generated_targets()
-        self.assertEqual(len(targets), 9)
-        self.assertEqual(targets[0], GeneratedTarget(0x010d, "DocumentName", "EXIF", "IFD0"))
-        self.assertEqual(targets[0].qualifiers, ("EXIF:DocumentName", "IFD0:DocumentName"))
+        predecessor = predecessor_public_targets(targets)
+        strings = [target for target in targets if target.case_family == "native_string_scalar"]
+        numeric = [target for target in targets if target.case_family == "native_unsigned_numeric_scalar"]
+        self.assertEqual(len(predecessor), 15)
+        self.assertEqual(len(targets), 19)
+        self.assertLess(len(predecessor), len(targets))
+        self.assertTrue(set(predecessor).issubset(targets))
+        self.assertGreater(sum(len(target.qualifiers) * len(case_inputs(target)) * 3 for target in strings), 0)
+        self.assertGreater(sum(len(target.qualifiers) * len(case_inputs(target)) * 3 for target in numeric), 0)
+        self.assertTrue(all(case_inputs(target)['insert'] == b'72' for target in numeric))
+        self.assertTrue(all('delete' in case_inputs(target) for target in numeric))
+
+    def test_selected_directory_cases_derive_every_eligible_source_recipe(self):
+        from generated_tiff_write_matrix import case_inputs, matrix_inputs, explicit_directory_operands, selected_qualifiers, directory_path, predecessor_public_targets
+        targets = generated_targets()
+        predecessor = predecessor_public_targets(targets)
+        directories = explicit_directory_operands()
+        self.assertEqual(directories, ("IFD0", "IFD1"))
+        counts = {}
+        for target in targets:
+            for name in selected_qualifiers(target, directories):
+                path = directory_path(target, name, directories)
+                family = ("selected_" if path else "baseline_") + target.case_family
+                counts[family] = counts.get(family, 0) + 3 * len(matrix_inputs(target))
+        self.assertEqual(sum(counts.values()), sum(
+            3 * len(matrix_inputs(target)) * len(selected_qualifiers(target, directories))
+            for target in targets))
+        self.assertEqual(sum(3 * len(matrix_inputs(target)) * len(selected_qualifiers(target, directories))
+                             for target in predecessor), 1242)
+
+    def test_decimal_public_cases_are_additive_and_typed(self):
+        from generated_tiff_write_matrix import matrix_inputs, extended_numeric_inputs, explicit_directory_operands, selected_qualifiers, public_scalar, predecessor_public_targets
+        targets, directories = generated_targets(), explicit_directory_operands()
+        predecessor = predecessor_public_targets(targets)
+        self.assertEqual(sum(len(selected_qualifiers(target, directories)) * len(matrix_inputs(target)) * 3
+                             for target in predecessor), 1242)
+        self.assertGreater(sum(len(selected_qualifiers(target, directories)) * len(matrix_inputs(target)) * 3
+                               for target in targets), 1242)
+        for target in targets:
+            for case, value in extended_numeric_inputs(target).items():
+                self.assertEqual(public_scalar(target, case, value), "float" if case == "numeric_float" else "utf8")
+
+    def test_tiff_ifd1_fixture_preserves_image_and_existing_entries(self):
+        from generated_tiff_write_matrix import make_existing_next_ifd_fixture
+        from native_write_matrix import make_tiff
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "carrier.tif"
+            for order in ("little", "big"):
+                make_tiff(path, order)
+                original = parse_tiff(path.read_bytes())
+                make_existing_next_ifd_fixture(path, "tiff_" + order)
+                changed = parse_tiff(path.read_bytes())
+                self.assertEqual(changed['tags'], original['tags'])
+                self.assertEqual(changed['image_payload_hex'], original['image_payload_hex'])
+                self.assertEqual(changed['children']['NextIFD']['tags'], {})
+
+    def test_selected_ifd_comparison_preserves_same_id_in_ifd0(self):
+        root = {"byte_order": "little", "image_payload_hex": None, "tags": {
+            "282": {"type": 5, "count": 1, "value_hex": "5b00000001000000"}}}
+        seed = copy.deepcopy(root)
+        seed["children"] = {"NextIFD": copy.deepcopy(root)}
+        expected = copy.deepcopy(seed)
+        expected["children"]["NextIFD"]["tags"]["282"]["value_hex"] = "2c01000001000000"
+        compare(seed, expected, expected, 282, target_directory=("NextIFD",))
+        bad = copy.deepcopy(expected)
+        bad["tags"]["282"]["value_hex"] = "2c01000001000000"
+        with self.assertRaises(AssertionError):
+            compare(seed, bad, bad, 282, target_directory=("NextIFD",))
+        with self.assertRaises(AssertionError):
+            compare(seed, expected, seed, 282, target_directory=("NextIFD",))
+
+    def test_native_seed_mandatory_ifd1_tag_turns_requested_insert_into_update(self):
+        seed = {"exif": {"tags": {}, "children": {"NextIFD": {"tags": {
+            "282": {"type": 5, "count": 1, "value_hex": "4800000001000000"}
+        }}}}}
+        self.assertEqual(
+            observed_operation(seed, "jpeg", ("NextIFD",), 282, "insert"),
+            (True, "update"),
+        )
+        self.assertEqual(
+            observed_operation(seed, "jpeg", ("NextIFD",), 283, "insert"),
+            (False, "insert"),
+        )
+        self.assertEqual(
+            observed_operation(seed, "jpeg", ("NextIFD",), 282, "delete"),
+            (True, "delete"),
+        )
+        x_resolution = next(target for target in generated_targets() if target.raw_tag_id == 282)
+        self.assertEqual(authenticated_ifd1_mandatory_input(x_resolution), b"72")
+        self.assertTrue(native_requested_insert_is_noop(
+            seed, copy.deepcopy(seed), "jpeg", ("NextIFD",), x_resolution, "insert", b"72"
+        ))
+        changed = copy.deepcopy(seed)
+        changed["exif"]["children"]["NextIFD"]["tags"]["282"]["value_hex"] = "2c01000001000000"
+        self.assertFalse(native_requested_insert_is_noop(
+            seed, changed, "jpeg", ("NextIFD",), x_resolution, "insert", b"72"
+        ))
+        self.assertFalse(native_requested_insert_is_noop(
+            seed, seed, "jpeg", ("NextIFD",), x_resolution, "update", b"72"
+        ))
+        self.assertFalse(native_requested_insert_is_noop(
+            seed, seed, "jpeg", ("NextIFD",), x_resolution, "insert", b"300"
+        ))
+
+    def test_unchanged_arbitrary_insert_is_not_a_native_mandatory_default_noop(self):
+        arbitrary = next(target for target in generated_targets() if target.raw_tag_id == 269)
+        seed = {"exif": {"tags": {}, "children": {"NextIFD": {"tags": {
+            "269": {"type": 2, "count": 4, "value_hex": "666f6f00"}
+        }}}}}
+        self.assertIsNone(authenticated_ifd1_mandatory_input(arbitrary))
+        self.assertFalse(native_requested_insert_is_noop(
+            seed, copy.deepcopy(seed), "jpeg", ("NextIFD",), arbitrary, "insert", b"foo"
+        ))
+
+    def test_generated_targets_follow_ledger_identities_and_refuse_malformed_or_empty_ledgers(self):
+        from generated_tiff_write_matrix import predecessor_public_targets
+        targets = generated_targets()
+        self.assertEqual(len(predecessor_public_targets(targets)), 15)
+        self.assertGreater(len(targets), 15)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "ledger.json"
             path.write_text(json.dumps({"emitted": True, "reason": None, "recipes": [{

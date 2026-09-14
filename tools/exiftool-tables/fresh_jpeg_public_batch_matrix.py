@@ -331,7 +331,8 @@ def compare_batch(source: Path, native_output: Path, generated_output: Path,
         raise AssertionError("mixed public batch lost fresh/empty EXIF APP1")
     _compare_tiff(native_doc["exif"], generated_doc["exif"])
     native_target, generated_target = _entry(native_doc, target.raw_tag_id), _entry(generated_doc, target.raw_tag_id)
-    if (native_target is not None) != spec["target_present"] or native_target != generated_target:
+    if ((native_target is not None) != spec["target_present"]
+            or native.entry_storage(native_target) != native.entry_storage(generated_target)):
         raise AssertionError("mixed public batch generated target transition differs")
     native_mandatory = _entry(native_doc, mandatory.raw_tag_id, mandatory.directory)
     generated_mandatory = _entry(generated_doc, mandatory.raw_tag_id, mandatory.directory)
@@ -339,7 +340,7 @@ def compare_batch(source: Path, native_output: Path, generated_output: Path,
         raise AssertionError("authored mandatory override was lost to generated defaults")
     if spec["mandatory_state"] == "absent" and native_mandatory is not None:
         raise AssertionError("authored mandatory removal was overwritten by generated defaults")
-    if native_mandatory != generated_mandatory:
+    if native.entry_storage(native_mandatory) != native.entry_storage(generated_mandatory):
         raise AssertionError("mixed public mandatory type/count/value bytes differ")
 
 
@@ -347,7 +348,8 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
                ledger: Path, rules: Path, mandatory_ledger: Path, address_rules: Path) -> dict[str, Any]:
     if not hasattr(native, "run_native_batch"):
         raise RuntimeError("fresh public batch matrix requires the committed native batch oracle helper")
-    targets = generated_targets(ledger, rules)
+    all_targets = generated_targets(ledger, rules)
+    targets = tuple(target for target in all_targets if target.case_family == "native_string_scalar")
     root = output.parent / "fresh-jpeg-public-batch-files"
     root.mkdir(parents=True, exist_ok=False)
     # Candidate admission is a source/native fact: Protected and PrintConv
@@ -398,6 +400,9 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
     if not isinstance(results, list) or len(results) != len(rows):
         raise AssertionError("public batch fixture results differ from requests")
     report: dict[str, Any] = {"instrument": "fresh_jpeg_public_batch_matrix_v2", "declared": len(rows),
+        "anchor_case_family": "native_string_scalar",
+        "numeric_cohort_instrument": "generated_scalar_write_matrix_v4",
+        "non_anchor_source_targets": [asdict(target) for target in all_targets if target.case_family != "native_string_scalar"],
                               "passed": 0, "mandatory_candidate": asdict(mandatory),
                               "mandatory_selection_probes": mandatory_probes,
                               "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
@@ -436,7 +441,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     perl, library = native.resolve_perl(args.perl), native.resolve_library(args.lib)
     identity = native.native_identity(perl, library)
     native.assert_contract_version(identity)
-    targets = generated_targets(args.ledger, args.rules)
+    all_targets = generated_targets(args.ledger, args.rules)
+    targets = tuple(target for target in all_targets if target.case_family == "native_string_scalar")
     declared = len(CARRIERS) * len(targets) * len(BATCH_CASES) + sum(
         2 * len(targets) for carrier in CARRIERS if carrier.jfif.unit is not None
     )

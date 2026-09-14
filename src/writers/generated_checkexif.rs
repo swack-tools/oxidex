@@ -159,6 +159,25 @@ pub(crate) fn check_exif(
             error: recipe.missing_format.other_error,
         });
     }
+    if !recipe
+        .check_value
+        .formats
+        .contains(&format.as_deref().expect("handled missing format"))
+    {
+        let numeric = super::generated_scalar_rules::NUMERIC_SCALAR
+            .as_ref()
+            .ok_or_else(|| refused("numeric CheckValue source is unsupported"))?;
+        super::generated_scalar::numeric_value(
+            numeric,
+            &value,
+            format.as_deref().expect("handled missing format"),
+            selected_count(recipe, input)?,
+        )?;
+        return Ok(CheckExifResult::Checked(CheckedScalar {
+            value,
+            error: None,
+        }));
+    }
     Ok(CheckExifResult::Checked(validate_scalar(
         &recipe.check_value,
         value,

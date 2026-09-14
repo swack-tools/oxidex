@@ -21,7 +21,7 @@ import sys
 from typing import Any, Iterable
 
 import native_write_matrix as native
-from generated_tiff_write_matrix import DRIVER, GeneratedTarget, generated_targets
+from generated_tiff_write_matrix import DRIVER, GeneratedTarget, generated_targets, run_typed_native
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -41,6 +41,14 @@ OPERATIONS = (
     # the public delete/no-op case and must keep an EXIF APP1 absent.
     ("delete-absent-noop", "delete", "undefined", None),
 )
+
+
+def operations_for(target):
+    if target.case_family == "native_string_scalar":
+        return OPERATIONS
+    return (("numeric-insert", "insert", "utf8", "300"),
+            ("numeric-zero", "empty", "utf8", "0"),
+            ("delete-absent-noop", "delete", "undefined", None))
 
 
 @dataclass(frozen=True)
@@ -175,7 +183,7 @@ def _target_entry(document: dict[str, Any], target: GeneratedTarget) -> dict[str
 def _assert_native_target_transition(source_doc: dict[str, Any], native_doc: dict[str, Any],
                                      target: GeneratedTarget, operation: str) -> None:
     before, after = _target_entry(source_doc, target), _target_entry(native_doc, target)
-    if operation in {"fresh-insert", "defined-empty"}:
+    if operation in {"fresh-insert", "defined-empty", "numeric-insert", "numeric-zero"}:
         if before is not None or after is None:
             raise AssertionError("native defined write did not transition the ledger target absent-to-present")
         return
@@ -252,15 +260,17 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
             raise AssertionError("empty IFD0 carrier has the wrong byte order")
         for target in targets:
             for qualifier in target.qualifiers:
-                for label, native_action, scalar, value in OPERATIONS:
+                for label, native_action, scalar, value in operations_for(target):
                     stem = f"{case.label}-{target.raw_tag_id:04x}-{qualifier.replace(':', '_')}-{label}"
                     native_output, generated_output = root / f"{stem}-native.jpg", root / f"{stem}-generated.jpg"
-                    call = native.run_native(perl, library, source, native_output, native_action, qualifier)
+                    call = (native.run_native(perl, library, source, native_output, native_action, qualifier)
+                            if target.case_family == "native_string_scalar" else
+                            run_typed_native(perl, library, source, native_output, qualifier, value))
                     assert_native_oracle(call, stem, label)
                     request = _request(source, generated_output, target, qualifier, scalar, value)
                     requests.append(request)
                     native_rows.append({"id": stem, "carrier": asdict(case), "target": asdict(target),
-                                        "qualifier": qualifier, "operation": label, "source": str(source),
+                                        "qualifier": qualifier, "operation": label, "case_family": target.case_family, "source": str(source),
                                         "native_output": str(native_output), "output": str(generated_output),
                                         "native_call": call})
     request_path, result_path = root / "requests.json", root / "results.json"

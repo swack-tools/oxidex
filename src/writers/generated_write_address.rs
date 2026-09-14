@@ -9,8 +9,45 @@ use super::generated_setnewvalue_address_rules::{
     StaticNativeLookupCandidate, StaticSetNewValueAddress, StaticSetNewValueQualifierScope,
 };
 
+use super::generated_scalar::PublicSetNewValueCallerRecipe;
+
+fn join_explicit_directories(
+    recipe: Option<&PublicSetNewValueCallerRecipe>,
+    address: Option<&super::generated_setnewvalue_address_rules::StaticSetNewValueAddressCapture>,
+) -> Result<&'static [&'static str], &'static str> {
+    let recipe = recipe.ok_or("explicit directory source recipe is absent")?;
+    let address = address.ok_or("explicit directory address capture is absent")?;
+    let source = &recipe.capture;
+    if source.exiftool_version != address.exiftool_version
+        || source.main_source_sha256 != address.main_source_sha256
+        || source.write_exif_source_sha256 != address.write_exif_source_sha256
+        || source.writer_source_sha256 != address.writer_source_sha256
+        || source.exif_source_sha256 != address.exif_source_sha256
+    {
+        return Err("explicit directory and address source captures differ");
+    }
+    Ok(recipe.directories)
+}
+
+pub(crate) fn authenticated_explicit_directories() -> Result<&'static [&'static str], &'static str>
+{
+    join_explicit_directories(
+        super::generated_scalar_rules::PUBLIC_SET_NEW_VALUE_CALLER.as_ref(),
+        super::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE.as_ref(),
+    )
+}
+
+pub(crate) fn undefined_value_bypasses_conversion() -> Result<bool, &'static str> {
+    authenticated_explicit_directories()?;
+    Ok(super::generated_scalar_rules::PUBLIC_SET_NEW_VALUE_CALLER
+        .as_ref()
+        .ok_or("public caller source recipe is absent")?
+        .undefined_value_bypasses_conversion)
+}
+
 pub(crate) struct AddressRules<'a> {
     pub rows: Option<&'a [StaticSetNewValueAddress]>,
+    pub explicit_directories: &'a [&'a str],
     pub qualifier_scope: &'a [StaticSetNewValueQualifierScope],
     pub lookup: &'a [StaticNativeLookupCandidate],
     /// Includes retained ownership of removed/renamed upstream names.
@@ -23,14 +60,29 @@ pub(crate) fn generated_rules() -> AddressRules<'static> {
     use super::generated_setnewvalue_address_rules::*;
     AddressRules {
         rows: SET_NEW_VALUE_ADDRESSING,
+        explicit_directories: authenticated_explicit_directories().unwrap_or(&[]),
         qualifier_scope: SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE,
         lookup: SET_NEW_VALUE_LOOKUP,
         owned_names: SET_NEW_VALUE_OWNED_NAMES,
     }
 }
 
+/// Source identity and selected directory are distinct: WriteGroup is the
+/// preferred destination, while a supported family-1 qualifier overrides it.
+#[derive(Clone, Copy)]
+pub(crate) struct SelectedAddress<'a> {
+    pub row: &'a StaticSetNewValueAddress,
+    pub selected_group: &'a str,
+}
+impl std::ops::Deref for SelectedAddress<'_> {
+    type Target = StaticSetNewValueAddress;
+    fn deref(&self) -> &Self::Target {
+        self.row
+    }
+}
+
 pub(crate) enum Resolution<'a> {
-    Resolved(&'a StaticSetNewValueAddress),
+    Resolved(SelectedAddress<'a>),
     OutsideMigratedScope,
     Unsupported(&'static str),
 }
@@ -42,12 +94,16 @@ fn ordinary(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn same_physical(a: &StaticSetNewValueAddress, b: &StaticSetNewValueAddress) -> bool {
+fn same_source_physical(a: &StaticSetNewValueAddress, b: &StaticSetNewValueAddress) -> bool {
     a.module == b.module
         && a.table == b.table
         && a.full_name == b.full_name
         && a.raw_id == b.raw_id
         && a.write_group == b.write_group
+}
+
+fn same_physical(a: &SelectedAddress<'_>, b: &SelectedAddress<'_>) -> bool {
+    same_source_physical(a.row, b.row) && a.selected_group == b.selected_group
 }
 
 pub(crate) fn resolve<'a>(key: &str, rules: &AddressRules<'a>) -> Resolution<'a> {
@@ -69,6 +125,13 @@ pub(crate) fn resolve<'a>(key: &str, rules: &AddressRules<'a>) -> Resolution<'a>
         };
     };
     let has_source_rows = rows.iter().any(|row| row.name.eq_ignore_ascii_case(name));
+    let explicit = group.and_then(|group| {
+        rules
+            .explicit_directories
+            .iter()
+            .copied()
+            .find(|directory| directory.eq_ignore_ascii_case(group))
+    });
     let mut selected: Option<&StaticSetNewValueAddress> = None;
     let mut external = false;
     let mut source_identity_present = false;
@@ -79,6 +142,12 @@ pub(crate) fn resolve<'a>(key: &str, rules: &AddressRules<'a>) -> Resolution<'a>
         .filter(|candidate| candidate.name.eq_ignore_ascii_case(name))
     {
         if group.is_some_and(|group| {
+            if explicit.is_some() {
+                return !candidate
+                    .groups
+                    .iter()
+                    .any(|native| native.family == 0 && native.value == "EXIF");
+            }
             !candidate
                 .groups
                 .iter()
@@ -98,17 +167,18 @@ pub(crate) fn resolve<'a>(key: &str, rules: &AddressRules<'a>) -> Resolution<'a>
         if row.index != index || !candidate.source_identity_present {
             return Resolution::Unsupported("generated lookup identity is inconsistent");
         }
-        if selected.is_some_and(|prior| !same_physical(prior, row)) {
+        if selected.is_some_and(|prior| !same_source_physical(prior, row)) {
             return Resolution::Unsupported("native lookup selects multiple physical fields");
         }
         selected = Some(row);
     }
-    let beyond_scope = group.is_some_and(|group| {
-        !rules
-            .qualifier_scope
-            .iter()
-            .any(|native| native.group.eq_ignore_ascii_case(group))
-    });
+    let beyond_scope = explicit.is_none()
+        && group.is_some_and(|group| {
+            !rules
+                .qualifier_scope
+                .iter()
+                .any(|native| native.group.eq_ignore_ascii_case(group))
+        });
     if beyond_scope {
         // With no admitted row for the name, an omitted source identity still
         // belongs to this migration. With admitted rows, an exclusively
@@ -135,13 +205,16 @@ pub(crate) fn resolve<'a>(key: &str, rules: &AddressRules<'a>) -> Resolution<'a>
         );
     }
     match selected {
-        Some(row) => Resolution::Resolved(row),
+        Some(row) => Resolution::Resolved(SelectedAddress {
+            row,
+            selected_group: explicit.unwrap_or(row.write_group),
+        }),
         None => Resolution::Unsupported("qualifier does not select a generated row"),
     }
 }
 
 pub(crate) struct AddressPlan<'a, 'k, V> {
-    pub generated: Vec<(&'a StaticSetNewValueAddress, V)>,
+    pub generated: Vec<(SelectedAddress<'a>, V)>,
     pub outside: Vec<(&'k str, V)>,
 }
 
@@ -168,7 +241,7 @@ pub(crate) fn plan_requests_with<'a, 'k, V: PartialEq>(
                 if let Some((_, prior)) = plan
                     .generated
                     .iter()
-                    .find(|(prior, _)| same_physical(prior, row))
+                    .find(|(prior, _)| same_physical(prior, &row))
                 {
                     if *prior != value {
                         return Err("conflicting aliases address the same physical field");
@@ -213,7 +286,7 @@ pub(crate) fn plan_metadata_delta_with<'a, 'k, V: PartialEq>(
                 return true;
             }
             matches!((resolver(old_key), resolver(key)),
-                (Resolution::Resolved(old), Resolution::Resolved(new)) if same_physical(old, new))
+                (Resolution::Resolved(old), Resolution::Resolved(new)) if same_physical(&old, &new))
         });
         if !unchanged {
             requests.push((key, Some(value)));
@@ -225,7 +298,7 @@ pub(crate) fn plan_metadata_delta_with<'a, 'k, V: PartialEq>(
         }
         let replacement = match resolver(key) {
             Resolution::Resolved(old) => desired.iter().any(|&(new_key, _)| {
-                matches!(resolver(new_key), Resolution::Resolved(new) if same_physical(old, new))
+                matches!(resolver(new_key), Resolution::Resolved(new) if same_physical(&old, &new))
             }),
             _ => false,
         };
@@ -299,10 +372,34 @@ mod tests {
     }
 
     #[test]
+    fn directory_operands_refuse_mixed_source_captures() {
+        use super::super::generated_setnewvalue_address_rules::StaticSetNewValueAddressCapture;
+        let recipe = super::super::generated_scalar_rules::PUBLIC_SET_NEW_VALUE_CALLER
+            .as_ref()
+            .unwrap();
+        let source = &recipe.capture;
+        let changed = StaticSetNewValueAddressCapture {
+            exiftool_version: source.exiftool_version,
+            main_source_sha256: source.main_source_sha256,
+            write_exif_source_sha256: source.write_exif_source_sha256,
+            writer_source_sha256: "different SetNewValue caller source",
+            exif_source_sha256: source.exif_source_sha256,
+        };
+        assert!(join_explicit_directories(Some(recipe), Some(&changed)).is_err());
+        assert!(join_explicit_directories(None, Some(&changed)).is_err());
+        assert!(join_explicit_directories(Some(recipe), None).is_err());
+        assert_eq!(
+            authenticated_explicit_directories().unwrap(),
+            recipe.directories
+        );
+    }
+
+    #[test]
     fn source_names_groups_and_case_resolve_without_a_tag_allowlist() {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -332,6 +429,7 @@ mod tests {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY), candidate(None, EXTERNAL)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -354,6 +452,7 @@ mod tests {
     #[test]
     fn missing_rules_and_retired_names_cannot_fall_back() {
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: None,
             lookup: &[],
@@ -371,6 +470,7 @@ mod tests {
             groups: FAMILY,
         }];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -390,6 +490,7 @@ mod tests {
         let rows = [row(0, "Field", "123"), row(1, "Field", "456")];
         let lookup = [candidate(Some(0), FAMILY), candidate(Some(1), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -401,6 +502,7 @@ mod tests {
         ));
         let lookup = [candidate(Some(2), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -417,6 +519,7 @@ mod tests {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -443,6 +546,7 @@ mod tests {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -465,6 +569,7 @@ mod tests {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -482,6 +587,7 @@ mod tests {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -506,6 +612,7 @@ mod tests {
         let rows = [row(0, "Field", "123")];
         let lookup = [candidate(Some(0), FAMILY)];
         let rules = AddressRules {
+            explicit_directories: &[],
             qualifier_scope: SCOPE,
             rows: Some(&rows),
             lookup: &lookup,
@@ -520,5 +627,42 @@ mod tests {
         .unwrap();
         assert!(plan.generated.is_empty());
         assert!(plan.outside.is_empty());
+    }
+    #[test]
+    fn explicit_directory_is_distinct_from_native_preferred_group() {
+        let rules = generated_rules();
+        let preferred = match resolve("EXIF:HostComputer", &rules) {
+            Resolution::Resolved(value) => value,
+            _ => panic!("expected generated source row"),
+        };
+        let explicit = match resolve("IFD1:HostComputer", &rules) {
+            Resolution::Resolved(value) => value,
+            _ => panic!("expected source explicit directory"),
+        };
+        assert_eq!(preferred.row.index, explicit.row.index);
+        assert_eq!(preferred.selected_group, preferred.row.write_group);
+        assert_eq!(explicit.selected_group, "IFD1");
+        let plan = plan_requests(
+            [
+                ("IFD0:HostComputer", 1),
+                ("IFD1:HostComputer", 2),
+                ("ifd1:hostcomputer", 2),
+            ],
+            &rules,
+        )
+        .unwrap();
+        assert_eq!(plan.generated.len(), 2);
+        assert!(
+            plan_requests([("IFD1:HostComputer", 1), ("ifd1:hostcomputer", 2)], &rules).is_err()
+        );
+        let baseline = [("IFD1:HostComputer", &1)];
+        let desired = [("EXIF:HostComputer", &2)];
+        let plan = plan_metadata_delta(&baseline, &desired, &[], &rules).unwrap();
+        assert_eq!(plan.generated.len(), 2);
+        assert!(
+            plan.generated
+                .iter()
+                .any(|(row, value)| row.selected_group == "IFD1" && value.is_none())
+        );
     }
 }

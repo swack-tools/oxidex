@@ -25,12 +25,14 @@ use crate::writers::tiff_scalar_final_stage::{
 };
 
 /// A descriptor class is admitted only after the final source recipe selected
-/// the corresponding native TIFF format.  The current scalar compiler can
-/// authenticate only the source literal `string`; a later literal must make
-/// that migration terminal until a source-derived mapping exists.
+/// the corresponding native TIFF format. Numeric classes additionally join
+/// the compiled CheckValue/WriteValue dispatch and native core/writer capture.
+/// Unknown formats keep their migration terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SourceValueClass {
     String,
+    Integer,
+    Rational,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,6 +111,7 @@ fn same_final(
             == PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE.write_exif_source_sha256
         && recipe.writer_source_sha256
             == PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE.writer_source_sha256
+        && recipe.main_source_sha256 == PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE.main_source_sha256
         && recipe.registry_source_sha256
             == PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE.exif_source_sha256
         && registry.source_file == "Image/ExifTool/Exif.pm"
@@ -123,6 +126,19 @@ fn same_final(
 fn source_value_class(recipe: &TiffScalarFinalStageRecipe) -> Option<SourceValueClass> {
     match (recipe.conversion_format, recipe.wire_format) {
         ("string", "string") => Some(SourceValueClass::String),
+        (conversion, wire) if conversion == wire => {
+            let numeric = crate::writers::generated_scalar_rules::NUMERIC_SCALAR.as_ref()?;
+            if recipe.writer_source_sha256 != numeric.writer_source_sha256
+                || recipe.main_source_sha256 != numeric.main_source_sha256
+            {
+                return None;
+            }
+            match numeric.formats.iter().position(|format| *format == wire) {
+                Some(0) => Some(SourceValueClass::Integer),
+                Some(1) => Some(SourceValueClass::Rational),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -415,11 +431,39 @@ mod tests {
     fn selected_generated_operands_publish_the_complete_current_intersection() {
         let facts = facts().expect("selected generated artifact join must be complete");
         assert_eq!(facts.len(), PUBLIC_SET_NEW_VALUE_MIGRATIONS.len());
-        assert!(
-            facts
+        for fact in facts {
+            let recipe = TIFF_SCALAR_FINAL_RECIPES
                 .iter()
-                .all(|fact| fact.value_class == SourceValueClass::String)
+                .find(|recipe| {
+                    recipe.raw_tag_id == fact.raw_tag_id
+                        && recipe.tag_name == fact.name
+                        && recipe.physical_write_group == fact.physical_group
+                })
+                .unwrap();
+            assert_eq!(Some(fact.value_class), source_value_class(recipe));
+        }
+        assert_eq!(
+            descriptor_fact("EXIF:XResolution").unwrap().value_class,
+            SourceValueClass::Rational
         );
+        assert_eq!(
+            reverse_name(0x011a, FormatFamily::EXIF, "IFD0"),
+            Some("XResolution")
+        );
+    }
+
+    #[test]
+    fn numeric_descriptor_refuses_mixed_core_or_writer_helper_capture() {
+        let mut recipe = TIFF_SCALAR_FINAL_RECIPES
+            .iter()
+            .copied()
+            .find(|recipe| matches!(source_value_class(recipe), Some(SourceValueClass::Rational)))
+            .unwrap();
+        recipe.main_source_sha256 = "different core helper source";
+        assert_eq!(source_value_class(&recipe), None);
+        recipe.main_source_sha256 = PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE.main_source_sha256;
+        recipe.writer_source_sha256 = "different numeric writer source";
+        assert_eq!(source_value_class(&recipe), None);
     }
 
     #[test]
@@ -464,6 +508,7 @@ mod tests {
     #[test]
     fn terminal_row_does_not_suppress_another_fully_joined_identity() {
         let live = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[0], false);
+        let live_name = live.name;
         let retired = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[1], true);
         let result = compose(
             Some(SET_NEW_VALUE_ADDRESS_ROWS),
@@ -473,9 +518,12 @@ mod tests {
         )
         .expect("global generated provenance remains valid");
         assert_eq!(result.current.len(), 1);
-        assert_eq!(result.current[0].name, "DocumentName");
+        assert_eq!(result.current[0].name, live_name);
         assert_eq!(result.terminal.len(), 1);
-        assert_eq!(result.terminal[0].name, "PageName");
+        assert_eq!(
+            result.terminal[0].name,
+            PUBLIC_SET_NEW_VALUE_MIGRATIONS[1].name
+        );
     }
 
     #[test]

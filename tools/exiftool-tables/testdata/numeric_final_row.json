@@ -1,0 +1,131 @@
+{
+  "effective_properties": {
+    "Count": {
+      "present": false
+    },
+    "Format": {
+      "present": false
+    },
+    "Groups": {
+      "present": false
+    },
+    "List": {
+      "present": false
+    },
+    "Name": {
+      "present": true,
+      "value": "XResolution"
+    },
+    "PrintConv": {
+      "present": false
+    },
+    "PrintConvInv": {
+      "present": false
+    },
+    "RawConvInv": {
+      "present": false
+    },
+    "RawJoin": {
+      "present": false
+    },
+    "ValueConv": {
+      "present": false
+    },
+    "ValueConvInv": {
+      "present": false
+    },
+    "Writable": {
+      "present": true,
+      "value": "rational64u"
+    },
+    "WriteCheck": {
+      "present": false
+    },
+    "WriteGroup": {
+      "present": true,
+      "value": "IFD0"
+    }
+  },
+  "effective_resolution": "native_get_tag_info",
+  "effective_table_binding": {
+    "kind": "containing_table",
+    "ref_identical_to_containing": true
+  },
+  "entry_kind": "HASH",
+  "properties": {
+    "Mandatory": {
+      "present": true,
+      "value": "1"
+    },
+    "Name": {
+      "present": true,
+      "value": "XResolution"
+    },
+    "Priority": {
+      "present": true,
+      "value": "0"
+    },
+    "Writable": {
+      "present": true,
+      "value": "rational64u"
+    },
+    "WriteGroup": {
+      "present": true,
+      "value": "IFD0"
+    }
+  },
+  "unknown_properties": {},
+  "write_controls": {
+    "CanCreate": {
+      "present": false
+    },
+    "DelValue": {
+      "present": false
+    },
+    "Deletable": {
+      "present": false
+    },
+    "Mandatory": {
+      "present": true,
+      "value": "1"
+    },
+    "PrintConvInv": {
+      "present": false
+    },
+    "RawConvInv": {
+      "present": false
+    },
+    "Validate": {
+      "present": false
+    },
+    "ValueConvInv": {
+      "present": false
+    },
+    "Writable": {
+      "present": true,
+      "value": "rational64u"
+    },
+    "WriteAlso": {
+      "present": false
+    },
+    "WriteCheck": {
+      "present": false
+    },
+    "WriteCondition": {
+      "present": false
+    },
+    "WriteGroup": {
+      "present": true,
+      "value": "IFD0"
+    },
+    "WriteHook": {
+      "present": false
+    },
+    "WriteLast": {
+      "present": false
+    },
+    "WritePseudo": {
+      "present": false
+    }
+  }
+}

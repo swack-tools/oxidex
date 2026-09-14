@@ -19,6 +19,13 @@ pub(crate) struct MandatoryDirectory {
     pub defaults: &'static [MandatoryDefault],
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MandatoryCleanup {
+    pub all_mandatory: bool,
+    pub no_next_ifd: bool,
+    pub entry_count_shrinks_or_new: bool,
+    pub omit_empty_ifd1: bool,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JfifAssignment {
     pub tag_id: u16,
     pub property: &'static str,
@@ -44,6 +51,23 @@ pub(crate) struct MandatoryRecipe {
     pub jfif_probe: &'static str,
     pub jfif_assignments: &'static [JfifAssignment],
     pub encodings: &'static [DefaultEncoding],
+    pub cleanup: MandatoryCleanup,
+}
+
+/// Refuse cleanup unless the captured WriteExif body authenticated each
+/// predicate used by the public IFD1 carrier path.
+pub(crate) fn require_ifd1_mandatory_cleanup(recipe: &MandatoryRecipe) -> Result<(), String> {
+    if recipe.cleanup
+        != (MandatoryCleanup {
+            all_mandatory: true,
+            no_next_ifd: true,
+            entry_count_shrinks_or_new: true,
+            omit_empty_ifd1: true,
+        })
+    {
+        return Err(refusal("mandatory IFD1 cleanup source is unsupported"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

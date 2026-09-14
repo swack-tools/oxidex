@@ -74,11 +74,13 @@ class FinalScalarRecipe:
     conversion_format: str
     wire_format: str
     count_rule: str
+    undefined_rule: str
     source_control_sha256: str
     write_proc_body_sha256: str
     write_proc_source_sha256: str
     registry_source_sha256: str
     writer_source_sha256: str
+    main_source_sha256: str
 
 
 @dataclass(frozen=True)
@@ -228,8 +230,41 @@ def _admitted_row(raw_id: str, row: Mapping[str, Any], supported_formats: set[st
         raise FinalStageRefused("row id is outside u16")
     properties = _mapping(row.get("properties"), "row.properties")
     unknown = _mapping(row.get("unknown_properties"), "row.unknown_properties")
-    if set(properties) != {"Name", "Writable", "WriteGroup"} or unknown:
+    data_member_present, _ = _property(properties, "DataMember", "row.properties")
+    if data_member_present:
+        raise FinalStageRefused("row DataMember activates a RawConv branch outside this specialization")
+    basic = {"Name", "Writable", "WriteGroup"}
+    metadata_only = {"Groups", "Notes"}
+    inert_without_data_member = {"RawConv"}
+    numeric = properties.get("Writable", {}).get("value") in {"int16u", "rational64u"}
+    allowed = basic | metadata_only | inert_without_data_member
+    if numeric:
+        allowed |= {"Mandatory", "Priority"}
+    if not basic.issubset(properties) or set(properties) - allowed or unknown:
         raise FinalStageRefused("row has unmodeled final-stage properties")
+    # Groups and Notes describe the tag to ExifTool's metadata layer. They
+    # are not consulted by the authenticated WriteExif specialization below.
+    groups_present, groups = _property(properties, "Groups", "row.properties")
+    if groups_present and (not isinstance(groups, Mapping)
+                           or any(not isinstance(key, str) or not isinstance(value, str)
+                                  for key, value in groups.items())):
+        raise FinalStageRefused("row Groups metadata is malformed")
+    notes_present, notes = _property(properties, "Notes", "row.properties")
+    if notes_present and not isinstance(notes, str):
+        raise FinalStageRefused("row Notes metadata is malformed")
+    raw_conv_present, _ = _property(properties, "RawConv", "row.properties")
+    # The complete, immutable WriteExif body authenticated by
+    # _authenticate_write_exif reaches RawConv only in its DataMember branch
+    # (WriteExif.pl:1933-1959). DataMember's proven absence makes this table
+    # metadata inert for this resolved edit path.
+    if raw_conv_present and data_member_present:
+        raise FinalStageRefused("row RawConv is active through DataMember")
+    # These declarations do not convert explicit values. Priority affects
+    # source lookup, which is separately authenticated; mandatory cleanup and
+    # numeric conversion remain independently runtime-guarded.
+    for key, expected in (("Mandatory", "1"), ("Priority", "0")):
+        if key in properties and ( _same_projection(row, key) if key == "Mandatory" else _property(properties, key, "row.properties")) != (True, expected):
+            raise FinalStageRefused("numeric row control is outside the supported specialization: " + key)
     name_present, name = _property(properties, "Name", "row.properties")
     writable_present, writable = _same_projection(row, "Writable")
     group_present, group = _same_projection(row, "WriteGroup")
@@ -240,7 +275,7 @@ def _admitted_row(raw_id: str, row: Mapping[str, Any], supported_formats: set[st
     if group not in {"IFD0", "ExifIFD"}:
         raise FinalStageRefused("row physical WriteGroup is outside ordinary TIFF directories")
     controls = _mapping(row.get("write_controls"), "row.write_controls")
-    if any(key not in {"Writable", "WriteGroup"} and _property(controls, key, "row.write_controls")[0] for key in controls):
+    if any(key not in {"Writable", "WriteGroup", "Mandatory"} and _property(controls, key, "row.write_controls")[0] for key in controls):
         raise FinalStageRefused("row has callback, count, condition, or overwrite control")
     # `Format` and FixedSize are properties rather than the dumper's compact
     # controls list, so the exact property set above proves they are absent.
@@ -256,6 +291,14 @@ def compile_final_scalar_stage(document: Mapping[str, Any]) -> tuple[list[FinalS
     except RecipeRefused as error:
         raise FinalStageRefused(f"generated scalar WriteValue dependency refused: {error}") from error
     supported_formats = set(scalar_write.formats)
+    from numeric_scalar import compile_numeric_scalar
+    try:
+        numeric = compile_numeric_scalar(document)
+        supported_formats.update(numeric.formats)
+    except RecipeRefused:
+        # Preserve the existing scalar route; omitted numeric rows stay
+        # explicit in the per-row report and public ownership ledger.
+        pass
     tables = _mapping(document.get("native_write_tables"), "native_write_tables")
     exif = _mapping(tables.get("Exif"), "native_write_tables.Exif")
     table = _mapping(exif.get("Main"), "native_write_tables.Exif.Main")
@@ -283,8 +326,8 @@ def compile_final_scalar_stage(document: Mapping[str, Any]) -> tuple[list[FinalS
             omissions.append({"raw_id": raw_id, "reason": str(error)})
             continue
         recipes.append(FinalScalarRecipe("Exif", "Main", "Image::ExifTool::Exif::Main", tag_id, name, "EXIF", group,
-                                         candidate["properties"]["Writable"]["value"], candidate["properties"]["Writable"]["value"], "CeilDivision", control_sha, write_body_sha,
-                                         write_source_sha, registry.source_sha256, scalar_write.provenance.source_sha256))
+                                         candidate["properties"]["Writable"]["value"], candidate["properties"]["Writable"]["value"], "CeilDivision", "DeleteEntry", control_sha, write_body_sha,
+                                         write_source_sha, registry.source_sha256, scalar_write.provenance.source_sha256, loaded["Image/ExifTool.pm"]))
     return recipes, omissions, registry
 
 
@@ -314,7 +357,7 @@ def render_rust(recipes: list[FinalScalarRecipe], registry: NativeFormatRegistry
     lines.extend(["];\n", "pub(crate) const TIFF_SCALAR_FINAL_FORMAT_REGISTRY: Option<NativeTiffFormatRegistry> = %s;\n" % registry_literal,
              "pub(crate) const TIFF_SCALAR_FINAL_RECIPES: &[TiffScalarFinalStageRecipe] = &[\n"])
     for recipe in recipes:
-        lines.append("TiffScalarFinalStageRecipe { module: %s, table: %s, full_name: %s, raw_tag_id: 0x%04x, tag_name: %s, table_group0: %s, physical_write_group: %s, conversion_format: %s, wire_format: %s, write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(), count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::%s, source_control_sha256: %s, write_proc_source_sha256: %s, registry_source_sha256: %s, writer_source_sha256: %s },\n" % (esc(recipe.module), esc(recipe.table), esc(recipe.full_name), recipe.raw_tag_id, esc(recipe.name), esc(recipe.table_group0), esc(recipe.physical_write_group), esc(recipe.conversion_format), esc(recipe.wire_format), recipe.count_rule, esc(recipe.source_control_sha256), esc(recipe.write_proc_source_sha256), esc(recipe.registry_source_sha256), esc(recipe.writer_source_sha256)))
+        lines.append("TiffScalarFinalStageRecipe { module: %s, table: %s, full_name: %s, raw_tag_id: 0x%04x, tag_name: %s, table_group0: %s, physical_write_group: %s, conversion_format: %s, wire_format: %s, write_value: crate::writers::generated_scalar_rules::WRITE_VALUE.as_ref(), count_rule: crate::writers::tiff_scalar_final_stage::NativeCountRule::%s, undefined_rule: crate::writers::tiff_scalar_final_stage::NativeUndefinedRule::%s, source_control_sha256: %s, write_proc_source_sha256: %s, registry_source_sha256: %s, writer_source_sha256: %s, main_source_sha256: %s },\n" % (esc(recipe.module), esc(recipe.table), esc(recipe.full_name), recipe.raw_tag_id, esc(recipe.name), esc(recipe.table_group0), esc(recipe.physical_write_group), esc(recipe.conversion_format), esc(recipe.wire_format), recipe.count_rule, recipe.undefined_rule, esc(recipe.source_control_sha256), esc(recipe.write_proc_source_sha256), esc(recipe.registry_source_sha256), esc(recipe.writer_source_sha256), esc(recipe.main_source_sha256)))
     lines.append("];\n")
     return "".join(lines)
 
