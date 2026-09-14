@@ -249,28 +249,60 @@ def _prior(report: Path, stage: str, args: argparse.Namespace, identity: dict[st
     return value
 
 
+def _cargo_executable(record: dict[str, Any], checkout: Path, target: Path,
+                      *, test: bool) -> dict[str, Any]:
+    """Use Cargo's exact package/target/profile evidence, never a guessed path."""
+    candidates: set[Path] = set()
+    kind = "lib" if test else "bin"
+    for line in record["stdout"].splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("reason") != "compiler-artifact":
+            continue
+        item = row.get("target", {})
+        if (item.get("name") != "oxidex" or kind not in item.get("kind", [])
+                or row.get("profile", {}).get("test") is not test
+                or not isinstance(row.get("manifest_path"), str)
+                or Path(row["manifest_path"]).resolve() != checkout / "Cargo.toml"):
+            continue
+        if not isinstance(row.get("executable"), str):
+            continue
+        candidate = _regular(Path(row["executable"]), "cargo JSON executable")
+        if not candidate.is_relative_to(target) or not os.access(candidate, os.X_OK):
+            raise Refused("cargo JSON executable is not executable inside the isolated target")
+        candidates.add(candidate)
+    if len(candidates) != 1:
+        raise Refused(f"cargo JSON did not identify one isolated oxidex {kind} executable")
+    executable = candidates.pop()
+    return {"path": str(executable), "sha256": _sha(executable), "bytes": executable.stat().st_size}
+
+
 def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
     checkout, target, report, perl, _source, native_lib, identity = _common(args, run)
     if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
         raise Refused("build checkout is not pinned to selected release")
     generated = _validate_artifacts(checkout, _prior(report, "generate", args, identity).get("generated_artifacts"))
-    record = _run(["cargo", "build", "--message-format=json", "--bin", "oxidex"], cwd=checkout,
-                  env=_environment(perl, native_lib, target), run=run)
-    raw = _raw(report, "build", record)
-    if record["state"] != "ok":
-        raise Refused("cargo build failed")
-    executable: Path | None = None
-    for line in record["stdout"].splitlines():
-        try: row = json.loads(line)
-        except json.JSONDecodeError: continue
-        if row.get("reason") == "compiler-artifact" and row.get("target", {}).get("name") == "oxidex" and isinstance(row.get("executable"), str):
-            candidate = _regular(Path(row["executable"]), "cargo JSON oxidex executable")
-            if executable is not None and executable != candidate: raise Refused("cargo JSON emitted multiple oxidex executables")
-            executable = candidate
-    if executable is None or not executable.is_relative_to(target):
-        raise Refused("cargo JSON did not identify an isolated oxidex executable")
-    result = {**_base("build", args, checkout, identity), "state": "passed", "denominator": 1,
-              "generated_artifacts": generated, "binary": {"path": str(executable), "sha256": _sha(executable), "bytes": executable.stat().st_size}, "raw_report": raw}
+    env = _environment(perl, native_lib, target)
+    records = []
+    for command in (["cargo", "build", "--all-features", "--message-format=json", "--bin", "oxidex"],
+                    ["cargo", "test", "--lib", "--all-features", "--no-run", "--message-format=json"]):
+        record = _run(command, cwd=checkout, env=env, run=run)
+        records.append(record)
+        if record["state"] != "ok":
+            _raw(report, "build", {"commands": records, "state": "failed"})
+            raise Refused("cargo build or writer-driver compilation failed")
+    raw = _raw(report, "build", {"commands": records, "state": "ok"})
+    executable = _cargo_executable(records[0], checkout, target, test=False)
+    writer = _cargo_executable(records[1], checkout, target, test=True)
+    if executable["path"] == writer["path"]:
+        raise Refused("CLI and writer driver must be distinct Cargo executables")
+    # A build may not change the generated inputs whose identity it claims.
+    _validate_artifacts(checkout, generated)
+    result = {**_base("build", args, checkout, identity), "state": "passed", "denominator": 2,
+              "generated_artifacts": generated, "binary": executable,
+              "writer_binary": writer, "raw_report": raw}
     _atomic(report, result); return result
 
 

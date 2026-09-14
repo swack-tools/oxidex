@@ -19,9 +19,20 @@ bash <checkout>/tools/exiftool-tables/regen-all.sh
 ```
 
 It records every path in the committed `artifacts.py` manifest with its
-post-generation hash. Build uses `cargo build --message-format=json --bin
-oxidex` and accepts only the executable announced by Cargo JSON under the
-isolated target. Read copies an immutable, hash-verified fixture manifest into
+post-generation hash. Build produces both the reader CLI and the public-writer
+test driver with explicit all-feature Cargo commands:
+
+```text
+cargo build --all-features --message-format=json --bin oxidex
+cargo test --lib --all-features --no-run --message-format=json
+```
+
+It accepts exactly one executable per intended target kind and test profile,
+from this checkout's Cargo manifest, inside the isolated target directory.
+The two identities are recorded as `binary` and `writer_binary`; the executor
+rechecks their hashes. Neither a CLI executable substituted for the test driver
+nor a failed second compilation can produce a passing build report. The build
+denominator of two counts executables, not tests or tag coverage. Read copies an immutable, hash-verified fixture manifest into
 the isolated target and invokes the checkout's `conformance.py` against that
 release's selected native source and the Cargo-announced binary. A nonzero
 VALUE, MISSING, RENAME or EXTRA count produces a `failed` report; it never
@@ -33,7 +44,7 @@ A fixture manifest is an immutable JSON object of this form:
 {
   "schema": 1,
   "kind": "oxidex_version_rehearsal_fixture_manifest",
-  "fixtures": [{"path": "/absolute/sample.jpg", "sha256": "...", "bytes": 123}]
+  "fixtures": [{"path": "fixtures/sample.jpg", "sha256": "...", "bytes": 123}]
 }
 ```
 
@@ -60,7 +71,7 @@ python3 tools/exiftool-tables/version_rehearsal_stage_adapter.py generate
 ```
 
 `build` takes the same arguments. `read` additionally takes
-`--fixture-manifest /absolute/manifest.json --native-probe-sha256
+`--fixture-manifest fixtures/manifest.json --native-probe-sha256
 {native_probe_sha256}`.
 The executor exposes `{source_commit}` and the equivalent
 `OXIDEX_REHEARSAL_SOURCE_COMMIT` environment value for this purpose.

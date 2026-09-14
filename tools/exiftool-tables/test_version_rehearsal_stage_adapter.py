@@ -46,8 +46,10 @@ class AdapterTests(unittest.TestCase):
             if argv[-2:] == ["diff", "--name-only"]: return subprocess.CompletedProcess(argv, 0, self.diff_output, "")
         if argv[0] == "bash": return subprocess.CompletedProcess(argv, 0, "regen", "")
         if argv[0] == "cargo":
-            binary = self.target / "debug/oxidex"; binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"binary")
-            return subprocess.CompletedProcess(argv, 0, json.dumps({"reason": "compiler-artifact", "target": {"name": "oxidex"}, "executable": str(binary)}) + "\n", "")
+            test = argv[1] == "test"
+            binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
+            binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"writer" if test else b"binary"); binary.chmod(0o755)
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"reason": "compiler-artifact", "manifest_path": str(self.checkout / "Cargo.toml"), "profile": {"test": test}, "target": {"name": "oxidex", "kind": ["lib"] if test else ["bin"]}, "executable": str(binary)}) + "\n", "")
         if argv[0] == sys.executable:
             output = Path(argv[argv.index("--json-out") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             corpus = Path(argv[2]); fixture = next(corpus.iterdir())
@@ -75,6 +77,52 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(read["state"], "passed"); self.assertEqual(read["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 2, "mismatched": 0})
         self.assertEqual(read["fixtures"]["entries"][0]["sha256"], adapter._sha(self.fixture))
         self.assertTrue(any(row[0][0] == sys.executable and "conformance.py" in row[0][1] for row in self.seen))
+
+    def test_build_records_distinct_cli_and_writer_driver(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        self.assertEqual(built["denominator"], 2)
+        self.assertNotEqual(built["binary"]["path"], built["writer_binary"]["path"])
+        adapter.executor._require_binary_proof(built, self.target, "writer_binary")
+        Path(built["writer_binary"]["path"]).write_bytes(b"changed")
+        with self.assertRaisesRegex(adapter.executor.Refused, "no longer matches"):
+            adapter.executor._require_binary_proof(built, self.target, "writer_binary")
+
+    def test_missing_test_profile_cannot_substitute_the_cli_for_writer_driver(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        def wrong_profile(argv, **kwargs):
+            result = self.fake_run(argv, **kwargs)
+            if argv[:2] == ["cargo", "test"]:
+                row = json.loads(result.stdout); row["profile"]["test"] = False
+                return subprocess.CompletedProcess(argv, 0, json.dumps(row), "")
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "one isolated oxidex lib"):
+            adapter.build(self.args("build"), run=wrong_profile)
+        self.assertFalse((self.reports / "build.json").exists())
+
+    def test_foreign_manifest_cannot_supply_rehearsal_executable(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        def foreign_package(argv, **kwargs):
+            result = self.fake_run(argv, **kwargs)
+            if argv[0] == "cargo":
+                row = json.loads(result.stdout); row["manifest_path"] = str(self.root / "other/Cargo.toml")
+                return subprocess.CompletedProcess(argv, 0, json.dumps(row), "")
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "one isolated oxidex bin"):
+            adapter.build(self.args("build"), run=foreign_package)
+
+    def test_failed_writer_driver_build_never_publishes_build_success(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        def fails_driver(argv, **kwargs):
+            if argv[:2] == ["cargo", "test"]:
+                return subprocess.CompletedProcess(argv, 1, "", "driver failed")
+            return self.fake_run(argv, **kwargs)
+        with self.assertRaisesRegex(adapter.Refused, "writer-driver compilation failed"):
+            adapter.build(self.args("build"), run=fails_driver)
+        self.assertFalse((self.reports / "build.json").exists())
+        raw = json.loads((self.reports / "raw/build-command.json").read_text())
+        self.assertEqual(raw["state"], "failed")
+        self.assertEqual(raw["commands"][-1]["exit"], 1)
 
     def test_generate_accepts_an_owned_checkout_already_pinned_to_selected_release(self):
         (self.checkout / ".exiftool-version").write_text("11.78\n"); self.diff_output = ""

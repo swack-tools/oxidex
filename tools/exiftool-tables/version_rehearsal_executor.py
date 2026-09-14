@@ -292,8 +292,8 @@ def _require_raw_report(result: Mapping[str, Any]) -> None:
         raise Refused("raw command report no longer matches stage proof")
 
 
-def _require_binary_proof(result: Mapping[str, Any], target: Path) -> dict[str, Any]:
-    row = result.get("binary")
+def _require_binary_proof(result: Mapping[str, Any], target: Path, field: str = "binary") -> dict[str, Any]:
+    row = result.get(field)
     if (not isinstance(row, dict) or not isinstance(row.get("path"), str) or not isinstance(row.get("sha256"), str)
             or __import__("re").fullmatch(r"[0-9a-f]{64}", row["sha256"]) is None
             or type(row.get("bytes")) is not int or row["bytes"] < 0):
@@ -371,6 +371,8 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
             if target is None:
                 raise Refused("stage result binary target was not supplied")
             _require_binary_proof(result, target)
+            if stage == "build" and "writer_binary" in result:
+                _require_binary_proof(result, target, "writer_binary")
         if stage == "read":
             _require_fixture_proof(result)
     return result
