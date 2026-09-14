@@ -285,4 +285,4 @@ pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE: StaticPublicSetNewValue
         intersection_sha256: "f6cf9dba5396c30574e78b8998a4c4369b7b75c41037c62d832ddf4c66f465a1",
     };
 pub(crate) const PUBLIC_SET_NEW_VALUE_MIGRATION_LEDGER_SHA256: &str =
-    "fb3d4814ec21681d83fa71e6cf324e865f8795bd9543b7cad0702a4897745fbd";
+    "9e0d6df6e7fe9caddc0b4f6cd8de8aad5eee0c6ebfaaae2aa703520af49dafad";

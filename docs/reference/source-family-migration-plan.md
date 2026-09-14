@@ -118,8 +118,8 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
   41,818 interned objects and zero unresolved references. The checked-in audit
   and source join conserve all 33,487 ordinary catalog entries. This proves
   source accounting, not runtime support.
-- ItemList's generated reader is in #779: 92 accepted declarations and 304
-  refusals across the 396 selected ItemList/UserData/Keys source records.
+- ItemList's generated reader is in #779: 92 accepted declarations and 307
+  refusals across the 399 selected ItemList/UserData/Keys source records.
   The recorded behavior suite has 25 fixtures and 50/50 native comparisons;
   this is bounded evidence, not full-catalog reading parity. The 11-file paired
   corpus comparison changed matched occurrences from 622 to 620, VALUE from
@@ -128,25 +128,30 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
 - The permanent source join now authenticates QuickTime ledger, capabilities
   and emitted Rust by complete generator replay, retaining all four input hashes.
   Of 330 catalog entries in ItemList/UserData/Keys, 92 join generated reader
-  declarations and 211 join explicit refusals; 27 still need source-shape
-  reconciliation. Across the full catalog, 33,184 entries remain unconsumed by
+  declarations and 238 join explicit refusals; all 330 now have an implementation
+  classification. Across the full catalog, 33,157 entries remain unconsumed by
   this implementation join. Every read/write observation remains explicitly
   unobserved until fixture evidence is attached. These counts measure accounting,
   not an increase in parsing coverage.
-- Writing fixes, numeric directory selection, Nikon generator recovery and
-  upgrade-rehearsal fixes are consolidated in #779. The last full regeneration
-  stopped at the Nikon encrypted-callback contract. Its repair is now integrated:
-  an actual canonical Nikon reader dump generates 91 tables and 2,317 rows, with
-  17 focused tests passing; the full combined regeneration still needs rerunning. It also exposed a separate
-  native address-probe load-context mismatch; the repaired probe emits 191
-  address rows and 1,261 candidates against the fresh dump, with six native
-  probe tests passing. The focused integrated checks now pass: 219 writer tests
-  (two ignored), the exact registry distribution test, 18 native mandatory-default
-  tests and library lint. Broader workspace/native matrix checks remain pending.
+- Writing fixes, numeric directory selection, Nikon generation and upgrade
+  rehearsal corrections are consolidated in #779. Canonical tier-2 regeneration
+  and all-feature lint pass. The broad Rust run passed 4,894 library tests and
+  found one Pentax AF-info regression; its generator repair is now integrated
+  and awaits the combined rerun. Source-generated address/helper rows increased
+  from 191 to 193, while public final recipes remain 19. These are implementation
+  counts, not observed-write counts.
+- The broad Python run exercised 1,314 tests and ended with 33 failures, 23 errors
+  and seven skips. Prepared fixes address missing standalone proof dependencies,
+  stale regeneration mocks and historical writer cohort inflation. Several native
+  errors came from the run supplying a library directory instead of a checkout
+  root. The corrected historical cohort is 15 and remains identical on recapture;
+  regenerated source facts cannot silently enlarge that comparison denominator.
+  The late-child timeout regression remains under investigation. No combined
+  all-green gate or full parity is claimed.
 
 ## Next steps and measurable exit checks
 
-1. **Make regeneration reliable.** Finish the Nikon callback diagnosis, then run
+1. **Make regeneration reliable.** Verify the integrated generator and cohort fixes, then run
    the sanctioned full regeneration using the recorded Perl and pinned library.
    Require both generation tiers, their independent native verifiers, and the
    declared-write-set check to pass. Inspect lost/added rows and refusals before

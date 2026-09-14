@@ -1,4 +1,5 @@
 import hashlib
+import copy
 import json
 from pathlib import Path
 import unittest
@@ -136,6 +137,26 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hydrated QuickTime"):
             capture.extract(full, full_hash="0" * 64, source_commit="1" * 40,
                             perl_version="5.38.2", tool_hash="2" * 64)
+
+    def test_full_regeneration_uses_same_effective_rows_as_bounded_capture(self):
+        import quicktime_generated_specs as compiler
+        bounded = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())
+        full = copy.deepcopy(bounded)
+        layouts = {}
+        for name, table in bounded["modules"]["QuickTime"]["tables"].items():
+            fullname = "Image::ExifTool::QuickTime::" + name
+            def wrapped(row, key):
+                if "_variants" in row:
+                    return {"_variants": [wrapped(item, key) for item in row["_variants"]]}
+                return {**row, "TagID": key, "Table": {"__ref": "tag_table", "table_full_names": [fullname]}}
+            layouts[fullname] = {"full_name": fullname, "meta": table["meta"],
+                                 "tags": {key: wrapped(row, key) for key, row in table["tags"].items()}}
+            # The earlier detached projection must not win over effective rows.
+            full["modules"]["QuickTime"]["tables"][name]["tags"] = {}
+        full["hydrated_layouts"] = {"tables": layouts, "shared_reference_objects": {}}
+        replay = compiler.compile_document(full)
+        self.assertEqual(replay, compiler.compile_document(bounded))
+        self.assertGreater(replay["identity_counts"]["generated"], 0)
 
     def test_capture_provenance_cannot_be_removed_or_reassigned(self):
         document = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())

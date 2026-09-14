@@ -634,8 +634,101 @@
       "write_group": "IFD0"
     }
   ],
-  "ledger_sha256": "fb3d4814ec21681d83fa71e6cf324e865f8795bd9543b7cad0702a4897745fbd",
+  "ledger_sha256": "9e0d6df6e7fe9caddc0b4f6cd8de8aad5eee0c6ebfaaae2aa703520af49dafad",
   "predecessor": "ea55869e56274acb227d7a132b0477406c5406489b49d98de59cd3127ad06fbc",
+  "predecessor_cohort": [
+    {
+      "group0": "EXIF",
+      "name": "DocumentName",
+      "raw_tag_id": 269,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "MinSampleValue",
+      "raw_tag_id": 280,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "MaxSampleValue",
+      "raw_tag_id": 281,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "XResolution",
+      "raw_tag_id": 282,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "YResolution",
+      "raw_tag_id": 283,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "PageName",
+      "raw_tag_id": 285,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "XPosition",
+      "raw_tag_id": 286,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "YPosition",
+      "raw_tag_id": 287,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "HostComputer",
+      "raw_tag_id": 316,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "TargetPrinter",
+      "raw_tag_id": 337,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "GDALMetadata",
+      "raw_tag_id": 42112,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "GDALNoData",
+      "raw_tag_id": 42113,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "UniqueCameraModel",
+      "raw_tag_id": 50708,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "ReelName",
+      "raw_tag_id": 51081,
+      "write_group": "IFD0"
+    },
+    {
+      "group0": "EXIF",
+      "name": "CameraLabel",
+      "raw_tag_id": 51105,
+      "write_group": "IFD0"
+    }
+  ],
+  "predecessor_cohort_sha256": "9d1d666a7089a82788438d3440c03246eff8ff5a3f3d199bbb84328a8b928cb0",
   "schema": "setnewvalue_public_migration_ledger_v1",
   "source": {
     "address_queries_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",

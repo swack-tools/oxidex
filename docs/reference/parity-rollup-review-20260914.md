@@ -161,3 +161,21 @@ The generated QuickTime Rust is byte-identical to the previous artifact.
 The Nikon repair is integrated and generates 91 tables/2,317 rows from an actual
 canonical native reader capture; 17 focused tests pass. Full regeneration is the
 next check. No broader parity or completed review gate is claimed here.
+
+
+## Latest integration checkpoint
+
+All 14 carried findings have corresponding code fixes; resolution still requires
+matching runtime evidence. The latest broad validation has not passed. Tier-2
+regeneration and all-feature lint passed; the broad Rust run found the now-fixed
+Pentax display-column omission, and the Python run exposed native harness,
+regeneration mock and historical-cohort defects. The late-child timeout case
+remains under investigation. Keep all unresolved threads visible until the
+corrected combined checks and required native evidence are recorded.
+
+The source baseline now joins all 330 catalog entries in ItemList, UserData and
+Keys to 92 generated declarations or 238 explicit refusals. The selector counts
+399 source records, of which 307 are refused; that is a separate denominator.
+The observed-read importer binds fixture bytes, emitted native/OxiDex JSON,
+generated source identities and producer hashes. Observations remain unclaimed
+until a fresh verifier run supplies evidence for this checkpoint.

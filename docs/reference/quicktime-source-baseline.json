@@ -15,23 +15,23 @@
         "unsupported_source_property:ValueConv": 6
       },
       "refused_records": 13,
-      "source_table_sha256": "c5ac0eee4f0b50de161061210968db3d4b07cd850f63c8153733254679faa5ea",
+      "source_table_sha256": "4a27ed4ec6b2f8ccac5f7dee94e75641b0608fefbf580f37f938cb15182f1fda",
       "table": "ItemList",
       "variant_records": 105
     },
     {
       "declarative_candidates": 0,
-      "raw_rows": 186,
+      "raw_rows": 189,
       "refusal_counts_nonexclusive": {
         "conditional_variant_selection": 29,
-        "protocol_userdata_language_records": 210,
+        "protocol_userdata_language_records": 213,
         "uncaptured_source_property:IText": 16,
         "uncaptured_source_property:NoDecode": 1,
         "uncaptured_source_property:RawConvInv": 2,
         "uncaptured_source_property:SetBase": 1,
         "uncaptured_source_property:Shift": 3,
         "uncaptured_source_property:WriteGroup": 2,
-        "unsupported_format:rational64s": 6,
+        "unsupported_format:rational64s": 9,
         "unsupported_format:undef": 4,
         "unsupported_print_conversion": 7,
         "unsupported_source_property:Binary": 10,
@@ -39,19 +39,18 @@
         "unsupported_source_property:Hidden": 7,
         "unsupported_source_property:RawConv": 11,
         "unsupported_source_property:SubDirectory": 57,
-        "unsupported_source_property:Unknown": 12,
+        "unsupported_source_property:Unknown": 14,
         "unsupported_source_property:ValueConv": 16
       },
-      "refused_records": 210,
-      "source_table_sha256": "8d6d85aefae27a60f52a5e87c9a49b5edd0cc122041671c77403b23833be97a8",
+      "refused_records": 213,
+      "source_table_sha256": "123b7ca6ce34b1979cf2dc707fef3e3938d326e1b3ecadc69796816d15efbd4e",
       "table": "UserData",
-      "variant_records": 210
+      "variant_records": 213
     },
     {
       "declarative_candidates": 0,
       "raw_rows": 81,
       "refusal_counts_nonexclusive": {
-        "missing_literal_name": 14,
         "protocol_keys_indexed_name_resolution": 81,
         "uncaptured_source_property:Shift": 3,
         "unsupported_print_conversion": 5,
@@ -59,7 +58,7 @@
         "unsupported_source_property:ValueConv": 6
       },
       "refused_records": 81,
-      "source_table_sha256": "aaee996cd5d419249f363097c97c58d75712868290510d02d5332a217aa3b912",
+      "source_table_sha256": "b1d4bd595657b7b352f40e8e6fb695ed804c80b138311516365ce6120f653adb",
       "table": "Keys",
       "variant_records": 81
     }
@@ -72,6 +71,7 @@
       "full_dump_sha256": "7f528a2998f963422a90ee25df3a80b4f615815a615aca018059999d22aecda4",
       "kind": "verbatim selected tables from hydrated dump",
       "perl_version": "5.38.2",
+      "projection": "effective hydrated rows with authenticated wrapper removal",
       "source_commit": "9a14b40efdb453d20ada85e0779702262311ea73",
       "source_module_table_count": 87,
       "tables": [
@@ -80,7 +80,7 @@
         "QuickTime::Keys"
       ]
     },
-    "dump_sha256": "94e8e016c55a20e90d36ac19d5255ab91ae28ff1e48e6114a2d4a6483756bf9b",
+    "dump_sha256": "842fc5ac477127b397365f15a201cf9e30201d2589eb7bc2d95932281ffde52b",
     "selector_sha256": "a94a5c470dfd49ec70ea4b4db481610c70ffee2a848da5c0cb973792286abd8d"
   }
 }

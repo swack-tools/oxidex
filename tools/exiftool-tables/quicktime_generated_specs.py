@@ -129,6 +129,11 @@ def compile_document(document):
     # Do not call selector.report(): its capture provenance assertions belong to
     # the bounded baseline snapshot, whereas regeneration consumes a full fresh
     # hydrated dump. inventory() is the shared pure source-row selection.
+    if "hydrated_layouts" in document:
+        from capture_quicktime_baseline import hydrated_tables
+        tables = hydrated_tables(document)
+        module = {**document["modules"]["QuickTime"], "tables": tables, "table_count": len(tables)}
+        document = {**document, "modules": {**document["modules"], "QuickTime": module}}
     base = selector.inventory(document)
     blocked_protocol = processor_reason(document)
     blocked_reader_protocol = reader_protocol_reason(document)

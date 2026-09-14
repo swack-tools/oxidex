@@ -17,11 +17,17 @@ This report records exact source and generated-declaration identities. Generated
 
 | Classification | Count |
 | --- | ---: |
-| `blocked_generated_reader_refusal` | 211 |
+| `blocked_generated_reader_refusal` | 238 |
 | `generated_reader_declaration_unobserved` | 92 |
-| `source_row_not_yet_consumed` | 33184 |
+| `source_row_not_yet_consumed` | 33157 |
 
-A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Each matched row records canonical row and table hashes for later implementation evidence.
+## Observed reads
+
+| Classification | Count |
+| --- | ---: |
+| `not_observed_yet` | 33487 |
+
+A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observed reads additionally require a clean, artifact-bound verifier report and exact source identity; writes remain unobserved.
 
 ## Families
 
