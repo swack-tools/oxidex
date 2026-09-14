@@ -99,6 +99,14 @@ binaries against the newer oracle; add a separate non-promoting rehearsal that
 regenerates both releases and checks each against its own native read/write
 behavior. Selection or successful generation alone is not conformance.
 
+An upgrade must adopt upstream fixes to existing parsing rules as well as new
+tags, changed types, conversions, formatting and native writing behavior.
+Changed output is expected when the newer ExifTool changes its answer: compare
+each generated build with its own native release, then explain the difference
+between releases. Do not preserve an obsolete tag rule just to keep an old
+snapshot green. A newly unsupported rule is an explicit upgrade gap, never a
+silent fallback to the older rule.
+
 Once that runner passes its own tests, exercise a randomly selected distinct
 release pair after three relevant merged batches or one week, whichever comes
 first. The existing hourly continuation records this cadence without launching

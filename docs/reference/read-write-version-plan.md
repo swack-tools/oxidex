@@ -76,3 +76,25 @@ Report the complete catalog population, tested versions/pairs, failures,
 untested releases and unexercised read/write behaviors. Keep corpus attribution,
 read conformance, write conformance and source-rule automation as separate
 measurements. No exact completion date follows from the current partial data.
+
+## Native readiness checkpoint, September 13
+
+The rehearsal CLI can verify a selected materialized release, its explicit
+Perl interpreter and required native capability, then read and set/delete
+metadata on private fixture copies. Reports bind commands and results to the
+verified archive/source tree and publish without replacing an existing report,
+including a concurrent publisher. File-move/link pseudo-tags require a separate
+containment contract; they are not metadata cases in this readiness instrument.
+
+The portable command-line tests create their own archived source fixtures and
+controlled executable stand-in. They exercise read/set/delete success, wrong
+version, changed plan/source, missing fixtures, filesystem-action refusal and
+report publication races without private paths or conditional skips. These
+tests establish the instrument's behavior, not ExifTool compatibility.
+
+The persisted random pair, 11.78 and 12.64, has also passed actual native CLI
+readiness for JPEG FileType and Comment set/delete, including UTF-8 input.
+This does not establish OxiDex/native conformance. Generating and building
+OxiDex for both versions, comparing both readers and writers with their own
+native release, and accounting for unsupported behavior remain the next
+rehearsal steps. A ready native oracle must never mark those steps passed.

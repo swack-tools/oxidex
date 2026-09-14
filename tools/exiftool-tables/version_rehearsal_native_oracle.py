@@ -12,6 +12,9 @@ import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
 SCHEMA=2; KIND="oxidex_exiftool_version_rehearsal_native_capability"; TIMEOUT=20
 TAG=re.compile(r"^[A-Za-z][A-Za-z0-9:]*$"); NAME=re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+# Native file relocation/link operations need their own containment contract.
+# These are transport actions, not metadata rules to carry across releases.
+FILE_RELOCATION_ACTIONS = {'filename', 'directory', 'hardlink', 'symlink', 'testname'}
 class Refused(ValueError): pass
 def _sha(p:Path)->str:
  h=hashlib.sha256();
@@ -35,6 +38,8 @@ def _case(v:Any)->dict[str,Any]:
  if r['expectation']=='value' and not isinstance(r.get('value'),str): raise Refused(f"{v['name']}: read value required")
  if not isinstance(w,dict) or w.get('operation') not in {'set','delete'}: raise Refused(f"{v['name']}: write operation must be set or delete")
  tag=_query(w.get('tag'),f"{v['name']} write tag")
+ if tag.rsplit(':', 1)[-1].casefold() in FILE_RELOCATION_ACTIONS:
+  raise Refused(f"{v['name']}: file relocation/link actions require a separate containment contract")
  if w['operation']=='set':
   if not isinstance(w.get('value'),str) or not isinstance(w.get('readback'),str): raise Refused(f"{v['name']}: set requires explicit string readback")
   if '\0' in w['value']: raise Refused(f"{v['name']}: NUL write requires a separate binary writer contract")
@@ -72,7 +77,8 @@ def probe_materialized_native(materialization,plan,catalog,capture,resolution,ar
  if lib.is_symlink() or not lib.is_dir(): raise Refused('materialized ExifTool lib directory is unavailable')
  parsed=[_case(x) for x in cases]
  if not parsed or len({x['name'] for x in parsed})!=len(parsed): raise Refused('at least one uniquely named capability case is required')
- prefix=[str(pp),f'-I{lib}',str(prog)]; version=_run([*prefix,'-ver'],run); cap=_capability(pp,run)
+ # Disable ambient user configuration before ExifTool loads its native tables.
+ prefix=[str(pp),f'-I{lib}',str(prog),'-config','']; version=_run([*prefix,'-ver'],run); cap=_capability(pp,run)
  identity={'release':release,'expected_version':release,'materialization_sha256':materialization['materialization_sha256'],'source_directory':row['source_directory'],'source_tree_sha256':row['tree']['tree_sha256'],'perl':{'path':str(pp),'sha256':_sha(pp)},'lib':{'path':str(lib)},'program':{'path':str(prog),'sha256':_sha(prog)}}
  ready=version['state']=='ok' and version['stdout'].strip()==release and cap['available']; records=[]
  if ready:
@@ -87,11 +93,31 @@ def probe_materialized_native(materialization,plan,catalog,capture,resolution,ar
  state='ready' if ready and all(x['state']=='ready' for x in records) else 'failed'
  payload={'schema':SCHEMA,'kind':KIND,'identity':identity,'version':version,'perl_capability':cap,'cases':records,'state':state,'execution':{'native_read':'probed' if records else 'failed','native_write':'probed' if records else 'failed','conformance':'unrun','limit':'matching-native readiness only; not OxiDex/native conformance'}}
  return {**payload,'probe_sha256':catalog_stage.sha256_json(payload)}
-def write_probe_report(path:Path,report:dict[str,Any])->None:
- if path.exists() or path.is_symlink(): raise Refused('native capability output already exists')
- payload={k:v for k,v in report.items() if k!='probe_sha256'}
- if report.get('probe_sha256')!=catalog_stage.sha256_json(payload): raise Refused('native capability report identity is malformed')
- rehearsal.atomic_json(path,report)
+def _unused_output(path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        raise Refused('native capability output already exists')
+
+
+def write_probe_report(path: Path, report: dict[str, Any]) -> None:
+    """Publish a complete report once, even when another run races this one."""
+    _unused_output(path)
+    payload = {k: v for k, v in report.items() if k != 'probe_sha256'}
+    if report.get('probe_sha256') != catalog_stage.sha256_json(payload):
+        raise Refused('native capability report identity is malformed')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(report, stream, indent=2, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as exc:
+            raise Refused('native capability output already exists') from exc
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 def main(argv: list[str] | None = None) -> int:
     """CLI for one selected materialized release; never builds or compares OxiDex."""
@@ -110,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--output', required=True)
     args = parser.parse_args(argv)
     try:
+        _unused_output(Path(args.output))
         cases = json.loads(Path(args.cases).read_text(encoding='utf-8'))
         if not isinstance(cases, list):
             raise Refused('case manifest must be a JSON array')
