@@ -17,6 +17,9 @@ class MandatoryRefused(ValueError): pass
 class MandatoryMalformed(ValueError): pass
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
+# Reviewed whole WriteExif implementation guard: a source refresh must receive an
+# explicit grammar review before mandatory-cleanup eligibility can reappear.
+_REVIEWED_WRITE_EXIF_SHA256 = "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
 _ID = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 _CONTEXT = re.compile(
     r"\Amy\(\$mandatory, \$allMandatory, \$addMandatory\); "
@@ -170,6 +173,8 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     source = writer.get("source_file"); digest = writer.get("source_sha256")
     if source != "Image/ExifTool/WriteExif.pl" or writer.get("cv_file") != source or not isinstance(digest, str) or not _SHA.fullmatch(digest):
         raise MandatoryMalformed("WriteExif source identity is unavailable")
+    if digest != _REVIEWED_WRITE_EXIF_SHA256:
+        raise MandatoryRefused("WriteExif whole-body review hash is unrecognized")
     closure = _mapping(fact.get("loaded_exiftool_closure"), "loaded_exiftool_closure")
     if not closure or closure.get(source) != digest or any(not isinstance(k, str) or not k.startswith("Image/ExifTool") or not isinstance(v, str) or not _SHA.fullmatch(v) for k, v in closure.items()):
         raise MandatoryMalformed("selected native module closure is unavailable")
