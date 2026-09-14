@@ -509,6 +509,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             if keys_candidate is not None and state == "joined":
                 if keys_candidate["generated"]:
                     implementation = reader_implementation = "generated_reader_declaration_unobserved"
+                    refusal = None
                 else:
                     implementation = reader_implementation = "blocked_generated_reader_refusal"
                     refusal = keys_candidate.get("reasons")
