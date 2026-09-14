@@ -39,13 +39,35 @@ def source():
     table = value["native_write_tables"]["Exif"]["Main"]
     table["table_properties"]["GROUPS"] = {
         "present": True, "value": {"0": "EXIF", "1": "IFD0", "2": "Image"}}
+    value["exiftool_version"] = "13.59"
+    source_hashes = {
+        "Image/ExifTool.pm": "c" * 64,
+        "Image/ExifTool/WriteExif.pl": "b" * 64,
+        "Image/ExifTool/Writer.pl": "a" * 64,
+        "Image/ExifTool/Exif.pm": "d" * 64,
+    }
+    closure_modules = [{"inc": path, "source_file": path, "source_sha256": digest}
+                       for path, digest in sorted(source_hashes.items())]
     value["native_capture_context"] = {
         "schema": "native_exiftool_capture_context_v1",
         "selected_library": "/selected/exiftool/lib",
         "perl_path": "/selected/perl",
         "perl_version": "5.038002",
         "exiftool_version": "13.59",
-        "loaded_closure": closure_manifest(),
+        "loaded_closure": closure_manifest(closure_modules),
+    }
+    table["effective_write_proc"] = {"present": True, "effective": fact(
+        "Image::ExifTool::Exif::WriteExif", "return;",
+        source="Image/ExifTool/WriteExif.pl")}
+    table["effective_write_proc"]["effective"]["source_sha256"] = source_hashes["Image/ExifTool/WriteExif.pl"]
+    value["native_write_capture_context"] = {
+        "kind": "write_exif_postload_context_v1", "resolved": True,
+        "loaded_modules": source_hashes,
+    }
+    value["native_write_format_registry"] = {
+        "state": "resolved",
+        "source": {"library_relative_path": "Image/ExifTool/Exif.pm",
+                   "sha256": source_hashes["Image/ExifTool/Exif.pm"]},
     }
     value["native_find_tag_info_warmup"] = {
         "warmed": True, "query_name_count": 1,

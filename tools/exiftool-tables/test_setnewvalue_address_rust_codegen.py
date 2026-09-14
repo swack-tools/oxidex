@@ -21,6 +21,13 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn("SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_QUALIFIED", rust)
+        self.assertIn("StaticSetNewValueAddressCapture", rust)
+        self.assertIn("SET_NEW_VALUE_ADDRESS_CAPTURE", rust)
+        self.assertEqual(report["source_capture_identity"], {
+            "exiftool_version": "13.59", "main_source_sha256": "c" * 64,
+            "write_exif_source_sha256": "b" * 64, "writer_source_sha256": "a" * 64,
+            "exif_source_sha256": "d" * 64,
+        })
         self.assertIn("noallowlist", rust)
 
     def test_missing_observation_is_explicit_omission(self):
@@ -62,6 +69,16 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn('"noallowlist"', rust)
         self.assertIn('"newname"', rust)
         self.assertIn("removed: true", rust)
+
+    def test_mixed_final_source_closure_is_an_explicit_omission(self):
+        document = source()
+        from setnewvalue_addressing import compile_addressing
+        addressing, _ = compile_addressing(document)
+        document["native_write_capture_context"]["loaded_modules"]["Image/ExifTool/Exif.pm"] = "e" * 64
+        rust, report = generate(document, observations(addressing.rows), bootstrap_ownership_ledger=True)
+        self.assertFalse(report["emitted"])
+        self.assertIn("closures disagree", report["reason"])
+        self.assertIn("SET_NEW_VALUE_ADDRESS_CAPTURE: Option<StaticSetNewValueAddressCapture> = None", rust)
 
     def test_lookup_emits_all_native_families_and_identity_presence(self):
         document = source()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+import re
 
 from checkexif_recipes import RecipeMalformed, RecipeRefused
 from scalar_helper_codegen import rust_string
@@ -36,6 +37,84 @@ def _qualified_owned_const(entries) -> str:
     return "".join(chunks)
 
 
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _source_sha(value: Any, context: str) -> str:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise RecipeRefused(f"{context} is not an authenticated SHA-256")
+    return value
+
+
+def _source_capture_identity(document: Mapping[str, Any], addressing: Addressing) -> dict[str, str]:
+    """Return the final-loaded source intersection used by public routing.
+
+    These are executable operands, rather than release comments: runtime joins
+    them to the final scalar stage before it can route a public address.  Each
+    digest must agree with both its exact captured helper/table fact and the
+    final loaded writer closure.
+    """
+    write_context = document.get("native_write_capture_context")
+    if not isinstance(write_context, Mapping) or write_context.get("kind") != "write_exif_postload_context_v1" or write_context.get("resolved") is not True:
+        raise RecipeRefused("WriteExif post-load capture context is unavailable")
+    loaded = write_context.get("loaded_modules")
+    if not isinstance(loaded, Mapping):
+        raise RecipeRefused("WriteExif post-load source closure is unavailable")
+    required = ("Image/ExifTool.pm", "Image/ExifTool/WriteExif.pl", "Image/ExifTool/Writer.pl", "Image/ExifTool/Exif.pm")
+    hashes = {path: _source_sha(loaded.get(path), f"WriteExif post-load closure {path}") for path in required}
+
+    # The generic capture closure is independently sealed and must describe the
+    # same selected files.  This catches a partially reloaded source tree.
+    generic_modules = addressing.capture_context["loaded_closure"]["modules"]
+    generic = {item.get("inc"): item.get("source_sha256") for item in generic_modules
+               if isinstance(item, Mapping)}
+    for path in required:
+        if generic.get(path) != hashes[path]:
+            raise RecipeRefused(f"address and WriteExif closures disagree for {path}")
+
+    tables = document.get("native_write_tables")
+    try:
+        table = tables["Exif"]["Main"]
+        write = table["effective_write_proc"]
+        write_fact = write["effective"]
+    except (KeyError, TypeError) as error:
+        raise RecipeRefused("Exif::Main effective WriteExif source is unavailable") from error
+    if (write.get("present") is not True or write_fact.get("resolved") is not True
+            or write_fact.get("__name") != "Image::ExifTool::Exif::WriteExif"
+            or write_fact.get("source_file") != "Image/ExifTool/WriteExif.pl"
+            or _source_sha(write_fact.get("source_sha256"), "Exif::Main WriteExif source") != hashes["Image/ExifTool/WriteExif.pl"]):
+        raise RecipeRefused("Exif::Main WriteExif source does not join the loaded closure")
+    if addressing.set_new_value_source_file != "Image/ExifTool/Writer.pl" or addressing.set_new_value_source_sha256 != hashes["Image/ExifTool/Writer.pl"]:
+        raise RecipeRefused("SetNewValue source does not join the loaded Writer.pl closure")
+
+    registry = document.get("native_write_format_registry")
+    if not isinstance(registry, Mapping) or registry.get("state") != "resolved":
+        raise RecipeRefused("Exif TIFF registry source is unavailable")
+    registry_source = registry.get("source")
+    if (not isinstance(registry_source, Mapping)
+            or registry_source.get("library_relative_path") != "Image/ExifTool/Exif.pm"
+            or _source_sha(registry_source.get("sha256"), "Exif TIFF registry source") != hashes["Image/ExifTool/Exif.pm"]):
+        raise RecipeRefused("Exif TIFF registry source does not join the loaded closure")
+    version = document.get("exiftool_version")
+    if not isinstance(version, str) or version != addressing.capture_context.get("exiftool_version"):
+        raise RecipeRefused("address source release differs from native capture context")
+    return {
+        "exiftool_version": version,
+        "main_source_sha256": hashes["Image/ExifTool.pm"],
+        "write_exif_source_sha256": hashes["Image/ExifTool/WriteExif.pl"],
+        "writer_source_sha256": hashes["Image/ExifTool/Writer.pl"],
+        "exif_source_sha256": hashes["Image/ExifTool/Exif.pm"],
+    }
+
+
+def _capture_const(identity: Mapping[str, str] | None) -> str:
+    if identity is None:
+        return "pub(crate) const SET_NEW_VALUE_ADDRESS_CAPTURE: Option<StaticSetNewValueAddressCapture> = None;\n"
+    return ("pub(crate) const SET_NEW_VALUE_ADDRESS_CAPTURE: Option<StaticSetNewValueAddressCapture> = Some("
+            "StaticSetNewValueAddressCapture { exiftool_version: %s, main_source_sha256: %s, write_exif_source_sha256: %s, writer_source_sha256: %s, exif_source_sha256: %s });\n" %
+            tuple(rust_string(identity[key]) for key in ("exiftool_version", "main_source_sha256", "write_exif_source_sha256", "writer_source_sha256", "exif_source_sha256")))
+
+
 def _families(groups: Mapping[str, Any]) -> tuple[tuple[int, str], ...]:
     values = []
     for family, value in groups.items():
@@ -58,12 +137,14 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
         "pub(crate) struct StaticNativeLookupCandidate { pub name: &'static str, pub row_index: Option<usize>, pub source_identity_present: bool, pub groups: &'static [StaticNativeLookupFamily] }\n"
         "pub(crate) struct StaticSetNewValueQualifierScope { pub family: u8, pub group: &'static str }\n"
         "pub(crate) struct StaticSetNewValueOwnedName { pub group0: &'static str, pub group1: &'static str, pub name: &'static str, pub removed: bool }\n"
+        "pub(crate) struct StaticSetNewValueAddressCapture { pub exiftool_version: &'static str, pub main_source_sha256: &'static str, pub write_exif_source_sha256: &'static str, pub writer_source_sha256: &'static str, pub exif_source_sha256: &'static str }\n"
     )
     try:
         ledger = build_ledger(document, prior_ledger, bootstrap=bootstrap_ownership_ledger)
         ledger_names = owned_names(ledger)
         ledger_qualified = qualified_ownership(ledger)
         addressing, report = compile_addressing(document)
+        capture_identity = _source_capture_identity(document, addressing)
         by_identity = {row.identity: index for index, row in enumerate(addressing.rows)}
         lookup = []
         for name in sorted(addressing.owned_names):
@@ -89,7 +170,7 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
             current_owned_names = set()
         return (
             prelude + "// SetNewValue addressing omitted: unsupported source.\n"
-            + _owned_names_const(current_owned_names) +
+            + _owned_names_const(current_owned_names) + _capture_const(None) +
             "pub(crate) const SET_NEW_VALUE_ADDRESSING: Option<&[StaticSetNewValueAddress]> = None;\n",
             {"emitted": False, "reason": str(error), "runtime_status": RUNTIME_STATUS,
              "owned_names": len(current_owned_names)},
@@ -115,12 +196,14 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
     chunks.append("];\n")
     chunks.append(_owned_names_const(ledger_names))
     chunks.append(_qualified_owned_const(ledger_qualified))
+    chunks.append(_capture_const(capture_identity))
     chunks.append("pub(crate) const SET_NEW_VALUE_ADDRESSING: Option<&[StaticSetNewValueAddress]> = Some(SET_NEW_VALUE_ADDRESS_ROWS);\n")
     return "".join(chunks), {
         "emitted": True, "runtime_status": RUNTIME_STATUS,
         "rows": len(addressing.rows), "owned_names": len(ledger_names),
         "removed_owned_names": sum(entry.removed for entry in ledger_qualified),
         "ownership_ledger_sha256": ledger["ledger_sha256"],
+        "source_capture_identity": capture_identity,
         "lookup_candidates": len(lookup), "source_report": report,
     }
 

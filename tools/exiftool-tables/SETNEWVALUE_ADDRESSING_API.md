@@ -86,3 +86,15 @@ wildcards, language suffixes, shortcuts, multiple/numbered/ID qualifiers,
 ExifIFD and other group forms, priority/preferred/avoid handling, protected
 tags, list recursion, deletion, NEW_VALUE construction, conversion, CHECK_PROC
 execution, serialization, and file writes.
+
+## Final-stage source join
+
+Generated operands include `SET_NEW_VALUE_ADDRESS_CAPTURE`, an optional
+`StaticSetNewValueAddressCapture`. When present it carries the selected
+ExifTool version and SHA-256 identities for `Image/ExifTool.pm`,
+`WriteExif.pl`, `Writer.pl`, and `Exif.pm`. The generator requires those
+hashes to agree across the sealed generic lookup closure, post-load WriteExif
+closure, effective `Exif::Main::WriteExif` fact, `SetNewValue` fact, and TIFF
+format-registry fact. A missing or mixed source closure emits both the address
+and capture operands as `None`; a public bridge must compare this operand with
+the final scalar recipe sources before resolving an address.

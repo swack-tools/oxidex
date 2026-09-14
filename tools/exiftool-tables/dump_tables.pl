@@ -159,8 +159,15 @@ sub native_capture_context {
         my $abs = abs_path($path);
         $abs = File::Spec->rel2abs($path) unless defined $abs;
         my $prefix = $lib_abs . '/';
-        die "loaded ExifTool module is outside selected library: $inc => $abs\n"
-            unless index($abs, $prefix) == 0;
+        # Keep the dump inspectable if a transitive require escaped the selected
+        # library.  The source-address compiler rejects this explicit malformed
+        # closure; dying here would hide the independent post-load writer
+        # refusal and turn a source mismatch into a capture failure.
+        if (index($abs, $prefix) != 0) {
+            push @modules, { inc => $inc, source_file => undef, source_sha256 => undef,
+                             reason => 'loaded_context_module_outside_selected_library' };
+            next;
+        }
         my %module = (inc => $inc, source_file => File::Spec->abs2rel($abs, $lib_abs));
         if (-f $abs) {
             open(my $fh, '<:raw', $abs) or die "read $abs: $!\n";
