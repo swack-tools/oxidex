@@ -7,7 +7,7 @@ then adds missing entries for a new directory.  Unsupported source refuses.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import re
 from typing import Any, Mapping
@@ -62,6 +62,13 @@ class MandatoryRecipe:
     directories: tuple[DirectoryDefaults, ...]
     jfif_override: JfifOverride
     selection: MandatorySelection
+    encodings: tuple["DefaultEncoding", ...] = ()
+
+@dataclass(frozen=True)
+class DefaultEncoding:
+    """A direct `WriteValue` operand for a generated IFD0 mandatory entry."""
+    tag_id: int
+    format_name: str
 
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping): raise MandatoryMalformed(f"{label} is not an object")
@@ -130,6 +137,7 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
 def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any]) -> MandatoryRecipe:
     """Require defaults and the general captured WriteExif callback share a source identity."""
     recipe = compile_mandatory(fact)
+    mandatory_closure = _mapping(fact.get("loaded_exiftool_closure"), "loaded_exiftool_closure")
     document = _mapping(document, "general writer document")
     if document.get("exiftool_version") != fact["native_identity"]["exiftool_version"]:
         raise MandatoryRefused("mandatory defaults do not join the selected native release")
@@ -143,7 +151,38 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
             or effective.get("source_file") != recipe.writer_source_file
             or effective.get("source_sha256") != recipe.writer_source_sha256):
         raise MandatoryRefused("mandatory defaults do not join the general captured WriteExif")
-    return recipe
+    helpers = _mapping(document.get("native_write_helpers"), "native_write_helpers")
+    write_value = _mapping(helpers.get("write_value"), "native_write_helpers.write_value")
+    if (write_value.get("__name") != "Image::ExifTool::WriteValue"
+            or write_value.get("source_file") != "Image/ExifTool/Writer.pl"
+            or write_value.get("source_sha256") != mandatory_closure.get("Image/ExifTool/Writer.pl")):
+        raise MandatoryRefused("mandatory defaults do not join the captured WriteValue helper")
+
+    rows = _mapping(fact.get("effective_exif_main_rows"), "effective_exif_main_rows")
+    # The direct new-directory path chooses Format when present, otherwise
+    # Writable.  This bounded encoder only implements those two native scalar
+    # packing procedures, and rejects every row with another write hook.
+    ids = {item.tag_id for directory in recipe.directories if directory.directory == "IFD0" for item in directory.defaults}
+    ids.update(tag_id for tag_id, _property, _adjustment in recipe.jfif_override.assignments)
+    encodings = []
+    for tag_id in sorted(ids):
+        controls = _mapping(rows.get(str(tag_id)), f"effective_exif_main_rows[{tag_id}]")
+        props = controls
+        def present(name: str) -> Any:
+            item = _mapping(controls.get(name), f"mandatory row control {name}")
+            if item.get("unsupported") is True:
+                raise MandatoryRefused(f"mandatory row {name} is a reference")
+            return item.get("value") if item.get("present") is True else None
+        if present("WriteGroup") != "IFD0" or present("Writable") not in {"int16u", "rational64u"}:
+            raise MandatoryRefused("mandatory row Writable/WriteGroup is unsupported")
+        if _mapping(props.get("Format", {"present": False}), "mandatory row Format").get("present") is True:
+            raise MandatoryRefused("mandatory row Format selection is unsupported")
+        for name in ("CanCreate", "DelValue", "Deletable", "PrintConvInv", "RawConvInv", "Validate", "ValueConvInv", "WriteAlso", "WriteCheck", "WriteCondition", "WriteHook", "WriteLast", "WritePseudo"):
+            if present(name) is not None:
+                raise MandatoryRefused(f"mandatory row {name} changes direct WriteValue semantics")
+        encodings.append(DefaultEncoding(tag_id, str(present("Writable"))))
+    return replace(recipe, encodings=tuple(encodings))
+
 
 def recipe_json(recipe: MandatoryRecipe) -> dict[str, Any]:
     value = asdict(recipe)

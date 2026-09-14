@@ -74,6 +74,24 @@ for my $directory (sort keys %$hash) {
     }
     $mandatory_map{$directory} = \%out;
 }
+my @row_properties = qw(Writable Format WriteGroup CanCreate DelValue Deletable PrintConvInv RawConvInv Validate ValueConvInv WriteAlso WriteCheck WriteCondition WriteHook WriteLast WritePseudo);
+my %effective_rows;
+for my $id (sort { $a <=> $b } grep { /^(?:0|[1-9][0-9]*)$/ && $_ <= 65535 } keys %Image::ExifTool::Exif::Main) {
+    my $entry = $Image::ExifTool::Exif::Main{$id};
+    next unless ref($entry) eq 'HASH';
+    my %properties;
+    for my $property (@row_properties) {
+        if (exists $entry->{$property} && defined $entry->{$property}) {
+            # A reference changes the native path and is deliberately not
+            # translated by this bounded numeric-default carrier.
+            $properties{$property} = ref($entry->{$property}) ? { present => JSON::PP::true, unsupported => JSON::PP::true }
+                                                       : { present => JSON::PP::true, value => "$entry->{$property}" };
+        } else {
+            $properties{$property} = { present => JSON::PP::false };
+        }
+    }
+    $effective_rows{"$id"} = \%properties;
+}
 my %closure;
 for my $name (sort keys %INC) {
     next unless $name =~ m{^Image/ExifTool(?:/|\.pm$)};
@@ -100,6 +118,9 @@ print JSON::PP->new->utf8->canonical->pretty->encode({
         perl_version => "$^V",
     },
     lexical => { name => '%mandatory', resolved => JSON::PP::true, entries => \%mandatory_map },
+    # Final-loaded Exif::Main fields used by WriteExif's direct WriteValue
+    # call.  The Python compiler selects only generated mandatory/JFIF IDs.
+    effective_exif_main_rows => \%effective_rows,
     loaded_exiftool_closure => \%closure,
     new_directory_context_deparse => $context,
 });

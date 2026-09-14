@@ -24,6 +24,13 @@ pub(crate) struct JfifAssignment {
     pub property: &'static str,
     pub adjustment: i64,
 }
+/// The source-selected direct `WriteValue` packing format for one IFD0
+/// default.  The generator refuses every other native format.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DefaultEncoding {
+    pub tag_id: u16,
+    pub format_name: &'static str,
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MandatoryRecipe {
     pub writer_source_file: &'static str,
@@ -34,6 +41,53 @@ pub(crate) struct MandatoryRecipe {
     pub jfif_directory: &'static str,
     pub jfif_probe: &'static str,
     pub jfif_assignments: &'static [JfifAssignment],
+    pub encodings: &'static [DefaultEncoding],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TiffByteOrder { Little, Big }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EncodedMandatoryDefault {
+    pub tag_id: u16,
+    /// TIFF type selected from the captured row's Writable operand.
+    pub tiff_type: u16,
+    pub count: u32,
+    pub bytes: Vec<u8>,
+}
+
+/// Execute the admitted direct `WriteValue` packing path for generated IFD0
+/// mandatory operands.  It intentionally has no public writer entry point.
+pub(crate) fn encode_ifd0_defaults(
+    recipe: &MandatoryRecipe,
+    defaults: &[MandatoryDefault],
+    byte_order: TiffByteOrder,
+) -> Result<Vec<EncodedMandatoryDefault>, String> {
+    let mut encoded = Vec::with_capacity(defaults.len());
+    for default in defaults {
+        let format = recipe.encodings.iter().find(|item| item.tag_id == default.tag_id)
+            .ok_or_else(|| refusal("mandatory default has no generated WriteValue operand"))?;
+        let value = match default.value {
+            MandatoryValue::Integer(value) => value,
+            MandatoryValue::Text(_) => return Err(refusal("text mandatory default is outside numeric encoder scope")),
+        };
+        let (tiff_type, count, bytes) = match format.format_name {
+            "int16u" => {
+                let value = u16::try_from(value).map_err(|_| refusal("int16u mandatory operand is outside native range"))?;
+                let bytes = match byte_order { TiffByteOrder::Little => value.to_le_bytes(), TiffByteOrder::Big => value.to_be_bytes() };
+                (3, 1, bytes.to_vec())
+            }
+            "rational64u" => {
+                let value = u32::try_from(value).map_err(|_| refusal("rational64u mandatory operand is outside native range"))?;
+                let mut bytes = Vec::with_capacity(8);
+                match byte_order { TiffByteOrder::Little => { bytes.extend(value.to_le_bytes()); bytes.extend(1u32.to_le_bytes()); }, TiffByteOrder::Big => { bytes.extend(value.to_be_bytes()); bytes.extend(1u32.to_be_bytes()); } }
+                (5, 1, bytes)
+            }
+            _ => return Err(refusal("mandatory WriteValue format is unsupported")),
+        };
+        encoded.push(EncodedMandatoryDefault { tag_id: default.tag_id, tiff_type, count, bytes });
+    }
+    Ok(encoded)
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JfifValues {
