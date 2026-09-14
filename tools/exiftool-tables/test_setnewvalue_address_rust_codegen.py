@@ -17,13 +17,28 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn("SET_NEW_VALUE_ADDRESS_ROWS", rust)
         self.assertIn("SET_NEW_VALUE_LOOKUP", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
-        self.assertIn("NoAllowlist", rust)
+        self.assertIn("noallowlist", rust)
 
     def test_missing_observation_is_explicit_omission(self):
-        rust, report = generate(source(), {"schema": "native_setnewvalue_addressing_v1", "queries": {}})
+        document = source()
+        from setnewvalue_addressing import compile_addressing
+        addressing, _ = compile_addressing(document)
+        native = observations(addressing.rows)
+        native["queries"] = {}
+        rust, report = generate(document, native)
         self.assertFalse(report["emitted"])
-        self.assertIn("lookup observation", report["reason"])
+        self.assertIn("query set", report["reason"])
+        self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
+        self.assertIn("noallowlist", rust)
         self.assertIn("= None", rust)
+
+    def test_source_template_failure_still_emits_current_owned_names(self):
+        document = source()
+        document["native_write_helpers"]["set_new_value"]["__deparse"] = "sub { return 0; }"
+        rust, report = generate(document, {})
+        self.assertFalse(report["emitted"])
+        self.assertIn("noallowlist", rust)
+        self.assertIn("SET_NEW_VALUE_ADDRESSING: Option", rust)
 
 
 if __name__ == "__main__":

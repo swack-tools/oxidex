@@ -8,6 +8,7 @@ not fall back to an older hand-written writer implementation.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -46,6 +47,12 @@ class Addressing:
     lookup_source_file: str
     lookup_source_sha256: str
     lookup_body_sha256: str
+    set_new_value_source_file: str
+    set_new_value_source_sha256: str
+    set_new_value_body_sha256: str
+    source_rows_sha256: str
+    query_names_sha256: str
+    capture_context: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -83,23 +90,62 @@ def _template() -> list[str]:
     return value
 
 
-def _find_tag_info_source(document: Mapping[str, Any]) -> tuple[str, str, str]:
+def _helper_identity(fact: Mapping[str, Any], requested: str, *, context: str) -> tuple[str, str, str, str]:
+    """Return the exact source identity that a native observation must re-prove."""
+    if fact.get("requested_binding") != requested:
+        raise RecipeRefused(f"{context} requested binding is stale")
+    try:
+        actual, source_file, source_sha256, _tokens = native_reader_facts.source_fact(fact, requested)
+    except native_reader_facts.ReaderRefused as error:
+        raise RecipeRefused(f"{context} is unresolved or rebound") from error
+    body = fact.get("__deparse")
+    if not isinstance(body, str):
+        raise RecipeRefused(f"{context} has no deparsed body")
+    return actual, source_file, source_sha256, hashlib.sha256(body.encode()).hexdigest()
+
+
+def _find_tag_info_source(document: Mapping[str, Any]) -> tuple[str, str, str, str]:
     helpers = _mapping(document.get("native_write_helpers"), "native_write_helpers")
     fact = _mapping(helpers.get("find_tag_info"), "native_write_helpers.find_tag_info")
-    if fact.get("requested_binding") != "Image::ExifTool::TagLookup::FindTagInfo":
-        raise RecipeRefused("FindTagInfo requested binding is stale")
+    actual, source_file, source_sha256, body_sha256 = _helper_identity(
+        fact, "Image::ExifTool::TagLookup::FindTagInfo", context="FindTagInfo")
     try:
-        actual, source_file, source_sha256, tokens = native_reader_facts.source_fact(
-            fact, "Image::ExifTool::TagLookup::FindTagInfo")
+        tokens = native_reader_facts.source_fact(
+            fact, "Image::ExifTool::TagLookup::FindTagInfo")[3]
     except native_reader_facts.ReaderRefused as error:
         raise RecipeRefused("FindTagInfo is unresolved or rebound") from error
     if actual != "Image::ExifTool::TagLookup::FindTagInfo" or tokens != _template():
         raise RecipeRefused("FindTagInfo name lookup control flow is unsupported")
-    body = fact.get("__deparse")
-    if not isinstance(body, str):
-        raise RecipeRefused("FindTagInfo has no deparsed body")
-    import hashlib
-    return source_file, source_sha256, hashlib.sha256(body.encode()).hexdigest()
+    return actual, source_file, source_sha256, body_sha256
+
+
+def _capture_context(document: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    context = _mapping(document.get("native_capture_context"), "native_capture_context")
+    if context.get("schema") != "native_exiftool_capture_context_v1":
+        raise RecipeRefused("native capture context is absent or stale")
+    required = ("selected_library", "perl_path", "perl_version", "exiftool_version", "loaded_closure_sha256")
+    values: list[tuple[str, str]] = []
+    for key in required:
+        value = context.get(key)
+        if not isinstance(value, str) or not value:
+            raise RecipeRefused(f"native capture context {key} is unavailable")
+        values.append((key, value))
+    if not re.fullmatch(r"[0-9a-f]{64}", dict(values)["loaded_closure_sha256"]):
+        raise RecipeRefused("native capture context closure digest is malformed")
+    return tuple(values)
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _address_rows_digest(rows: tuple[AddressRow, ...]) -> str:
+    return _digest([asdict(row) for row in rows])
+
+
+def _query_names_digest(names: frozenset[str] | set[str]) -> str:
+    return _digest(sorted(names))
 
 
 def _table_groups(document: Mapping[str, Any], row: Row) -> tuple[str, str]:
@@ -152,8 +198,17 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
     document = _mapping(document, "document")
     # The complete caller match authenticates its tag/group split before this
     # narrow operand adopts the documented one-qualifier subset.
-    compile_setnewvalue_convinv(document["native_write_helpers"]["set_new_value"])
-    source_file, source_sha256, body_sha256 = _find_tag_info_source(document)
+    setnew = _mapping(_mapping(document.get("native_write_helpers"), "native_write_helpers").get("set_new_value"),
+                      "native_write_helpers.set_new_value")
+    compile_setnewvalue_convinv(setnew)
+    setnew_actual, setnew_file, setnew_sha256, setnew_body_sha256 = _helper_identity(
+        setnew, "Image::ExifTool::SetNewValue", context="SetNewValue")
+    if setnew_actual != "Image::ExifTool::SetNewValue":
+        raise RecipeRefused("SetNewValue is rebound")
+    lookup_actual, source_file, source_sha256, body_sha256 = _find_tag_info_source(document)
+    if lookup_actual != "Image::ExifTool::TagLookup::FindTagInfo":
+        raise RecipeRefused("FindTagInfo is rebound")
+    capture_context = _capture_context(document)
     source_rows, source_report = compile_rows(document)
     address_rows = []
     omissions = []
@@ -166,8 +221,13 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
         except RecipeRefused as error:
             omissions.append({"identity": (row.module, row.table, row.full_name, row.raw_id, row.name),
                               "reason": str(error)})
-    result = Addressing(tuple(address_rows), frozenset(_owned_names(document)),
-                       source_file, source_sha256, body_sha256)
+    address_rows = tuple(address_rows)
+    owned_names = frozenset(_owned_names(document))
+    result = Addressing(address_rows, owned_names,
+                       source_file, source_sha256, body_sha256,
+                       setnew_file, setnew_sha256, setnew_body_sha256,
+                       _address_rows_digest(address_rows), _query_names_digest(owned_names),
+                       capture_context)
     return result, {
         "runtime_status": RUNTIME_STATUS,
         "rows_emitted": len(result.rows),
@@ -176,6 +236,11 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
         "source_row_report": source_report,
         "find_tag_info": {"source_file": source_file, "source_sha256": source_sha256,
                           "body_sha256": body_sha256},
+        "set_new_value": {"source_file": setnew_file, "source_sha256": setnew_sha256,
+                          "body_sha256": setnew_body_sha256},
+        "source_rows_sha256": result.source_rows_sha256,
+        "query_names_sha256": result.query_names_sha256,
+        "native_capture_context": dict(result.capture_context),
     }
 
 
@@ -197,18 +262,86 @@ def _candidate_identity(value: Mapping[str, Any]) -> tuple[str, str, str, str, s
     return fields if all(isinstance(item, str) for item in fields) else None
 
 
-def _observed_candidates(observations: Mapping[str, Any], name: str) -> list[Mapping[str, Any]] | None:
+def observation_input(addressing: Addressing) -> dict[str, Any]:
+    """The sealed payload accepted by the canonical native probe."""
+    return {
+        "schema": "native_setnewvalue_address_probe_input_v2",
+        "capture": _observation_capture(addressing),
+        "rows": [asdict(row) for row in addressing.rows],
+        "query_names": sorted(addressing.owned_names),
+    }
+
+
+def _helper_capture(requested: str, source_file: str, source_sha256: str, body_sha256: str) -> dict[str, str]:
+    return {"requested_binding": requested, "actual_name": requested,
+            "source_file": source_file, "source_sha256": source_sha256,
+            "body_sha256": body_sha256}
+
+
+def _observation_capture(addressing: Addressing) -> dict[str, Any]:
+    return {
+        "source_rows_sha256": addressing.source_rows_sha256,
+        "query_names_sha256": addressing.query_names_sha256,
+        "native_capture_context": dict(addressing.capture_context),
+        "find_tag_info": _helper_capture("Image::ExifTool::TagLookup::FindTagInfo",
+                                           addressing.lookup_source_file,
+                                           addressing.lookup_source_sha256,
+                                           addressing.lookup_body_sha256),
+        "set_new_value": _helper_capture("Image::ExifTool::SetNewValue",
+                                           addressing.set_new_value_source_file,
+                                           addressing.set_new_value_source_sha256,
+                                           addressing.set_new_value_body_sha256),
+    }
+
+
+def _validate_observations(addressing: Addressing, observations: Mapping[str, Any]) -> Mapping[str, Any]:
     observations = _mapping(observations, "native lookup observations")
-    if observations.get("schema") != "native_setnewvalue_addressing_v1":
+    if observations.get("schema") != "native_setnewvalue_addressing_v2":
         raise RecipeMalformed("native lookup observations have unknown schema")
+    capture = _mapping(observations.get("capture"), "native lookup observations.capture")
+    if capture != _observation_capture(addressing):
+        raise RecipeRefused("native lookup observations do not match the captured source rows/helpers")
+    runtime = _mapping(observations.get("runtime"), "native lookup observations.runtime")
+    expected_context = dict(addressing.capture_context)
+    for key in ("selected_library", "perl_path", "perl_version", "exiftool_version"):
+        if runtime.get(key) != expected_context[key]:
+            raise RecipeRefused(f"native lookup observations used a different {key}")
+    closure = _mapping(runtime.get("loaded_closure"), "native lookup observations.runtime.loaded_closure")
+    modules = closure.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise RecipeMalformed("native lookup observations have no loaded ExifTool closure")
+    if not isinstance(closure.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", closure["sha256"]):
+        raise RecipeMalformed("native lookup observations closure digest is malformed")
+    for module in modules:
+        module = _mapping(module, "native lookup observations.loaded closure member")
+        for key in ("inc", "source_file", "source_sha256"):
+            if not isinstance(module.get(key), str) or not module[key]:
+                raise RecipeMalformed("native lookup observations closure member is malformed")
+    if _digest(modules) != closure["sha256"]:
+        raise RecipeRefused("native lookup observations loaded closure digest does not match its modules")
+    helpers = _mapping(runtime.get("helpers"), "native lookup observations.runtime.helpers")
+    for key in ("find_tag_info", "set_new_value"):
+        if _mapping(helpers.get(key), f"native lookup observations.runtime.helpers.{key}") != capture[key]:
+            raise RecipeRefused(f"native lookup {key} identity disagrees with the dump capture")
     queries = _mapping(observations.get("queries"), "native lookup observations.queries")
+    if _digest(sorted(queries)) != addressing.query_names_sha256:
+        raise RecipeRefused("native lookup query set does not match generated rows")
+    return queries
+
+
+def _observed_candidates(addressing: Addressing, observations: Mapping[str, Any], name: str) -> list[Mapping[str, Any]] | None:
+    queries = _validate_observations(addressing, observations)
     query = queries.get(name.lower())
     if query is None:
         return None
     query = _mapping(query, f"native lookup observations.queries[{name.lower()!r}]")
     if query.get("query", "").lower() != name.lower() or not isinstance(query.get("candidates"), list):
         raise RecipeMalformed("native lookup observation is malformed")
-    return [_mapping(item, "native lookup candidate") for item in query["candidates"]]
+    candidates = [_mapping(item, "native lookup candidate") for item in query["candidates"]]
+    for candidate in candidates:
+        if not isinstance(candidate.get("name"), str) or candidate["name"].lower() != name.lower():
+            raise RecipeMalformed("native lookup candidate name does not match its query")
+    return candidates
 
 
 def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) -> Resolution:
@@ -220,16 +353,33 @@ def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) 
     lower = name.lower()
     candidates = [row for row in addressing.rows if row.name.lower() == lower]
     if not candidates:
+        # An explicitly-qualified spelling may identify a native table that
+        # lies entirely outside this EXIF/IFD0 migration despite a colliding
+        # bare source name.  Probe all source-owned names for that distinction.
+        if group is not None:
+            observed = _observed_candidates(addressing, observations, name)
+            wanted = group.lower()
+            native_matches = [candidate for candidate in observed if isinstance(candidate.get("groups"), Mapping)
+                              and any(isinstance(value, str) and value.lower() == wanted
+                                      for value in candidate["groups"].values())]
+            if (wanted not in {"exif", "ifd0"} and native_matches and
+                    all(_candidate_identity(candidate) is None for candidate in native_matches)):
+                return Resolution("outside_migrated_scope",
+                                  reason="qualified native lookup selects only an unmigrated group")
         state = "owned_unsupported" if lower in addressing.owned_names else "outside_migrated_scope"
         return Resolution(state, reason=("source-owned row has no final addressing recipe"
                                          if state == "owned_unsupported"
                                          else "name is outside migrated source rows"))
-    observed = _observed_candidates(observations, name)
+    observed = _observed_candidates(addressing, observations, name)
     if observed is None:
         return Resolution("owned_unsupported", reason="native lookup observation is unavailable")
     by_identity = {row.identity: row for row in candidates}
     selected = []
     external = 0
+    wanted = group.lower() if group is not None else None
+    matched_native = 0
+    matched_external = 0
+    matched_generated = 0
     for candidate in observed:
         identity = _candidate_identity(candidate)
         row = by_identity.get(identity) if identity else None
@@ -237,19 +387,24 @@ def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) 
         if not isinstance(groups, Mapping):
             raise RecipeMalformed("native lookup candidate lacks groups")
         if group is not None:
-            wanted = group.lower()
-            if wanted == "exif":
-                matches = groups.get("0") == "EXIF"
-            elif wanted == "ifd0":
-                matches = groups.get("1") == "IFD0"
-            else:
-                return Resolution("owned_unsupported", reason="group qualifier is outside EXIF/IFD0 subset")
+            matches = any(isinstance(value, str) and value.lower() == wanted for value in groups.values())
             if not matches:
                 continue
+            matched_native += 1
         if row is None:
             external += 1
+            matched_external += 1
         else:
             selected.append(row)
+            matched_generated += 1
+    # A qualified lookup that native resolves solely to another group is not
+    # owned by this EXIF/IFD0 migration, even when its bare spelling collides
+    # with a source-owned EXIF field.  The unqualified spelling remains
+    # terminal because native ambiguity is real.
+    if group is not None and wanted not in {"exif", "ifd0"}:
+        if matched_native and matched_generated == 0 and matched_external == matched_native:
+            return Resolution("outside_migrated_scope", reason="qualified native lookup selects only an unmigrated group")
+        return Resolution("owned_unsupported", reason="group qualifier is outside EXIF/IFD0 subset")
     if external:
         return Resolution("owned_unsupported", reason="native lookup has candidates outside generated rows")
     unique = {row.identity: row for row in selected}
@@ -276,11 +431,19 @@ def resolve_batch(addressing: Addressing, observations: Mapping[str, Any],
                                        reason="conflicting duplicate requests resolve to one physical field"))
             continue
         accepted[answer.row.identity] = (answer.row, value)
-    return tuple(accepted.values()), tuple(failures)
+    # This is an atomic admission API.  A caller may not send the earlier
+    # accepted operands after one alias is rejected; otherwise a conflicting
+    # duplicate request could partially write a file.
+    if failures:
+        return (), tuple(failures)
+    return tuple(accepted.values()), ()
 
 
 def render(addressing: Addressing) -> str:
-    return json.dumps({"runtime_status": RUNTIME_STATUS, "rows": [asdict(row) for row in addressing.rows]},
+    return json.dumps({"runtime_status": RUNTIME_STATUS, "rows": [asdict(row) for row in addressing.rows],
+                       "source_rows_sha256": addressing.source_rows_sha256,
+                       "query_names_sha256": addressing.query_names_sha256,
+                       "native_capture_context": dict(addressing.capture_context)},
                       sort_keys=True, indent=2) + "\n"
 
 
@@ -293,8 +456,8 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     addressing, report = compile_addressing(json.loads(args.tables.read_text(encoding="utf-8")))
-    args.rows.write_text(json.dumps([asdict(row) for row in addressing.rows], sort_keys=True) + "\n",
-                         encoding="utf-8")
+    args.rows.write_text(json.dumps(observation_input(addressing), sort_keys=True) + "\n",
+                        encoding="utf-8")
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

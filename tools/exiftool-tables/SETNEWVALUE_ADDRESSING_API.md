@@ -7,8 +7,15 @@ values. It accepts only the ordinary `EXIF`/`IFD0` subset of SetNewValue's
 group grammar. The complete captured SetNewValue and TagLookup::FindTagInfo
 bodies must both match their closed source templates.
 
-Run `setnewvalue_address_probe.pl EXIFTOOL_LIB rows.json` after row generation.
-It records every native `FindTagInfo` candidate for each source row name. A
+Run `setnewvalue_address_probe.pl EXIFTOOL_LIB probe-input.json` after row
+generation. The input seals the generated-row digest, query-name digest, dump
+capture context, and exact SetNewValue/FindTagInfo source and deparse
+identities. The probe rejects any preloaded `Image::ExifTool` package and every
+loaded Image::ExifTool file outside the selected library. Its observation also
+records the canonical Perl path/release and a digest of the whole loaded
+ExifTool closure. The compiler verifies those joins before resolving or
+emitting any operand; observations from a same-named but stale/mixed lookup
+are refused. It records every native `FindTagInfo` candidate for each source row name. A
 resolution is `resolved` only when the observed candidate set has exactly one
 generated row after the optional `EXIF:` or `IFD0:` filter. This prevents an
 unqualified partial row set from treating native `Software` as unique when
@@ -21,9 +28,25 @@ conflicting aliases to one physical identity. `outside_migrated_scope` is only
 for names absent from the selected source rows. A missing final addressing
 recipe must not fall back to the old writer.
 
+Ownership is qualified native identity, not a bare spelling alone. An
+unqualified `Software` that native finds in EXIF and XMP is terminal, while an
+explicit `XMP:Software` whose native candidates are all outside generated
+EXIF/IFD0 rows is `outside_migrated_scope`; it must not be swallowed by the
+EXIF migration. `resolve_batch` is atomic: if any request fails, it returns no
+accepted operands, including when two aliases carry conflicting values.
+
 The Rust generator emits static address rows, native lookup candidates, and
-source-owned names. It remains inactive with
+source-owned names. If source/template/probe compilation fails, it still emits
+the current raw source-owned names with `SET_NEW_VALUE_ADDRESSING = None`, so a
+router has a terminal ownership result instead of reopening a legacy route. It remains inactive with
 `inactive_source_addressing_no_public_setnewvalue_admission`.
+
+Current-source ownership cannot identify a tag that an upstream release has
+removed or renamed: that needs a separately authenticated persisted ownership
+ledger and source-removal policy. This component deliberately has neither a
+historical tag-name allowlist nor permission to route such a disappearance to
+the old writer. Public integration must keep that case terminal until the
+ledger exists.
 
 This does not implement public SetNewValue. Unsupported portions include
 wildcards, language suffixes, shortcuts, multiple/numbered/ID qualifiers,

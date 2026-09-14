@@ -1,23 +1,125 @@
 #!/usr/bin/env perl
-# Capture native FindTagInfo candidates for already-generated static row names.
+# Capture authenticated native FindTagInfo candidates for generated rows.
 use strict;
 use warnings;
+use B ();
+use B::Deparse;
+use Cwd qw(abs_path);
+use Digest::SHA qw(sha256_hex);
+use File::Spec ();
 use JSON::PP;
 use Scalar::Util qw(refaddr);
 
-my ($lib, $rows_path) = @ARGV;
-die "usage: setnewvalue_address_probe.pl EXIFTOOL_LIB rows.json\n" unless $lib && $rows_path;
-unshift @INC, $lib;
+my ($lib, $input_path) = @ARGV;
+die "usage: setnewvalue_address_probe.pl EXIFTOOL_LIB probe-input.json\n" unless $lib && $input_path;
+my $lib_abs = abs_path($lib) or die "invalid ExifTool lib: $lib\n";
+
+# Must be first: unshift(@INC) cannot authenticate a package already loaded
+# from main, Writer, TagLookup, or a transitive ambient path.
+for my $inc (sort keys %INC) {
+    next unless $inc eq 'Image/ExifTool.pm' || $inc =~ m{^Image/ExifTool/};
+    die "ExifTool was preloaded before selected-library guard: $inc => $INC{$inc}\n";
+}
+unshift @INC, $lib_abs;
 require Image::ExifTool;
 require 'Image/ExifTool/Writer.pl';
 
-open(my $fh, '<:raw', $rows_path) or die "read $rows_path: $!\n";
-local $/;
-my $rows = decode_json(<$fh>);
-close($fh) or die "close $rows_path: $!\n";
-die "rows.json is not an array\n" unless ref($rows) eq 'ARRAY';
+sub read_raw {
+    my ($path) = @_;
+    open(my $fh, '<:raw', $path) or die "read $path: $!\n";
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or die "close $path: $!\n";
+    return $bytes;
+}
 
-my (%selected, %names);
+sub relative_selected_file {
+    my ($path) = @_;
+    my $abs = abs_path($path);
+    die "unreadable selected source: $path\n" unless defined($abs) && -f $abs;
+    my $prefix = $lib_abs . '/';
+    die "loaded source is outside selected library: $abs\n" unless index($abs, $prefix) == 0;
+    return File::Spec->abs2rel($abs, $lib_abs);
+}
+
+sub loaded_closure {
+    my @modules;
+    for my $inc (sort keys %INC) {
+        next unless $inc eq 'Image/ExifTool.pm' || $inc =~ m{^Image/ExifTool/};
+        my $source_file = relative_selected_file($INC{$inc});
+        push @modules, { inc => $inc, source_file => $source_file,
+                         source_sha256 => sha256_hex(read_raw($INC{$inc})) };
+    }
+    die "selected ExifTool closure is empty\n" unless @modules;
+    my $encoded = JSON::PP->new->canonical->utf8->encode(\@modules);
+    return { sha256 => sha256_hex($encoded), modules => \@modules };
+}
+
+sub helper_fact {
+    my ($binding) = @_;
+    no strict 'refs';
+    my $cv = *{$binding}{CODE} or die "native helper is unavailable: $binding\n";
+    my $b = B::svref_2object($cv);
+    my $gv = $b->GV;
+    my $actual = ($gv->STASH->NAME // '') . '::' . ($gv->NAME // '');
+    die "native helper binding was rebound: $binding => $actual\n" unless $actual eq $binding;
+    my $body = B::Deparse->new('-p', '-sC')->coderef2text($cv);
+    my $file = relative_selected_file($b->FILE);
+    my $abs = File::Spec->catfile($lib_abs, $file);
+    return { requested_binding => $binding, actual_name => $actual,
+             source_file => $file, source_sha256 => sha256_hex(read_raw($abs)),
+             body_sha256 => sha256_hex($body) };
+}
+
+my $input = decode_json(read_raw($input_path));
+die "probe input is not an object\n" unless ref($input) eq 'HASH';
+die "probe input schema is unsupported\n"
+    unless $input->{schema} eq 'native_setnewvalue_address_probe_input_v2';
+my $capture = $input->{capture};
+my $rows = $input->{rows};
+my $query_names = $input->{query_names};
+die "probe capture is not an object\n" unless ref($capture) eq 'HASH';
+die "probe rows is not an array\n" unless ref($rows) eq 'ARRAY';
+die "probe query names are not an array\n" unless ref($query_names) eq 'ARRAY';
+
+my $canonical = JSON::PP->new->canonical->utf8;
+my $rows_digest = sha256_hex($canonical->encode($rows));
+die "probe rows digest disagrees with capture\n"
+    unless defined($capture->{source_rows_sha256}) && $capture->{source_rows_sha256} eq $rows_digest;
+for my $name (@$query_names) {
+    die "probe query name is not text\n" unless defined($name) && !ref($name);
+}
+my @query_names = sort map { lc($_) } @$query_names;
+my %seen_name;
+@query_names = grep { !$seen_name{$_}++ } @query_names;
+my $query_digest = sha256_hex($canonical->encode(\@query_names));
+die "probe query-name digest disagrees with capture\n"
+    unless defined($capture->{query_names_sha256}) && $capture->{query_names_sha256} eq $query_digest;
+
+my $runtime_find = helper_fact('Image::ExifTool::TagLookup::FindTagInfo');
+my $runtime_setnew = helper_fact('Image::ExifTool::SetNewValue');
+for my $key (qw(find_tag_info set_new_value)) {
+    die "capture helper is not an object: $key\n" unless ref($capture->{$key}) eq 'HASH';
+}
+die "FindTagInfo identity differs from supplied dump capture\n"
+    unless $canonical->encode($runtime_find) eq $canonical->encode($capture->{find_tag_info});
+die "SetNewValue identity differs from supplied dump capture\n"
+    unless $canonical->encode($runtime_setnew) eq $canonical->encode($capture->{set_new_value});
+
+my $context = $capture->{native_capture_context};
+die "native capture context is not an object\n" unless ref($context) eq 'HASH';
+my %actual_context = (
+    selected_library => $lib_abs,
+    perl_path => (abs_path($^X) // $^X),
+    perl_version => "$]",
+    exiftool_version => "$Image::ExifTool::VERSION",
+);
+for my $key (sort keys %actual_context) {
+    die "selected runtime $key differs from dump capture\n"
+        unless defined($context->{$key}) && $context->{$key} eq $actual_context{$key};
+}
+
+my %selected;
 for my $row (@$rows) {
     die "row is not an object\n" unless ref($row) eq 'HASH';
     for my $key (qw(module table full_name raw_id name)) {
@@ -26,12 +128,11 @@ for my $row (@$rows) {
     my $table = Image::ExifTool::GetTagTable($row->{full_name})
         or die "cannot load selected table $row->{full_name}\n";
     $selected{refaddr($table)} = { map { $_ => $row->{$_} } qw(module table full_name) };
-    $names{lc $row->{name}} //= $row->{name};
 }
 my $et = Image::ExifTool->new;
 my %queries;
-for my $lower (sort keys %names) {
-    my $name = $names{$lower};
+for my $lower (@query_names) {
+    my $name = $lower;
     my @candidates;
     for my $info (Image::ExifTool::TagLookup::FindTagInfo($name)) {
         my $table = $info->{Table};
@@ -48,4 +149,10 @@ for my $lower (sort keys %names) {
     }
     $queries{$lower} = { query => $name, candidates => \@candidates };
 }
-print JSON::PP->new->canonical->encode({ schema => 'native_setnewvalue_addressing_v1', queries => \%queries }), "\n";
+my $closure = loaded_closure();
+print JSON::PP->new->canonical->utf8->encode({
+    schema => 'native_setnewvalue_addressing_v2', capture => $capture,
+    runtime => { %actual_context, loaded_closure => $closure,
+                 helpers => { find_tag_info => $runtime_find, set_new_value => $runtime_setnew } },
+    queries => \%queries,
+}), "\n";

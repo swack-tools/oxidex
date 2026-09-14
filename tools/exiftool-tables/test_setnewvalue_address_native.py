@@ -90,6 +90,23 @@ class NativeSetNewValueAddressingTests(unittest.TestCase):
             with self.assertRaisesRegex(RecipeRefused, "caller control flow"):
                 compile_setnewvalue_convinv(setnew)
 
+    def test_probe_refuses_preloaded_external_exiftool_before_reading_input(self):
+        """The selected -I path cannot silently replace an ambient package."""
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory) / "external/Image"
+            external.mkdir(parents=True)
+            (external / "ExifTool.pm").write_text(
+                "package Image::ExifTool; our $VERSION = 'external'; 1;\n", encoding="utf-8")
+            probe_input = Path(directory) / "ignored.json"
+            probe_input.write_text("{}", encoding="utf-8")
+            result = subprocess.run(
+                [PERL, f"-I{Path(directory) / 'external'}", "-MImage::ExifTool",
+                 str(ROOT / "tools/exiftool-tables/setnewvalue_address_probe.pl"),
+                 str(LIB), str(probe_input)],
+                text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("preloaded before selected-library guard", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

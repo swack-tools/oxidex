@@ -1,13 +1,14 @@
 """Source-selected ordinary EXIF addressing tests."""
 from copy import deepcopy
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import unittest
 
 from checkexif_recipes import RecipeRefused
 from convinv_rows import compile_rows
-from setnewvalue_addressing import compile_addressing, resolve, resolve_batch
+from setnewvalue_addressing import _observation_capture, compile_addressing, resolve, resolve_batch
 from test_checkexif_recipes import fact
 from test_convinv_rows import ready
 
@@ -31,10 +32,18 @@ def source():
     table = value["native_write_tables"]["Exif"]["Main"]
     table["table_properties"]["GROUPS"] = {
         "present": True, "value": {"0": "EXIF", "1": "IFD0", "2": "Image"}}
+    value["native_capture_context"] = {
+        "schema": "native_exiftool_capture_context_v1",
+        "selected_library": "/selected/exiftool/lib",
+        "perl_path": "/selected/perl",
+        "perl_version": "5.038002",
+        "exiftool_version": "13.59",
+        "loaded_closure_sha256": "a" * 64,
+    }
     return value
 
 
-def observations(rows, *, external=False):
+def observations(rows, *, external=False, addressing=None):
     row = rows[0]
     candidate = {"module": row.module, "table": row.table, "full_name": row.full_name,
                  "raw_id": row.raw_id, "name": row.name,
@@ -43,7 +52,20 @@ def observations(rows, *, external=False):
     if external:
         values.append({"external_table": "Image::ExifTool::XMP::Main", "raw_id": "other",
                        "name": row.name, "groups": {"0": "XMP", "1": "XMP", "2": "Image"}})
-    return {"schema": "native_setnewvalue_addressing_v1",
+    # The source rows are compiled again so this test fixture carries the same
+    # sealed native-capture context as the real probe input.
+    if addressing is None:
+        addressing, _ = compile_addressing(source())
+    capture = _observation_capture(addressing)
+    context = capture["native_capture_context"]
+    modules = [{"inc": "Image/ExifTool.pm", "source_file": "Image/ExifTool.pm", "source_sha256": "c" * 64}]
+    closure_sha = hashlib.sha256(json.dumps(modules, sort_keys=True, separators=(",", ":"),
+                                            ensure_ascii=False).encode()).hexdigest()
+    return {"schema": "native_setnewvalue_addressing_v2", "capture": capture,
+            "runtime": {**{key: context[key] for key in ("selected_library", "perl_path", "perl_version", "exiftool_version")},
+                        "loaded_closure": {"sha256": closure_sha, "modules": modules},
+                        "helpers": {"find_tag_info": capture["find_tag_info"],
+                                    "set_new_value": capture["set_new_value"]}},
             "queries": {row.name.lower(): {"query": row.name, "candidates": values}}}
 
 
@@ -86,8 +108,10 @@ class SetNewValueAddressingTests(unittest.TestCase):
         native = observations(addressing.rows)
         self.assertEqual(resolve(addressing, native, "ExifIFD:NoAllowlist").state, "owned_unsupported")
         self.assertEqual(resolve(addressing, native, "UnknownTag").state, "outside_migrated_scope")
-        self.assertEqual(resolve(addressing, {"schema": "native_setnewvalue_addressing_v1", "queries": {}},
-                                 "NoAllowlist").state, "owned_unsupported")
+        unavailable = observations(addressing.rows)
+        unavailable["queries"] = {}
+        with self.assertRaisesRegex(RecipeRefused, "query set"):
+            resolve(addressing, unavailable, "NoAllowlist")
 
     def test_aliases_deduplicate_and_conflicts_refuse_same_physical_field(self):
         addressing = self.compiled()
@@ -98,9 +122,43 @@ class SetNewValueAddressingTests(unittest.TestCase):
         self.assertEqual(failures, ())
         accepted, failures = resolve_batch(addressing, native, {
             "NoAllowlist": "one", "EXIF:noallowlist": "two"})
-        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted, ())
         self.assertEqual(len(failures), 1)
         self.assertIn("conflicting duplicate", failures[0].reason)
+
+    def test_explicit_unmigrated_group_is_outside_scope_despite_bare_name_collision(self):
+        addressing = self.compiled()
+        native = observations(addressing.rows, external=True)
+        self.assertEqual(resolve(addressing, native, "XMP:NoAllowlist").state,
+                         "outside_migrated_scope")
+        # The same spelling without an explicit native group remains terminal:
+        # it is ambiguous between a migrated source field and XMP.
+        self.assertEqual(resolve(addressing, native, "NoAllowlist").state,
+                         "owned_unsupported")
+        self.assertEqual(resolve(addressing, native, "UnknownGroup:NoAllowlist").state,
+                         "owned_unsupported")
+
+    def test_native_xmp_software_does_not_claim_qualified_exif_ownership(self):
+        document = source()
+        raw = document["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
+        raw["properties"]["Name"]["value"] = "Software"
+        raw["effective_properties"]["Name"]["value"] = "Software"
+        addressing, _ = compile_addressing(document)
+        native = observations(addressing.rows, external=True, addressing=addressing)
+        self.assertEqual(resolve(addressing, native, "EXIF:Software").state, "resolved")
+        self.assertEqual(resolve(addressing, native, "XMP:Software").state,
+                         "outside_migrated_scope")
+
+    def test_qualified_external_candidate_stays_outside_when_source_recipe_is_omitted(self):
+        addressing = self.compiled()
+        native = observations(addressing.rows, external=True)
+        native["queries"]["noallowlist"]["candidates"] = [
+            native["queries"]["noallowlist"]["candidates"][-1]]
+        omitted = replace(addressing, rows=())
+        self.assertEqual(resolve(omitted, native, "XMP:NoAllowlist").state,
+                         "outside_migrated_scope")
+        self.assertEqual(resolve(omitted, native, "EXIF:NoAllowlist").state,
+                         "owned_unsupported")
 
     def test_source_name_and_group_changes_do_not_retain_old_address_recipe(self):
         changed = source()
@@ -109,8 +167,7 @@ class SetNewValueAddressingTests(unittest.TestCase):
         addressing, report = compile_addressing(changed)
         self.assertEqual(addressing.rows, ())
         self.assertEqual(report["rows_omitted"], 1)
-        result = resolve(addressing, {"schema": "native_setnewvalue_addressing_v1", "queries": {}},
-                         "NoAllowlist")
+        result = resolve(addressing, {}, "NoAllowlist")
         self.assertEqual(result.state, "owned_unsupported")
 
         changed = source()
@@ -126,6 +183,35 @@ class SetNewValueAddressingTests(unittest.TestCase):
         addressing, _report = compile_addressing(doc)
         self.assertEqual(addressing.rows[0].name, "ChangedName")
         self.assertEqual(addressing.rows[0].raw_id, "raw-not-name")
+
+    def test_stale_same_name_lookup_and_mutated_probe_rows_refuse_before_resolution(self):
+        addressing = self.compiled()
+        native = observations(addressing.rows)
+        native["runtime"]["helpers"]["find_tag_info"] = {
+            **native["runtime"]["helpers"]["find_tag_info"], "body_sha256": "d" * 64}
+        with self.assertRaisesRegex(RecipeRefused, "find_tag_info identity"):
+            resolve(addressing, native, "NoAllowlist")
+
+        native = observations(addressing.rows)
+        native["capture"]["source_rows_sha256"] = "e" * 64
+        with self.assertRaisesRegex(RecipeRefused, "source rows/helpers"):
+            resolve(addressing, native, "NoAllowlist")
+
+    def test_query_set_and_changed_source_name_are_not_reused(self):
+        addressing = self.compiled()
+        native = observations(addressing.rows)
+        native["queries"]["changedname"] = native["queries"].pop("noallowlist")
+        with self.assertRaisesRegex(RecipeRefused, "query set"):
+            resolve(addressing, native, "NoAllowlist")
+
+        changed = source()
+        raw = changed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
+        raw["properties"]["Name"]["value"] = "ChangedName"
+        raw["effective_properties"]["Name"]["value"] = "ChangedName"
+        changed_addressing, _ = compile_addressing(changed)
+        stale = observations(addressing.rows)
+        with self.assertRaisesRegex(RecipeRefused, "source rows/helpers"):
+            resolve(changed_addressing, stale, "ChangedName")
 
 
 if __name__ == "__main__":

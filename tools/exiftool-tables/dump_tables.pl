@@ -138,6 +138,55 @@ sub source_file_fact {
     return (File::Spec->abs2rel($abs, $lib_abs), sha256_hex($bytes), undef);
 }
 
+# Bind write-side source projections to the Perl executable, selected library,
+# release, and every Image::ExifTool file actually loaded in this process.
+# Consumers compare their native lookup probe to this envelope and separately
+# re-prove the relevant helper bodies.  A path outside $lib_abs is a refusal:
+# @INC ordering alone cannot authenticate an already loaded package.
+sub native_capture_context {
+    my ($lib_abs) = @_;
+    my @modules;
+    for my $inc (sort keys %INC) {
+        next unless $inc eq 'Image/ExifTool.pm' || $inc =~ m{^Image/ExifTool/};
+        my $path = $INC{$inc};
+        if (!defined($path) || !length($path)) {
+            # A failed require leaves an %INC key with an undefined value.
+            # Preserve it as unavailable instead of turning an intentionally
+            # unresolved writer helper into a dump-wide failure.
+            push @modules, { inc => $inc, source_file => undef, source_sha256 => undef };
+            next;
+        }
+        my $abs = abs_path($path);
+        $abs = File::Spec->rel2abs($path) unless defined $abs;
+        my $prefix = $lib_abs . '/';
+        die "loaded ExifTool module is outside selected library: $inc => $abs\n"
+            unless index($abs, $prefix) == 0;
+        my %module = (inc => $inc, source_file => File::Spec->abs2rel($abs, $lib_abs));
+        if (-f $abs) {
+            open(my $fh, '<:raw', $abs) or die "read $abs: $!\n";
+            local $/;
+            my $bytes = <$fh>;
+            close($fh) or die "close $abs: $!\n";
+            $module{source_sha256} = sha256_hex($bytes);
+        } else {
+            # A deliberately removed Writer.pl must still leave the sidecar
+            # inspectable with explicit unresolved helper facts.
+            $module{source_sha256} = undef;
+        }
+        push @modules, \%module;
+    }
+    die "selected ExifTool closure is empty\n" unless @modules;
+    my $closure = JSON::PP->new->canonical->utf8->encode(\@modules);
+    return {
+        schema => 'native_exiftool_capture_context_v1',
+        selected_library => $lib_abs,
+        perl_path => abs_path($^X) // $^X,
+        perl_version => "$]",
+        exiftool_version => "$Image::ExifTool::VERSION",
+        loaded_closure_sha256 => sha256_hex($closure),
+    };
+}
+
 sub unresolved_code_fact {
     my ($name, $reason) = @_;
     return {
@@ -1402,6 +1451,7 @@ for my $full_name (sort keys %write_tables) {
 # Capture helper facts in the same settled state as the table callbacks above.
 # This does not alter the read projection or route a native writer.
 my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+my $native_capture_context = native_capture_context($EXIFTOOL_LIB_ABS);
 
 # The registry is intentionally captured after the writer helpers have settled
 # and before JSON emission.  It has no effect on the detached read projection.
@@ -1435,6 +1485,7 @@ print $json->encode({
     native_write_tables => \%native_write_tables,
     native_write_helpers => $native_write_helpers,
     native_write_format_registry => $native_write_format_registry,
+    native_capture_context => $native_capture_context,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
     native_runtime_contracts => { utf8 => {
