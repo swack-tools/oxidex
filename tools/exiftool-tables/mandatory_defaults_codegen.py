@@ -49,7 +49,7 @@ def render(recipe: MandatoryRecipe) -> str:
     lines.extend(f"DefaultEncoding {{ tag_id: 0x{item.tag_id:04x}, format_name: {rust_string(item.format_name)} }},\n" for item in recipe.encodings)
     lines.append("];\n")
     lines.append("pub(crate) const MANDATORY_DEFAULTS: MandatoryRecipe = MandatoryRecipe { "
-                 f"writer_source_file: {rust_string(recipe.writer_source_file)}, writer_source_sha256: {rust_string(recipe.writer_source_sha256)}, "
+                 f"writer_source_file: {rust_string(recipe.writer_source_file)}, writer_source_sha256: {rust_string(recipe.writer_source_sha256)}, write_value_source_sha256: {rust_string(recipe.write_value_source_sha256)}, "
                  f"perl_version: {rust_string('')}, no_mandatory_guard: {guard}, directories: DIRECTORIES, jfif_directory: {rust_string(recipe.jfif_override.directory)}, jfif_probe: {rust_string(recipe.jfif_override.probe)}, jfif_assignments: JFIF_ASSIGNMENTS, encodings: ENCODINGS }};\n")
     return ''.join(lines)
 def _selected_perl(fact: Mapping[str, Any], selected_perl: str | None) -> None:

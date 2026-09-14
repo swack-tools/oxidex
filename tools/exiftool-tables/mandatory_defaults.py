@@ -63,6 +63,7 @@ class MandatoryRecipe:
     jfif_override: JfifOverride
     selection: MandatorySelection
     encodings: tuple["DefaultEncoding", ...] = ()
+    write_value_source_sha256: str = ""
 
 @dataclass(frozen=True)
 class DefaultEncoding:
@@ -181,7 +182,7 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
             if present(name) is not None:
                 raise MandatoryRefused(f"mandatory row {name} changes direct WriteValue semantics")
         encodings.append(DefaultEncoding(tag_id, str(present("Writable"))))
-    return replace(recipe, encodings=tuple(encodings))
+    return replace(recipe, encodings=tuple(encodings), write_value_source_sha256=str(write_value["source_sha256"]))
 
 
 def recipe_json(recipe: MandatoryRecipe) -> dict[str, Any]:

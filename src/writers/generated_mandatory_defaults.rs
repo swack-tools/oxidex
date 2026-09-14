@@ -38,4 +38,4 @@ DefaultEncoding { tag_id: 0x011b, format_name: "rational64u" },
 DefaultEncoding { tag_id: 0x0128, format_name: "int16u" },
 DefaultEncoding { tag_id: 0x0213, format_name: "int16u" },
 ];
-pub(crate) const MANDATORY_DEFAULTS: MandatoryRecipe = MandatoryRecipe { writer_source_file: "Image/ExifTool/WriteExif.pl", writer_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533", perl_version: "v5.38.2", no_mandatory_guard: true, directories: DIRECTORIES, jfif_directory: "IFD0", jfif_probe: "JFIFYResolution", jfif_assignments: JFIF_ASSIGNMENTS, encodings: ENCODINGS };
+pub(crate) const MANDATORY_DEFAULTS: MandatoryRecipe = MandatoryRecipe { writer_source_file: "Image/ExifTool/WriteExif.pl", writer_source_sha256: "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533", write_value_source_sha256: "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44", perl_version: "v5.38.2", no_mandatory_guard: true, directories: DIRECTORIES, jfif_directory: "IFD0", jfif_probe: "JFIFYResolution", jfif_assignments: JFIF_ASSIGNMENTS, encodings: ENCODINGS };
