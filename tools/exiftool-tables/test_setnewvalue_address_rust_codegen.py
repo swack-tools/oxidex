@@ -179,6 +179,14 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn("family: 2", rust)
         self.assertIn("source_identity_present: true", rust)
         self.assertIn("source_identity_present: false", rust)
+        # The runtime must distinguish a same-named candidate in a foreign
+        # native table from an omitted physical field in the selected table.
+        # Keep every source-observed identity/control operand in the generated
+        # contract; groups or a numeric id alone cannot make that distinction.
+        for field in ("module", "table", "full_name", "raw_id", "writable",
+                      "permanent", "write_group"):
+            self.assertIn(f"pub {field}:", rust)
+            self.assertIn(f"{field}:", rust)
 
 
 if __name__ == "__main__":
