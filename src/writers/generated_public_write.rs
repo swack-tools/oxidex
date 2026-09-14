@@ -282,7 +282,45 @@ pub(crate) fn rewrite_tiff_transaction(
         plan.generated,
         &super::tiff_surgical::generated_scalar::generated_rules(),
     )?;
-    Ok(result.bytes)
+    cleanup_source_mandatory_ifd1(&result.bytes)
+}
+
+/// Apply only the generated WriteExif mandatory-only predicate after a scalar
+/// deletion has shrunk IFD1. Tag IDs and encodings come from the capture.
+fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
+    use crate::writers::exif_surgical::{IfdKind, scan_exif_entries};
+    use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
+    use crate::writers::{
+        generated_mandatory_defaults::MANDATORY_DEFAULTS, mandatory_defaults_runtime as mandatory,
+    };
+    mandatory::require_ifd1_mandatory_cleanup(&MANDATORY_DEFAULTS)
+        .map_err(ExifToolError::unsupported_format)?;
+    let scan = scan_exif_entries(bytes)?;
+    let order = match scan.byte_order {
+        crate::io::ByteOrder::LittleEndian => mandatory::TiffByteOrder::Little,
+        crate::io::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
+    };
+    let defaults = MANDATORY_DEFAULTS
+        .directories
+        .iter()
+        .find(|d| d.directory == "IFD1")
+        .ok_or_else(|| refused("captured mandatory IFD1 defaults missing"))?;
+    let encoded =
+        mandatory::encode_mandatory_defaults(&MANDATORY_DEFAULTS, defaults.defaults, order)
+            .map_err(ExifToolError::unsupported_format)?;
+    let edits: Vec<_> = encoded
+        .into_iter()
+        .map(|e| ScopedEntryEdit {
+            ifd: IfdKind::Ifd1,
+            tag_id: e.tag_id,
+            mutation: EntryMutation::Set {
+                field_type: e.tiff_type,
+                count: e.count,
+                bytes: e.bytes,
+            },
+        })
+        .collect();
+    super::tiff_surgical::entry_edits::remove_ifd1_if_only_mandatory(bytes, &edits, true)
 }
 
 #[cfg(test)]
