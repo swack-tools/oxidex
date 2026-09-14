@@ -171,6 +171,8 @@ def render_report(snapshot: dict, current_source: dict | None = None) -> str:
     return "\n".join([
         "# Authenticated catalog observations", "",
         "This is a historical native receipt. It does not assert that a later source or runtime has the same observations.", "",
+        f"[Download the authenticated observation snapshot](/measurements/catalog-hydrated-observed-{observed['inputs']['exiftool_version']}.json).",
+        "[Compare source classifications and remaining work](goal-checkpoint-20260914.md).", "",
         f"- Observed runtime commit: `{snapshot['native_evidence']['source_commit']}`",
         f"- Runtime input manifest: `{snapshot['native_evidence']['runtime_input_manifest_sha256']}`",
         f"- Historical source join SHA-256: `{snapshot['source_join_sha256']}`",
