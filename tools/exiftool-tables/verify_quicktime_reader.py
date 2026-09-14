@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import runtime_evidence_inputs as runtime_inputs
 import struct
 import subprocess
 
@@ -229,7 +230,7 @@ def compare(tree: Path, output: Path, artifacts: tuple[Path, Path, Path, Path]):
         "pin": oracle.version, "fixture_count": len(fixtures), "observations": rows,
         "inputs": dict(sorted(input_digests.items())),
         "producer": {"source_commit": state.commit, "source_dirty": False, "source_fingerprint": fingerprint,
-                     "runtime_input_manifest_sha256": baseline.runtime_input_manifest(root),
+                     "runtime_input_manifest_sha256": runtime_inputs.runtime_input_manifest(root),
                      "runtime_artifact_sha256": hashlib.sha256(Path(binary.path).read_bytes()).hexdigest(),
                      "fixture_manifest_sha256": fixture_digest, "pin": oracle.version},
         "matched_occurrences": occurrences, "observed_identities": identities,

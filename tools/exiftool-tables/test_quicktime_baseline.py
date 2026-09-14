@@ -2,6 +2,7 @@ import hashlib
 import copy
 import json
 from pathlib import Path
+import runtime_evidence_inputs as runtime_inputs
 import unittest
 import subprocess
 import tempfile
@@ -18,14 +19,14 @@ class BaselineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             for path, body in {"Cargo.toml": "[package]", "Cargo.lock": "lock", ".exiftool-version": "13.59",
-                               "src/parser.rs": "parser", "oxidex-tags/src/lib.rs": "tags", "docs/report.md": "report"}.items():
+                               "src/parser.rs": "parser", ".cargo/config.toml": "[build]", "oxidex-tags/src/lib.rs": "tags", "docs/report.md": "report"}.items():
                 target = root / path; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(body)
-            before = baseline.runtime_input_manifest(root)
+            before = runtime_inputs.runtime_input_manifest(root)
             (root / "docs/report.md").write_text("changed report")
-            self.assertEqual(before, baseline.runtime_input_manifest(root))
-            for path in ("src/parser.rs", "Cargo.lock", "oxidex-tags/src/lib.rs", ".exiftool-version"):
+            self.assertEqual(before, runtime_inputs.runtime_input_manifest(root))
+            for path in ("src/parser.rs", "Cargo.lock", "oxidex-tags/src/lib.rs", ".exiftool-version", ".cargo/config.toml"):
                 target = root / path; target.write_text(target.read_text() + "!")
-                self.assertNotEqual(before, baseline.runtime_input_manifest(root))
+                self.assertNotEqual(before, runtime_inputs.runtime_input_manifest(root))
                 target.write_text(target.read_text()[:-1])
     def test_source_fingerprint_detects_already_dirty_tracked_and_untracked_edits(self):
         with tempfile.TemporaryDirectory() as folder:

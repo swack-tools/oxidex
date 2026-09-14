@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
+import runtime_evidence_inputs as runtime_inputs
 import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -345,7 +346,7 @@ def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str
             raise ValueError("QuickTime read evidence producer binding is malformed")
     if producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip():
         raise ValueError("QuickTime read evidence pin differs from repository pin")
-    if producer["runtime_input_manifest_sha256"] != baseline.runtime_input_manifest(quicktime_selector.ROOT):
+    if producer["runtime_input_manifest_sha256"] != runtime_inputs.runtime_input_manifest(quicktime_selector.ROOT):
         raise ValueError("QuickTime read evidence runtime input manifest differs from current inputs")
     if evidence.get("inputs") != dict(sorted(input_digests.items())):
         raise ValueError("QuickTime read evidence generated artifact binding differs")
