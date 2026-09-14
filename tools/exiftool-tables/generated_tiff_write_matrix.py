@@ -95,7 +95,19 @@ def generated_targets(ledger_path: Path = LEDGER, rules_path: Path = RULES) -> t
     return result
 
 
-def compare(seed, expected, actual, target_tag_id: int | None):
+def changed_tag_ids(target_tag_id: int | set[int] | frozenset[int] | None) -> set[str]:
+    """Normalize a source-derived changed physical identity set for comparison."""
+    if target_tag_id is None:
+        return set()
+    if isinstance(target_tag_id, int):
+        return {str(target_tag_id)}
+    if isinstance(target_tag_id, (set, frozenset)) and all(type(value) is int and value >= 0 for value in target_tag_id):
+        return {str(value) for value in target_tag_id}
+    raise ValueError("changed target identities are malformed")
+
+
+def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[int] | None):
+    changed = changed_tag_ids(target_tag_id)
     if seed["image_payload_hex"] != actual["image_payload_hex"]:
         raise AssertionError("generated write changed image payload")
     if expected["image_payload_hex"] != actual["image_payload_hex"]:
@@ -120,13 +132,13 @@ def compare(seed, expected, actual, target_tag_id: int | None):
         if tag != "273" and native.entry_storage(value) != native.entry_storage(actual["tags"][tag]):
             raise AssertionError(f"native/generated unrelated tag type/count/value differs for {tag}")
     for tag, value in seed["tags"].items():
-        if (target_tag_id is None or tag != str(target_tag_id)) and native.entry_storage(value) != native.entry_storage(actual["tags"].get(tag)):
+        if tag not in changed and native.entry_storage(value) != native.entry_storage(actual["tags"].get(tag)):
             raise AssertionError(f"generated write changed unrelated tag {tag}")
     for name, child in expected_children.items():
         compare(seed["children"][name], child, actual_children[name], None)
 
 
-def compare_carrier(seed, expected, actual, carrier, target_tag_id: int):
+def compare_carrier(seed, expected, actual, carrier, target_tag_id: int | set[int] | frozenset[int] | None):
     if carrier != "jpeg":
         return compare(seed, expected, actual, target_tag_id)
     for key in ("sos_to_end_sha256", "non_exif_sha256"):

@@ -74,7 +74,7 @@ BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 use strict; use warnings; use utf8; use JSON::PP; use Encode ();
 use Image::ExifTool; require 'Image/ExifTool/Writer.pl';
 ''' + NATIVE_LIBRARY_GUARD + r'''
-my ($in, $out, $action, $tag) = @ARGV;
+my ($in, $out, $action, $tag, $batch_json) = @ARGV;
 sub state { my ($v) = @_; return {defined => JSON::PP::false} unless defined $v;
   my $utf8 = utf8::is_utf8($v) ? JSON::PP::true : JSON::PP::false;
   my $bytes = $utf8 ? Encode::encode('UTF-8', $v) : $v;
@@ -90,9 +90,33 @@ sub value_for { my ($name) = @_;
   return pack('H*', '610062') if $name eq 'embedded_nul';
   die "unknown action $name";
 }
+sub batch_value { my ($spec) = @_;
+  die 'batch item must be an object' unless ref($spec) eq 'HASH';
+  my $scalar = $spec->{scalar};
+  die 'batch item scalar is absent' unless defined($scalar) && !ref($scalar);
+  return undef if $scalar eq 'undefined';
+  my $value = $spec->{value};
+  die 'defined batch item value is absent' unless defined($value) && !ref($value);
+  if ($scalar eq 'bytes') {
+    die 'batch bytes must be even lowercase hex' unless $value =~ /\A(?:[0-9a-f]{2})*\z/;
+    return pack('H*', $value);
+  }
+  return $value if $scalar eq 'utf8';
+  die "unsupported batch scalar $scalar";
+}
 my $et = Image::ExifTool->new;
 my @sets;
-if ($action eq 'seed_artist' || $action eq 'seed_artist_target') {
+if ($action eq 'batch') {
+  die 'batch JSON is absent' unless defined($batch_json);
+  my $batch = JSON::PP::decode_json($batch_json);
+  die 'batch must be a non-empty array' unless ref($batch) eq 'ARRAY' && @$batch;
+  for my $spec (@$batch) {
+    die 'batch tag is absent' unless ref($spec) eq 'HASH' && defined($spec->{tag}) && !ref($spec->{tag}) && length($spec->{tag});
+    my $value = batch_value($spec);
+    my $set_return = scalar $et->SetNewValue($spec->{tag}, $value);
+    push @sets, {tag => $spec->{tag}, input => state($value), return => $set_return};
+  }
+} elsif ($action eq 'seed_artist' || $action eq 'seed_artist_target') {
   my $artist_return = scalar $et->SetNewValue('IFD0:Artist', 'seed-artist');
   push @sets, {tag => 'IFD0:Artist', input => state('seed-artist'), return => $artist_return};
   if ($action eq 'seed_artist_target') {
@@ -176,6 +200,51 @@ def run_native(perl: Path, library: Path, source: Path, target: Path,
             pass
     return {"command": [str(perl), "-I" + str(library), "-e", "<native-write-program>",
                          str(library), str(source), str(target), action, tag or ""],
+            "returncode": completed.returncode, "stdout": stdout, "stderr": stderr,
+            "result": parsed}
+
+
+def run_native_batch(perl: Path, library: Path, source: Path, target: Path,
+                     batch: list[dict[str, str]]) -> dict[str, Any]:
+    """Apply one ordered native SetNewValue batch through one WriteInfo call.
+
+    This accepts only the scalar states exercised by the generated public
+    transaction probe.  Validating here makes the recorded JSON both a native
+    operand record and an unambiguous replay input; it never falls back to a
+    shell or an ambient ExifTool executable.
+    """
+    if not batch:
+        raise ValueError("native batch is empty")
+    checked: list[dict[str, str]] = []
+    for item in batch:
+        if set(item) - {"tag", "scalar", "value"} or not isinstance(item.get("tag"), str) or not item["tag"]:
+            raise ValueError("native batch item has malformed tag/schema")
+        scalar, value = item.get("scalar"), item.get("value")
+        if scalar == "undefined":
+            if value is not None:
+                raise ValueError("undefined native batch item has a value")
+            checked.append({"tag": item["tag"], "scalar": scalar})
+        elif scalar == "utf8" and isinstance(value, str):
+            checked.append({"tag": item["tag"], "scalar": scalar, "value": value})
+        elif scalar == "bytes" and isinstance(value, str) and len(value) % 2 == 0 and all(char in "0123456789abcdef" for char in value):
+            checked.append({"tag": item["tag"], "scalar": scalar, "value": value})
+        else:
+            raise ValueError("native batch item has unsupported scalar/value")
+    validate_library(library)
+    encoded = json.dumps(checked, sort_keys=True, separators=(",", ":"))
+    command = [str(perl), "-I" + str(library), "-e", NATIVE_WRITE,
+               str(library), str(source), str(target), "batch", "", encoded]
+    completed = subprocess.run(command, env=clean_env(), capture_output=True, timeout=30)
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    parsed: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            pass
+    return {"command": [str(perl), "-I" + str(library), "-e", "<native-write-program>",
+                         str(library), str(source), str(target), "batch", "", checked],
             "returncode": completed.returncode, "stdout": stdout, "stderr": stderr,
             "result": parsed}
 

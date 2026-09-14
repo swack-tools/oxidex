@@ -326,12 +326,21 @@ mod tests {
             output: std::path::PathBuf,
             carrier: Option<String>,
             route: Option<String>,
+            key: Option<String>,
+            scalar: Option<String>,
+            value: Option<String>,
+            batch: Option<Vec<BatchItem>>,
+            fault: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct BatchItem {
             key: String,
             scalar: String,
             value: Option<String>,
         }
-        fn apply(request: &Request) -> std::result::Result<Vec<String>, String> {
-            let value = match (request.scalar.as_str(), request.value.as_deref()) {
+        fn scalar(scalar: &str, value: Option<&str>) -> std::result::Result<Scalar, String> {
+            match (scalar, value) {
                 ("undefined", None) => Scalar::Undefined,
                 ("utf8", Some(value)) => Scalar::Utf8(value.to_owned()),
                 ("bytes", Some(hex)) if hex.is_ascii() && hex.len().is_multiple_of(2) => {
@@ -344,24 +353,116 @@ mod tests {
                     )
                 }
                 _ => return Err("invalid typed scalar request".into()),
-            };
+            }
+        }
+        fn apply(request: &Request) -> std::result::Result<Vec<String>, String> {
+            if request.route.as_deref() == Some("public-batch") {
+                use crate::core::{operations, tag_value::TagValue};
+                let batch = request
+                    .batch
+                    .as_deref()
+                    .filter(|items| !items.is_empty())
+                    .ok_or("public batch request is empty")?;
+                if request.key.is_some() || request.scalar.is_some() || request.value.is_some() {
+                    return Err("public batch request carries a single-operation field".into());
+                }
+                std::fs::copy(&request.input, &request.output)
+                    .map_err(|error| error.to_string())?;
+                let baseline = operations::read_metadata(&request.output)
+                    .map_err(|error| error.to_string())?;
+                let mut desired = baseline.clone();
+                let mut removed = Vec::new();
+                for item in batch {
+                    match (item.scalar.as_str(), item.value.as_deref()) {
+                        ("undefined", None) => {
+                            desired.remove(&item.key);
+                            removed.push(item.key.clone());
+                        }
+                        // Omit a reader key from the desired whole map without
+                        // turning it into an explicit rowless deletion. This
+                        // models an alias replacement: the address planner
+                        // observes the other spelling of the same physical
+                        // field and retains it as an update.
+                        ("omitted", None) => {
+                            desired.remove(&item.key);
+                        }
+                        ("utf8", Some(value)) => {
+                            desired.insert(&item.key, TagValue::String(value.to_owned()));
+                        }
+                        ("bytes", Some(hex)) if hex.is_ascii() && hex.len().is_multiple_of(2) => {
+                            let bytes = (0..hex.len())
+                                .step_by(2)
+                                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16))
+                                .collect::<std::result::Result<Vec<_>, _>>()
+                                .map_err(|error| error.to_string())?;
+                            desired.insert(&item.key, TagValue::Binary(bytes));
+                        }
+                        ("integer", Some(value)) => {
+                            let integer =
+                                value.parse::<i64>().map_err(|error| error.to_string())?;
+                            desired.insert(&item.key, TagValue::Integer(integer));
+                        }
+                        _ => return Err("invalid public batch item".into()),
+                    }
+                }
+                match request.fault.as_deref() {
+                    None => operations::write_metadata_with_removals(
+                        &request.output,
+                        &desired,
+                        &removed,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    Some("forged-final-identity-after-legacy") => {
+                        // This is a test-only lower-stage provenance fault. The whole-map
+                        // planner is real, then the production transaction performs the
+                        // legacy rewrite in memory before its generated identity refusal.
+                        // No bytes are committed on that error.
+                        let mut plan = crate::writers::generated_public_write::plan_public_write(
+                            &baseline, &desired, &removed,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let generated_request = plan
+                            .generated
+                            .first_mut()
+                            .ok_or("post-legacy fault has no generated request")?;
+                        generated_request.writer_source_sha256 = "fixture-forged-final-identity";
+                        let input =
+                            std::fs::read(&request.output).map_err(|error| error.to_string())?;
+                        crate::writers::generated_public_write::rewrite_tiff_transaction(
+                            &input, &baseline, plan,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        return Err("post-legacy forged identity unexpectedly succeeded".into());
+                    }
+                    Some(_) => return Err("unsupported public batch fault".into()),
+                }
+                return Ok(Vec::new());
+            }
+            let key = request
+                .key
+                .as_deref()
+                .ok_or("single-operation key is absent")?;
+            let scalar_name = request
+                .scalar
+                .as_deref()
+                .ok_or("single-operation scalar is absent")?;
+            if request.batch.is_some() || request.fault.is_some() {
+                return Err("single-operation request carries batch fields".into());
+            }
+            let value = scalar(scalar_name, request.value.as_deref())?;
             if request.route.as_deref() == Some("public-api") {
                 // Fixture copy is preparation; the public operation itself must
                 // make exactly one atomic commit after the complete plan passes.
                 std::fs::copy(&request.input, &request.output).map_err(|e| e.to_string())?;
                 use crate::core::{operations, tag_value::TagValue};
                 match value {
-                    Scalar::Undefined => operations::remove_tag(&request.output, &request.key),
-                    Scalar::Utf8(text) => operations::modify_tag(
-                        &request.output,
-                        &request.key,
-                        TagValue::String(text),
-                    ),
-                    Scalar::Bytes(bytes) => operations::modify_tag(
-                        &request.output,
-                        &request.key,
-                        TagValue::Binary(bytes),
-                    ),
+                    Scalar::Undefined => operations::remove_tag(&request.output, key),
+                    Scalar::Utf8(text) => {
+                        operations::modify_tag(&request.output, key, TagValue::String(text))
+                    }
+                    Scalar::Bytes(bytes) => {
+                        operations::modify_tag(&request.output, key, TagValue::Binary(bytes))
+                    }
                 }
                 .map_err(|e| e.to_string())?;
                 return Ok(Vec::new());
@@ -370,7 +471,7 @@ mod tests {
             let result = if request.route.as_deref() == Some("resolved-address") {
                 use crate::writers::generated_write_address::{self, Resolution};
                 let address_rules = generated_write_address::generated_rules();
-                let row = match generated_write_address::resolve(&request.key, &address_rules) {
+                let row = match generated_write_address::resolve(key, &address_rules) {
                     Resolution::Resolved(row) => row,
                     Resolution::OutsideMigratedScope => {
                         return Err("outside generated address scope".into());
@@ -399,10 +500,7 @@ mod tests {
                 if !matches!(request.route.as_deref(), None | Some("final-key")) {
                     return Err("unsupported test route".into());
                 }
-                let requests = vec![ScalarWriteRequest {
-                    key: &request.key,
-                    value,
-                }];
+                let requests = vec![ScalarWriteRequest { key, value }];
                 match request.carrier.as_deref() {
                     None | Some("tiff_little" | "tiff_big") => {
                         rewrite_generated_scalars(&input, requests, &generated_rules())

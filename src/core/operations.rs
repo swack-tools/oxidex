@@ -931,7 +931,7 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
 /// for, whose key a `-TAG=` could not take out of the map (see
 /// `exif_surgical::removal_names_rowless_entry`); every other writer judges
 /// removals by the map alone.
-fn write_metadata_with_removals(
+pub(crate) fn write_metadata_with_removals(
     path: &Path,
     metadata: &MetadataMap,
     removed: &[String],
