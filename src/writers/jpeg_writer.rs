@@ -435,16 +435,45 @@ fn transform_exif<T>(
     }) {
         return Err(ExifToolError::parse_error("Invalid JPEG header marker"));
     }
-    let mut exif = head.iter().filter(|seg| is_exif_segment(seg));
-    let block = exif.next();
+    let mut exif = head
+        .iter()
+        .enumerate()
+        .filter(|(_, seg)| is_exif_segment(seg));
+    let existing = exif.next();
     if exif.next().is_some() {
         return Err(ExifToolError::parse_error(
             "Ambiguous multiple JPEG EXIF blocks",
         ));
     }
+    let policy = &crate::writers::generated_raw_jfif::RAW_JFIF;
+    let target_index = if let Some((index, _)) = existing {
+        if !policy.creation_wait_for_directories.contains(&"IFD0") {
+            return Err(ExifToolError::unsupported_format(
+                "source creation policy does not support existing IFD0 placement",
+            ));
+        }
+        index
+    } else {
+        validate_creation_sources()?;
+        head.iter()
+            .enumerate()
+            .skip(1) // SOI framing precedes all metadata.
+            .find(|(_, segment)| {
+                !policy
+                    .creation_skip_markers
+                    .contains(&(segment.marker as u8))
+            })
+            .map(|(index, _)| index)
+            .ok_or_else(|| ExifToolError::parse_error("Missing JPEG creation boundary"))?
+    };
+    let property_prefix = match policy.creation_timing {
+        crate::writers::raw_segment_properties::RawCreationTiming::BeforeCurrentSegment => {
+            &head[..target_index]
+        }
+    };
     let (tiff, outcome) = transform(
-        block.map(|block| &block.data[EXIF_IDENTIFIER.len()..]),
-        head,
+        existing.map(|(_, block)| &block.data[EXIF_IDENTIFIER.len()..]),
+        property_prefix,
     )?;
     let length = tiff
         .len()
@@ -452,25 +481,18 @@ fn transform_exif<T>(
         .and_then(|len| u16::try_from(len).ok())
         .ok_or_else(|| ExifToolError::parse_error("Edited EXIF exceeds JPEG APP1 size limit"))?;
     let bytes = reader.read(0, reader.size() as usize)?;
-    let (start, end) = if let Some(block) = block {
-        let start = usize::try_from(block.offset)
-            .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?;
-        let end = start
+    let start = usize::try_from(head[target_index].offset)
+        .map_err(|_| ExifToolError::parse_error("JPEG segment offset exceeds address space"))?;
+    let end = if let Some((_, block)) = existing {
+        start
             .checked_add(4 + block.data.len())
             .filter(|end| *end <= bytes.len())
-            .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG EXIF segment"))?;
-        (start, end)
+            .ok_or_else(|| ExifToolError::parse_error("Truncated JPEG EXIF segment"))?
     } else {
-        let insertion = head
-            .iter()
-            .find(|segment| segment.marker == 0xffe0)
-            .map_or(2, |segment| {
-                segment.offset as usize + 4 + segment.data.len()
-            });
-        if insertion > bytes.len() {
+        if start > bytes.len() {
             return Err(ExifToolError::parse_error("Truncated JPEG insertion point"));
         }
-        (insertion, insertion)
+        start
     };
     let mut out = bytes[..start].to_vec();
     if !tiff.is_empty() {

@@ -202,9 +202,9 @@ def compare_jpeg(source: Path, native_output: Path, generated_output: Path,
     for key in ("sos_to_end_sha256", "non_exif_sha256"):
         if source_doc[key] != native_doc[key] or source_doc[key] != generated_doc[key]:
             raise AssertionError(f"JPEG {key} changed outside Exif APP1")
-    if operation == "delete-absent-noop" and source_doc["exif"] is None:
+    if operation == "delete-absent-noop":
         if native_doc["exif"] is not None or generated_doc["exif"] is not None:
-            raise AssertionError("delete/no-op unexpectedly created an Exif APP1")
+            raise AssertionError("delete/no-op retained or created an Exif APP1")
         return
     if native_doc["exif"] is None or generated_doc["exif"] is None:
         raise AssertionError("native/generated fresh write disagrees on EXIF APP1 presence")

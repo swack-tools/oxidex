@@ -72,6 +72,19 @@ class FreshJpegPublicWriteMatrixTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "retained or created"):
                 matrix._assert_native_target_transition(document, document, target, "delete-absent-noop")
 
+    def test_empty_ifd_delete_accepts_both_absent_but_rejects_generated_retention(self) -> None:
+        target = matrix.generated_targets(matrix.LEDGER, matrix.RULES)[0]
+        for case in matrix.CARRIERS:
+            if case.empty_ifd0_order is None:
+                continue
+            with self.subTest(order=case.empty_ifd0_order), tempfile.TemporaryDirectory() as temp:
+                source, cleared = Path(temp) / "source.jpg", Path(temp) / "cleared.jpg"
+                matrix.write_carrier(source, case)
+                matrix.write_carrier(cleared, matrix.CarrierCase("cleared", case.jfif, None))
+                matrix.compare_jpeg(source, cleared, cleared, target, "delete-absent-noop")
+                with self.assertRaisesRegex(AssertionError, "retained or created"):
+                    matrix.compare_jpeg(source, cleared, source, target, "delete-absent-noop")
+
     def test_exact_target_count_is_compared_against_native(self) -> None:
         target = matrix.generated_targets(matrix.LEDGER, matrix.RULES)[0]
         expected = {"byte_order": "big", "tags": {str(target.raw_tag_id): {"type": 2, "count": 1, "value_hex": "00"}}, "children": {}}
