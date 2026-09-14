@@ -11,16 +11,17 @@ import tempfile
 import unittest
 
 from checkexif_recipes import RecipeRefused
+from native_write_matrix import optional_native_configuration
 from setnewvalue_addressing import _find_tag_info_source
 from setnewvalue_convinv_recipes import compile_setnewvalue_convinv
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PERL = os.environ.get("EXIFTOOL_PERL")
-LIB = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
+_NATIVE_CONFIGURATION = optional_native_configuration(os.environ.get("EXIFTOOL_PERL"), os.environ.get("OXIDEX_PINNED_EXIFTOOL"))
+PERL, LIB = _NATIVE_CONFIGURATION if _NATIVE_CONFIGURATION else (None, None)
 
 
-@unittest.skipUnless(PERL and LIB and Path(PERL).is_file() and Path(LIB).is_dir(),
+@unittest.skipUnless(PERL is not None,
                      "requires explicit canonical EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL")
 class NativeSetNewValueAddressingTests(unittest.TestCase):
     def probe_capture(self, lib: Path, *, preload: tuple[str, ...] = ()) -> dict:

@@ -14,12 +14,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fresh_jpeg_byte_order_codegen import FreshByteOrderRefused, _source_profile, compile_recipe, generate
+from native_write_matrix import optional_native_configuration
 
-PERL = Path(os.environ.get("EXIFTOOL_PERL", "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2"))
-LIB = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", "/tmp/oxidex-exiftool-cache/exiftool/lib"))
-if (LIB / "lib").is_dir():
-    LIB = LIB / "lib"
-NATIVE_READY = PERL.is_file() and LIB.is_dir()
+_NATIVE_CONFIGURATION = optional_native_configuration(os.environ.get("EXIFTOOL_PERL"), os.environ.get("OXIDEX_PINNED_EXIFTOOL"))
+PERL, LIB = _NATIVE_CONFIGURATION if _NATIVE_CONFIGURATION else (None, None)
+NATIVE_READY = PERL is not None
 ROOT = Path(__file__).resolve().parents[2]
 DUMP = ROOT / "tools/exiftool-tables/dump_tables.pl"
 
