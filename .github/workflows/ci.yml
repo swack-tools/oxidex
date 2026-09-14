@@ -503,6 +503,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt
+      - name: Verify complete source catalog snapshot
+        run: |
+          python3 tools/exiftool-tables/catalog_snapshot.py \
+            --exiftool-dir "$EXIFTOOL_SOURCE" --perl perl \
+            --output "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" --check
       - name: Verify committed tables against ExifTool
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
