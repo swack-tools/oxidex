@@ -87,6 +87,13 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
+echo ">> checking bounded QuickTime generated ItemList declarations"
+# This source snapshot is deliberately bounded and independently captured.  It
+# is not regenerated from the broad dump above; check it here so a full regen
+# cannot silently carry a stale declaration/omission pair.
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" --check
+
+echo
 echo ">> generating inactive serial-directory facts"
 python3 "$HERE/serial_directory.py" "$JSON" \
     --output "$CACHE/serial-$VERSION.json" --rust-output "$SERIAL_OUT"

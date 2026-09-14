@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Generate inert Rust ItemList specs from the QuickTime source ledger.
+
+The generated Rust file is deliberately not wired into the QuickTime parser in
+this milestone.  It records only source facts that a later generic ItemList
+executor may consume; a declaration is not observed reading support.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import quicktime_atom_tables as selector
+
+
+ROOT = selector.ROOT
+SNAPSHOT = ROOT / "tools/exiftool-tables/fixtures/quicktime_source_13_59.json"
+LEDGER = ROOT / "tools/exiftool-tables/quicktime_generated_itemlist_ledger.json"
+RUST = ROOT / "src/parsers/quicktime/generated_itemlist_specs.rs"
+EXPECTED_PROCESSOR = {
+    "__name": "Image::ExifTool::QuickTime::ProcessMOV",
+    "__perl": "CODE",
+    "__opaque": True,
+    "source_file": "Image/ExifTool/QuickTime.pm",
+    "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e",
+}
+
+
+def source_format(value):
+    if value is None:
+        return {"kind": "implicit"}
+    if value == "string":
+        return {"kind": "string"}
+    width = int(value.removeprefix("int").removesuffix("u"))
+    return {"kind": "unsigned", "width": width}
+
+
+def processor_reason(document):
+    try:
+        processor = document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"]["PROCESS_PROC"]
+    except (KeyError, TypeError):
+        return "missing_or_changed_processor_contract:PROCESS_PROC"
+    if not isinstance(processor, dict):
+        return "missing_or_changed_processor_contract:PROCESS_PROC"
+    if any(processor.get(key) != value for key, value in EXPECTED_PROCESSOR.items()):
+        return "missing_or_changed_processor_contract:PROCESS_PROC"
+    return None
+
+
+def compile_document(document, *, raw=None):
+    source = raw if raw is not None else selector.serialized(document).encode()
+    base = selector.report(source)
+    blocked_protocol = processor_reason(document)
+    specs = []
+    ledger = []
+    for family in base["families"]:
+        for record in family["records"]:
+            reasons = list(record["reasons"])
+            if family["table"] == "ItemList" and blocked_protocol:
+                reasons.append(blocked_protocol)
+            reasons = sorted(set(reasons))
+            generated = family["table"] == "ItemList" and not reasons
+            entry = {"identity": record["identity"], "generated": generated, "reasons": reasons}
+            if generated:
+                spec = record["spec"]
+                operand = {
+                    "raw_fourcc": spec["key_hex"],
+                    "name": spec["name"],
+                    "group": spec["group"],
+                    "source_format": source_format(spec["format"]),
+                    "safe_enum_operands": [{"raw": raw, "rendered": rendered}
+                                           for raw, rendered in (spec["print_enum"] or {}).items()],
+                    "source_identity": record["identity"],
+                }
+                specs.append(operand)
+                entry["generated_spec_sha256"] = hashlib.sha256(
+                    json.dumps(operand, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+                ).hexdigest()
+            ledger.append(entry)
+    specs.sort(key=lambda row: (row["raw_fourcc"], row["name"]))
+    ledger.sort(key=lambda row: (row["identity"]["table"], row["identity"]["raw_key"],
+                                 row["identity"]["variant_path"]))
+    return {
+        "schema": "quicktime_generated_itemlist_specs_v1",
+        "scope": "generated declarations only; no runtime connection or observed support claimed",
+        "source": base["source"],
+        "protocol": {"table": "ItemList", "processor_contract": EXPECTED_PROCESSOR,
+                     "eligible": blocked_protocol is None,
+                     "reason": blocked_protocol},
+        "specs": specs,
+        "ledger": ledger,
+        "identity_counts": {"source_records": len(ledger), "generated": len(specs),
+                            "omitted": len(ledger) - len(specs)},
+    }
+
+
+def rust_string(value):
+    escaped = []
+    for char in value:
+        if char == "\\":
+            escaped.append("\\\\")
+        elif char == '"':
+            escaped.append('\\"')
+        elif char == "\n":
+            escaped.append("\\n")
+        elif char == "\r":
+            escaped.append("\\r")
+        elif char == "\t":
+            escaped.append("\\t")
+        elif ord(char) < 0x20 or ord(char) == 0x7f:
+            escaped.append(f"\\u{{{ord(char):x}}}")
+        else:
+            escaped.append(char)
+    return '"' + "".join(escaped) + '"'
+
+
+def render_format(value):
+    if value["kind"] == "implicit":
+        return "SourceFormat::Implicit"
+    if value["kind"] == "string":
+        return "SourceFormat::String"
+    return f"SourceFormat::Unsigned({value['width']})"
+
+
+def render_rust(result):
+    lines = [
+        "// @generated by tools/exiftool-tables/quicktime_generated_specs.py; DO NOT EDIT.",
+        "// Source declarations only. No QuickTime runtime consumer is connected in this milestone.",
+        "",
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]",
+        "pub(crate) enum SourceFormat {",
+        "    Implicit,",
+        "    String,",
+        "    Unsigned(u8),",
+        "}",
+        "",
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]",
+        "pub(crate) struct EnumOperand { pub raw: &'static str, pub rendered: &'static str }",
+        "",
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]",
+        "pub(crate) struct ItemListSpec {",
+        "    pub raw_fourcc: [u8; 4], pub name: &'static str, pub group: &'static str,",
+        "    pub source_format: SourceFormat, pub safe_enum_operands: &'static [EnumOperand],",
+        "}",
+        "",
+        "pub(crate) static ITEMLIST_SPECS: &[ItemListSpec] = &[",
+    ]
+    for row in result["specs"]:
+        raw = ", ".join(f"0x{row['raw_fourcc'][index:index + 2]}" for index in range(0, 8, 2))
+        enums = ", ".join("EnumOperand { raw: %s, rendered: %s }" %
+                          (rust_string(item["raw"]), rust_string(item["rendered"]))
+                          for item in row["safe_enum_operands"])
+        lines.append("    ItemListSpec { raw_fourcc: [%s], name: %s, group: %s, source_format: %s, safe_enum_operands: &[%s] }," %
+                     (raw, rust_string(row["name"]), rust_string(row["group"]),
+                      render_format(row["source_format"]), enums))
+    lines.extend([
+        "];",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def serialized(result):
+    return json.dumps(result, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+    parser.add_argument("--ledger", type=Path, default=LEDGER)
+    parser.add_argument("--rust", type=Path, default=RUST)
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--replace", action="store_true")
+    args = parser.parse_args()
+    if args.check and args.replace:
+        parser.error("--check and --replace are mutually exclusive")
+    raw = args.snapshot.read_bytes()
+    result = compile_document(json.loads(raw), raw=raw)
+    outputs = [(args.ledger, serialized(result)), (args.rust, render_rust(result))]
+    if args.check:
+        for path, contents in outputs:
+            if not path.is_file() or path.read_text() != contents:
+                parser.error(f"stale generated ItemList artifact: {path}")
+    else:
+        for path, contents in outputs:
+            if path.exists() and not args.replace:
+                parser.error(f"output exists: {path}; use --replace")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents)
+
+
+if __name__ == "__main__":
+    main()

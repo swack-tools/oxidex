@@ -19,6 +19,18 @@ The verbatim three-table snapshot, including processor metadata, is
 records the parent dump/tool hashes, base commit and Perl version. This snapshot
 covers three tables, not the complete ExifTool universe.
 
+`tools/exiftool-tables/quicktime_generated_specs.py` turns the 91 accepted
+ItemList source rows into the inert Rust declaration artifact
+`src/parsers/quicktime/generated_itemlist_specs.rs`. It carries raw FourCC,
+name, group, implicit/string/unsigned-width source format and safe enum operands.
+`tools/exiftool-tables/quicktime_generated_itemlist_ledger.json` conserves all
+396 selected source identities: 91 generated declarations and 305 omitted rows,
+including the existing 14 ItemList refusals plus distinct UserData and Keys
+protocol refusals. The generator requires the captured ItemList processor
+contract; a missing or changed processor makes every ItemList row explicitly
+refused. These declarations have no Rust runtime consumer and are not reading
+or writing coverage.
+
 ## Reproduce and check staleness
 
 From the repository root:
@@ -29,6 +41,7 @@ python3 tools/exiftool-tables/quicktime_atom_tables.py \
   --output tools/exiftool-tables/quicktime_source_capabilities.json \
   --summary docs/reference/quicktime-source-baseline.json --check
 python3 tools/exiftool-tables/quicktime_baseline.py --check-fixtures
+python3 tools/exiftool-tables/quicktime_generated_specs.py --check
 python3 -m unittest discover -s tools/exiftool-tables -p 'test_quicktime*.py'
 ```
 
