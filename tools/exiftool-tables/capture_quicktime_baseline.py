@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract three verbatim hydrated tables from a recorded full pinned dump.
+"""Project three effective QuickTime tables from a recorded full pinned dump.
 
 This reads the full JSON document; run it under the host's shared heavy-job lock.
 The supplied commit identifies the dump tool used by the preceding capture.
@@ -14,32 +14,37 @@ import subprocess
 import quicktime_atom_tables as selector
 
 
-def resolve_shared(value, shared):
+def resolve_shared(value, shared, resolving=()):
     """Materialize only hydrated HASH references; table references are wrappers."""
     if isinstance(value, list):
-        return [resolve_shared(item, shared) for item in value]
+        return [resolve_shared(item, shared, resolving) for item in value]
     if not isinstance(value, dict):
         return value
     if set(value) == {"__ref", "object_id"}:
         if value.get("__ref") != "HASH" or not isinstance(value["object_id"], str):
             raise ValueError("hydrated QuickTime shared reference is malformed")
+        if value["object_id"] in resolving:
+            raise ValueError("hydrated QuickTime shared reference is cyclic")
         target = shared.get(value["object_id"])
         if not isinstance(target, dict) or target.get("kind") != "HASH" or not isinstance(target.get("properties"), dict):
             raise ValueError("hydrated QuickTime shared reference is missing or malformed")
-        return resolve_shared(target["properties"], shared)
-    return {key: resolve_shared(item, shared) for key, item in value.items()}
+        return resolve_shared(target["properties"], shared, resolving + (value["object_id"],))
+    return {key: resolve_shared(item, shared, resolving) for key, item in value.items()}
 
 
-def project_row(row, *, table, raw_key, defaults, shared):
+def project_row(row, *, table, raw_key, defaults, shared, variant_path=()):
     row = resolve_shared(row, shared)
     if not isinstance(row, dict):
         raise ValueError("hydrated QuickTime row is malformed")
     if "_variants" in row:
+        if set(row) != {"_variants"}:
+            raise ValueError("hydrated QuickTime variants have unprojected wrapper fields")
         variants = row.pop("_variants")
         if not isinstance(variants, list) or not variants:
             raise ValueError("hydrated QuickTime variants are malformed")
-        return {"_variants": [project_row(item, table=table, raw_key=raw_key, defaults=defaults, shared=shared)
-                              for item in variants]}
+        return {"_variants": [project_row(item, table=table, raw_key=raw_key, defaults=defaults, shared=shared,
+                                           variant_path=variant_path + (index,))
+                              for index, item in enumerate(variants)]}
     tag_id, table_ref = row.pop("TagID", raw_key), row.pop("Table", None)
     if tag_id != raw_key or not isinstance(table_ref, dict) or table not in table_ref.get("table_full_names", []):
         raise ValueError("hydrated QuickTime row identity is malformed")
@@ -47,11 +52,14 @@ def project_row(row, *, table, raw_key, defaults, shared):
     if not isinstance(extras, dict):
         raise ValueError("hydrated QuickTime row extras are malformed")
     index = extras.pop("Index", None)
-    if index is not None and not isinstance(index, str):
-        raise ValueError("hydrated QuickTime variant index is malformed")
+    if index is not None and (not variant_path or index != str(variant_path[-1])):
+        raise ValueError("hydrated QuickTime variant index differs from its path")
     extras = set(extras) - {"GotGroups", "Preferred"}
     if extras:
-        row["_extra_keys"] = sorted(extras)
+        existing = row.get("_extra_keys", [])
+        if not isinstance(existing, list) or not all(isinstance(key, str) for key in existing):
+            raise ValueError("hydrated QuickTime existing extra keys are malformed")
+        row["_extra_keys"] = sorted(set(existing) | extras)
     groups = row.get("Groups")
     if groups is not None:
         if not isinstance(groups, dict):
@@ -103,7 +111,8 @@ def extract(document, *, full_hash, source_commit, perl_version, tool_hash):
                               "tables": ["QuickTime::" + name for name in selector.TABLES],
                               "source_module_table_count": module["table_count"],
                               "source_commit": source_commit, "full_dump_sha256": full_hash,
-                              "dump_tool_sha256": tool_hash, "perl_version": perl_version}}
+                              "dump_tool_sha256": tool_hash, "perl_version": perl_version,
+                              "projection": "effective hydrated rows with authenticated wrapper removal"}}
 
     if "quicktime_itemlist_reader_protocol" in document:
         result["quicktime_itemlist_reader_protocol"] = document["quicktime_itemlist_reader_protocol"]

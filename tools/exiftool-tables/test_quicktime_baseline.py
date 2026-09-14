@@ -101,6 +101,24 @@ class BaselineTests(unittest.TestCase):
         projected = capture.hydrated_tables(document)
         self.assertEqual(projected["Keys"]["tags"]["artist"], {"Name": "Artist"})
 
+    def test_hydrated_projection_rejects_index_drift_and_preserves_extra_keys(self):
+        kwargs = {"table": "Image::ExifTool::QuickTime::Keys", "raw_key": "artist", "defaults": {}, "shared": {}}
+        row = {"_variants": [{"TagID": "artist", "Table": {"table_full_names": [kwargs["table"]]},
+                              "_extra_properties": {"Index": "1"}}]}
+        with self.assertRaisesRegex(ValueError, "index differs"):
+            capture.project_row(row, **kwargs)
+        row["_variants"][0]["_extra_properties"] = {"Index": "0", "NewProperty": "x"}
+        row["_variants"][0]["_extra_keys"] = ["OlderProperty"]
+        self.assertEqual(capture.project_row(row, **kwargs), {"_variants": [{"_extra_keys": ["NewProperty", "OlderProperty"]}]})
+
+    def test_hydrated_projection_refuses_cycles_and_variant_wrapper_loss(self):
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            capture.resolve_shared({"__ref": "HASH", "object_id": "loop"},
+                                   {"loop": {"kind": "HASH", "properties": {"again": {"__ref": "HASH", "object_id": "loop"}}}})
+        with self.assertRaisesRegex(ValueError, "wrapper fields"):
+            capture.project_row({"_variants": [], "Name": "lost"}, table="Image::ExifTool::QuickTime::Keys",
+                                raw_key="artist", defaults={}, shared={})
+
     def test_reading_check_detects_changed_values_and_pin(self):
         before = {"pin": "13.59", "fixtures": [{"actual": {"ItemList:AlbumID": 1}}]}
         baseline.check_reading_baseline(before, before)
