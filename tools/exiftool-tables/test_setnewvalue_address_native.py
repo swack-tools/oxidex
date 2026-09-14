@@ -42,10 +42,14 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
                                     text=True, capture_output=True).stdout
         return json.loads(output)
 
-    def perl_body(self, lib: Path, symbol: str, prepend: Path | None = None) -> str:
+    def perl_body(self, lib: Path, symbol: str, prepend: Path | None = None,
+                  *, preload_xmp: bool = False) -> str:
         inc = ([f"-I{prepend}"] if prepend else []) + [f"-I{lib}"]
+        modules = ["-MB::Deparse", "-MImage::ExifTool"]
+        if preload_xmp:
+            modules.append("-MImage::ExifTool::XMP")
         result = subprocess.run(
-            [PERL, *inc, "-MB::Deparse", "-MImage::ExifTool", "-e",
+            [PERL, *inc, *modules, "-e",
              f"require q(Image/ExifTool/Writer.pl); print B::Deparse->new('-p','-sC')->coderef2text(\\&{symbol})"],
             check=True, capture_output=True, text=True)
         return result.stdout
@@ -109,6 +113,30 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
             setnew["dependencies"] = {"Image::ExifTool::ConvInv": conv}
             with self.assertRaisesRegex(RecipeRefused, "caller control flow"):
                 compile_setnewvalue_convinv(setnew)
+
+    def test_preloaded_xmp_deparse_spelling_is_closed_and_authenticated(self):
+        """The full capture's settled XMP context adds only this one ``&``.
+
+        It is an observed B::Deparse rendering of the same selected source,
+        not permission to erase arbitrary ampersands from a source body.
+        """
+        lib = Path(LIB)
+        source = (lib / "Image/ExifTool/TagLookup.pm").read_bytes()
+        body = self.perl_body(lib, "Image::ExifTool::TagLookup::FindTagInfo", preload_xmp=True)
+        self.assertIn("&Image::ExifTool::XMP::AddFlattenedTags", body)
+        fact = self.code_fact("Image::ExifTool::TagLookup::FindTagInfo", body,
+                              "Image/ExifTool/TagLookup.pm", source,
+                              requested="Image::ExifTool::TagLookup::FindTagInfo")
+        _find_tag_info_source({"native_write_helpers": {"find_tag_info": fact}})
+
+        # A second ampersand elsewhere is not a deparser-context spelling of
+        # the canonical XMP call and must still reject the whole callable.
+        changed = dict(fact)
+        changed["__deparse"] = body.replace("GetTagInfoList($table, $tagID)",
+                                              "&GetTagInfoList($table, $tagID)", 1)
+        self.assertNotEqual(changed["__deparse"], body)
+        with self.assertRaisesRegex(RecipeRefused, "FindTagInfo"):
+            _find_tag_info_source({"native_write_helpers": {"find_tag_info": changed}})
 
     def test_probe_refuses_preloaded_external_exiftool_before_reading_input(self):
         """The selected -I path cannot silently replace an ambient package."""

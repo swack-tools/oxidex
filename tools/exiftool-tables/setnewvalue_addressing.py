@@ -92,6 +92,29 @@ def _template() -> list[str]:
     return value
 
 
+def _find_tag_info_templates() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the two exact deparse renderings of the selected callable.
+
+    ``FindTagInfo`` lazily requires XMP before calling ``AddFlattenedTags``.
+    The Perl source spells that call without ``&``.  B::Deparse renders the
+    same already-compiled call with ``&`` when XMP's prototype was loaded
+    *before* deparsing, which is the settled state of a broad native capture.
+    This is a deparser-context difference, not a second executable grammar.
+
+    Accepting only the complete canonical body and the complete body with
+    that one, source-defined spelling change keeps inserted control flow (or
+    an ampersand on any other call) a refusal.  Do not normalize ampersands
+    generally: they can change prototype and argument semantics.
+    """
+    canonical = tuple(_template())
+    call = "Image::ExifTool::XMP::AddFlattenedTags"
+    if canonical.count(call) != 1:
+        raise RecipeRefused("FindTagInfo source template has ambiguous XMP call")
+    index = canonical.index(call)
+    preloaded_xmp = canonical[:index] + ("&",) + canonical[index:]
+    return canonical, preloaded_xmp
+
+
 def _helper_identity(fact: Mapping[str, Any], requested: str, *, context: str) -> tuple[str, str, str, str]:
     """Return the exact source identity that a native observation must re-prove."""
     if fact.get("requested_binding") != requested:
@@ -116,7 +139,8 @@ def _find_tag_info_source(document: Mapping[str, Any]) -> tuple[str, str, str, s
             fact, "Image::ExifTool::TagLookup::FindTagInfo")[3]
     except native_reader_facts.ReaderRefused as error:
         raise RecipeRefused("FindTagInfo is unresolved or rebound") from error
-    if actual != "Image::ExifTool::TagLookup::FindTagInfo" or tokens != _template():
+    if (actual != "Image::ExifTool::TagLookup::FindTagInfo"
+            or tuple(tokens) not in _find_tag_info_templates()):
         raise RecipeRefused("FindTagInfo name lookup control flow is unsupported")
     return actual, source_file, source_sha256, body_sha256
 
