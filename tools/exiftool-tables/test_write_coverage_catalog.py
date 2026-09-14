@@ -83,13 +83,24 @@ class WriteCoverageCatalogTests(unittest.TestCase):
         self.assertEqual(first["native_definition"]["row_unknown_controls"]["FutureControl"]["value"], {"kept": True})
         self.assertEqual(first["operation_coverage"]["carrier_route"], "not_inferred_from_definition_inventory")
         context = result["table_contexts"][first["identity"]["table_context_ref"]]
-        self.assertEqual(context["table_properties"]["WRITABLE"], fact(1))
+        self.assertEqual(context["source_context"]["table_properties"]["WRITABLE"], fact(1))
         self.assertEqual(catalog.resolve_source_variant(result, first),
                          result["source_entries"][first["identity"]["source_entry_ref"]]["entry"])
         empty = next(item for item in result["records"] if item["identity"]["raw_id"] == "321")
         self.assertEqual(empty["identity"]["source_variant_state"], "unresolved_empty_alternatives")
         self.assertEqual(catalog.resolve_source_variant(result, empty)["alternatives"], [])
         self.assertEqual(result["source"]["root_module_facts"]["modules_failed"], {"present": True, "value": 1})
+
+    def test_table_context_retains_all_source_fields_without_metadata_collisions(self):
+        document = sample_dump()
+        table = document["native_write_tables"]["Exif"]["Main"]
+        table.update(row_count=4, id="native-id", FutureContext={"nested": [1, 2]})
+        result = catalog.build_catalog(document, dump_sha256="a" * 64)
+        context = next(iter(result["table_contexts"].values()))
+        self.assertEqual(context["source_context"],
+                         {key: value for key, value in table.items() if key != "rows"})
+        self.assertEqual(context["id"], "table-00001")
+        self.assertEqual(context["source_context"]["id"], "native-id")
 
     def test_cli_emits_stable_json_and_raw_dump_hash(self):
         document = sample_dump()

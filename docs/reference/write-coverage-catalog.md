@@ -10,8 +10,8 @@ Run it against an already captured dump:
 
 ```sh
 python3 tools/exiftool-tables/write_coverage_catalog.py \
-  --dump /path/to/tables.json \
-  --output /path/to/write-definition-catalog.json
+  --dump scratch/tables.json \
+  --output scratch/write-definition-catalog.json
 ```
 
 The catalog hashes both the source bytes and canonical decoded JSON.
@@ -28,7 +28,7 @@ can be written to any carrier format.
 
 Each record has a stable identity of module, table, full source table name, raw
 row id, and conditional-variant path. `table_contexts` stores every table's
-properties, controls, unknown controls and procedure provenance once;
+complete source context except its row map once, under `source_context`;
 `source_entries` stores every raw row once. Records point to both by stable
 reference and retain the selected branch's SHA-256. Array alternatives become
 separate records; empty or malformed arrays produce an explicit unresolved

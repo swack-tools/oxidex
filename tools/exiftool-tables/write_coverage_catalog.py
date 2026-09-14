@@ -8,8 +8,8 @@ declaration into a successful operation.  Every emitted record is therefore
 
 Rows are flattened only to give conditional alternatives stable identities.
 Their original source entry, including unknown controls and nested variants,
-is retained in each record so a later operation runner can choose a concrete
-native context without losing evidence.
+is retained once in source_entries and referenced by each record so a later
+operation runner can choose a concrete native context without losing evidence.
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def _alternatives(entry: Any, path: tuple[int, ...] = ()) -> list[tuple[tuple[in
     if isinstance(entry, Mapping) and entry.get("entry_kind") == "ARRAY" and isinstance(entry.get("alternatives"), list):
         if not entry["alternatives"]:
             return [(path, entry, "unresolved_empty_alternatives")]
-        result: list[tuple[tuple[int, ...], Any]] = []
+        result: list[tuple[tuple[int, ...], Any, str]] = []
         for index, child in enumerate(entry["alternatives"]):
             result.extend(_alternatives(child, path + (index,)))
         return result
@@ -152,14 +152,7 @@ def _table_context(context_id: str, module: str, table_name: str, table: Mapping
         "id": context_id,
         "module": module,
         "table": table_name,
-        "full_name": table.get("full_name"),
-        "table_properties": table.get("table_properties"),
-        "write_controls": table.get("write_controls"),
-        "unknown_table_properties": table.get("unknown_table_properties"),
-        "effective_write_proc": table.get("effective_write_proc"),
-        "effective_check_proc": table.get("effective_check_proc"),
-        "effective_row_resolver": table.get("effective_row_resolver"),
-        "effective_row_context": table.get("effective_row_context"),
+        "source_context": {key: value for key, value in table.items() if key != "rows"},
     }
 
 
