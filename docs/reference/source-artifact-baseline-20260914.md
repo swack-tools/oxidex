@@ -33,8 +33,33 @@ python3 tools/exiftool-tables/join_source_artifacts.py \
 ```
 
 Focused validation: 18 join tests and 6 source-inventory tests. Runtime Rust and
-Cargo source match the base, already validated with Clippy. Full-capture counts
-must be regenerated after this fix before being quoted as current.
+Cargo source match the base, already validated with Clippy. The full recorded dump was joined successfully at selector commit
+`72ed1397f526faab71c46f11cbcf0bea9137e844` and artifact commit
+`304d6339274d14f3a26cfeed85e2428855ea688a`.
+
+## Recorded result
+
+Instrument: `join_source_artifacts.py`, pinned ExifTool 13.59 dump. The committed
+[source/artifact report](source-artifact-baseline-13.59.json) records input,
+selector, executor and generated-artifact hashes plus counts for 141 processor
+families. All 1,512 captured source tables remain in the denominator.
+
+| Selected artifact family | Source tables | Definitions present | Emitted row literals | Tables blocked by Gate A |
+| --- | ---: | ---: | ---: | ---: |
+| Binary | 651 | 624 | 7,002 | 129 |
+| IFD | 496 | 496 | 6,117 | 228 |
+| Keyed | 13 | 10 | 189 | 1 |
+| Outside these selectors | 352 | Not assessed | Not assessed | Not assessed |
+
+Definitions include empty or blocked tables. Emitted row literals are artifact
+counts, not supported source rows. The static policy classification is 1,097
+not enabled through the inspected route, 391 unknown, and 24 allowlisted but
+with dispatch unverified. These states say nothing about alternate handwritten
+routes. Observed reading and writing remain null in this instrument.
+
+The report preserves 1,278 binary and four keyed omission-sidecar rows and
+aggregates exact Gate A reason codes. IFD has no row-omission sidecar in this
+artifact format; zero sidecar rows must not be interpreted as zero omissions.
 
 ## Limits and subsequent work
 
