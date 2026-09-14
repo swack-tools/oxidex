@@ -3,7 +3,7 @@ import hashlib
 import unittest
 
 from checkexif_recipes import RecipeRefused, RecipeMalformed
-from sanitize_recipes import _CANONICAL, compile_sanitize
+from sanitize_recipes import _CANONICAL, _WITHOUT_ENCODE_HANGS, compile_sanitize
 
 
 def source_fact(body=_CANONICAL):
@@ -29,6 +29,18 @@ def source_fact(body=_CANONICAL):
 
 
 class SanitizeSourceMechanism(unittest.TestCase):
+    def test_option_guard_is_selected_from_the_complete_source_shape(self):
+        self.assertTrue(compile_sanitize(source_fact()).encode_hangs_guard)
+        self.assertFalse(compile_sanitize(source_fact(_WITHOUT_ENCODE_HANGS)).encode_hangs_guard)
+        # Either guard changed in isolation is a different, unmodeled flow.
+        for body in (
+            _CANONICAL.replace("(($self->{'OPTIONS'}{'EncodeHangs'} || $@) ?", "($@ ?"),
+            _WITHOUT_ENCODE_HANGS.replace("($@ ?", "(($self->{'OPTIONS'}{'EncodeHangs'} || $@) ?"),
+            _WITHOUT_ENCODE_HANGS.replace("(require Encode);", "(require Encode); die 'changed';"),
+        ):
+            with self.subTest(body=body), self.assertRaises(RecipeRefused):
+                compile_sanitize(source_fact(body))
+
     def test_source_guards_change_operands(self):
         for old, new, field, expected in (
             ("5.006", "10.006", "downgrade_at_or_after", 10_006_000),

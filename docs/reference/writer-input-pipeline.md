@@ -92,6 +92,38 @@ semantics. Replaced bindings or registry entries must refuse. Raw interpreter
 and library hashes remain evidence; source-to-XS binary linkage is not claimed.
 Unsupported manual packing and XML/HTML paths remain work to complete.
 
+## Generated sanitization execution checkpoint
+
+The next candidate captures a pristine interpreter and the actual final table
+producer's encoding state. It validates exact typed vectors (including undef),
+the requested and actual functions, and the registry's resolved method. It
+joins those callable fingerprints to Sanitize's captured dependencies before
+emitting Rust operands. Portable artifacts exclude machine paths and binary
+hashes; optional raw diagnostics retain them outside the source tree.
+
+`test_sanitize_rust.py` captures actual native source, generates its operands
+and compiles the real `generated_sanitize.rs` executor with standalone rustc.
+Base cases cover Unicode, NUL, bytes, undef, scalar references and inactive escape
+options. It tests a copied version-guard mutation and, when present in source,
+removes both EncodeHangs guards in another copy. Source/body identities are
+checked before comparison. Both option values are compared when the selected
+source ignores EncodeHangs or cannot reach manual packing.
+
+The current-pin permanent regression passed 260 native/Rust comparisons.
+Separate actual 11.78 and 12.64 native sources passed 208 comparisons each;
+both lack the option guards and the generated runtime follows their bodies.
+The compiler compares complete source shapes and refuses mixed guards or
+unmodeled statements, instead of keeping the previous release's behavior.
+
+Normal regeneration owns the sanitization rules and ledger (38 artifacts).
+Official full regeneration and the pre-repair full gate passed; targeted
+three-release proofs, source/codegen tests and Clippy passed after repairing
+the historical grammar. See the [progress record](../AUTOGENERATION-PROGRESS.md)
+for precise counts and evidence boundaries. Exact-head publication gates remain
+pending. No public writer is activated by direct-helper proof; inverse
+conversions, charset/count, physical writing and remaining sanitizer branches
+still need their own proof.
+
 There is no new production writer or manual-rule retirement to count at this
 checkpoint. Helper proof, complete file behavior and release conformance remain
 separate measurements.

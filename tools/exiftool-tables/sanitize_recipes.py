@@ -39,6 +39,14 @@ if (($self->{'OPTIONS'}{'Escape'} eq 'XML')) {
 }
 }"""
 
+# Older native implementations have the same complete control flow without
+# either EncodeHangs short-circuit. Match that source shape, never a version
+# number: a backport or a source mutation must select its own behavior.
+_WITHOUT_ENCODE_HANGS = (_CANONICAL
+    .replace("and (($self->{'OPTIONS'}{'EncodeHangs'} || eval {", "and (eval {")
+    .replace("}) || $@)))", "} || $@)))")
+    .replace("(($self->{'OPTIONS'}{'EncodeHangs'} || $@) ?", "($@ ?"))
+
 _DEPENDENCIES = {
     "Encode::encode",
     "Encode::is_utf8",
@@ -66,6 +74,7 @@ class SanitizeRecipe:
     callback_references: dict[str, Any]
     downgrade_at_or_after: int
     manual_pack_before: int
+    encode_hangs_guard: bool
     encode_name: str
     manual_pack_formats: tuple[str, str, str]
     xml_unescape: str
@@ -150,14 +159,19 @@ def compile_sanitize(fact: Any) -> SanitizeRecipe:
         raise RecipeRefused("Sanitize direct dependency set is unsupported")
     try:
         tokens = native_reader_facts.body_tokens(fact["__deparse"])
-        canonical = native_reader_facts.body_tokens(_CANONICAL)
     except (KeyError, TypeError, native_reader_facts.ReaderRefused) as error:
         raise RecipeRefused("Sanitize has no deparsed body") from error
     downgrade, normalized = _version(tokens, ("$", "]", ">", "="))
     manual, normalized = _version(normalized, ("$", "]", "<"))
-    _canonical_downgrade, canonical = _version(canonical, ("$", "]", ">", "="))
-    _canonical_manual, canonical = _version(canonical, ("$", "]", "<"))
-    if _normalize_callback_ampersands(normalized) != _normalize_callback_ampersands(canonical):
+    encode_hangs_guard = None
+    for shape, uses_encode_hangs in ((_CANONICAL, True), (_WITHOUT_ENCODE_HANGS, False)):
+        canonical = native_reader_facts.body_tokens(shape)
+        _, canonical = _version(canonical, ("$", "]", ">", "="))
+        _, canonical = _version(canonical, ("$", "]", "<"))
+        if _normalize_callback_ampersands(normalized) == _normalize_callback_ampersands(canonical):
+            encode_hangs_guard = uses_encode_hangs
+            break
+    if encode_hangs_guard is None:
         raise RecipeRefused("Sanitize executable body is outside the closed grammar")
     return SanitizeRecipe(
         provenance=provenance,
@@ -165,6 +179,7 @@ def compile_sanitize(fact: Any) -> SanitizeRecipe:
         callback_references=deepcopy(callbacks),
         downgrade_at_or_after=downgrade,
         manual_pack_before=manual,
+        encode_hangs_guard=encode_hangs_guard,
         encode_name="utf8",
         manual_pack_formats=("C*", "U0C*", "C0C*"),
         xml_unescape="Image::ExifTool::XMP::UnescapeXML",

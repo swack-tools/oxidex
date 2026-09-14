@@ -32,6 +32,7 @@ use File::Basename qw(dirname);
 use FindBin;
 use lib $FindBin::Bin;
 use OxiDex::NativeReaderContract ();
+use OxiDex::Utf8PrimitiveContract ();
 use Scalar::Util qw(refaddr);
 use B ();
 
@@ -249,6 +250,7 @@ my $EXIFTOOL_LIB = shift @ARGV or die "usage: $0 <exiftool-lib-dir> [module...]\
 unshift @INC, $EXIFTOOL_LIB;
 
 my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
+my $pristine_utf8 = OxiDex::Utf8PrimitiveContract::capture_pristine($^X);
 
 # Table facts are a property of the selected native tree, never of the
 # account running the dump.  ExifTool loads $EXIFTOOL_HOME/.ExifTool_config
@@ -1047,6 +1049,7 @@ my $unsigned_reader_contract = OxiDex::NativeReaderContract::finalise_loaded_con
 # Latin-1 byte -- which is exactly how a copyright sign in a Notes field ends
 # up as an invalid 0xA9 in the output.
 my $json = JSON::PP->new->utf8->canonical->pretty;
+my $final_utf8 = OxiDex::Utf8PrimitiveContract::capture_final();
 print $json->encode({
     exiftool_version => $Image::ExifTool::VERSION,
     modules_ok       => $ok,
@@ -1060,4 +1063,7 @@ print $json->encode({
     native_write_helpers => $native_write_helpers,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
+    native_runtime_contracts => { utf8 => {
+        kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
+    } },
 });

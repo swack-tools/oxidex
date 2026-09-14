@@ -74,7 +74,7 @@ else:
         dump(args[0]);output(flag('--rust-output'),'serial')
         assert flag('--rust-output')==artifact('serial_directory')
         output(flag('--output'),'serial-report')
-    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py'):
+    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py'):
         dump(args[0])
         selected={root/item.path for item in artifacts.select(producer=name.removesuffix('.py'))}
         assert {flag('--output'),flag('--report')}==selected
@@ -225,6 +225,7 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
                     self.assertLess(names.index('scalar_helper_codegen.py'), names.index('rustfmt'))
                     self.assertLess(names.index('checkexif_rust_codegen.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('sanitize_rust_codegen.py'), names.index('rustfmt'))
                     self.assertGreater(names.index('verify_serial_directory.py'), names.index('rustfmt'))
                 self.assertEqual(names.count('rustfmt'), 2 if full else 1)
                 format_calls = [c for c in calls if c['tool'] == 'rustfmt']
@@ -251,7 +252,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_tier_one_producer_and_verifier_failures_survive_exit_guard(self):
-        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'verify_serial_directory.py'):
+        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'verify_serial_directory.py'):
             with self.subTest(leaf=leaf):
                 result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
                 self.assertEqual(result.returncode, 47, result.stdout + result.stderr)

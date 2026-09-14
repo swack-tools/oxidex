@@ -1,0 +1,1847 @@
+{
+  "exiftool_version": "13.59",
+  "omissions": [],
+  "perl_version": 5038002,
+  "primitive_contract": {
+    "final": {
+      "bindings": {
+        "encode": {
+          "actual_name": "Encode::encode",
+          "body_sha256": "bbf989ff1662a261972b94947c18baa393289cb2ae991ad735b9bd11f0002747",
+          "implementation": "xsub",
+          "prototype": "$$;$",
+          "requested": "Encode::encode",
+          "resolved": true
+        },
+        "is_utf8": {
+          "actual_name": "Encode::is_utf8",
+          "body_sha256": "9c7397689b9fd5b85183057ceee4ab4f5b886b5b8546e64e698ef76dd365ce73",
+          "implementation": "xsub",
+          "prototype": "$;$",
+          "requested": "Encode::is_utf8",
+          "resolved": true
+        }
+      },
+      "kind": "utf8_primitive_snapshot_v1",
+      "ok": true,
+      "perl_version": 5.038002,
+      "unsupported_domains": [
+        "out_of_range",
+        "scalar_reference",
+        "surrogate"
+      ],
+      "utf8_registry": {
+        "class": "Encode::utf8",
+        "encode_method": {
+          "actual_name": "Encode::utf8::encode",
+          "body_sha256": "41b805ea7ac014e23556e98bb374702a08344268f92489a02f0880849394a1e4",
+          "implementation": "xsub",
+          "prototype": null,
+          "requested": "utf8 registry encode",
+          "resolved": true
+        },
+        "name": "utf8"
+      },
+      "vectors": [
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "61",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "61",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "forced_utf8_ascii"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c3a9",
+              "char_length": 2,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c3a9",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "forced_utf8_latin1"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "7f",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "7f",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u007f"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c280",
+              "char_length": 2,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c280",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u0080"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "dfbf",
+              "char_length": 2,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "dfbf",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u07ff"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "e0a080",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "e0a080",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u0800"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "efbfbf",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "efbfbf",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "uffff"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "f0908080",
+              "char_length": 4,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "f0908080",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u10000"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "f48fbfbf",
+              "char_length": 4,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "f48fbfbf",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u10ffff"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c3a900",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c3a900",
+            "char_length": 2,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "unicode_nul"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c383c2a9",
+              "char_length": 4,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c3a9",
+            "char_length": 2,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": false
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "",
+              "char_length": 0,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "bytes_utf8"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "610062",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "610062",
+            "char_length": 3,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": false
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "",
+              "char_length": 0,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "bytes_nul"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "domain": "undefined",
+              "supported": false
+            },
+            "warning": null
+          },
+          "input": {
+            "domain": "undefined",
+            "supported": false
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "",
+              "char_length": 0,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "undefined"
+        }
+      ]
+    },
+    "kind": "utf8_primitive_join_v1",
+    "pristine": {
+      "bindings": {
+        "encode": {
+          "actual_name": "Encode::encode",
+          "body_sha256": "bbf989ff1662a261972b94947c18baa393289cb2ae991ad735b9bd11f0002747",
+          "implementation": "xsub",
+          "prototype": "$$;$",
+          "requested": "Encode::encode",
+          "resolved": true
+        },
+        "is_utf8": {
+          "actual_name": "Encode::is_utf8",
+          "body_sha256": "9c7397689b9fd5b85183057ceee4ab4f5b886b5b8546e64e698ef76dd365ce73",
+          "implementation": "xsub",
+          "prototype": "$;$",
+          "requested": "Encode::is_utf8",
+          "resolved": true
+        }
+      },
+      "kind": "utf8_primitive_snapshot_v1",
+      "ok": true,
+      "perl_version": 5.038002,
+      "unsupported_domains": [
+        "out_of_range",
+        "scalar_reference",
+        "surrogate"
+      ],
+      "utf8_registry": {
+        "class": "Encode::utf8",
+        "encode_method": {
+          "actual_name": "Encode::utf8::encode",
+          "body_sha256": "41b805ea7ac014e23556e98bb374702a08344268f92489a02f0880849394a1e4",
+          "implementation": "xsub",
+          "prototype": null,
+          "requested": "utf8 registry encode",
+          "resolved": true
+        },
+        "name": "utf8"
+      },
+      "vectors": [
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "61",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "61",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "forced_utf8_ascii"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c3a9",
+              "char_length": 2,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c3a9",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "forced_utf8_latin1"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "7f",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "7f",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u007f"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c280",
+              "char_length": 2,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c280",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u0080"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "dfbf",
+              "char_length": 2,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "dfbf",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u07ff"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "e0a080",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "e0a080",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u0800"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "efbfbf",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "efbfbf",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "uffff"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "f0908080",
+              "char_length": 4,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "f0908080",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u10000"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "f48fbfbf",
+              "char_length": 4,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "f48fbfbf",
+            "char_length": 1,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "u10ffff"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c3a900",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c3a900",
+            "char_length": 2,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": true
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "31",
+              "char_length": 1,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "unicode_nul"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "c383c2a9",
+              "char_length": 4,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "c3a9",
+            "char_length": 2,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": false
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "",
+              "char_length": 0,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "bytes_utf8"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "610062",
+              "char_length": 3,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "input": {
+            "bytes_hex": "610062",
+            "char_length": 3,
+            "domain": "scalar",
+            "supported": true,
+            "utf8_flag": false
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "",
+              "char_length": 0,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "bytes_nul"
+        },
+        {
+          "creation_error": null,
+          "encode_utf8": {
+            "error": null,
+            "result": {
+              "domain": "undefined",
+              "supported": false
+            },
+            "warning": null
+          },
+          "input": {
+            "domain": "undefined",
+            "supported": false
+          },
+          "is_utf8": {
+            "error": null,
+            "result": {
+              "bytes_hex": "",
+              "char_length": 0,
+              "domain": "scalar",
+              "supported": true,
+              "utf8_flag": false
+            },
+            "warning": null
+          },
+          "name": "undefined"
+        }
+      ]
+    }
+  },
+  "recipe": {
+    "callback_references": {
+      "Image::ExifTool::SetWarning": {
+        "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    ($Image::ExifTool::evalWarning = $_[0]);\n}",
+        "__name": "Image::ExifTool::SetWarning",
+        "__opaque": true,
+        "__perl": "CODE",
+        "resolved": true,
+        "source_file": "Image/ExifTool.pm",
+        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+      }
+    },
+    "downgrade_at_or_after": 5006000,
+    "encode_hangs_guard": true,
+    "encode_name": "utf8",
+    "html_unescape": "Image::ExifTool::HTML::UnescapeHTML",
+    "manual_pack_before": 5010000,
+    "manual_pack_formats": [
+      "C*",
+      "U0C*",
+      "C0C*"
+    ],
+    "provenance": {
+      "actual_name": "Image::ExifTool::Sanitize",
+      "body_sha256": "057e8c2eb2533316743d16c6ba6fa410adb808ee3c96eec7be58d1e6eccd978f",
+      "dependencies": [],
+      "requested_binding": "Image::ExifTool::Sanitize",
+      "source_file": "Image/ExifTool/Writer.pl",
+      "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    "raw_dependencies": {
+      "Encode::encode": {
+        "__deparse": "($$;$) ;",
+        "__name": "Encode::encode",
+        "__opaque": true,
+        "__perl": "CODE",
+        "reason": "source_file_unreadable",
+        "resolved": false,
+        "source_file": null,
+        "source_sha256": null
+      },
+      "Encode::is_utf8": {
+        "__deparse": "($;$) ;",
+        "__name": "Encode::is_utf8",
+        "__opaque": true,
+        "__perl": "CODE",
+        "reason": "source_file_unreadable",
+        "resolved": false,
+        "source_file": null,
+        "source_sha256": null
+      },
+      "Image::ExifTool::HTML::UnescapeHTML": {
+        "__deparse": "($;$) {\n    package Image::ExifTool::HTML;\n    use strict;\n    (my($str, $enc) = @_);\n    (return UnescapeXML($str, (\\%entityNum), $enc));\n}",
+        "__name": "Image::ExifTool::HTML::UnescapeHTML",
+        "__opaque": true,
+        "__perl": "CODE",
+        "dependencies": {
+          "Image::ExifTool::HTML::UnescapeXML": {
+            "__deparse": "($;$$) {\n    package Image::ExifTool::XMP;\n    use strict;\n    (my($str, $conv, $enc) = @_);\n    ($conv or ($conv = (\\%charNum)));\n    ($str =~ s/&(#?\\w+);/UnescapeChar($1, $conv, $enc);/seg);\n    (return $str);\n}",
+            "__name": "Image::ExifTool::XMP::UnescapeXML",
+            "__opaque": true,
+            "__perl": "CODE",
+            "dependencies": {
+              "Image::ExifTool::XMP::UnescapeChar": {
+                "__deparse": "($$;$) {\n    package Image::ExifTool::XMP;\n    use strict;\n    (my($ch, $conv, $enc) = @_);\n    (my($val) = $conv->{$ch});\n    unless (defined($val)) {\n        if (($ch =~ /^#x([0-9a-fA-F]+)$/)) {\n            ($val = hex($1));\n        } elsif (($ch =~ /^#(\\d+)$/)) {\n            ($val = $1);\n        } else {\n            (return (\"&$ch;\"));\n        }\n    }\n    (($val < 128) and (return chr($val)));\n    ($val = (($] >= 5.006001) ? pack('C0U', $val) : &Image::ExifTool::PackUTF8($val)));\n    (($enc and ($enc ne 'UTF8')) and ($val = &Image::ExifTool::Decode((undef), $val, 'UTF8', (undef), $enc)));\n    (return $val);\n}",
+                "__name": "Image::ExifTool::XMP::UnescapeChar",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Decode": {
+                    "__deparse": "($$$;$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $val, $from, $fromOrder, $to, $toOrder) = @_);\n    ($from or ($from = $self->{'OPTIONS'}{'Charset'}));\n    ($to or ($to = $self->{'OPTIONS'}{'Charset'}));\n    if ((($from ne $to) and length($val))) {\n        (require Image::ExifTool::Charset);\n        (my($cs1) = $Image::ExifTool::Charset::csType{$from});\n        (my($cs2) = $Image::ExifTool::Charset::csType{$to});\n        if ((($cs1 and $cs2) and not(($cs2 & 2)))) {\n            if (((($cs1 | $cs2) & 1664) or ($val =~ /[\\x80-\\xff]/))) {\n                (my($uni) = &Image::ExifTool::Charset::Decompose($self, $val, $from, $fromOrder));\n                ($val = &Image::ExifTool::Charset::Recompose($self, $uni, $to, $toOrder));\n            }\n        } elsif ($self) {\n            (my($set) = ($cs1 ? $to : $from));\n            unless ($$self{\"DecodeWarn$set\"}) {\n                $self->Warn((\"Unsupported character set ($set)\"));\n                ($$self{\"DecodeWarn$set\"} = 1);\n            }\n        }\n    }\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::Decode",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Charset::Decompose": {
+                        "__deparse": "($$$;$) {\n    package Image::ExifTool::Charset;\n    use strict;\n    local $_;\n    (my($et, $val, $charset) = @_);\n    (my($type) = $Image::ExifTool::Charset::csType{$charset});\n    my(@uni, $conv);\n    if (($type & 1)) {\n        ($conv = LoadCharset($charset));\n        unless ($conv) {\n            ($et and $et->Warn((\"Invalid character set $charset\")));\n            (return (\\@uni));\n        }\n    } elsif (($type == 256)) {\n        if (($] < 5.006001)) {\n            (@uni = &Image::ExifTool::UnpackUTF8($val));\n        } else {\n            undef($Image::ExifTool::evalWarning);\n            (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n            (@uni = unpack((($] < 5.01) ? 'U0U*' : 'C0U*'), $val));\n            if ((($Image::ExifTool::evalWarning and $et) and not($et->{'WarnBadUTF8'}))) {\n                $et->Warn('Malformed UTF-8 character(s)');\n                ($et->{'WarnBadUTF8'} = 1);\n            }\n        }\n        (return (\\@uni));\n    }\n    if (($type & 256)) {\n        (@uni = unpack('C*', $val));\n        foreach $_ (@uni) {\n            (defined($conv->{$_}) and ($_ = $conv->{$_}));\n        }\n    } elsif (($type & 1536)) {\n        my($unknown);\n        (my($byteOrder) = $_[3]);\n        if (not($byteOrder)) {\n            ($byteOrder = GetByteOrder);\n        } elsif (($byteOrder eq 'Unknown')) {\n            ($byteOrder = GetByteOrder);\n            ($unknown = 1);\n        }\n        (my($fmt) = (($byteOrder eq 'MM') ? 'n*' : 'v*'));\n        if (($type & 1024)) {\n            ($fmt = uc($fmt));\n            (($val =~ s/^(\\0\\0\\xfe\\xff|\\xff\\xfe\\0\\0)//) and ($fmt = (($1 eq \"\\000\\000\\376\\377\") ? 'N*' : 'V*')));\n            $unknown = undef;\n        } elsif (($val =~ s/^(\\xfe\\xff|\\xff\\xfe)//)) {\n            ($fmt = (($1 eq \"\\376\\377\") ? 'n*' : 'v*'));\n            $unknown = undef;\n        }\n        (@uni = unpack($fmt, $val));\n        if (not($conv)) {\n            if ($unknown) {\n                my(%bh, %bl);\n                (my($zh, $zl) = (0, 0));\n                foreach $_ (@uni) {\n                    ($bh{$_ >> 8} = 1);\n                    ($bl{$_ & 255} = 1);\n                    (($_ & 65280) or (++$zh));\n                    (($_ & 255) or (++$zl));\n                }\n                (my($bh, $bl) = (scalar(keys(%bh)), scalar(keys(%bl))));\n                if ((($bh > $bl) or (($bh == $bl) and ($zl > $zh)))) {\n                    ($fmt =~ tr/NVnv/VNvn/);\n                    (@uni = unpack($fmt, $val));\n                    ($et->{'WrongByteOrder'} = 1);\n                }\n            }\n            if (($charset eq 'UTF16')) {\n                my($i);\n                for (($i = 0); ($i < $#uni); (++$i)) {\n                    (((($uni[$i] & 64512) == 55296) and (($uni[$i + 1] & 64512) == 56320)) or (next));\n                    (my($cp) = ((65536 + (($uni[$i] & 1023) << 10)) + ($uni[$i + 1] & 1023)));\n                    splice(@uni, $i, 2, $cp);\n                }\n            }\n        } elsif ($unknown) {\n            (my($e1) = 0);\n            foreach $_ (@uni) {\n                (defined($conv->{$_}) and (($_ = $conv->{$_}), (next)));\n                (++$e1);\n            }\n            if ($e1) {\n                ($fmt = (($byteOrder eq 'MM') ? 'v*' : 'n*'));\n                (my(@try) = unpack($fmt, $val));\n                (my($e2) = 0);\n                foreach $_ (@try) {\n                    (defined($conv->{$_}) and (($_ = $conv->{$_}), (next)));\n                    (++$e2);\n                }\n                if (($e2 < $e1)) {\n                    ($et->{'WrongByteOrder'} = 1);\n                    (return (\\@try));\n                }\n            }\n        } else {\n            foreach $_ (@uni) {\n                (defined($conv->{$_}) and ($_ = $conv->{$_}));\n            }\n        }\n    } else {\n        (my(@bytes) = unpack('C*', $val));\n        while (@bytes) {\n            (my($ch) = shift(@bytes));\n            (my($cv) = $conv->{$ch});\n            ($cv or (push(@uni, $ch), (next)));\n            (ref($cv) or (push(@uni, $cv), (next)));\n            ((ref($cv) eq 'ARRAY') and (push(@uni, @$cv), (next)));\n            ($ch = shift(@bytes));\n            if (defined($ch)) {\n                if ($cv->{$ch}) {\n                    ($cv = $cv->{$ch});\n                    (ref($cv) or (push(@uni, $cv), (next)));\n                    push(@uni, @$cv);\n                } else {\n                    push(@uni, 63);\n                    unshift(@bytes, $ch);\n                }\n            } else {\n                push(@uni, 63);\n            }\n        }\n    }\n    (return (\\@uni));\n}",
+                        "__name": "Image::ExifTool::Charset::Decompose",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::Charset::LoadCharset": {
+                            "__deparse": "($) {\n    package Image::ExifTool::Charset;\n    use strict;\n    (my($charset) = (shift()));\n    (my($conv) = $charsetTable{$charset});\n    unless ($conv) {\n        (my $module = \"Image::ExifTool::Charset::$charset\");\n        no strict 'refs';\n        if ((%$module or eval((\"require $module\")))) {\n            ($conv = ($charsetTable{$charset} = (\\%$module)));\n        }\n    }\n    (return $conv);\n}",
+                            "__name": "Image::ExifTool::Charset::LoadCharset",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool/Charset.pm",
+                            "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                          },
+                          "Image::ExifTool::UnpackUTF8": {
+                            "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    my(@out, $pos);\n    (pos($_[0]) = ($pos = 0));\n    while (1) {\n        my($ch, $newPos, $val, $byte);\n        if (($_[0] =~ /([\\x80-\\xff])/g)) {\n            ($ch = ord($1));\n            ($newPos = (pos($_[0]) - 1));\n        } else {\n            ($newPos = length($_[0]));\n        }\n        (my($len) = ($newPos - $pos));\n        ($len and push(@out, unpack((\"x${pos}C$len\"), $_[0])));\n        (defined($ch) or (last));\n        ($pos = ($newPos + 1));\n        if ((($ch < 194) or ($ch >= 248))) {\n            push(@out, 63);\n            ($Image::ExifTool::evalWarning = 'Bad UTF-8');\n            (next);\n        }\n        (my($n) = 1);\n        if (($ch < 224)) {\n            ($val = ($ch & 31));\n        } elsif (($ch < 240)) {\n            ($val = ($ch & 15));\n            (++$n);\n        } else {\n            ($val = ($ch & 7));\n            ($n += 2);\n        }\n        unless (($_[0] =~ /\\G([\\x80-\\xbf]{$n})/g)) {\n            (pos($_[0]) = $pos);\n            push(@out, 63);\n            ($Image::ExifTool::evalWarning = 'Bad UTF-8');\n            (next);\n        }\n        foreach $byte (unpack('C*', $1)) {\n            ($val = (($val << 6) | ($byte & 63)));\n        }\n        push(@out, $val);\n        ($pos += $n);\n    }\n    (return @out);\n}",
+                            "__name": "Image::ExifTool::UnpackUTF8",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool/Writer.pl",
+                            "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Charset.pm",
+                        "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                      },
+                      "Image::ExifTool::Charset::Recompose": {
+                        "__deparse": "($$;$$) {\n    package Image::ExifTool::Charset;\n    use strict;\n    local $_;\n    (my($et, $uni, $charset) = @_);\n    my($outVal, $conv, $inv);\n    ($charset or ($charset = $et->{'OPTIONS'}{'Charset'}));\n    (my($csType) = $Image::ExifTool::Charset::csType{$charset});\n    if (($csType == 256)) {\n        if (($] >= 5.006001)) {\n            ($outVal = pack('C0U*', @$uni));\n        } else {\n            ($outVal = &Image::ExifTool::PackUTF8(@$uni));\n        }\n        ($outVal =~ s/\\0.*//s);\n        (return $outVal);\n    }\n    if (($csType & 2049)) {\n        ($conv = LoadCharset($charset));\n        unless ($conv) {\n            ($et and $et->Warn((\"Missing charset $charset\")));\n            (return '');\n        }\n        ($inv = $unicode2byte{$charset});\n        unless ($inv) {\n            if ((not($csType) or ($csType & 2050))) {\n                ($et and $et->Warn((\"Invalid destination charset $charset\")));\n                (return '');\n            }\n            my($char, %inv);\n            foreach $char (keys(%$conv)) {\n                ($inv{$conv->{$char}} = $char);\n            }\n            ($inv = ($unicode2byte{$charset} = (\\%inv)));\n        }\n    }\n    if (($csType & 256)) {\n        foreach $_ (@$uni) {\n            (($_ < 128) and (next));\n            ($inv->{$_} and (($_ = $inv->{$_}), (next)));\n            ((($_ < 256) and not($conv->{$_})) and (next));\n            ($_ = 63);\n            if (($et and not($et->{'EncodingError'}))) {\n                $et->Warn((\"Some character(s) could not be encoded in $charset\"));\n                ($et->{'EncodingError'} = 1);\n            }\n        }\n        ($outVal = pack('C*', @$uni));\n        ($outVal =~ s/\\0.*//s);\n    } else {\n        if ($inv) {\n            ($inv->{$_} and ($_ = $inv->{$_})) foreach (@$uni);\n        }\n        if (($charset eq 'UTF16')) {\n            my($i);\n            for (($i = 0); ($i < @$uni); (++$i)) {\n                ((($uni->[$i] >= 65536) and ($uni->[$i] < 1114111)) or (next));\n                (my($t) = ($uni->[$i] - 65536));\n                (my($w1) = (55296 + (($t >> 10) & 1023)));\n                (my($w2) = (56320 + ($t & 1023)));\n                splice(@$uni, $i, 1, $w1, $w2);\n                (++$i);\n            }\n        }\n        (my($byteOrder) = ($_[3] || GetByteOrder));\n        (my($fmt) = (($byteOrder eq 'MM') ? 'n*' : 'v*'));\n        (($csType & 1024) and ($fmt = uc($fmt)));\n        ($outVal = pack($fmt, @$uni));\n    }\n    (return $outVal);\n}",
+                        "__name": "Image::ExifTool::Charset::Recompose",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::Charset::LoadCharset": {
+                            "__deparse": "($) {\n    package Image::ExifTool::Charset;\n    use strict;\n    (my($charset) = (shift()));\n    (my($conv) = $charsetTable{$charset});\n    unless ($conv) {\n        (my $module = \"Image::ExifTool::Charset::$charset\");\n        no strict 'refs';\n        if ((%$module or eval((\"require $module\")))) {\n            ($conv = ($charsetTable{$charset} = (\\%$module)));\n        }\n    }\n    (return $conv);\n}",
+                            "__name": "Image::ExifTool::Charset::LoadCharset",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool/Charset.pm",
+                            "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                          },
+                          "Image::ExifTool::PackUTF8": {
+                            "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    my(@out);\n    while (@_) {\n        (my($ch) = (pop()));\n        (($ch < 128) and (unshift(@out, $ch), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 32) and (unshift(@out, (192 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 16) and (unshift(@out, (224 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        unshift(@out, (240 | ($ch & 7)));\n    }\n    (return pack('C*', @out));\n}",
+                            "__name": "Image::ExifTool::PackUTF8",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool/Writer.pl",
+                            "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Charset.pm",
+                        "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                      },
+                      "Image::ExifTool::Warn": {
+                        "__deparse": "($$;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $str, $ignorable) = @_);\n    (my($noWarn) = $self->{'OPTIONS'}{'NoWarning'});\n    my($noCount);\n    while ($ignorable) {\n        if (($ignorable & 4)) {\n            ($noCount = 1);\n            (($ignorable &= 3) or (last));\n        }\n        (my($ignorable) = ($ignorable & 3));\n        ($self->{'OPTIONS'}{'IgnoreMinorErrors'} and (return 0));\n        ((($ignorable eq '3') and $self->{'OPTIONS'}{'Validate'}) and (return 0));\n        ((defined($noWarn) and eval {\n            do {\n                ($str =~ /$noWarn/)\n            }\n        }) and (return 1));\n        ($str = (($ignorable eq '2') ? (\"[Minor] $str\") : (\"[minor] $str\")));\n        (last);\n    }\n    unless ((defined($noWarn) and eval {\n        do {\n            ($str =~ /$noWarn/)\n        }\n    })) {\n        if ($self->{'WAS_WARNED'}{$str}) {\n            ($noCount or (++$self->{'WAS_WARNED'}{$str}));\n        } else {\n            $self->FoundTag('Warning', $str);\n            ($self->{'WAS_WARNED'}{$str} = 1);\n        }\n    }\n    (return 1);\n}",
+                        "__name": "Image::ExifTool::Warn",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::FoundTag": {
+                            "__deparse": "($$$;@) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($self, $tagInfo, $value, @grps) = @_);\n    my($tag, $noListDel, $tbl);\n    (my($options) = $self->{'OPTIONS'});\n    if ((ref($tagInfo) eq 'HASH')) {\n        (($tag = $tagInfo->{'Name'}) or (warn(\"No tag name\\n\"), (return (undef))));\n        ($tbl = $tagInfo->{'Table'});\n    } else {\n        ($tag = $tagInfo);\n        ($tbl = GetTagTable('Image::ExifTool::Extra'));\n        ($tagInfo = $self->GetTagInfo($tbl, $tag));\n        ($tagInfo or ($tagInfo = {'Name', $tag, 'Groups', (\\%allGroupsExifTool)}));\n        ($options->{'Verbose'} and $self->VerboseInfo((undef), $tagInfo, 'Value', $value));\n    }\n    (my($priority) = $tagInfo->{'Priority'});\n    unless (defined($priority)) {\n        ($priority = $tbl->{'PRIORITY'});\n        ((not(defined($priority)) and $tagInfo->{'Avoid'}) and ($priority = 0));\n    }\n    ($grps[0] or ($grps[0] = $self->{'SET_GROUP0'}));\n    ($grps[1] or ($grps[1] = $self->{'SET_GROUP1'}));\n    if ($options->{'IgnoreGroups'}) {\n        foreach $_ (0 .. 1) {\n            (my($g) = lc((($grps[$_] or $tagInfo->{'Groups'}{$_}) or $tagInfo->{'Table'}{'GROUPS'}{$_})));\n            (($options->{'IgnoreGroups'}{$g} || $options->{'IgnoreGroups'}{\"$_$g\"}) and (return (undef)));\n        }\n    }\n    (my($valueHash) = $self->{'VALUE'});\n    if ($tagInfo->{'RawConv'}) {\n        my(@val);\n        if (((ref($value) eq 'HASH') and $tagInfo->{'IsComposite'})) {\n            foreach $_ (keys(%$value)) {\n                ($val[$_] = $$valueHash{$value->{$_}});\n            }\n        }\n        (my($conv) = $tagInfo->{'RawConv'});\n        (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n        undef($Image::ExifTool::evalWarning);\n        if ((ref($conv) eq 'CODE')) {\n            ($value = &$conv($value, $self));\n            ($self->{'grps'} and ((@grps = @{$self->{'grps'};}), delete $self->{'grps'}));\n        } else {\n            (my($val) = $value);\n            ($value = eval($conv));\n            ($@ and ($Image::ExifTool::evalWarning = $@));\n        }\n        ($Image::ExifTool::evalWarning and $self->Warn(((\"RawConv ${tag}: \") . CleanWarning())));\n        (defined($value) or (return (undef)));\n    }\n    if ($options->{'IgnoreTags'}) {\n        if ($options->{'IgnoreTags'}{'all'}) {\n            ($self->{'REQ_TAG_LOOKUP'}{lc($tag)} or (return (undef)));\n        } else {\n            ($options->{'IgnoreTags'}{lc($tag)} and (return (undef)));\n        }\n    }\n    if (defined($valueHash->{$tag})) {\n        if ($self->{'LIST_TAGS'}{$tagInfo}) {\n            ($tag = $self->{'LIST_TAGS'}{$tagInfo});\n            if (defined($self->{'NO_LIST'})) {\n                if (defined($self->{'TAG_EXTRA'}{$tag}{'NoList'})) {\n                    push(@{$$self{'TAG_EXTRA'}{$tag}{'NoList'};}, $value);\n                } else {\n                    ($self->{'TAG_EXTRA'}{$tag}{'NoList'} = [$valueHash->{$tag}, $value]);\n                }\n                ($noListDel = 1);\n            } else {\n                if ((ref($valueHash->{$tag}) ne 'ARRAY')) {\n                    ($valueHash->{$tag} = [$valueHash->{$tag}]);\n                }\n                push(@{$$valueHash{$tag};}, $value);\n                (return $tag);\n            }\n        }\n        (my($nextInd) = ($self->{'DUPL_TAG'}{$tag} = (($self->{'DUPL_TAG'}{$tag} || 0) + 1)));\n        (my $nextTag = \"$tag ($nextInd)\");\n        (my($oldPriority) = $self->{'PRIORITY'}{$tag});\n        unless ($oldPriority) {\n            if ((($self->{'DOC_NUM'} or ($tag eq 'Warning')) or not($self->{'TAG_EXTRA'}{$tag}{'G3'}))) {\n                ($oldPriority = 1);\n            } else {\n                ($oldPriority = 0);\n            }\n        }\n        if (defined($priority)) {\n            (((not($priority) and $self->{'DIR_NAME'}) and ($self->{'DIR_NAME'} eq $self->{'PRIORITY_DIR'})) and ($priority = 1));\n        } elsif (($self->{'LOW_PRIORITY_DIR'}{'*'} or ($self->{'DIR_NAME'} and $self->{'LOW_PRIORITY_DIR'}{$self->{'DIR_NAME'}}))) {\n            ($priority = 0);\n        } else {\n            ($priority = 1);\n        }\n        if (((($priority >= $oldPriority) and ((!$self->{'DOC_NUM'}) || ($self->{'TAG_EXTRA'}{$tag}{'G3'} && ($self->{'DOC_NUM'} eq $self->{'TAG_EXTRA'}{$tag}{'G3'})))) and not($noListDel))) {\n            ($self->{'PRIORITY'}{$nextTag} = $self->{'PRIORITY'}{$tag});\n            ($valueHash->{$nextTag} = $valueHash->{$tag});\n            ($self->{'FILE_ORDER'}{$nextTag} = $self->{'FILE_ORDER'}{$tag});\n            (my($oldInfo) = ($self->{'TAG_INFO'}{$nextTag} = $self->{'TAG_INFO'}{$tag}));\n            ($self->{'TAG_EXTRA'}{$nextTag} = $self->{'TAG_EXTRA'}{$tag});\n            ($self->{'TAG_EXTRA'}{$tag} = {});\n            delete $self->{'BOTH'}{$tag};\n            ($self->{'LIST_TAGS'}{$oldInfo} and ($self->{'LIST_TAGS'}{$oldInfo} = $nextTag));\n            if ($self->{'COMP_KEYS'}{$tag}) {\n                ($_->[0]{$_->[1]} = $nextTag) foreach (@{$$self{'COMP_KEYS'}{$tag};});\n                ($self->{'COMP_KEYS'}{$nextTag} = $self->{'COMP_KEYS'}{$tag});\n                delete $self->{'COMP_KEYS'}{$tag};\n            }\n        } else {\n            ($tag = $nextTag);\n        }\n        ($self->{'PRIORITY'}{$tag} = $priority);\n        ($noListDel and ($self->{'TAG_EXTRA'}{$tag}{'NoListDel'} = 1));\n    } elsif ($priority) {\n        ($self->{'PRIORITY'}{$tag} = $priority);\n    }\n    ($valueHash->{$tag} = $value);\n    ($self->{'FILE_ORDER'}{$tag} = (++$self->{'NUM_FOUND'}));\n    ($self->{'TAG_INFO'}{$tag} = $tagInfo);\n    ($self->{'TAG_EXTRA'}{$tag} or ($self->{'TAG_EXTRA'}{$tag} = {}));\n    ($grps[0] and ($self->{'TAG_EXTRA'}{$tag}{'G0'} = $grps[0]));\n    ($grps[1] and ($self->{'TAG_EXTRA'}{$tag}{'G1'} = $grps[1]));\n    if ($self->{'DOC_NUM'}) {\n        ($self->{'TAG_EXTRA'}{$tag}{'G3'} = $self->{'DOC_NUM'});\n        ($self->{'HAS_DOC'}{$self->{'DOC_NUM'}} = 1);\n        if (($self->{'DOC_NUM'} =~ /^(\\d+)/)) {\n            (($self->{'DOC_COUNT'} >= $1) or ($self->{'DOC_COUNT'} = $1));\n        }\n    }\n    ($options->{'SavePath'} and ($self->{'TAG_EXTRA'}{$tag}{'G5'} = $self->MetadataPath));\n    if ((($tagInfo->{'List'} and not($self->{'NO_LIST'})) and not($noListDel))) {\n        ($self->{'LIST_TAGS'}{$tagInfo} = $tag);\n    }\n    if (($options->{'Validate'} and not(ref($value)))) {\n        Image::ExifTool::Validate::ValidateRaw($self, $tag, $value);\n    }\n    (return $tag);\n}",
+                            "__name": "Image::ExifTool::FoundTag",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "dependencies": {
+                              "Image::ExifTool::CleanWarning": {
+                                "__deparse": "(;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($str) = (shift()));\n    unless (defined($str)) {\n        (defined($Image::ExifTool::evalWarning) or (return (undef)));\n        ($str = $Image::ExifTool::evalWarning);\n    }\n    (($str =~ /(.*?) at /s) and ($str = $1));\n    ($str =~ s/\\s+$//s);\n    (return $str);\n}",
+                                "__name": "Image::ExifTool::CleanWarning",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::GetTagInfo": {
+                                "__deparse": "($$$;$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $tagTablePtr, $tagID) = @_);\n    my($valPt, $format, $count);\n    (my(@infoArray) = GetTagInfoList($tagTablePtr, $tagID));\n    (my($options) = $self->{'OPTIONS'});\n    my($tagInfo);\n    foreach $tagInfo (@infoArray) {\n        (my($condition) = $tagInfo->{'Condition'});\n        if ($condition) {\n            ((@_ > 3) and (($valPt, $format, $count) = splice(@_, 3)));\n            ((($condition =~ /\\$(valPt|format|count)\\b/) and not(defined($valPt))) and (return ''));\n            (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n            undef($Image::ExifTool::evalWarning);\n            unless (eval($condition)) {\n                ($@ and ($Image::ExifTool::evalWarning = $@));\n                ($Image::ExifTool::evalWarning and $self->Warn(((\"Condition $tagInfo->{'Name'}: \") . CleanWarning())));\n                (next);\n            }\n        }\n        if (((($tagInfo->{'Unknown'} and not($options->{'Unknown'})) and ((!$self->{'IsWriting'}) || $tagInfo->{'AddedUnknown'})) and not((($options->{'Verbose'} || $self->{'HTML_DUMP'}) || ($options->{'Validate'} && (!$tagInfo->{'AddedUnknown'})))))) {\n            (return (undef));\n        }\n        (return $tagInfo);\n    }\n    if ((((not($tagInfo) and (($options->{'Unknown'} || $options->{'Verbose'}) || $self->{'HTML_DUMP'})) and ($tagID =~ /^\\d+$/)) and not($self->{'NO_UNKNOWN'}))) {\n        my($printConv);\n        if (defined($tagTablePtr->{'PRINT_CONV'})) {\n            ($printConv = $tagTablePtr->{'PRINT_CONV'});\n        } else {\n            ($printConv = (\\&Image::ExifTool::LimitLongValues));\n        }\n        (my($hex) = sprintf('0x%.4x', $tagID));\n        (my($prefix) = $tagTablePtr->{'TAG_PREFIX'});\n        ($tagInfo = {'Name', (\"${prefix}_$hex\"), 'Description', MakeDescription($prefix, $hex), 'Unknown', 1, 'Writable', 0, 'PrintConv', $printConv, 'AddedUnknown', 1});\n        AddTagToTable($tagTablePtr, $tagID, $tagInfo);\n    } else {\n        $tagInfo = undef;\n    }\n    (return $tagInfo);\n}",
+                                "__name": "Image::ExifTool::GetTagInfo",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::AddTagToTable": {
+                                    "__deparse": "($$;$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID, $tagInfo, $noPrefix) = @_);\n    ((ref($tagInfo) eq 'HASH') or ($tagInfo = ($tagInfo ? {'Name', $tagInfo} : {})));\n    if ($tagInfo->{'Groups'}) {\n        foreach $_ (keys(%{$$tagTablePtr{'GROUPS'};})) {\n            ($tagInfo->{'Groups'}{$_} and (next));\n            ($tagInfo->{'Groups'}{$_} = $tagTablePtr->{'GROUPS'}{$_});\n        }\n    } else {\n        ($tagInfo->{'Groups'} = {%{$tagTablePtr->{'GROUPS'};}});\n    }\n    ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n    (($tagInfo->{'GotGroups'} = 1), ($tagInfo->{'Table'} = $tagTablePtr));\n    ($tagInfo->{'TagID'} = $tagID);\n    (defined($tagInfo->{'Hidden'}) or ($tagInfo->{'Hidden'} = 1));\n    if ((defined($tagTablePtr->{'AVOID'}) and not(defined($tagInfo->{'Avoid'})))) {\n        ($tagInfo->{'Avoid'} = $tagTablePtr->{'AVOID'});\n    }\n    (my($name) = $tagInfo->{'Name'});\n    (defined($name) or ($name = $tagID));\n    ($name =~ tr/\\-0-9A-Z_a-z//cd);\n    ($name = ucfirst($name));\n    unless (((defined($tagInfo->{'Name'}) or $noPrefix) or not($tagTablePtr->{'TAG_PREFIX'}))) {\n        ($tagInfo->{'Description'} = MakeDescription($tagTablePtr->{'TAG_PREFIX'}, $name));\n        ($name = \"$tagTablePtr->{'TAG_PREFIX'}_$name\");\n    }\n    (((length($name) < 2) || (!($name =~ /^[A-Z]/i))) and ($name = \"Tag$name\"));\n    ($tagInfo->{'Name'} = $name);\n    unless ((defined($tagTablePtr->{$tagID}) or $Image::ExifTool::specialTags{$tagID})) {\n        ($tagTablePtr->{$tagID} = $tagInfo);\n        if ((($purgeFlag and $tagInfo->{'Unknown'}) and not($tagInfo->{'SubDirectory'}))) {\n            push(@purgeTags, $tagInfo);\n        }\n    }\n    ($tagInfo->{'Unknown'} and ($tagInfo->{'AddedUnknown'} = 1));\n    (return $tagInfo);\n}",
+                                    "__name": "Image::ExifTool::AddTagToTable",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "dependencies": {
+                                      "Image::ExifTool::ExpandFlags": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::ExpandFlags",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::MakeDescription": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::MakeDescription",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      }
+                                    },
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::CleanWarning": {
+                                    "__deparse": "(;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($str) = (shift()));\n    unless (defined($str)) {\n        (defined($Image::ExifTool::evalWarning) or (return (undef)));\n        ($str = $Image::ExifTool::evalWarning);\n    }\n    (($str =~ /(.*?) at /s) and ($str = $1));\n    ($str =~ s/\\s+$//s);\n    (return $str);\n}",
+                                    "__name": "Image::ExifTool::CleanWarning",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::GetTagInfoList": {
+                                    "__deparse": "($$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID) = @_);\n    (my($tagInfo) = $tagTablePtr->{$tagID});\n    if ($Image::ExifTool::specialTags{$tagID}) {\n        warn((\"Tag $tagID conflicts with internal ExifTool variable in $tagTablePtr->{'TABLE_NAME'}\\n\"));\n    } elsif ((ref($tagInfo) eq 'HASH')) {\n        (return $tagInfo);\n    } elsif ((ref($tagInfo) eq 'ARRAY')) {\n        (return @$tagInfo);\n    } elsif ($tagInfo) {\n        ($tagInfo = ($tagTablePtr->{$tagID} = {'Name', $tagInfo}));\n        (return $tagInfo);\n    }\n    (return ());\n}",
+                                    "__name": "Image::ExifTool::GetTagInfoList",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::MakeDescription": {
+                                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tag, $tagID) = @_);\n    (my($desc) = ucfirst($tag));\n    ($desc =~ tr/_/ /);\n    (defined($tagID) or (($desc =~ s/ (0x[\\da-f]+)$//i) and ($tagID = $1)));\n    ($desc =~ s/([a-z])([A-Z\\d])/$1 $2/g);\n    ($desc =~ s/([A-Z])([A-Z][a-z])/$1 $2/g);\n    ($desc =~ s/(\\d)([A-Z]\\S)/$1 $2/g);\n    (defined($tagID) and ($desc .= ' ' . $tagID));\n    (return $desc);\n}",
+                                    "__name": "Image::ExifTool::MakeDescription",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::Warn": {
+                                    "__deparse": null,
+                                    "__name": "Image::ExifTool::Warn",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "reason": "dependency_cycle",
+                                    "resolved": false,
+                                    "source_file": null,
+                                    "source_sha256": null
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::GetTagTable": {
+                                "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    ((my $tableName = (shift())) or (return (undef)));\n    (my($table) = $Image::ExifTool::allTables{$tableName});\n    unless ($table) {\n        no strict 'refs';\n        unless (%$tableName) {\n            if (($tableName =~ /(.*)::/)) {\n                (my($module) = $1);\n                if (not(eval((\"require $module\")))) {\n                    ($@ and warn($@));\n                } elsif (not(%$tableName)) {\n                    if (($module eq 'Image::ExifTool::XMP')) {\n                        (require 'Image/ExifTool/XMP2.pl');\n                    } elsif (($tableName eq 'Image::ExifTool::QuickTime::Stream')) {\n                        (require 'Image/ExifTool/QuickTimeStream.pl');\n                    }\n                }\n            }\n            (%$tableName or (warn((\"Can't find table $tableName\\n\")), (return (undef))));\n        }\n        ($table = (\\%$tableName));\n        use strict 'refs';\n        ($table->{'INIT_TABLE'} and &{$table->{'INIT_TABLE'};}($table));\n        ($table->{'TABLE_NAME'} = $tableName);\n        (($table->{'SHORT_NAME'} = $tableName) =~ s/^Image::ExifTool:://);\n        (my($defaultGroups) = $table->{'GROUPS'});\n        ($defaultGroups or ($defaultGroups = ($table->{'GROUPS'} = {})));\n        unless (($defaultGroups->{'0'} and $defaultGroups->{'1'})) {\n            if (($tableName =~ /Image::.*?::([^:]*)/)) {\n                ($defaultGroups->{'0'} or ($defaultGroups->{'0'} = $1));\n                ($defaultGroups->{'1'} or ($defaultGroups->{'1'} = $1));\n            } else {\n                ($defaultGroups->{'0'} or ($defaultGroups->{'0'} = $tableName));\n                ($defaultGroups->{'1'} or ($defaultGroups->{'1'} = $tableName));\n            }\n        }\n        ($defaultGroups->{'2'} or ($defaultGroups->{'2'} = 'Other'));\n        if ((($defaultGroups->{'0'} eq 'XMP') or $table->{'NAMESPACE'})) {\n            (require Image::ExifTool::XMP);\n            &Image::ExifTool::XMP::RegisterNamespace($table);\n            ($table->{'WRITE_PROC'} or ($table->{'WRITE_PROC'} = (\\&Image::ExifTool::XMP::WriteXMP)));\n            ($table->{'CHECK_PROC'} or ($table->{'CHECK_PROC'} = (\\&Image::ExifTool::XMP::CheckXMP)));\n            ($table->{'LANG_INFO'} or ($table->{'LANG_INFO'} = (\\&Image::ExifTool::XMP::GetLangInfo)));\n        }\n        unless (defined($table->{'TAG_PREFIX'})) {\n            my($tagPrefix);\n            if ((($tableName =~ /Image::.*?::(.*)::Main/) or ($tableName =~ /Image::.*?::(.*)/))) {\n                (($tagPrefix = $1) =~ s/::/_/g);\n            } else {\n                ($tagPrefix = $tableName);\n            }\n            ($table->{'TAG_PREFIX'} = $tagPrefix);\n        }\n        SetupTagTable($table);\n        if (((%Image::ExifTool::UserDefined and $Image::ExifTool::UserDefined{$tableName}) and ($table ne (\\%Image::ExifTool::Composite)))) {\n            my($tagID);\n            foreach $tagID (TagTableKeys($Image::ExifTool::UserDefined{$tableName})) {\n                ($Image::ExifTool::specialTags{$tagID} and (next));\n                delete $table->{$tagID};\n                AddTagToTable($table, $tagID, $Image::ExifTool::UserDefined{$tableName}{$tagID}, 1);\n            }\n        }\n        push(@Image::ExifTool::tableOrder, $tableName);\n        ($Image::ExifTool::allTables{$tableName} = $table);\n    }\n    if ((((($table eq (\\%Image::ExifTool::Composite)) and not($table->{'VARS'}{'LOADED_USERDEFINED'})) and %Image::ExifTool::UserDefined) and $Image::ExifTool::UserDefined{$tableName})) {\n        (my($userComp) = $Image::ExifTool::UserDefined{$tableName});\n        delete $Image::ExifTool::UserDefined{$tableName};\n        AddCompositeTags($userComp, 1);\n        ($Image::ExifTool::UserDefined{$tableName} = $userComp);\n        ($table->{'VARS'}{'LOADED_USERDEFINED'} = 1);\n    }\n    (return $table);\n}",
+                                "__name": "Image::ExifTool::GetTagTable",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::AddCompositeTags": {
+                                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($add, $override) = @_);\n    my($module, $prefix, $tagID);\n    if (ref($add)) {\n        ($prefix = 'UserDefined-');\n    } else {\n        (($prefix = $add) =~ s/.*:://);\n        ($module = $add);\n        ($add .= '::Composite');\n        no strict 'refs';\n        ($add = (\\%$add));\n        ($prefix .= '-');\n    }\n    (my($defaultGroups) = $add->{'GROUPS'});\n    (my($compTable) = GetTagTable('Image::ExifTool::Composite'));\n    if ($defaultGroups) {\n        ($defaultGroups->{'0'} or ($defaultGroups->{'0'} = 'Composite'));\n        ($defaultGroups->{'1'} or ($defaultGroups->{'1'} = 'Composite'));\n        ($defaultGroups->{'2'} or ($defaultGroups->{'2'} = 'Other'));\n    } else {\n        ($defaultGroups = ($add->{'GROUPS'} = {0, 'Composite', 1, 'Composite', 2, 'Other'}));\n    }\n    SetupTagTable($add);\n    foreach $tagID (sort(keys(%$add))) {\n        ($Image::ExifTool::specialTags{$tagID} and (next));\n        (my($tagInfo) = $add->{$tagID});\n        (my $new = $prefix . $tagID);\n        ($tagInfo->{'Writable'} and ($tagInfo->{'Module'} = $module));\n        (($override and not(defined($tagInfo->{'Override'}))) and ($tagInfo->{'Override'} = 1));\n        ($tagInfo->{'IsComposite'} = 1);\n        if ($compositeID{$tagID}) {\n            (my($over) = (($tagInfo->{'Override'} || 0) - ($$compTable{$compositeID{$tagID}[0]}{'Override'} || 0)));\n            (($over < 0) and (next));\n            if ($over) {\n                delete $compTable->{$_} foreach (@{$compositeID{$tagID};});\n                delete $compositeID{$tagID};\n            }\n        }\n        (my($n) = 0);\n        while ($compTable->{$new}) {\n            (($n++) and ($new =~ s/-\\d+$//));\n            ($new .= \"-$n\");\n        }\n        (($tagID eq $new) or ($tagInfo->{'NewTagID'} = $new));\n        ($compositeID{$tagID} or ($compositeID{$tagID} = []));\n        unshift(@{$compositeID{$tagID};}, $new);\n        my($type, @hashes, @scalars, %used);\n        foreach $type (('Require', 'Desire', 'Inhibit')) {\n            ((my $req = $tagInfo->{$type}) or (next));\n            push(@{((ref($req) eq 'HASH') ? (\\@hashes) : (\\@scalars));}, $type);\n        }\n        if (@scalars) {\n            foreach $type (@hashes) {\n                ($used{$_} = 1) foreach (keys(%{$$tagInfo{$type};}));\n            }\n            (my($next) = 0);\n            foreach $type (@scalars) {\n                (++$next) while $used{$next};\n                ($tagInfo->{$type} = {($next++), $tagInfo->{$type}});\n            }\n        }\n        ($tagInfo->{'Table'} = $compTable);\n        ($tagInfo->{'TagID'} = $new);\n        ($compTable->{$new} = $tagInfo);\n        (my($groups) = $tagInfo->{'Groups'});\n        ($groups or ($groups = ($tagInfo->{'Groups'} = {})));\n        foreach $_ (keys(%$defaultGroups)) {\n            ($groups->{$_} or ($groups->{$_} = $defaultGroups->{$_}));\n        }\n        ($tagInfo->{'GotGroups'} = 1);\n    }\n}",
+                                    "__name": "Image::ExifTool::AddCompositeTags",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "dependencies": {
+                                      "Image::ExifTool::GetTagTable": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::GetTagTable",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::SetupTagTable": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::SetupTagTable",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      }
+                                    },
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::AddTagToTable": {
+                                    "__deparse": "($$;$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID, $tagInfo, $noPrefix) = @_);\n    ((ref($tagInfo) eq 'HASH') or ($tagInfo = ($tagInfo ? {'Name', $tagInfo} : {})));\n    if ($tagInfo->{'Groups'}) {\n        foreach $_ (keys(%{$$tagTablePtr{'GROUPS'};})) {\n            ($tagInfo->{'Groups'}{$_} and (next));\n            ($tagInfo->{'Groups'}{$_} = $tagTablePtr->{'GROUPS'}{$_});\n        }\n    } else {\n        ($tagInfo->{'Groups'} = {%{$tagTablePtr->{'GROUPS'};}});\n    }\n    ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n    (($tagInfo->{'GotGroups'} = 1), ($tagInfo->{'Table'} = $tagTablePtr));\n    ($tagInfo->{'TagID'} = $tagID);\n    (defined($tagInfo->{'Hidden'}) or ($tagInfo->{'Hidden'} = 1));\n    if ((defined($tagTablePtr->{'AVOID'}) and not(defined($tagInfo->{'Avoid'})))) {\n        ($tagInfo->{'Avoid'} = $tagTablePtr->{'AVOID'});\n    }\n    (my($name) = $tagInfo->{'Name'});\n    (defined($name) or ($name = $tagID));\n    ($name =~ tr/\\-0-9A-Z_a-z//cd);\n    ($name = ucfirst($name));\n    unless (((defined($tagInfo->{'Name'}) or $noPrefix) or not($tagTablePtr->{'TAG_PREFIX'}))) {\n        ($tagInfo->{'Description'} = MakeDescription($tagTablePtr->{'TAG_PREFIX'}, $name));\n        ($name = \"$tagTablePtr->{'TAG_PREFIX'}_$name\");\n    }\n    (((length($name) < 2) || (!($name =~ /^[A-Z]/i))) and ($name = \"Tag$name\"));\n    ($tagInfo->{'Name'} = $name);\n    unless ((defined($tagTablePtr->{$tagID}) or $Image::ExifTool::specialTags{$tagID})) {\n        ($tagTablePtr->{$tagID} = $tagInfo);\n        if ((($purgeFlag and $tagInfo->{'Unknown'}) and not($tagInfo->{'SubDirectory'}))) {\n            push(@purgeTags, $tagInfo);\n        }\n    }\n    ($tagInfo->{'Unknown'} and ($tagInfo->{'AddedUnknown'} = 1));\n    (return $tagInfo);\n}",
+                                    "__name": "Image::ExifTool::AddTagToTable",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "dependencies": {
+                                      "Image::ExifTool::ExpandFlags": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::ExpandFlags",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::MakeDescription": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::MakeDescription",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      }
+                                    },
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::SetupTagTable": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr) = (shift()));\n    (my($avoid) = $tagTablePtr->{'AVOID'});\n    my($tagID, $tagInfo);\n    foreach $tagID (TagTableKeys($tagTablePtr)) {\n        (my(@infoArray) = GetTagInfoList($tagTablePtr, $tagID));\n        foreach $tagInfo (@infoArray) {\n            ($tagInfo->{'Table'} = $tagTablePtr);\n            ($tagInfo->{'TagID'} = $tagID);\n            ($tagInfo->{'Name'} or ($tagInfo->{'Name'} = MakeTagName($tagID)));\n            ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n            (defined($avoid) and ($tagInfo->{'Avoid'} = $avoid));\n            if (($tagInfo->{'Mask'} and not(defined($tagInfo->{'BitShift'})))) {\n                (my($mask, $bitShift) = ($tagInfo->{'Mask'}, 0));\n                (++$bitShift) until ($mask & (1 << $bitShift));\n                ($tagInfo->{'BitShift'} = $bitShift);\n            }\n        }\n        ((@infoArray > 1) or (next));\n        (my($index) = 0);\n        foreach $tagInfo (@infoArray) {\n            ($tagInfo->{'Index'} = ($index++));\n        }\n    }\n}",
+                                    "__name": "Image::ExifTool::SetupTagTable",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "dependencies": {
+                                      "Image::ExifTool::ExpandFlags": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::ExpandFlags",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::GetTagInfoList": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::GetTagInfoList",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::MakeTagName": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::MakeTagName",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::TagTableKeys": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::TagTableKeys",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      }
+                                    },
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::TagTableKeys": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($tagTablePtr) = (shift()));\n    my(@keyList);\n    foreach $_ (keys(%$tagTablePtr)) {\n        ($Image::ExifTool::specialTags{$_} or push(@keyList, $_));\n    }\n    (return @keyList);\n}",
+                                    "__name": "Image::ExifTool::TagTableKeys",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::XMP::RegisterNamespace": {
+                                    "__deparse": "($) {\n    package Image::ExifTool::XMP;\n    use strict;\n    (my($table) = (shift()));\n    (ref($table->{'NAMESPACE'}) or (return $table->{'NAMESPACE'}));\n    (my($nsRef) = $table->{'NAMESPACE'});\n    my($ns);\n    if ((ref($nsRef) eq 'ARRAY')) {\n        ($ns = $nsRef->[0]);\n        ($Image::ExifTool::XMP::nsURI{$ns} = $nsRef->[1]);\n        ($uri2ns{$nsRef->[1]} = $ns);\n    } else {\n        (my(@ns) = sort(keys(%$nsRef)));\n        while (@ns) {\n            ($ns = pop(@ns));\n            if (($Image::ExifTool::XMP::nsURI{$ns} and ($Image::ExifTool::XMP::nsURI{$ns} ne $nsRef->{$ns}))) {\n                warn((\"User-defined namespace prefix '${ns}' conflicts with existing namespace\\n\"));\n            }\n            ($Image::ExifTool::XMP::nsURI{$ns} = $nsRef->{$ns});\n            ($uri2ns{$nsRef->{$ns}} = $ns);\n        }\n    }\n    (return ($table->{'NAMESPACE'} = $ns));\n}",
+                                    "__name": "Image::ExifTool::XMP::RegisterNamespace",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool/XMP.pm",
+                                    "source_sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::Validate::ValidateRaw": {
+                                "__deparse": null,
+                                "__name": "Image::ExifTool::Validate::ValidateRaw",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "reason": "code_ref_unavailable",
+                                "resolved": false,
+                                "source_file": null,
+                                "source_sha256": null
+                              },
+                              "Image::ExifTool::VerboseInfo": {
+                                "__deparse": "($$$%) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $tagID, $tagInfo, %parms) = @_);\n    (my($verbose) = $self->{'OPTIONS'}{'Verbose'});\n    (my($out) = $self->{'OPTIONS'}{'TextOut'});\n    my($tag, $line, $hexID);\n    if (defined($tagID)) {\n        if (($tagID =~ /^\\d+$/)) {\n            if (((($parms{'Table'} and $parms{'Table'}{'VARS'}) and $parms{'Table'}{'ID_FMT'}) and ($parms{'Table'}{'VARS'}{'ID_FMT'} eq 'dec'))) {\n                ($hexID = $tagID);\n            } else {\n                ($hexID = sprintf('0x%.4x', $tagID));\n            }\n        }\n    } else {\n        ($tagID = 'Unknown');\n    }\n    if (($tagInfo and $tagInfo->{'Name'})) {\n        ($tag = $tagInfo->{'Name'});\n    } elsif ($parms{'Name'}) {\n        ($tag = $parms{'Name'});\n        $hexID = undef;\n    } else {\n        my($prefix);\n        ($parms{'Table'} and ($prefix = $parms{'Table'}{'TAG_PREFIX'}));\n        if (($prefix or defined($hexID))) {\n            ($prefix or ($prefix = 'Unknown'));\n            ($tag = $prefix . '_' . (defined($hexID) ? $hexID : $tagID));\n        } else {\n            ($tag = $tagID);\n        }\n    }\n    (my($dataPt) = $parms{'DataPt'});\n    (my($size) = $parms{'Size'});\n    ((defined($size) or not($dataPt)) or ($size = length($$dataPt)));\n    (my($indent) = $self->{'INDENT'});\n    ($line = $indent);\n    (my($index) = $parms{'Index'});\n    if (defined($index)) {\n        ($line .= $index . ') ');\n        ((length($index) < 2) and ($line .= ' '));\n        ($indent .= '    ');\n    }\n    ($line .= $tag);\n    if (($tagInfo and $tagInfo->{'SubDirectory'})) {\n        ($line .= ' (SubDirectory) -->');\n    } else {\n        (my($maxLen) = (90 - length($line)));\n        (my($val) = $parms{'Value'});\n        if (defined($val)) {\n            ((ref($val) eq 'ARRAY') and ($val = '[' . join(',', @$val) . ']'));\n            ($line .= ' = ' . $self->Printable($val, $maxLen));\n        } elsif ($dataPt) {\n            (my($start) = ($parms{'Start'} || 0));\n            ($line .= ' = ' . $self->Printable(substr($$dataPt, $start, $size), $maxLen));\n        }\n    }\n    print($out (\"$line\\n\"));\n    if ((($verbose > 1) and (((($parms{'Extra'} || $parms{'Format'}) || $parms{'DataPt'}) || defined($size)) || ($tagID =~ m[/])))) {\n        ($line = $indent . '- Tag ');\n        if (defined($hexID)) {\n            ($line .= $hexID);\n        } else {\n            ($tagID =~ s/([\\0-\\x1f\\x7f-\\xff])/sprintf('\\\\x%.2x', ord($1));/eg);\n            ($line .= \"'${tagID}'\");\n        }\n        (defined($parms{'Extra'}) and ($line .= $parms{'Extra'}));\n        (my($format) = $parms{'Format'});\n        if (($format or defined($size))) {\n            ($line .= ' (');\n            if (defined($size)) {\n                ($line .= \"$size bytes\");\n                ($format and ($line .= ', '));\n            }\n            if ($format) {\n                ($line .= $format);\n                ($parms{'Count'} and ($line .= '[' . $parms{'Count'} . ']'));\n            }\n            ($line .= ')');\n        }\n        ((($verbose > 2) and $parms{'DataPt'}) and ($line .= ':'));\n        print($out (\"$line\\n\"));\n    }\n    if (((($verbose > 2) and $parms{'DataPt'}) and not(($tagInfo && $tagInfo->{'ReadFromRAF'})))) {\n        ($parms{'Out'} = $out);\n        ($parms{'Prefix'} = $indent);\n        (($verbose < 5) and ($parms{'MaxLen'} = (($verbose == 3) ? 96 : 2048)));\n        HexDump($dataPt, $size, %parms);\n    }\n}",
+                                "__name": "Image::ExifTool::VerboseInfo",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::HexDump": {
+                                    "__deparse": "($;$%) {\n    package Image::ExifTool;\n    use strict;\n    (my($dataPt) = (shift()));\n    (my($len) = (shift()));\n    (my(%opts) = @_);\n    (my($start) = ($opts{'Start'} || 0));\n    (my($addr) = $opts{'Addr'});\n    (my($wid) = ($opts{'Width'} || 16));\n    (my($prefix) = ($opts{'Prefix'} || ''));\n    (my($out) = ($opts{'Out'} || (\\*STDOUT)));\n    (my($maxLen) = $opts{'MaxLen'});\n    (my($datLen) = (length($$dataPt) - $start));\n    my($more);\n    (defined($opts{'Len'}) and ($len = $opts{'Len'}));\n    (defined($addr) or ($addr = (($start + ($opts{'DataPos'} || 0)) + ($opts{'Base'} || 0))));\n    (defined($len) or ($len = $datLen));\n    if (($maxLen and ($len > $maxLen))) {\n        ($maxLen = (int((($maxLen - 1) / $wid)) * $wid));\n        ($more = ($len - $maxLen));\n        ($len = $maxLen);\n    }\n    if (($len > $datLen)) {\n        print($out (\"$prefix    Warning: Attempted dump outside data\\n\"));\n        print($out (\"$prefix    ($len bytes specified, but only $datLen available)\\n\"));\n        ($len = $datLen);\n    }\n    (my($format) = sprintf('%%-%ds', ($wid * 3)));\n    (my($tmpl) = ('H2' x $wid));\n    my($i);\n    for (($i = 0); ($i < $len); ($i += $wid)) {\n        (($wid > ($len - $i)) and (($wid = ($len - $i)), ($tmpl = ('H2' x $wid))));\n        printf($out (\"$prefix%8.4x: \"), ($addr + $i));\n        (my($dat) = substr($$dataPt, ($i + $start), $wid));\n        (my($s) = join(' ', unpack($tmpl, $dat)));\n        printf($out $format, $s);\n        ($dat =~ tr/\\000-\\037\\177-\\377/./);\n        print($out (\"[$dat]\\n\"));\n    }\n    ($more and print($out (\"$prefix    [snip $more bytes]\\n\")));\n}",
+                                    "__name": "Image::ExifTool::HexDump",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool/Writer.pl",
+                                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                                  },
+                                  "Image::ExifTool::Printable": {
+                                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $outStr, $maxLen) = @_);\n    (defined($outStr) or (return '(undef)'));\n    ((ref($outStr) eq 'SCALAR') and (return ('(Binary data ' . length($$outStr) . ' bytes)')));\n    ($outStr =~ tr/\\cA-\\037\\177-\\377/./);\n    ($outStr =~ s/\\x00//g);\n    (my($verbose) = $self->{'OPTIONS'}{'Verbose'});\n    if (($verbose < 4)) {\n        if ($maxLen) {\n            (($maxLen < 20) and ($maxLen = 20));\n        } elsif (defined($maxLen)) {\n            ($maxLen = length($outStr));\n        } else {\n            ($maxLen = 60);\n        }\n    } else {\n        ($maxLen = length($outStr));\n        ((($maxLen > 2048) and ($verbose < 5)) and ($maxLen = 2048));\n    }\n    ((length($outStr) > $maxLen) and ($outStr = substr($outStr, 0, ($maxLen - 6)) . '[snip]'));\n    (return $outStr);\n}",
+                                    "__name": "Image::ExifTool::Printable",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool/Writer.pl",
+                                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                              },
+                              "Image::ExifTool::Warn": {
+                                "__deparse": null,
+                                "__name": "Image::ExifTool::Warn",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "reason": "dependency_cycle",
+                                "resolved": false,
+                                "source_file": null,
+                                "source_sha256": null
+                              }
+                            },
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  },
+                  "Image::ExifTool::PackUTF8": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    my(@out);\n    while (@_) {\n        (my($ch) = (pop()));\n        (($ch < 128) and (unshift(@out, $ch), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 32) and (unshift(@out, (192 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 16) and (unshift(@out, (224 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        unshift(@out, (240 | ($ch & 7)));\n    }\n    (return pack('C*', @out));\n}",
+                    "__name": "Image::ExifTool::PackUTF8",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/XMP.pm",
+                "source_sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+              }
+            },
+            "resolved": true,
+            "source_file": "Image/ExifTool/XMP.pm",
+            "source_sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+          }
+        },
+        "resolved": true,
+        "source_file": "Image/ExifTool/HTML.pm",
+        "source_sha256": "8e1c4f875f14f37b899fd082efe7f5c77c0ec38f47be1761190d1e748dbb539d"
+      },
+      "Image::ExifTool::XMP::UnescapeXML": {
+        "__deparse": "($;$$) {\n    package Image::ExifTool::XMP;\n    use strict;\n    (my($str, $conv, $enc) = @_);\n    ($conv or ($conv = (\\%charNum)));\n    ($str =~ s/&(#?\\w+);/UnescapeChar($1, $conv, $enc);/seg);\n    (return $str);\n}",
+        "__name": "Image::ExifTool::XMP::UnescapeXML",
+        "__opaque": true,
+        "__perl": "CODE",
+        "dependencies": {
+          "Image::ExifTool::XMP::UnescapeChar": {
+            "__deparse": "($$;$) {\n    package Image::ExifTool::XMP;\n    use strict;\n    (my($ch, $conv, $enc) = @_);\n    (my($val) = $conv->{$ch});\n    unless (defined($val)) {\n        if (($ch =~ /^#x([0-9a-fA-F]+)$/)) {\n            ($val = hex($1));\n        } elsif (($ch =~ /^#(\\d+)$/)) {\n            ($val = $1);\n        } else {\n            (return (\"&$ch;\"));\n        }\n    }\n    (($val < 128) and (return chr($val)));\n    ($val = (($] >= 5.006001) ? pack('C0U', $val) : &Image::ExifTool::PackUTF8($val)));\n    (($enc and ($enc ne 'UTF8')) and ($val = &Image::ExifTool::Decode((undef), $val, 'UTF8', (undef), $enc)));\n    (return $val);\n}",
+            "__name": "Image::ExifTool::XMP::UnescapeChar",
+            "__opaque": true,
+            "__perl": "CODE",
+            "dependencies": {
+              "Image::ExifTool::Decode": {
+                "__deparse": "($$$;$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $val, $from, $fromOrder, $to, $toOrder) = @_);\n    ($from or ($from = $self->{'OPTIONS'}{'Charset'}));\n    ($to or ($to = $self->{'OPTIONS'}{'Charset'}));\n    if ((($from ne $to) and length($val))) {\n        (require Image::ExifTool::Charset);\n        (my($cs1) = $Image::ExifTool::Charset::csType{$from});\n        (my($cs2) = $Image::ExifTool::Charset::csType{$to});\n        if ((($cs1 and $cs2) and not(($cs2 & 2)))) {\n            if (((($cs1 | $cs2) & 1664) or ($val =~ /[\\x80-\\xff]/))) {\n                (my($uni) = &Image::ExifTool::Charset::Decompose($self, $val, $from, $fromOrder));\n                ($val = &Image::ExifTool::Charset::Recompose($self, $uni, $to, $toOrder));\n            }\n        } elsif ($self) {\n            (my($set) = ($cs1 ? $to : $from));\n            unless ($$self{\"DecodeWarn$set\"}) {\n                $self->Warn((\"Unsupported character set ($set)\"));\n                ($$self{\"DecodeWarn$set\"} = 1);\n            }\n        }\n    }\n    (return $val);\n}",
+                "__name": "Image::ExifTool::Decode",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Charset::Decompose": {
+                    "__deparse": "($$$;$) {\n    package Image::ExifTool::Charset;\n    use strict;\n    local $_;\n    (my($et, $val, $charset) = @_);\n    (my($type) = $Image::ExifTool::Charset::csType{$charset});\n    my(@uni, $conv);\n    if (($type & 1)) {\n        ($conv = LoadCharset($charset));\n        unless ($conv) {\n            ($et and $et->Warn((\"Invalid character set $charset\")));\n            (return (\\@uni));\n        }\n    } elsif (($type == 256)) {\n        if (($] < 5.006001)) {\n            (@uni = &Image::ExifTool::UnpackUTF8($val));\n        } else {\n            undef($Image::ExifTool::evalWarning);\n            (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n            (@uni = unpack((($] < 5.01) ? 'U0U*' : 'C0U*'), $val));\n            if ((($Image::ExifTool::evalWarning and $et) and not($et->{'WarnBadUTF8'}))) {\n                $et->Warn('Malformed UTF-8 character(s)');\n                ($et->{'WarnBadUTF8'} = 1);\n            }\n        }\n        (return (\\@uni));\n    }\n    if (($type & 256)) {\n        (@uni = unpack('C*', $val));\n        foreach $_ (@uni) {\n            (defined($conv->{$_}) and ($_ = $conv->{$_}));\n        }\n    } elsif (($type & 1536)) {\n        my($unknown);\n        (my($byteOrder) = $_[3]);\n        if (not($byteOrder)) {\n            ($byteOrder = GetByteOrder);\n        } elsif (($byteOrder eq 'Unknown')) {\n            ($byteOrder = GetByteOrder);\n            ($unknown = 1);\n        }\n        (my($fmt) = (($byteOrder eq 'MM') ? 'n*' : 'v*'));\n        if (($type & 1024)) {\n            ($fmt = uc($fmt));\n            (($val =~ s/^(\\0\\0\\xfe\\xff|\\xff\\xfe\\0\\0)//) and ($fmt = (($1 eq \"\\000\\000\\376\\377\") ? 'N*' : 'V*')));\n            $unknown = undef;\n        } elsif (($val =~ s/^(\\xfe\\xff|\\xff\\xfe)//)) {\n            ($fmt = (($1 eq \"\\376\\377\") ? 'n*' : 'v*'));\n            $unknown = undef;\n        }\n        (@uni = unpack($fmt, $val));\n        if (not($conv)) {\n            if ($unknown) {\n                my(%bh, %bl);\n                (my($zh, $zl) = (0, 0));\n                foreach $_ (@uni) {\n                    ($bh{$_ >> 8} = 1);\n                    ($bl{$_ & 255} = 1);\n                    (($_ & 65280) or (++$zh));\n                    (($_ & 255) or (++$zl));\n                }\n                (my($bh, $bl) = (scalar(keys(%bh)), scalar(keys(%bl))));\n                if ((($bh > $bl) or (($bh == $bl) and ($zl > $zh)))) {\n                    ($fmt =~ tr/NVnv/VNvn/);\n                    (@uni = unpack($fmt, $val));\n                    ($et->{'WrongByteOrder'} = 1);\n                }\n            }\n            if (($charset eq 'UTF16')) {\n                my($i);\n                for (($i = 0); ($i < $#uni); (++$i)) {\n                    (((($uni[$i] & 64512) == 55296) and (($uni[$i + 1] & 64512) == 56320)) or (next));\n                    (my($cp) = ((65536 + (($uni[$i] & 1023) << 10)) + ($uni[$i + 1] & 1023)));\n                    splice(@uni, $i, 2, $cp);\n                }\n            }\n        } elsif ($unknown) {\n            (my($e1) = 0);\n            foreach $_ (@uni) {\n                (defined($conv->{$_}) and (($_ = $conv->{$_}), (next)));\n                (++$e1);\n            }\n            if ($e1) {\n                ($fmt = (($byteOrder eq 'MM') ? 'v*' : 'n*'));\n                (my(@try) = unpack($fmt, $val));\n                (my($e2) = 0);\n                foreach $_ (@try) {\n                    (defined($conv->{$_}) and (($_ = $conv->{$_}), (next)));\n                    (++$e2);\n                }\n                if (($e2 < $e1)) {\n                    ($et->{'WrongByteOrder'} = 1);\n                    (return (\\@try));\n                }\n            }\n        } else {\n            foreach $_ (@uni) {\n                (defined($conv->{$_}) and ($_ = $conv->{$_}));\n            }\n        }\n    } else {\n        (my(@bytes) = unpack('C*', $val));\n        while (@bytes) {\n            (my($ch) = shift(@bytes));\n            (my($cv) = $conv->{$ch});\n            ($cv or (push(@uni, $ch), (next)));\n            (ref($cv) or (push(@uni, $cv), (next)));\n            ((ref($cv) eq 'ARRAY') and (push(@uni, @$cv), (next)));\n            ($ch = shift(@bytes));\n            if (defined($ch)) {\n                if ($cv->{$ch}) {\n                    ($cv = $cv->{$ch});\n                    (ref($cv) or (push(@uni, $cv), (next)));\n                    push(@uni, @$cv);\n                } else {\n                    push(@uni, 63);\n                    unshift(@bytes, $ch);\n                }\n            } else {\n                push(@uni, 63);\n            }\n        }\n    }\n    (return (\\@uni));\n}",
+                    "__name": "Image::ExifTool::Charset::Decompose",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Charset::LoadCharset": {
+                        "__deparse": "($) {\n    package Image::ExifTool::Charset;\n    use strict;\n    (my($charset) = (shift()));\n    (my($conv) = $charsetTable{$charset});\n    unless ($conv) {\n        (my $module = \"Image::ExifTool::Charset::$charset\");\n        no strict 'refs';\n        if ((%$module or eval((\"require $module\")))) {\n            ($conv = ($charsetTable{$charset} = (\\%$module)));\n        }\n    }\n    (return $conv);\n}",
+                        "__name": "Image::ExifTool::Charset::LoadCharset",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Charset.pm",
+                        "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                      },
+                      "Image::ExifTool::UnpackUTF8": {
+                        "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    my(@out, $pos);\n    (pos($_[0]) = ($pos = 0));\n    while (1) {\n        my($ch, $newPos, $val, $byte);\n        if (($_[0] =~ /([\\x80-\\xff])/g)) {\n            ($ch = ord($1));\n            ($newPos = (pos($_[0]) - 1));\n        } else {\n            ($newPos = length($_[0]));\n        }\n        (my($len) = ($newPos - $pos));\n        ($len and push(@out, unpack((\"x${pos}C$len\"), $_[0])));\n        (defined($ch) or (last));\n        ($pos = ($newPos + 1));\n        if ((($ch < 194) or ($ch >= 248))) {\n            push(@out, 63);\n            ($Image::ExifTool::evalWarning = 'Bad UTF-8');\n            (next);\n        }\n        (my($n) = 1);\n        if (($ch < 224)) {\n            ($val = ($ch & 31));\n        } elsif (($ch < 240)) {\n            ($val = ($ch & 15));\n            (++$n);\n        } else {\n            ($val = ($ch & 7));\n            ($n += 2);\n        }\n        unless (($_[0] =~ /\\G([\\x80-\\xbf]{$n})/g)) {\n            (pos($_[0]) = $pos);\n            push(@out, 63);\n            ($Image::ExifTool::evalWarning = 'Bad UTF-8');\n            (next);\n        }\n        foreach $byte (unpack('C*', $1)) {\n            ($val = (($val << 6) | ($byte & 63)));\n        }\n        push(@out, $val);\n        ($pos += $n);\n    }\n    (return @out);\n}",
+                        "__name": "Image::ExifTool::UnpackUTF8",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Writer.pl",
+                        "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Charset.pm",
+                    "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                  },
+                  "Image::ExifTool::Charset::Recompose": {
+                    "__deparse": "($$;$$) {\n    package Image::ExifTool::Charset;\n    use strict;\n    local $_;\n    (my($et, $uni, $charset) = @_);\n    my($outVal, $conv, $inv);\n    ($charset or ($charset = $et->{'OPTIONS'}{'Charset'}));\n    (my($csType) = $Image::ExifTool::Charset::csType{$charset});\n    if (($csType == 256)) {\n        if (($] >= 5.006001)) {\n            ($outVal = pack('C0U*', @$uni));\n        } else {\n            ($outVal = &Image::ExifTool::PackUTF8(@$uni));\n        }\n        ($outVal =~ s/\\0.*//s);\n        (return $outVal);\n    }\n    if (($csType & 2049)) {\n        ($conv = LoadCharset($charset));\n        unless ($conv) {\n            ($et and $et->Warn((\"Missing charset $charset\")));\n            (return '');\n        }\n        ($inv = $unicode2byte{$charset});\n        unless ($inv) {\n            if ((not($csType) or ($csType & 2050))) {\n                ($et and $et->Warn((\"Invalid destination charset $charset\")));\n                (return '');\n            }\n            my($char, %inv);\n            foreach $char (keys(%$conv)) {\n                ($inv{$conv->{$char}} = $char);\n            }\n            ($inv = ($unicode2byte{$charset} = (\\%inv)));\n        }\n    }\n    if (($csType & 256)) {\n        foreach $_ (@$uni) {\n            (($_ < 128) and (next));\n            ($inv->{$_} and (($_ = $inv->{$_}), (next)));\n            ((($_ < 256) and not($conv->{$_})) and (next));\n            ($_ = 63);\n            if (($et and not($et->{'EncodingError'}))) {\n                $et->Warn((\"Some character(s) could not be encoded in $charset\"));\n                ($et->{'EncodingError'} = 1);\n            }\n        }\n        ($outVal = pack('C*', @$uni));\n        ($outVal =~ s/\\0.*//s);\n    } else {\n        if ($inv) {\n            ($inv->{$_} and ($_ = $inv->{$_})) foreach (@$uni);\n        }\n        if (($charset eq 'UTF16')) {\n            my($i);\n            for (($i = 0); ($i < @$uni); (++$i)) {\n                ((($uni->[$i] >= 65536) and ($uni->[$i] < 1114111)) or (next));\n                (my($t) = ($uni->[$i] - 65536));\n                (my($w1) = (55296 + (($t >> 10) & 1023)));\n                (my($w2) = (56320 + ($t & 1023)));\n                splice(@$uni, $i, 1, $w1, $w2);\n                (++$i);\n            }\n        }\n        (my($byteOrder) = ($_[3] || GetByteOrder));\n        (my($fmt) = (($byteOrder eq 'MM') ? 'n*' : 'v*'));\n        (($csType & 1024) and ($fmt = uc($fmt)));\n        ($outVal = pack($fmt, @$uni));\n    }\n    (return $outVal);\n}",
+                    "__name": "Image::ExifTool::Charset::Recompose",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Charset::LoadCharset": {
+                        "__deparse": "($) {\n    package Image::ExifTool::Charset;\n    use strict;\n    (my($charset) = (shift()));\n    (my($conv) = $charsetTable{$charset});\n    unless ($conv) {\n        (my $module = \"Image::ExifTool::Charset::$charset\");\n        no strict 'refs';\n        if ((%$module or eval((\"require $module\")))) {\n            ($conv = ($charsetTable{$charset} = (\\%$module)));\n        }\n    }\n    (return $conv);\n}",
+                        "__name": "Image::ExifTool::Charset::LoadCharset",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Charset.pm",
+                        "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                      },
+                      "Image::ExifTool::PackUTF8": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    my(@out);\n    while (@_) {\n        (my($ch) = (pop()));\n        (($ch < 128) and (unshift(@out, $ch), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 32) and (unshift(@out, (192 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 16) and (unshift(@out, (224 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        unshift(@out, (240 | ($ch & 7)));\n    }\n    (return pack('C*', @out));\n}",
+                        "__name": "Image::ExifTool::PackUTF8",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Writer.pl",
+                        "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Charset.pm",
+                    "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+                  },
+                  "Image::ExifTool::Warn": {
+                    "__deparse": "($$;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $str, $ignorable) = @_);\n    (my($noWarn) = $self->{'OPTIONS'}{'NoWarning'});\n    my($noCount);\n    while ($ignorable) {\n        if (($ignorable & 4)) {\n            ($noCount = 1);\n            (($ignorable &= 3) or (last));\n        }\n        (my($ignorable) = ($ignorable & 3));\n        ($self->{'OPTIONS'}{'IgnoreMinorErrors'} and (return 0));\n        ((($ignorable eq '3') and $self->{'OPTIONS'}{'Validate'}) and (return 0));\n        ((defined($noWarn) and eval {\n            do {\n                ($str =~ /$noWarn/)\n            }\n        }) and (return 1));\n        ($str = (($ignorable eq '2') ? (\"[Minor] $str\") : (\"[minor] $str\")));\n        (last);\n    }\n    unless ((defined($noWarn) and eval {\n        do {\n            ($str =~ /$noWarn/)\n        }\n    })) {\n        if ($self->{'WAS_WARNED'}{$str}) {\n            ($noCount or (++$self->{'WAS_WARNED'}{$str}));\n        } else {\n            $self->FoundTag('Warning', $str);\n            ($self->{'WAS_WARNED'}{$str} = 1);\n        }\n    }\n    (return 1);\n}",
+                    "__name": "Image::ExifTool::Warn",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::FoundTag": {
+                        "__deparse": "($$$;@) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($self, $tagInfo, $value, @grps) = @_);\n    my($tag, $noListDel, $tbl);\n    (my($options) = $self->{'OPTIONS'});\n    if ((ref($tagInfo) eq 'HASH')) {\n        (($tag = $tagInfo->{'Name'}) or (warn(\"No tag name\\n\"), (return (undef))));\n        ($tbl = $tagInfo->{'Table'});\n    } else {\n        ($tag = $tagInfo);\n        ($tbl = GetTagTable('Image::ExifTool::Extra'));\n        ($tagInfo = $self->GetTagInfo($tbl, $tag));\n        ($tagInfo or ($tagInfo = {'Name', $tag, 'Groups', (\\%allGroupsExifTool)}));\n        ($options->{'Verbose'} and $self->VerboseInfo((undef), $tagInfo, 'Value', $value));\n    }\n    (my($priority) = $tagInfo->{'Priority'});\n    unless (defined($priority)) {\n        ($priority = $tbl->{'PRIORITY'});\n        ((not(defined($priority)) and $tagInfo->{'Avoid'}) and ($priority = 0));\n    }\n    ($grps[0] or ($grps[0] = $self->{'SET_GROUP0'}));\n    ($grps[1] or ($grps[1] = $self->{'SET_GROUP1'}));\n    if ($options->{'IgnoreGroups'}) {\n        foreach $_ (0 .. 1) {\n            (my($g) = lc((($grps[$_] or $tagInfo->{'Groups'}{$_}) or $tagInfo->{'Table'}{'GROUPS'}{$_})));\n            (($options->{'IgnoreGroups'}{$g} || $options->{'IgnoreGroups'}{\"$_$g\"}) and (return (undef)));\n        }\n    }\n    (my($valueHash) = $self->{'VALUE'});\n    if ($tagInfo->{'RawConv'}) {\n        my(@val);\n        if (((ref($value) eq 'HASH') and $tagInfo->{'IsComposite'})) {\n            foreach $_ (keys(%$value)) {\n                ($val[$_] = $$valueHash{$value->{$_}});\n            }\n        }\n        (my($conv) = $tagInfo->{'RawConv'});\n        (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n        undef($Image::ExifTool::evalWarning);\n        if ((ref($conv) eq 'CODE')) {\n            ($value = &$conv($value, $self));\n            ($self->{'grps'} and ((@grps = @{$self->{'grps'};}), delete $self->{'grps'}));\n        } else {\n            (my($val) = $value);\n            ($value = eval($conv));\n            ($@ and ($Image::ExifTool::evalWarning = $@));\n        }\n        ($Image::ExifTool::evalWarning and $self->Warn(((\"RawConv ${tag}: \") . CleanWarning())));\n        (defined($value) or (return (undef)));\n    }\n    if ($options->{'IgnoreTags'}) {\n        if ($options->{'IgnoreTags'}{'all'}) {\n            ($self->{'REQ_TAG_LOOKUP'}{lc($tag)} or (return (undef)));\n        } else {\n            ($options->{'IgnoreTags'}{lc($tag)} and (return (undef)));\n        }\n    }\n    if (defined($valueHash->{$tag})) {\n        if ($self->{'LIST_TAGS'}{$tagInfo}) {\n            ($tag = $self->{'LIST_TAGS'}{$tagInfo});\n            if (defined($self->{'NO_LIST'})) {\n                if (defined($self->{'TAG_EXTRA'}{$tag}{'NoList'})) {\n                    push(@{$$self{'TAG_EXTRA'}{$tag}{'NoList'};}, $value);\n                } else {\n                    ($self->{'TAG_EXTRA'}{$tag}{'NoList'} = [$valueHash->{$tag}, $value]);\n                }\n                ($noListDel = 1);\n            } else {\n                if ((ref($valueHash->{$tag}) ne 'ARRAY')) {\n                    ($valueHash->{$tag} = [$valueHash->{$tag}]);\n                }\n                push(@{$$valueHash{$tag};}, $value);\n                (return $tag);\n            }\n        }\n        (my($nextInd) = ($self->{'DUPL_TAG'}{$tag} = (($self->{'DUPL_TAG'}{$tag} || 0) + 1)));\n        (my $nextTag = \"$tag ($nextInd)\");\n        (my($oldPriority) = $self->{'PRIORITY'}{$tag});\n        unless ($oldPriority) {\n            if ((($self->{'DOC_NUM'} or ($tag eq 'Warning')) or not($self->{'TAG_EXTRA'}{$tag}{'G3'}))) {\n                ($oldPriority = 1);\n            } else {\n                ($oldPriority = 0);\n            }\n        }\n        if (defined($priority)) {\n            (((not($priority) and $self->{'DIR_NAME'}) and ($self->{'DIR_NAME'} eq $self->{'PRIORITY_DIR'})) and ($priority = 1));\n        } elsif (($self->{'LOW_PRIORITY_DIR'}{'*'} or ($self->{'DIR_NAME'} and $self->{'LOW_PRIORITY_DIR'}{$self->{'DIR_NAME'}}))) {\n            ($priority = 0);\n        } else {\n            ($priority = 1);\n        }\n        if (((($priority >= $oldPriority) and ((!$self->{'DOC_NUM'}) || ($self->{'TAG_EXTRA'}{$tag}{'G3'} && ($self->{'DOC_NUM'} eq $self->{'TAG_EXTRA'}{$tag}{'G3'})))) and not($noListDel))) {\n            ($self->{'PRIORITY'}{$nextTag} = $self->{'PRIORITY'}{$tag});\n            ($valueHash->{$nextTag} = $valueHash->{$tag});\n            ($self->{'FILE_ORDER'}{$nextTag} = $self->{'FILE_ORDER'}{$tag});\n            (my($oldInfo) = ($self->{'TAG_INFO'}{$nextTag} = $self->{'TAG_INFO'}{$tag}));\n            ($self->{'TAG_EXTRA'}{$nextTag} = $self->{'TAG_EXTRA'}{$tag});\n            ($self->{'TAG_EXTRA'}{$tag} = {});\n            delete $self->{'BOTH'}{$tag};\n            ($self->{'LIST_TAGS'}{$oldInfo} and ($self->{'LIST_TAGS'}{$oldInfo} = $nextTag));\n            if ($self->{'COMP_KEYS'}{$tag}) {\n                ($_->[0]{$_->[1]} = $nextTag) foreach (@{$$self{'COMP_KEYS'}{$tag};});\n                ($self->{'COMP_KEYS'}{$nextTag} = $self->{'COMP_KEYS'}{$tag});\n                delete $self->{'COMP_KEYS'}{$tag};\n            }\n        } else {\n            ($tag = $nextTag);\n        }\n        ($self->{'PRIORITY'}{$tag} = $priority);\n        ($noListDel and ($self->{'TAG_EXTRA'}{$tag}{'NoListDel'} = 1));\n    } elsif ($priority) {\n        ($self->{'PRIORITY'}{$tag} = $priority);\n    }\n    ($valueHash->{$tag} = $value);\n    ($self->{'FILE_ORDER'}{$tag} = (++$self->{'NUM_FOUND'}));\n    ($self->{'TAG_INFO'}{$tag} = $tagInfo);\n    ($self->{'TAG_EXTRA'}{$tag} or ($self->{'TAG_EXTRA'}{$tag} = {}));\n    ($grps[0] and ($self->{'TAG_EXTRA'}{$tag}{'G0'} = $grps[0]));\n    ($grps[1] and ($self->{'TAG_EXTRA'}{$tag}{'G1'} = $grps[1]));\n    if ($self->{'DOC_NUM'}) {\n        ($self->{'TAG_EXTRA'}{$tag}{'G3'} = $self->{'DOC_NUM'});\n        ($self->{'HAS_DOC'}{$self->{'DOC_NUM'}} = 1);\n        if (($self->{'DOC_NUM'} =~ /^(\\d+)/)) {\n            (($self->{'DOC_COUNT'} >= $1) or ($self->{'DOC_COUNT'} = $1));\n        }\n    }\n    ($options->{'SavePath'} and ($self->{'TAG_EXTRA'}{$tag}{'G5'} = $self->MetadataPath));\n    if ((($tagInfo->{'List'} and not($self->{'NO_LIST'})) and not($noListDel))) {\n        ($self->{'LIST_TAGS'}{$tagInfo} = $tag);\n    }\n    if (($options->{'Validate'} and not(ref($value)))) {\n        Image::ExifTool::Validate::ValidateRaw($self, $tag, $value);\n    }\n    (return $tag);\n}",
+                        "__name": "Image::ExifTool::FoundTag",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::CleanWarning": {
+                            "__deparse": "(;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($str) = (shift()));\n    unless (defined($str)) {\n        (defined($Image::ExifTool::evalWarning) or (return (undef)));\n        ($str = $Image::ExifTool::evalWarning);\n    }\n    (($str =~ /(.*?) at /s) and ($str = $1));\n    ($str =~ s/\\s+$//s);\n    (return $str);\n}",
+                            "__name": "Image::ExifTool::CleanWarning",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          },
+                          "Image::ExifTool::GetTagInfo": {
+                            "__deparse": "($$$;$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $tagTablePtr, $tagID) = @_);\n    my($valPt, $format, $count);\n    (my(@infoArray) = GetTagInfoList($tagTablePtr, $tagID));\n    (my($options) = $self->{'OPTIONS'});\n    my($tagInfo);\n    foreach $tagInfo (@infoArray) {\n        (my($condition) = $tagInfo->{'Condition'});\n        if ($condition) {\n            ((@_ > 3) and (($valPt, $format, $count) = splice(@_, 3)));\n            ((($condition =~ /\\$(valPt|format|count)\\b/) and not(defined($valPt))) and (return ''));\n            (local $SIG{'__WARN__'} = (\\&Image::ExifTool::SetWarning));\n            undef($Image::ExifTool::evalWarning);\n            unless (eval($condition)) {\n                ($@ and ($Image::ExifTool::evalWarning = $@));\n                ($Image::ExifTool::evalWarning and $self->Warn(((\"Condition $tagInfo->{'Name'}: \") . CleanWarning())));\n                (next);\n            }\n        }\n        if (((($tagInfo->{'Unknown'} and not($options->{'Unknown'})) and ((!$self->{'IsWriting'}) || $tagInfo->{'AddedUnknown'})) and not((($options->{'Verbose'} || $self->{'HTML_DUMP'}) || ($options->{'Validate'} && (!$tagInfo->{'AddedUnknown'})))))) {\n            (return (undef));\n        }\n        (return $tagInfo);\n    }\n    if ((((not($tagInfo) and (($options->{'Unknown'} || $options->{'Verbose'}) || $self->{'HTML_DUMP'})) and ($tagID =~ /^\\d+$/)) and not($self->{'NO_UNKNOWN'}))) {\n        my($printConv);\n        if (defined($tagTablePtr->{'PRINT_CONV'})) {\n            ($printConv = $tagTablePtr->{'PRINT_CONV'});\n        } else {\n            ($printConv = (\\&Image::ExifTool::LimitLongValues));\n        }\n        (my($hex) = sprintf('0x%.4x', $tagID));\n        (my($prefix) = $tagTablePtr->{'TAG_PREFIX'});\n        ($tagInfo = {'Name', (\"${prefix}_$hex\"), 'Description', MakeDescription($prefix, $hex), 'Unknown', 1, 'Writable', 0, 'PrintConv', $printConv, 'AddedUnknown', 1});\n        AddTagToTable($tagTablePtr, $tagID, $tagInfo);\n    } else {\n        $tagInfo = undef;\n    }\n    (return $tagInfo);\n}",
+                            "__name": "Image::ExifTool::GetTagInfo",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "dependencies": {
+                              "Image::ExifTool::AddTagToTable": {
+                                "__deparse": "($$;$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID, $tagInfo, $noPrefix) = @_);\n    ((ref($tagInfo) eq 'HASH') or ($tagInfo = ($tagInfo ? {'Name', $tagInfo} : {})));\n    if ($tagInfo->{'Groups'}) {\n        foreach $_ (keys(%{$$tagTablePtr{'GROUPS'};})) {\n            ($tagInfo->{'Groups'}{$_} and (next));\n            ($tagInfo->{'Groups'}{$_} = $tagTablePtr->{'GROUPS'}{$_});\n        }\n    } else {\n        ($tagInfo->{'Groups'} = {%{$tagTablePtr->{'GROUPS'};}});\n    }\n    ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n    (($tagInfo->{'GotGroups'} = 1), ($tagInfo->{'Table'} = $tagTablePtr));\n    ($tagInfo->{'TagID'} = $tagID);\n    (defined($tagInfo->{'Hidden'}) or ($tagInfo->{'Hidden'} = 1));\n    if ((defined($tagTablePtr->{'AVOID'}) and not(defined($tagInfo->{'Avoid'})))) {\n        ($tagInfo->{'Avoid'} = $tagTablePtr->{'AVOID'});\n    }\n    (my($name) = $tagInfo->{'Name'});\n    (defined($name) or ($name = $tagID));\n    ($name =~ tr/\\-0-9A-Z_a-z//cd);\n    ($name = ucfirst($name));\n    unless (((defined($tagInfo->{'Name'}) or $noPrefix) or not($tagTablePtr->{'TAG_PREFIX'}))) {\n        ($tagInfo->{'Description'} = MakeDescription($tagTablePtr->{'TAG_PREFIX'}, $name));\n        ($name = \"$tagTablePtr->{'TAG_PREFIX'}_$name\");\n    }\n    (((length($name) < 2) || (!($name =~ /^[A-Z]/i))) and ($name = \"Tag$name\"));\n    ($tagInfo->{'Name'} = $name);\n    unless ((defined($tagTablePtr->{$tagID}) or $Image::ExifTool::specialTags{$tagID})) {\n        ($tagTablePtr->{$tagID} = $tagInfo);\n        if ((($purgeFlag and $tagInfo->{'Unknown'}) and not($tagInfo->{'SubDirectory'}))) {\n            push(@purgeTags, $tagInfo);\n        }\n    }\n    ($tagInfo->{'Unknown'} and ($tagInfo->{'AddedUnknown'} = 1));\n    (return $tagInfo);\n}",
+                                "__name": "Image::ExifTool::AddTagToTable",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::ExpandFlags": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagInfo) = (shift()));\n    (my($flags) = $tagInfo->{'Flags'});\n    if ((ref($flags) eq 'ARRAY')) {\n        foreach $_ (@$flags) {\n            ($tagInfo->{$_} = 1);\n        }\n    } elsif ((ref($flags) eq 'HASH')) {\n        my($key);\n        foreach $key (keys(%$flags)) {\n            ($tagInfo->{$key} = $flags->{$key});\n        }\n    } else {\n        ($tagInfo->{$flags} = 1);\n    }\n}",
+                                    "__name": "Image::ExifTool::ExpandFlags",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::MakeDescription": {
+                                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tag, $tagID) = @_);\n    (my($desc) = ucfirst($tag));\n    ($desc =~ tr/_/ /);\n    (defined($tagID) or (($desc =~ s/ (0x[\\da-f]+)$//i) and ($tagID = $1)));\n    ($desc =~ s/([a-z])([A-Z\\d])/$1 $2/g);\n    ($desc =~ s/([A-Z])([A-Z][a-z])/$1 $2/g);\n    ($desc =~ s/(\\d)([A-Z]\\S)/$1 $2/g);\n    (defined($tagID) and ($desc .= ' ' . $tagID));\n    (return $desc);\n}",
+                                    "__name": "Image::ExifTool::MakeDescription",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::CleanWarning": {
+                                "__deparse": "(;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($str) = (shift()));\n    unless (defined($str)) {\n        (defined($Image::ExifTool::evalWarning) or (return (undef)));\n        ($str = $Image::ExifTool::evalWarning);\n    }\n    (($str =~ /(.*?) at /s) and ($str = $1));\n    ($str =~ s/\\s+$//s);\n    (return $str);\n}",
+                                "__name": "Image::ExifTool::CleanWarning",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::GetTagInfoList": {
+                                "__deparse": "($$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID) = @_);\n    (my($tagInfo) = $tagTablePtr->{$tagID});\n    if ($Image::ExifTool::specialTags{$tagID}) {\n        warn((\"Tag $tagID conflicts with internal ExifTool variable in $tagTablePtr->{'TABLE_NAME'}\\n\"));\n    } elsif ((ref($tagInfo) eq 'HASH')) {\n        (return $tagInfo);\n    } elsif ((ref($tagInfo) eq 'ARRAY')) {\n        (return @$tagInfo);\n    } elsif ($tagInfo) {\n        ($tagInfo = ($tagTablePtr->{$tagID} = {'Name', $tagInfo}));\n        (return $tagInfo);\n    }\n    (return ());\n}",
+                                "__name": "Image::ExifTool::GetTagInfoList",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::MakeDescription": {
+                                "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tag, $tagID) = @_);\n    (my($desc) = ucfirst($tag));\n    ($desc =~ tr/_/ /);\n    (defined($tagID) or (($desc =~ s/ (0x[\\da-f]+)$//i) and ($tagID = $1)));\n    ($desc =~ s/([a-z])([A-Z\\d])/$1 $2/g);\n    ($desc =~ s/([A-Z])([A-Z][a-z])/$1 $2/g);\n    ($desc =~ s/(\\d)([A-Z]\\S)/$1 $2/g);\n    (defined($tagID) and ($desc .= ' ' . $tagID));\n    (return $desc);\n}",
+                                "__name": "Image::ExifTool::MakeDescription",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::Warn": {
+                                "__deparse": null,
+                                "__name": "Image::ExifTool::Warn",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "reason": "dependency_cycle",
+                                "resolved": false,
+                                "source_file": null,
+                                "source_sha256": null
+                              }
+                            },
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          },
+                          "Image::ExifTool::GetTagTable": {
+                            "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    ((my $tableName = (shift())) or (return (undef)));\n    (my($table) = $Image::ExifTool::allTables{$tableName});\n    unless ($table) {\n        no strict 'refs';\n        unless (%$tableName) {\n            if (($tableName =~ /(.*)::/)) {\n                (my($module) = $1);\n                if (not(eval((\"require $module\")))) {\n                    ($@ and warn($@));\n                } elsif (not(%$tableName)) {\n                    if (($module eq 'Image::ExifTool::XMP')) {\n                        (require 'Image/ExifTool/XMP2.pl');\n                    } elsif (($tableName eq 'Image::ExifTool::QuickTime::Stream')) {\n                        (require 'Image/ExifTool/QuickTimeStream.pl');\n                    }\n                }\n            }\n            (%$tableName or (warn((\"Can't find table $tableName\\n\")), (return (undef))));\n        }\n        ($table = (\\%$tableName));\n        use strict 'refs';\n        ($table->{'INIT_TABLE'} and &{$table->{'INIT_TABLE'};}($table));\n        ($table->{'TABLE_NAME'} = $tableName);\n        (($table->{'SHORT_NAME'} = $tableName) =~ s/^Image::ExifTool:://);\n        (my($defaultGroups) = $table->{'GROUPS'});\n        ($defaultGroups or ($defaultGroups = ($table->{'GROUPS'} = {})));\n        unless (($defaultGroups->{'0'} and $defaultGroups->{'1'})) {\n            if (($tableName =~ /Image::.*?::([^:]*)/)) {\n                ($defaultGroups->{'0'} or ($defaultGroups->{'0'} = $1));\n                ($defaultGroups->{'1'} or ($defaultGroups->{'1'} = $1));\n            } else {\n                ($defaultGroups->{'0'} or ($defaultGroups->{'0'} = $tableName));\n                ($defaultGroups->{'1'} or ($defaultGroups->{'1'} = $tableName));\n            }\n        }\n        ($defaultGroups->{'2'} or ($defaultGroups->{'2'} = 'Other'));\n        if ((($defaultGroups->{'0'} eq 'XMP') or $table->{'NAMESPACE'})) {\n            (require Image::ExifTool::XMP);\n            &Image::ExifTool::XMP::RegisterNamespace($table);\n            ($table->{'WRITE_PROC'} or ($table->{'WRITE_PROC'} = (\\&Image::ExifTool::XMP::WriteXMP)));\n            ($table->{'CHECK_PROC'} or ($table->{'CHECK_PROC'} = (\\&Image::ExifTool::XMP::CheckXMP)));\n            ($table->{'LANG_INFO'} or ($table->{'LANG_INFO'} = (\\&Image::ExifTool::XMP::GetLangInfo)));\n        }\n        unless (defined($table->{'TAG_PREFIX'})) {\n            my($tagPrefix);\n            if ((($tableName =~ /Image::.*?::(.*)::Main/) or ($tableName =~ /Image::.*?::(.*)/))) {\n                (($tagPrefix = $1) =~ s/::/_/g);\n            } else {\n                ($tagPrefix = $tableName);\n            }\n            ($table->{'TAG_PREFIX'} = $tagPrefix);\n        }\n        SetupTagTable($table);\n        if (((%Image::ExifTool::UserDefined and $Image::ExifTool::UserDefined{$tableName}) and ($table ne (\\%Image::ExifTool::Composite)))) {\n            my($tagID);\n            foreach $tagID (TagTableKeys($Image::ExifTool::UserDefined{$tableName})) {\n                ($Image::ExifTool::specialTags{$tagID} and (next));\n                delete $table->{$tagID};\n                AddTagToTable($table, $tagID, $Image::ExifTool::UserDefined{$tableName}{$tagID}, 1);\n            }\n        }\n        push(@Image::ExifTool::tableOrder, $tableName);\n        ($Image::ExifTool::allTables{$tableName} = $table);\n    }\n    if ((((($table eq (\\%Image::ExifTool::Composite)) and not($table->{'VARS'}{'LOADED_USERDEFINED'})) and %Image::ExifTool::UserDefined) and $Image::ExifTool::UserDefined{$tableName})) {\n        (my($userComp) = $Image::ExifTool::UserDefined{$tableName});\n        delete $Image::ExifTool::UserDefined{$tableName};\n        AddCompositeTags($userComp, 1);\n        ($Image::ExifTool::UserDefined{$tableName} = $userComp);\n        ($table->{'VARS'}{'LOADED_USERDEFINED'} = 1);\n    }\n    (return $table);\n}",
+                            "__name": "Image::ExifTool::GetTagTable",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "dependencies": {
+                              "Image::ExifTool::AddCompositeTags": {
+                                "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($add, $override) = @_);\n    my($module, $prefix, $tagID);\n    if (ref($add)) {\n        ($prefix = 'UserDefined-');\n    } else {\n        (($prefix = $add) =~ s/.*:://);\n        ($module = $add);\n        ($add .= '::Composite');\n        no strict 'refs';\n        ($add = (\\%$add));\n        ($prefix .= '-');\n    }\n    (my($defaultGroups) = $add->{'GROUPS'});\n    (my($compTable) = GetTagTable('Image::ExifTool::Composite'));\n    if ($defaultGroups) {\n        ($defaultGroups->{'0'} or ($defaultGroups->{'0'} = 'Composite'));\n        ($defaultGroups->{'1'} or ($defaultGroups->{'1'} = 'Composite'));\n        ($defaultGroups->{'2'} or ($defaultGroups->{'2'} = 'Other'));\n    } else {\n        ($defaultGroups = ($add->{'GROUPS'} = {0, 'Composite', 1, 'Composite', 2, 'Other'}));\n    }\n    SetupTagTable($add);\n    foreach $tagID (sort(keys(%$add))) {\n        ($Image::ExifTool::specialTags{$tagID} and (next));\n        (my($tagInfo) = $add->{$tagID});\n        (my $new = $prefix . $tagID);\n        ($tagInfo->{'Writable'} and ($tagInfo->{'Module'} = $module));\n        (($override and not(defined($tagInfo->{'Override'}))) and ($tagInfo->{'Override'} = 1));\n        ($tagInfo->{'IsComposite'} = 1);\n        if ($compositeID{$tagID}) {\n            (my($over) = (($tagInfo->{'Override'} || 0) - ($$compTable{$compositeID{$tagID}[0]}{'Override'} || 0)));\n            (($over < 0) and (next));\n            if ($over) {\n                delete $compTable->{$_} foreach (@{$compositeID{$tagID};});\n                delete $compositeID{$tagID};\n            }\n        }\n        (my($n) = 0);\n        while ($compTable->{$new}) {\n            (($n++) and ($new =~ s/-\\d+$//));\n            ($new .= \"-$n\");\n        }\n        (($tagID eq $new) or ($tagInfo->{'NewTagID'} = $new));\n        ($compositeID{$tagID} or ($compositeID{$tagID} = []));\n        unshift(@{$compositeID{$tagID};}, $new);\n        my($type, @hashes, @scalars, %used);\n        foreach $type (('Require', 'Desire', 'Inhibit')) {\n            ((my $req = $tagInfo->{$type}) or (next));\n            push(@{((ref($req) eq 'HASH') ? (\\@hashes) : (\\@scalars));}, $type);\n        }\n        if (@scalars) {\n            foreach $type (@hashes) {\n                ($used{$_} = 1) foreach (keys(%{$$tagInfo{$type};}));\n            }\n            (my($next) = 0);\n            foreach $type (@scalars) {\n                (++$next) while $used{$next};\n                ($tagInfo->{$type} = {($next++), $tagInfo->{$type}});\n            }\n        }\n        ($tagInfo->{'Table'} = $compTable);\n        ($tagInfo->{'TagID'} = $new);\n        ($compTable->{$new} = $tagInfo);\n        (my($groups) = $tagInfo->{'Groups'});\n        ($groups or ($groups = ($tagInfo->{'Groups'} = {})));\n        foreach $_ (keys(%$defaultGroups)) {\n            ($groups->{$_} or ($groups->{$_} = $defaultGroups->{$_}));\n        }\n        ($tagInfo->{'GotGroups'} = 1);\n    }\n}",
+                                "__name": "Image::ExifTool::AddCompositeTags",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::GetTagTable": {
+                                    "__deparse": null,
+                                    "__name": "Image::ExifTool::GetTagTable",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "reason": "dependency_cycle",
+                                    "resolved": false,
+                                    "source_file": null,
+                                    "source_sha256": null
+                                  },
+                                  "Image::ExifTool::SetupTagTable": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr) = (shift()));\n    (my($avoid) = $tagTablePtr->{'AVOID'});\n    my($tagID, $tagInfo);\n    foreach $tagID (TagTableKeys($tagTablePtr)) {\n        (my(@infoArray) = GetTagInfoList($tagTablePtr, $tagID));\n        foreach $tagInfo (@infoArray) {\n            ($tagInfo->{'Table'} = $tagTablePtr);\n            ($tagInfo->{'TagID'} = $tagID);\n            ($tagInfo->{'Name'} or ($tagInfo->{'Name'} = MakeTagName($tagID)));\n            ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n            (defined($avoid) and ($tagInfo->{'Avoid'} = $avoid));\n            if (($tagInfo->{'Mask'} and not(defined($tagInfo->{'BitShift'})))) {\n                (my($mask, $bitShift) = ($tagInfo->{'Mask'}, 0));\n                (++$bitShift) until ($mask & (1 << $bitShift));\n                ($tagInfo->{'BitShift'} = $bitShift);\n            }\n        }\n        ((@infoArray > 1) or (next));\n        (my($index) = 0);\n        foreach $tagInfo (@infoArray) {\n            ($tagInfo->{'Index'} = ($index++));\n        }\n    }\n}",
+                                    "__name": "Image::ExifTool::SetupTagTable",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "dependencies": {
+                                      "Image::ExifTool::ExpandFlags": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::ExpandFlags",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::GetTagInfoList": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::GetTagInfoList",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::MakeTagName": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::MakeTagName",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      },
+                                      "Image::ExifTool::TagTableKeys": {
+                                        "__deparse": null,
+                                        "__name": "Image::ExifTool::TagTableKeys",
+                                        "__opaque": true,
+                                        "__perl": "CODE",
+                                        "reason": "dependency_depth_exceeded",
+                                        "resolved": false,
+                                        "source_file": null,
+                                        "source_sha256": null
+                                      }
+                                    },
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::AddTagToTable": {
+                                "__deparse": "($$;$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID, $tagInfo, $noPrefix) = @_);\n    ((ref($tagInfo) eq 'HASH') or ($tagInfo = ($tagInfo ? {'Name', $tagInfo} : {})));\n    if ($tagInfo->{'Groups'}) {\n        foreach $_ (keys(%{$$tagTablePtr{'GROUPS'};})) {\n            ($tagInfo->{'Groups'}{$_} and (next));\n            ($tagInfo->{'Groups'}{$_} = $tagTablePtr->{'GROUPS'}{$_});\n        }\n    } else {\n        ($tagInfo->{'Groups'} = {%{$tagTablePtr->{'GROUPS'};}});\n    }\n    ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n    (($tagInfo->{'GotGroups'} = 1), ($tagInfo->{'Table'} = $tagTablePtr));\n    ($tagInfo->{'TagID'} = $tagID);\n    (defined($tagInfo->{'Hidden'}) or ($tagInfo->{'Hidden'} = 1));\n    if ((defined($tagTablePtr->{'AVOID'}) and not(defined($tagInfo->{'Avoid'})))) {\n        ($tagInfo->{'Avoid'} = $tagTablePtr->{'AVOID'});\n    }\n    (my($name) = $tagInfo->{'Name'});\n    (defined($name) or ($name = $tagID));\n    ($name =~ tr/\\-0-9A-Z_a-z//cd);\n    ($name = ucfirst($name));\n    unless (((defined($tagInfo->{'Name'}) or $noPrefix) or not($tagTablePtr->{'TAG_PREFIX'}))) {\n        ($tagInfo->{'Description'} = MakeDescription($tagTablePtr->{'TAG_PREFIX'}, $name));\n        ($name = \"$tagTablePtr->{'TAG_PREFIX'}_$name\");\n    }\n    (((length($name) < 2) || (!($name =~ /^[A-Z]/i))) and ($name = \"Tag$name\"));\n    ($tagInfo->{'Name'} = $name);\n    unless ((defined($tagTablePtr->{$tagID}) or $Image::ExifTool::specialTags{$tagID})) {\n        ($tagTablePtr->{$tagID} = $tagInfo);\n        if ((($purgeFlag and $tagInfo->{'Unknown'}) and not($tagInfo->{'SubDirectory'}))) {\n            push(@purgeTags, $tagInfo);\n        }\n    }\n    ($tagInfo->{'Unknown'} and ($tagInfo->{'AddedUnknown'} = 1));\n    (return $tagInfo);\n}",
+                                "__name": "Image::ExifTool::AddTagToTable",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::ExpandFlags": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagInfo) = (shift()));\n    (my($flags) = $tagInfo->{'Flags'});\n    if ((ref($flags) eq 'ARRAY')) {\n        foreach $_ (@$flags) {\n            ($tagInfo->{$_} = 1);\n        }\n    } elsif ((ref($flags) eq 'HASH')) {\n        my($key);\n        foreach $key (keys(%$flags)) {\n            ($tagInfo->{$key} = $flags->{$key});\n        }\n    } else {\n        ($tagInfo->{$flags} = 1);\n    }\n}",
+                                    "__name": "Image::ExifTool::ExpandFlags",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::MakeDescription": {
+                                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tag, $tagID) = @_);\n    (my($desc) = ucfirst($tag));\n    ($desc =~ tr/_/ /);\n    (defined($tagID) or (($desc =~ s/ (0x[\\da-f]+)$//i) and ($tagID = $1)));\n    ($desc =~ s/([a-z])([A-Z\\d])/$1 $2/g);\n    ($desc =~ s/([A-Z])([A-Z][a-z])/$1 $2/g);\n    ($desc =~ s/(\\d)([A-Z]\\S)/$1 $2/g);\n    (defined($tagID) and ($desc .= ' ' . $tagID));\n    (return $desc);\n}",
+                                    "__name": "Image::ExifTool::MakeDescription",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::SetupTagTable": {
+                                "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr) = (shift()));\n    (my($avoid) = $tagTablePtr->{'AVOID'});\n    my($tagID, $tagInfo);\n    foreach $tagID (TagTableKeys($tagTablePtr)) {\n        (my(@infoArray) = GetTagInfoList($tagTablePtr, $tagID));\n        foreach $tagInfo (@infoArray) {\n            ($tagInfo->{'Table'} = $tagTablePtr);\n            ($tagInfo->{'TagID'} = $tagID);\n            ($tagInfo->{'Name'} or ($tagInfo->{'Name'} = MakeTagName($tagID)));\n            ($tagInfo->{'Flags'} and ExpandFlags($tagInfo));\n            (defined($avoid) and ($tagInfo->{'Avoid'} = $avoid));\n            if (($tagInfo->{'Mask'} and not(defined($tagInfo->{'BitShift'})))) {\n                (my($mask, $bitShift) = ($tagInfo->{'Mask'}, 0));\n                (++$bitShift) until ($mask & (1 << $bitShift));\n                ($tagInfo->{'BitShift'} = $bitShift);\n            }\n        }\n        ((@infoArray > 1) or (next));\n        (my($index) = 0);\n        foreach $tagInfo (@infoArray) {\n            ($tagInfo->{'Index'} = ($index++));\n        }\n    }\n}",
+                                "__name": "Image::ExifTool::SetupTagTable",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "dependencies": {
+                                  "Image::ExifTool::ExpandFlags": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagInfo) = (shift()));\n    (my($flags) = $tagInfo->{'Flags'});\n    if ((ref($flags) eq 'ARRAY')) {\n        foreach $_ (@$flags) {\n            ($tagInfo->{$_} = 1);\n        }\n    } elsif ((ref($flags) eq 'HASH')) {\n        my($key);\n        foreach $key (keys(%$flags)) {\n            ($tagInfo->{$key} = $flags->{$key});\n        }\n    } else {\n        ($tagInfo->{$flags} = 1);\n    }\n}",
+                                    "__name": "Image::ExifTool::ExpandFlags",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::GetTagInfoList": {
+                                    "__deparse": "($$) {\n    package Image::ExifTool;\n    use strict;\n    (my($tagTablePtr, $tagID) = @_);\n    (my($tagInfo) = $tagTablePtr->{$tagID});\n    if ($Image::ExifTool::specialTags{$tagID}) {\n        warn((\"Tag $tagID conflicts with internal ExifTool variable in $tagTablePtr->{'TABLE_NAME'}\\n\"));\n    } elsif ((ref($tagInfo) eq 'HASH')) {\n        (return $tagInfo);\n    } elsif ((ref($tagInfo) eq 'ARRAY')) {\n        (return @$tagInfo);\n    } elsif ($tagInfo) {\n        ($tagInfo = ($tagTablePtr->{$tagID} = {'Name', $tagInfo}));\n        (return $tagInfo);\n    }\n    (return ());\n}",
+                                    "__name": "Image::ExifTool::GetTagInfoList",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::MakeTagName": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($name) = (shift()));\n    ($name =~ tr/\\-0-9A-Z_a-z//cd);\n    ($name = ucfirst($name));\n    (((length($name) < 2) || ($name =~ /^[-0-9]/)) and ($name = \"Tag$name\"));\n    (return $name);\n}",
+                                    "__name": "Image::ExifTool::MakeTagName",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  },
+                                  "Image::ExifTool::TagTableKeys": {
+                                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($tagTablePtr) = (shift()));\n    my(@keyList);\n    foreach $_ (keys(%$tagTablePtr)) {\n        ($Image::ExifTool::specialTags{$_} or push(@keyList, $_));\n    }\n    (return @keyList);\n}",
+                                    "__name": "Image::ExifTool::TagTableKeys",
+                                    "__opaque": true,
+                                    "__perl": "CODE",
+                                    "resolved": true,
+                                    "source_file": "Image/ExifTool.pm",
+                                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                                  }
+                                },
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::TagTableKeys": {
+                                "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    local $_;\n    (my($tagTablePtr) = (shift()));\n    my(@keyList);\n    foreach $_ (keys(%$tagTablePtr)) {\n        ($Image::ExifTool::specialTags{$_} or push(@keyList, $_));\n    }\n    (return @keyList);\n}",
+                                "__name": "Image::ExifTool::TagTableKeys",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              },
+                              "Image::ExifTool::XMP::RegisterNamespace": {
+                                "__deparse": "($) {\n    package Image::ExifTool::XMP;\n    use strict;\n    (my($table) = (shift()));\n    (ref($table->{'NAMESPACE'}) or (return $table->{'NAMESPACE'}));\n    (my($nsRef) = $table->{'NAMESPACE'});\n    my($ns);\n    if ((ref($nsRef) eq 'ARRAY')) {\n        ($ns = $nsRef->[0]);\n        ($Image::ExifTool::XMP::nsURI{$ns} = $nsRef->[1]);\n        ($uri2ns{$nsRef->[1]} = $ns);\n    } else {\n        (my(@ns) = sort(keys(%$nsRef)));\n        while (@ns) {\n            ($ns = pop(@ns));\n            if (($Image::ExifTool::XMP::nsURI{$ns} and ($Image::ExifTool::XMP::nsURI{$ns} ne $nsRef->{$ns}))) {\n                warn((\"User-defined namespace prefix '${ns}' conflicts with existing namespace\\n\"));\n            }\n            ($Image::ExifTool::XMP::nsURI{$ns} = $nsRef->{$ns});\n            ($uri2ns{$nsRef->{$ns}} = $ns);\n        }\n    }\n    (return ($table->{'NAMESPACE'} = $ns));\n}",
+                                "__name": "Image::ExifTool::XMP::RegisterNamespace",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool/XMP.pm",
+                                "source_sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+                              }
+                            },
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          },
+                          "Image::ExifTool::Validate::ValidateRaw": {
+                            "__deparse": null,
+                            "__name": "Image::ExifTool::Validate::ValidateRaw",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "reason": "code_ref_unavailable",
+                            "resolved": false,
+                            "source_file": null,
+                            "source_sha256": null
+                          },
+                          "Image::ExifTool::VerboseInfo": {
+                            "__deparse": "($$$%) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $tagID, $tagInfo, %parms) = @_);\n    (my($verbose) = $self->{'OPTIONS'}{'Verbose'});\n    (my($out) = $self->{'OPTIONS'}{'TextOut'});\n    my($tag, $line, $hexID);\n    if (defined($tagID)) {\n        if (($tagID =~ /^\\d+$/)) {\n            if (((($parms{'Table'} and $parms{'Table'}{'VARS'}) and $parms{'Table'}{'ID_FMT'}) and ($parms{'Table'}{'VARS'}{'ID_FMT'} eq 'dec'))) {\n                ($hexID = $tagID);\n            } else {\n                ($hexID = sprintf('0x%.4x', $tagID));\n            }\n        }\n    } else {\n        ($tagID = 'Unknown');\n    }\n    if (($tagInfo and $tagInfo->{'Name'})) {\n        ($tag = $tagInfo->{'Name'});\n    } elsif ($parms{'Name'}) {\n        ($tag = $parms{'Name'});\n        $hexID = undef;\n    } else {\n        my($prefix);\n        ($parms{'Table'} and ($prefix = $parms{'Table'}{'TAG_PREFIX'}));\n        if (($prefix or defined($hexID))) {\n            ($prefix or ($prefix = 'Unknown'));\n            ($tag = $prefix . '_' . (defined($hexID) ? $hexID : $tagID));\n        } else {\n            ($tag = $tagID);\n        }\n    }\n    (my($dataPt) = $parms{'DataPt'});\n    (my($size) = $parms{'Size'});\n    ((defined($size) or not($dataPt)) or ($size = length($$dataPt)));\n    (my($indent) = $self->{'INDENT'});\n    ($line = $indent);\n    (my($index) = $parms{'Index'});\n    if (defined($index)) {\n        ($line .= $index . ') ');\n        ((length($index) < 2) and ($line .= ' '));\n        ($indent .= '    ');\n    }\n    ($line .= $tag);\n    if (($tagInfo and $tagInfo->{'SubDirectory'})) {\n        ($line .= ' (SubDirectory) -->');\n    } else {\n        (my($maxLen) = (90 - length($line)));\n        (my($val) = $parms{'Value'});\n        if (defined($val)) {\n            ((ref($val) eq 'ARRAY') and ($val = '[' . join(',', @$val) . ']'));\n            ($line .= ' = ' . $self->Printable($val, $maxLen));\n        } elsif ($dataPt) {\n            (my($start) = ($parms{'Start'} || 0));\n            ($line .= ' = ' . $self->Printable(substr($$dataPt, $start, $size), $maxLen));\n        }\n    }\n    print($out (\"$line\\n\"));\n    if ((($verbose > 1) and (((($parms{'Extra'} || $parms{'Format'}) || $parms{'DataPt'}) || defined($size)) || ($tagID =~ m[/])))) {\n        ($line = $indent . '- Tag ');\n        if (defined($hexID)) {\n            ($line .= $hexID);\n        } else {\n            ($tagID =~ s/([\\0-\\x1f\\x7f-\\xff])/sprintf('\\\\x%.2x', ord($1));/eg);\n            ($line .= \"'${tagID}'\");\n        }\n        (defined($parms{'Extra'}) and ($line .= $parms{'Extra'}));\n        (my($format) = $parms{'Format'});\n        if (($format or defined($size))) {\n            ($line .= ' (');\n            if (defined($size)) {\n                ($line .= \"$size bytes\");\n                ($format and ($line .= ', '));\n            }\n            if ($format) {\n                ($line .= $format);\n                ($parms{'Count'} and ($line .= '[' . $parms{'Count'} . ']'));\n            }\n            ($line .= ')');\n        }\n        ((($verbose > 2) and $parms{'DataPt'}) and ($line .= ':'));\n        print($out (\"$line\\n\"));\n    }\n    if (((($verbose > 2) and $parms{'DataPt'}) and not(($tagInfo && $tagInfo->{'ReadFromRAF'})))) {\n        ($parms{'Out'} = $out);\n        ($parms{'Prefix'} = $indent);\n        (($verbose < 5) and ($parms{'MaxLen'} = (($verbose == 3) ? 96 : 2048)));\n        HexDump($dataPt, $size, %parms);\n    }\n}",
+                            "__name": "Image::ExifTool::VerboseInfo",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "dependencies": {
+                              "Image::ExifTool::HexDump": {
+                                "__deparse": "($;$%) {\n    package Image::ExifTool;\n    use strict;\n    (my($dataPt) = (shift()));\n    (my($len) = (shift()));\n    (my(%opts) = @_);\n    (my($start) = ($opts{'Start'} || 0));\n    (my($addr) = $opts{'Addr'});\n    (my($wid) = ($opts{'Width'} || 16));\n    (my($prefix) = ($opts{'Prefix'} || ''));\n    (my($out) = ($opts{'Out'} || (\\*STDOUT)));\n    (my($maxLen) = $opts{'MaxLen'});\n    (my($datLen) = (length($$dataPt) - $start));\n    my($more);\n    (defined($opts{'Len'}) and ($len = $opts{'Len'}));\n    (defined($addr) or ($addr = (($start + ($opts{'DataPos'} || 0)) + ($opts{'Base'} || 0))));\n    (defined($len) or ($len = $datLen));\n    if (($maxLen and ($len > $maxLen))) {\n        ($maxLen = (int((($maxLen - 1) / $wid)) * $wid));\n        ($more = ($len - $maxLen));\n        ($len = $maxLen);\n    }\n    if (($len > $datLen)) {\n        print($out (\"$prefix    Warning: Attempted dump outside data\\n\"));\n        print($out (\"$prefix    ($len bytes specified, but only $datLen available)\\n\"));\n        ($len = $datLen);\n    }\n    (my($format) = sprintf('%%-%ds', ($wid * 3)));\n    (my($tmpl) = ('H2' x $wid));\n    my($i);\n    for (($i = 0); ($i < $len); ($i += $wid)) {\n        (($wid > ($len - $i)) and (($wid = ($len - $i)), ($tmpl = ('H2' x $wid))));\n        printf($out (\"$prefix%8.4x: \"), ($addr + $i));\n        (my($dat) = substr($$dataPt, ($i + $start), $wid));\n        (my($s) = join(' ', unpack($tmpl, $dat)));\n        printf($out $format, $s);\n        ($dat =~ tr/\\000-\\037\\177-\\377/./);\n        print($out (\"[$dat]\\n\"));\n    }\n    ($more and print($out (\"$prefix    [snip $more bytes]\\n\")));\n}",
+                                "__name": "Image::ExifTool::HexDump",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool/Writer.pl",
+                                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                              },
+                              "Image::ExifTool::Printable": {
+                                "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($self, $outStr, $maxLen) = @_);\n    (defined($outStr) or (return '(undef)'));\n    ((ref($outStr) eq 'SCALAR') and (return ('(Binary data ' . length($$outStr) . ' bytes)')));\n    ($outStr =~ tr/\\cA-\\037\\177-\\377/./);\n    ($outStr =~ s/\\x00//g);\n    (my($verbose) = $self->{'OPTIONS'}{'Verbose'});\n    if (($verbose < 4)) {\n        if ($maxLen) {\n            (($maxLen < 20) and ($maxLen = 20));\n        } elsif (defined($maxLen)) {\n            ($maxLen = length($outStr));\n        } else {\n            ($maxLen = 60);\n        }\n    } else {\n        ($maxLen = length($outStr));\n        ((($maxLen > 2048) and ($verbose < 5)) and ($maxLen = 2048));\n    }\n    ((length($outStr) > $maxLen) and ($outStr = substr($outStr, 0, ($maxLen - 6)) . '[snip]'));\n    (return $outStr);\n}",
+                                "__name": "Image::ExifTool::Printable",
+                                "__opaque": true,
+                                "__perl": "CODE",
+                                "resolved": true,
+                                "source_file": "Image/ExifTool.pm",
+                                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                              }
+                            },
+                            "resolved": true,
+                            "source_file": "Image/ExifTool/Writer.pl",
+                            "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                          },
+                          "Image::ExifTool::Warn": {
+                            "__deparse": null,
+                            "__name": "Image::ExifTool::Warn",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "reason": "dependency_cycle",
+                            "resolved": false,
+                            "source_file": null,
+                            "source_sha256": null
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "Image::ExifTool::PackUTF8": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    my(@out);\n    while (@_) {\n        (my($ch) = (pop()));\n        (($ch < 128) and (unshift(@out, $ch), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 32) and (unshift(@out, (192 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        (($ch < 16) and (unshift(@out, (224 | $ch)), (next)));\n        unshift(@out, (128 | ($ch & 63)));\n        ($ch >>= 6);\n        unshift(@out, (240 | ($ch & 7)));\n    }\n    (return pack('C*', @out));\n}",
+                "__name": "Image::ExifTool::PackUTF8",
+                "__opaque": true,
+                "__perl": "CODE",
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              }
+            },
+            "resolved": true,
+            "source_file": "Image/ExifTool/XMP.pm",
+            "source_sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+          }
+        },
+        "resolved": true,
+        "source_file": "Image/ExifTool/XMP.pm",
+        "source_sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+      }
+    },
+    "xml_unescape": "Image::ExifTool::XMP::UnescapeXML"
+  },
+  "status": "inactive source-derived helper; no public writer",
+  "unsupported_branches": [
+    "EncodeHangs/manual packing",
+    "Encode load/evaluation failure",
+    "XML unescape",
+    "HTML unescape",
+    "non-SCALAR references",
+    "non-Unicode Perl character values"
+  ]
+}

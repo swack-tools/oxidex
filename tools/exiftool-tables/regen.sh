@@ -104,6 +104,12 @@ python3 "$HERE/checkexif_rust_codegen.py" "$JSON" \
     --report "$(artifact_path checkexif-ledger)"
 
 echo
+echo ">> generating source-derived input-normalization operands"
+python3 "$HERE/sanitize_rust_codegen.py" "$JSON" \
+    --output "$(artifact_path sanitize-rules)" \
+    --report "$(artifact_path sanitize-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \
