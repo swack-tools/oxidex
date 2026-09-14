@@ -54,6 +54,7 @@ class Addressing:
     source_rows_sha256: str
     query_names_sha256: str
     capture_context: Mapping[str, Any]
+    qualifier_scope: tuple[tuple[int, str], ...]
 
 
 @dataclass(frozen=True)
@@ -251,7 +252,9 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
                        source_file, source_sha256, body_sha256,
                        setnew_file, setnew_sha256, setnew_body_sha256,
                        _address_rows_digest(address_rows), _query_names_digest(owned_names),
-                       capture_context)
+                       capture_context,
+                       tuple(sorted({(0, row.group0) for row in address_rows} |
+                                    {(1, row.group1) for row in address_rows})))
     return result, {
         "runtime_status": RUNTIME_STATUS,
         "rows_emitted": len(result.rows),
@@ -265,6 +268,8 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
         "source_rows_sha256": result.source_rows_sha256,
         "query_names_sha256": result.query_names_sha256,
         "native_capture_context": result.capture_context,
+        "admitted_qualifier_scope": [{"family": family, "group": group}
+                                     for family, group in result.qualifier_scope],
     }
 
 
@@ -473,7 +478,9 @@ def render(addressing: Addressing) -> str:
     return json.dumps({"runtime_status": RUNTIME_STATUS, "rows": [asdict(row) for row in addressing.rows],
                        "source_rows_sha256": addressing.source_rows_sha256,
                        "query_names_sha256": addressing.query_names_sha256,
-                       "native_capture_context": copy.deepcopy(addressing.capture_context)},
+                       "native_capture_context": copy.deepcopy(addressing.capture_context),
+                       "admitted_qualifier_scope": [{"family": family, "group": group}
+                                                    for family, group in addressing.qualifier_scope]},
                       sort_keys=True, indent=2) + "\n"
 
 

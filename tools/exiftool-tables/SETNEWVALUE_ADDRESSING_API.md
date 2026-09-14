@@ -74,6 +74,13 @@ so external routing retains its source distinction, but family-2/ID/all,
 `AllowGroup`, language, shortcut, wildcard, and tag-key grammar execution are
 not writer admission yet.
 
+Generated native lookup operands retain every observed numeric group-family
+pair and a `source_identity_present` bit. A candidate with no generated row
+index is therefore distinguishable as an omitted source-owned identity versus
+a truly external table candidate. `SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE` is
+also generated from the source compiler; consumers must not substitute a
+handwritten EXIF/IFD0 group list.
+
 This does not implement public SetNewValue. Unsupported portions include
 wildcards, language suffixes, shortcuts, multiple/numbered/ID qualifiers,
 ExifIFD and other group forms, priority/preferred/avoid handling, protected

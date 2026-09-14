@@ -16,7 +16,9 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertTrue(report["emitted"])
         self.assertIn("SET_NEW_VALUE_ADDRESS_ROWS", rust)
         self.assertIn("SET_NEW_VALUE_LOOKUP", rust)
-        self.assertIn("group2", rust)
+        self.assertIn("StaticNativeLookupFamily", rust)
+        self.assertIn("source_identity_present", rust)
+        self.assertIn("SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_QUALIFIED", rust)
         self.assertIn("noallowlist", rust)
@@ -60,6 +62,17 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn('"noallowlist"', rust)
         self.assertIn('"newname"', rust)
         self.assertIn("removed: true", rust)
+
+    def test_lookup_emits_all_native_families_and_identity_presence(self):
+        document = source()
+        from setnewvalue_addressing import compile_addressing
+        addressing, _ = compile_addressing(document)
+        rust, report = generate(document, observations(addressing.rows, external=True),
+                                bootstrap_ownership_ledger=True)
+        self.assertTrue(report["emitted"])
+        self.assertIn("family: 2", rust)
+        self.assertIn("source_identity_present: true", rust)
+        self.assertIn("source_identity_present: false", rust)
 
 
 if __name__ == "__main__":
