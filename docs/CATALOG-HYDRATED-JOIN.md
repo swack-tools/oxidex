@@ -74,3 +74,36 @@ identity, status and row/table hash against the committed ledger. Only the full
 dump serialization hash is excluded from this semantic comparison; both ledger
 files retain that hash as evidence provenance. The preceding graph audit checks
 the complete source manifest, producer, Perl version and expected graph counts.
+
+The same CI join also supplies the IFD compiler source dump, identity ledger,
+rendered Rust artifact, and expression oracle ledger. This makes IFD schema
+declaration accounting part of the deterministic source denominator; it remains
+an unobserved declaration until an independent dispatch and fixture instrument
+is available.
+
+## Historical native observations
+
+`docs/public/measurements/catalog-hydrated-observed-13.59.json` is a separate
+Pages artifact when authenticated native receipts are available. It contains
+the full source-coordinate join with observed states, its exact source-join
+SHA-256, the source and runtime commits, and the named native instrument. It is
+explicitly historical evidence, not a claim that a newer source/runtime has
+the same coverage. Its companion human report is
+`docs/reference/catalog-hydrated-observed.md`.
+
+Publish it only from a join that has already validated its native receipts:
+
+```sh
+python3 tools/exiftool-tables/catalog_observed_snapshot.py \
+  --source-join docs/public/measurements/catalog-hydrated-join-13.59.json \
+  --observed-join "$AUTHENTICATED_OBSERVED_JOIN" \
+  --source-commit "$SOURCE_COMMIT" --runtime-commit "$RUNTIME_COMMIT" \
+  --instrument "$NATIVE_INSTRUMENT" \
+  --snapshot docs/public/measurements/catalog-hydrated-observed-13.59.json \
+  --report docs/reference/catalog-hydrated-observed.md --replace
+```
+
+CI validates a published snapshot against its recorded source ledger without
+requiring historical native fixtures on every runner. A changed source ledger,
+coordinate, declaration axis, observation count, runtime commit, or instrument
+refuses rather than silently dropping or re-crediting observations.

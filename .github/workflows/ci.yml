@@ -537,6 +537,10 @@ jobs:
             --quicktime-itemlist-rust "src/parsers/quicktime/generated_itemlist_specs.rs" \
             --quicktime-keys-ledger "tools/exiftool-tables/quicktime_generated_keys_ledger.json" \
             --quicktime-keys-rust "src/parsers/quicktime/generated_keys_specs.rs" \
+            --ifd-source "$RUNNER_TEMP/catalog-writer-source.json" \
+            --ifd-identity-ledger "tools/exiftool-tables/ifd_identity_ledger.json" \
+            --ifd-rust "src/exiftool_tables/ifd_tables.rs" \
+            --ifd-expr-ledger "tools/exiftool-tables/expr_oracle_ledger.json" \
             --writer-source "$RUNNER_TEMP/catalog-writer-source.json" \
             --writer-final-ledger "tools/exiftool-tables/tiff_scalar_final_ledger.json" \
             --writer-final-rust "src/writers/generated_tiff_scalar_final_rules.rs" \
@@ -560,6 +564,18 @@ jobs:
           print('=== instrument: catalog/source ledger semantic check ===')
           print('All catalog identities, row/table hashes and statuses match.')
           PYCODE
+      - name: Validate published observed catalog receipt, when present
+        run: |
+          set -euo pipefail
+          observed="docs/public/measurements/catalog-hydrated-observed-$(cat .exiftool-version).json"
+          if [[ -f "$observed" ]]; then
+            python3 tools/exiftool-tables/catalog_observed_snapshot.py \
+              --source-join "docs/public/measurements/catalog-hydrated-join-$(cat .exiftool-version).json" \
+              --snapshot "$observed" --verify
+          else
+            echo '=== instrument: catalog observed receipt check ==='
+            echo 'No published native receipt yet; source declaration ledger remains independent.'
+          fi
       - name: Verify committed tables against ExifTool
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
