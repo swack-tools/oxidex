@@ -127,12 +127,82 @@ _CALLER_BLOCK: tuple[str, ...] = (
 )
 
 
-def _method_default(body: str) -> str:
+@dataclass(frozen=True)
+class _FreshJpegSourceProfile:
+    """Complete callable profiles plus the selected IFD0 caller predicate."""
+
+    name: str
+    method_template: tuple[str | None, ...]
+    set_byte_order_body_sha256: str
+    get_byte_order_body_sha256: str
+    caller_body_sha256: str
+    caller_block: tuple[str, ...]
+    # The fixed fresh-JPEG route is IFD0.  Retain whether source reached
+    # SetPreferredByteOrder with no second argument or an IFD0-proven undef
+    # default; this is a source predicate, not an inferred common behavior.
+    caller_mode: str
+
+
+_METHOD_TEMPLATE_11_78: tuple[str | None, ...] = (
+    '(', '$', ')', '{', 'package', 'Image::ExifTool', ';', 'use', 'strict', ';',
+    '(', 'my', '$', 'self', '=', '(', 'shift', '(', ')', ')', ')', ';',
+    '(', 'my', '$', 'byteOrder', '=', '(', '(', '(', '$', 'self', '-', '>', 'Options',
+    '(', "'ByteOrder'", ')', '|', '|', '$', 'self', '-', '>', 'GetNewValue',
+    '(', "'ExifByteOrder'", ')', ')', '|', '|', '$', 'self', '-', '>', '{',
+    "'MAKER_NOTE_BYTE_ORDER'", '}', ')', '|', '|', None, ')', ')', ';', 'unless',
+    '(', 'SetByteOrder', '(', '$', 'byteOrder', ')', ')', '{', '(', '$', 'self',
+    '-', '>', 'Options', '(', "'Verbose'", ')', 'and', 'warn', '(', '(',
+    '"Invalid byte order \'${byteOrder}\'\\n"', ')', ')', ')', ';', '(', '$',
+    'byteOrder', '=', '(', '$', 'self', '-', '>', '{', "'MAKER_NOTE_BYTE_ORDER'",
+    '}', '|', '|', None, ')', ')', ';', 'SetByteOrder', '(', '$', 'byteOrder',
+    ')', ';', '}', '(', 'return', 'GetByteOrder', ')', ';', '}',
+)
+
+_CALLER_BLOCK_11_78: tuple[str, ...] = (
+    'unless', '(', 'defined', '(', '$', 'self', '-', '>', '{', "'EXIF_DATA'", '}', ')', ')',
+    '{', 'if', '(', '(', '$', 'self', '-', '>', 'SetPreferredByteOrder', 'eq', "'MM'", ')', ')',
+    '{', '(', '$', 'self', '-', '>', '{', "'EXIF_DATA'", '}', '=', '"MM\\000*\\000\\000\\000\\cH"', ')', ';', '}',
+    'else', '{', '(', '$', 'self', '-', '>', '{', "'EXIF_DATA'", '}', '=', '"II*\\000\\cH\\000\\000\\000"', ')', ';', '}', '}',
+)
+
+_PROFILE_11_78 = _FreshJpegSourceProfile(
+    name="no-default-argument-ifd0",
+    method_template=_METHOD_TEMPLATE_11_78,
+    set_byte_order_body_sha256='59a7c469a92f6dfa30781a7fcac4c4cf4783bba998448501bcf3220b87af7fe3',
+    get_byte_order_body_sha256='ec444b8559811d658353c39da300d2e105ef2f30bfb0298aee35245111f394d9',
+    caller_body_sha256='17eb23190c1454a26d6b94419ba52ae769300fa6ea93bc19789b3c0729fd509f',
+    caller_block=_CALLER_BLOCK_11_78,
+    caller_mode="NoDefaultArgument",
+)
+_PROFILE_12_64 = _FreshJpegSourceProfile(
+    name="default-argument-ifd0-12-64",
+    method_template=_METHOD_TEMPLATE,
+    set_byte_order_body_sha256='59a7c469a92f6dfa30781a7fcac4c4cf4783bba998448501bcf3220b87af7fe3',
+    get_byte_order_body_sha256='ec444b8559811d658353c39da300d2e105ef2f30bfb0298aee35245111f394d9',
+    caller_body_sha256='0d82e3b6c7fe0d7e1f08db3055735321687666131d20f076516777979081ff5c',
+    caller_block=_CALLER_BLOCK,
+    caller_mode="Ifd0DefaultArgumentUndef",
+)
+_CURRENT_SOURCE_PROFILE = _FreshJpegSourceProfile(
+    name="default-argument-ifd0",
+    method_template=_METHOD_TEMPLATE,
+    set_byte_order_body_sha256=_SET_BYTE_ORDER_FULL_BODY_SHA256,
+    get_byte_order_body_sha256=_GET_BYTE_ORDER_FULL_BODY_SHA256,
+    caller_body_sha256=_DOPROCESS_TIFF_FULL_BODY_SHA256,
+    caller_block=_CALLER_BLOCK,
+    caller_mode="Ifd0DefaultArgumentUndef",
+)
+_SOURCE_PROFILES: tuple[_FreshJpegSourceProfile, ...] = (
+    _PROFILE_11_78, _PROFILE_12_64, _CURRENT_SOURCE_PROFILE,
+)
+
+
+def _method_default(body: str, template: tuple[str | None, ...]) -> str:
     tokens = body_tokens(body)
-    if len(tokens) != len(_METHOD_TEMPLATE):
+    if len(tokens) != len(template):
         raise FreshByteOrderRefused("SetPreferredByteOrder body is outside the admitted grammar")
     values: list[str] = []
-    for actual, expected in zip(tokens, _METHOD_TEMPLATE):
+    for actual, expected in zip(tokens, template):
         if expected is None:
             if actual not in {"'II'", "'MM'"}:
                 raise FreshByteOrderRefused("SetPreferredByteOrder fallback is unsupported")
@@ -144,30 +214,41 @@ def _method_default(body: str) -> str:
     return values[0]
 
 
-def _closed_helper(body: str, expected_normalized_sha256: str, name: str) -> None:
-    # These helper bodies have no admitted variable positions.  The digest is
-    # over every B::Deparse token, so whitespace-only source differences are
-    # harmless but no executable statement/token is ignored.
-    if _normalized_body_sha256(body) != expected_normalized_sha256:
-        raise FreshByteOrderRefused(f"{name} body is outside the admitted grammar")
-
-
-def _caller_new_ifd0(body: str) -> None:
+def _matches_caller_profile(body: str, profile: _FreshJpegSourceProfile) -> bool:
     tokens = body_tokens(body)
-    # Match the exact branch before checking the complete caller body.  The
-    # branch check explains unsupported fresh-header changes; the full-body
-    # normalized digest prevents an unmodeled write immediately before/after it
-    # from silently changing EXIF_DATA or the downstream selected order.
-    locations = [index for index in range(len(tokens)) if tuple(tokens[index:index + len(_CALLER_BLOCK)]) == _CALLER_BLOCK]
-    if len(locations) != 1:
-        raise FreshByteOrderRefused("DoProcessTIFF new-header caller block is outside the admitted grammar")
-    if _normalized_body_sha256(body) != _DOPROCESS_TIFF_FULL_BODY_SHA256:
+    locations = [index for index in range(len(tokens))
+                 if tuple(tokens[index:index + len(profile.caller_block)]) == profile.caller_block]
+    return len(locations) == 1 and _normalized_body_sha256(body) == profile.caller_body_sha256
+
+
+def _source_profile(method_body: str, set_body: str, get_body: str, caller_body: str) -> tuple[_FreshJpegSourceProfile, str]:
+    """Select one complete profile and extract its dynamic fallback literal."""
+    method_matches: list[tuple[_FreshJpegSourceProfile, str]] = []
+    for profile in _SOURCE_PROFILES:
+        try:
+            method_matches.append((profile, _method_default(method_body, profile.method_template)))
+        except FreshByteOrderRefused:
+            continue
+    if not method_matches:
+        raise FreshByteOrderRefused("SetPreferredByteOrder body is outside the admitted grammar")
+    set_matches = [item for item in method_matches
+                   if _normalized_body_sha256(set_body) == item[0].set_byte_order_body_sha256]
+    if not set_matches:
+        raise FreshByteOrderRefused("SetByteOrder body is outside the admitted grammar")
+    get_matches = [item for item in set_matches
+                   if _normalized_body_sha256(get_body) == item[0].get_byte_order_body_sha256]
+    if not get_matches:
+        raise FreshByteOrderRefused("GetByteOrder body is outside the admitted grammar")
+    matches = [item for item in get_matches if _matches_caller_profile(caller_body, item[0])]
+    if len(matches) != 1:
         raise FreshByteOrderRefused("DoProcessTIFF complete caller body is outside the admitted grammar")
+    return matches[0]
 
 
 @dataclass(frozen=True)
 class FreshJpegByteOrderRecipe:
     order: str
+    caller_mode: str
     set_preferred_source_sha256: str
     set_preferred_body_sha256: str
     set_byte_order_source_sha256: str
@@ -244,10 +325,8 @@ def compile_recipe(document: Mapping[str, Any], writer_document: Mapping[str, An
         raise FreshByteOrderRefused("byte-order helper source does not join DoProcessTIFF core source")
     _capture_context(document, method_source, caller_source)
     writer_capture_closure_sha256, writer_read_capture_closure_sha256 = _writer_capture_join(document, writer_document)
-    fallback = _method_default(method["__deparse"])
-    _closed_helper(set_byte_order["__deparse"], _SET_BYTE_ORDER_FULL_BODY_SHA256, "SetByteOrder")
-    _closed_helper(get_byte_order["__deparse"], _GET_BYTE_ORDER_FULL_BODY_SHA256, "GetByteOrder")
-    _caller_new_ifd0(caller["__deparse"])
+    profile, fallback = _source_profile(method["__deparse"], set_byte_order["__deparse"],
+                                        get_byte_order["__deparse"], caller["__deparse"])
     observations = _mapping(document.get("observations"), "observations")
     default = _mapping(observations.get("fresh_ifd0_no_overrides"), "fresh IFD0 observation")
     if default.get("selected") != fallback or default.get("reported") != fallback:
@@ -260,6 +339,7 @@ def compile_recipe(document: Mapping[str, Any], writer_document: Mapping[str, An
             raise FreshByteOrderRefused(f"{name} observation is unresolved")
     return FreshJpegByteOrderRecipe(
         order=fallback,
+        caller_mode=profile.caller_mode,
         set_preferred_source_sha256=method_source,
         set_preferred_body_sha256=hashlib.sha256(method["__deparse"].encode()).hexdigest(),
         set_byte_order_source_sha256=set_byte_order_source,

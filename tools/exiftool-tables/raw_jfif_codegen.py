@@ -57,12 +57,50 @@ def function(fact: Any, name: str, closure: Mapping) -> Mapping:
     return fact
 
 
+def source_contract(fact: Mapping) -> tuple[Path, Mapping]:
+    """Recognize one complete reader/caller grammar, never a version label.
+
+    Historical alternatives are complete executable productions. A statement
+    inserted into any captured function prevents the whole profile matching.
+    The original grammar and report digest remain unchanged for13.59.
+    """
+    funcs=mapping(fact.get('functions'),'native functions')
+    substitutions={
+        '@@MARKER@@':r'(?P<marker>[0-9]+)',
+        '@@SIGNATURE@@':r'(?P<signature>[A-Za-z0-9]+)',
+        '@@SIGNATURE_AGAIN@@':r'(?P=signature)',
+        '@@ORDER@@':r'(?P<order>MM|II)',
+        '@@START@@':r'(?P<skip>[0-9]+)',
+        '@@START_AGAIN@@':r'(?P=skip)',
+    }
+    for filename in ('raw_jfif_source_grammar.json',
+                     'raw_jfif_source_grammar_11_78.json',
+                     'raw_jfif_source_grammar_12_64.json'):
+        path=HERE/filename
+        contract=json.loads(path.read_text())
+        grammar=contract['functions']
+        if set(funcs)!=set(grammar): continue
+        matches=True
+        for name,lines in grammar.items():
+            body=mapping(funcs[name],name).get('body')
+            if not isinstance(body,str): matches=False;break
+            expected='\n'.join(lines)
+            if name=='WriteJPEG':
+                pattern=re.escape(expected)
+                for token,replacement in substitutions.items():pattern=pattern.replace(re.escape(token),replacement)
+                matches=re.fullmatch(pattern,body) is not None
+            else:matches=body==expected
+            if not matches:break
+        if matches:return path,contract
+    raise Refused('native bodies are outside every complete raw JFIF source grammar')
+
+
 def compile_fact(fact: Any) -> Recipe:
     fact=mapping(fact,'raw JFIF capture')
     if fact.get('schema')!=1 or fact.get('kind')!='raw_jfif_native_fact': raise Refused('unsupported raw JFIF capture')
     closure=mapping(fact.get('loaded_closure'),'native closure')
     funcs=mapping(fact.get('functions'),'native functions')
-    contract=json.loads((HERE/'raw_jfif_source_grammar.json').read_text())
+    _contract_path,contract=source_contract(fact)
     grammar=contract['functions']
     substitutions={
         '@@MARKER@@':r'(?P<marker>[0-9]+)',
@@ -113,6 +151,12 @@ def compile_fact(fact: Any) -> Recipe:
         return match[1]+str(code & 0x0f) if match else f'marker 0x{code:02x}'
     skip_markers=tuple(code for code in range(256) if marker_name(code)==skip_name)
     wait_for_directories=tuple(wait_for_directories)
+
+    if 'exif_header_hex' in contract:
+        header=mapping(fact.get('exif_header'),'native EXIF header')
+        source(header,closure,'native EXIF header')
+        if header.get('binding')!='Image::ExifTool::exifAPP1hdr' or header.get('hex')!=contract['exif_header_hex']:
+            raise Refused('native EXIF header changes the historical creation dispatcher')
 
     reader=mapping(funcs['ReadValue'].get('lexical_hashes'),'ReadValue lexical hashes')
     processors=mapping(funcs['ProcessBinaryData'].get('lexical_hashes'),'ProcessBinaryData lexical hashes')
@@ -206,7 +250,7 @@ pub(crate) const RAW_JFIF: RawSegmentRecipe = RawSegmentRecipe {
 '''
     report={'schema':1,'status':'compiled bounded raw DATAMEMBER decoder; public integration separate',
             'recipe':asdict(recipe),'native_identity':{k:v for k,v in fact['native_identity'].items() if k!='perl'},
-            'loaded_closure':fact['loaded_closure'],'source_grammar_sha256':hashlib.sha256((HERE/'raw_jfif_source_grammar.json').read_bytes()).hexdigest()}
+            'loaded_closure':fact['loaded_closure'],'source_grammar_sha256':hashlib.sha256(source_contract(fact)[0].read_bytes()).hexdigest()}
     return rust,report
 
 

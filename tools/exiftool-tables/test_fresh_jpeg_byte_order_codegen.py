@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
-from fresh_jpeg_byte_order_codegen import FreshByteOrderRefused, compile_recipe, generate
+from fresh_jpeg_byte_order_codegen import FreshByteOrderRefused, _source_profile, compile_recipe, generate
 
 PERL = Path(os.environ.get("EXIFTOOL_PERL", "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2"))
 LIB = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", "/tmp/oxidex-exiftool-cache/exiftool/lib"))
@@ -43,6 +43,47 @@ def native_writer_document(library: Path = LIB) -> dict[str, object]:
 
 
 
+class HistoricalFreshJpegProfileTests(unittest.TestCase):
+    """Portable source facts captured from the persisted selected releases."""
+
+    def profile(self, release: str):
+        document = json.loads((Path(__file__).parent / "testdata" / f"fresh_jpeg_byte_order_{release.replace('.', '_')}_fact.json").read_text())
+        return _source_profile(document["set_preferred_byte_order"]["__deparse"],
+                               document["set_byte_order"]["__deparse"],
+                               document["get_byte_order"]["__deparse"],
+                               document["new_jpeg_caller"]["__deparse"]), document
+
+    def test_selected_release_profiles_extract_their_own_ifd0_operand(self):
+        expected = {
+            "11.78": ("no-default-argument-ifd0", "NoDefaultArgument"),
+            "12.64": ("default-argument-ifd0-12-64", "Ifd0DefaultArgumentUndef"),
+        }
+        for release, (name, mode) in expected.items():
+            with self.subTest(release=release):
+                (profile, fallback), document = self.profile(release)
+                self.assertEqual((profile.name, profile.caller_mode, fallback), (name, mode, "MM"))
+                self.assertEqual(document["observations"]["fresh_ifd0_no_overrides"], {"selected": "MM", "reported": "MM"})
+
+    def test_historical_method_fallback_mutation_reaches_selected_operand(self):
+        (profile, _), document = self.profile("11.78")
+        method = document["set_preferred_byte_order"]["__deparse"]
+        self.assertEqual(method.count("'MM'"), 2)
+        changed = method.replace("'MM'", "'II'")
+        selected, fallback = _source_profile(changed, document["set_byte_order"]["__deparse"],
+                                             document["get_byte_order"]["__deparse"],
+                                             document["new_jpeg_caller"]["__deparse"])
+        self.assertEqual((selected.name, fallback), (profile.name, "II"))
+
+    def test_historical_caller_mutation_refuses_instead_of_reusing_current_mode(self):
+        _, document = self.profile("12.64")
+        caller = document["new_jpeg_caller"]["__deparse"]
+        changed = caller.replace("SetPreferredByteOrder($defaultByteOrder)", "SetPreferredByteOrder()", 1)
+        with self.assertRaisesRegex(FreshByteOrderRefused, "DoProcessTIFF complete caller body"):
+            _source_profile(document["set_preferred_byte_order"]["__deparse"],
+                            document["set_byte_order"]["__deparse"],
+                            document["get_byte_order"]["__deparse"], changed)
+
+
 @unittest.skipUnless(NATIVE_READY, "requires canonical EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL")
 class FreshJpegByteOrderTests(unittest.TestCase):
     @classmethod
@@ -54,6 +95,7 @@ class FreshJpegByteOrderTests(unittest.TestCase):
         recipe = compile_recipe(self.document, self.writer_document)
         self.assertEqual(recipe.order, self.document["observations"]["fresh_ifd0_no_overrides"]["selected"])
         self.assertEqual(recipe.order, "MM")
+        self.assertEqual(recipe.caller_mode, "Ifd0DefaultArgumentUndef")
         source, report = generate(self.document, self.writer_document)
         self.assertEqual(report["state"], "resolved")
         self.assertIn("selected: FreshJpegExifByteOrder::BigEndian", source)
@@ -121,7 +163,7 @@ class FreshJpegByteOrderTests(unittest.TestCase):
             needle = "my $defaultByteOrder;\n        if ($$dirInfo{DirName}"
             self.assertIn(needle, source)
             core.write_text(source.replace(needle, "my $defaultByteOrder;\n        my $injected = 1;\n        if ($$dirInfo{DirName}", 1), encoding="utf-8")
-            with self.assertRaisesRegex(FreshByteOrderRefused, "new-header caller block"):
+            with self.assertRaisesRegex(FreshByteOrderRefused, "DoProcessTIFF complete caller body"):
                 compile_recipe(native_document(copied), native_writer_document(copied))
 
     def test_copied_post_block_exif_write_changes_native_outcome_and_refuses(self) -> None:

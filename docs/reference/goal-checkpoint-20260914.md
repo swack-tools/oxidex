@@ -119,3 +119,6 @@ work are recorded in [generated ItemList progress](quicktime-generated-reader.md
 The earlier writer checkpoint is preserved separately in
 [writer checkpoint](writer-checkpoint-20260914.md). Its stop instruction describes
 the historical session, not the active full-parity goal.
+
+The [upgrade rehearsal checkpoint](upgrade-checkpoint-20260914.md) likewise
+records historical evidence rather than a passing combined-tree gate.
