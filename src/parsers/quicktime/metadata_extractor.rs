@@ -2545,7 +2545,14 @@ fn strip_hex_word_padding(text: &str) -> String {
 
 /// Extract the generated direct-Keys subset of `moov/meta/keys` + `ilst`.
 fn extract_mp4_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
-    let (Some(keys), Some(ilst)) = (meta.find_child("keys"), meta.find_child("ilst")) else {
+    // `meta` is a FullBox: native ProcessKeys receives children after its
+    // version/flags prefix, while Atom::find_child would treat those bytes as
+    // an atom header.
+    let body = meta.data.get(4..).unwrap_or(meta.data);
+    let (_, children) = super::atom_parser::parse_atoms(body).map_err(|e| e.to_string())?;
+    let keys = children.iter().find(|atom| atom.atom_type.matches("keys"));
+    let ilst = children.iter().find(|atom| atom.atom_type.matches("ilst"));
+    let (Some(keys), Some(ilst)) = (keys, ilst) else {
         return Ok(());
     };
     let resolved = super::keys_reader::resolve_keys(keys.data);
@@ -3757,6 +3764,26 @@ mod tests {
         atom.extend_from_slice(kind);
         atom.extend_from_slice(payload);
         atom
+    }
+
+    #[test]
+    fn native_keys_fullbox_resolves_indexed_artist() {
+        // ExifTool ProcessKeys: FullBox, count, then [size, namespace, key].
+        let mut keys = vec![0; 4];
+        keys.extend_from_slice(&1u32.to_be_bytes());
+        keys.extend_from_slice(&((8 + b"com.apple.quicktime.artist".len()) as u32).to_be_bytes());
+        keys.extend_from_slice(b"mdta");
+        keys.extend_from_slice(b"com.apple.quicktime.artist");
+        let data = child_atom(b"data", &[0, 0, 0, 1, 0, 0, 0, 0, b'A', b'd', b'a']);
+        let item = ilst_item(&[0, 0, 0, 1], &data);
+        let ilst = child_atom(b"ilst", &item);
+        let mut meta = vec![0; 4];
+        meta.extend_from_slice(&child_atom(b"keys", &keys));
+        meta.extend_from_slice(&ilst);
+        let moov = child_atom(b"moov", &child_atom(b"meta", &meta));
+        let (_, roots) = super::super::atom_parser::parse_atoms(&moov).expect("atom tree");
+        let metadata = extract_metadata(&roots, false).expect("metadata");
+        assert_eq!(metadata.get_string("QuickTime:Artist"), Some("Ada"));
     }
 
     /// `cpil` and `pgap` are flags ExifTool prints as words, not as the raw

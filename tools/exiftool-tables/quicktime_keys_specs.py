@@ -36,7 +36,7 @@ def compile_document(document):
         blocked = "missing_or_changed_processor_contract:PROCESS_PROC"
     elif blocked is None and hashlib.sha256(proc.get("__deparse", "").encode()).hexdigest() != PROCESSOR_SHA256:
         blocked = "missing_or_changed_processor_contract:PROCESS_PROC"
-    elif blocked is None and meta.get("GROUPS", {}).get("0", "QuickTime") != "QuickTime" or meta.get("GROUPS", {}).get("1") != "Keys" or meta.get("VARS", {}).get("LONG_TAGS") != "9":
+    elif blocked is None and (meta.get("GROUPS", {}).get("0", "QuickTime") != "QuickTime" or meta.get("GROUPS", {}).get("1") != "Keys" or meta.get("VARS", {}).get("LONG_TAGS") != "9"):
         blocked = "missing_or_changed_processor_contract:Keys_metadata"
     specs=[]; ledger=[]
     keys_family = next(f for f in base["families"] if f["table"] == "Keys")
@@ -61,7 +61,7 @@ def render_rust(result):
     for x in result['specs']:
         es=', '.join('EnumOperand { raw: %s, rendered: %s }'%(rust_string(e['raw']),rust_string(e['rendered'])) for e in x['safe_enum_operands'])
         lines.append('    KeySpec { source_key: %s, data: ItemListSpec { raw_fourcc: [0, 0, 0, 0], name: %s, group: %s, group0: %s, source_format: %s, safe_enum_operands: &[%s] } },'%(rust_string(x['source_key']),rust_string(x['name']),rust_string(x['group']),rust_string(x['group0']),render_format(x['source_format']),es))
-        refused = [x["identity"]["raw_key"] for x in result["ledger"] if not x["generated"]]
+    refused = [x["identity"]["raw_key"] for x in result["ledger"] if not x["generated"]]
     lines.extend(['];', 'pub(crate) static REFUSED_SOURCE_KEYS: &[&str] = &[' + ', '.join(rust_string(x) for x in refused) + '];', ''])
     return '\n'.join(lines)
 def serialized(x): return json.dumps(x,sort_keys=True,indent=2,ensure_ascii=False)+'\n'
