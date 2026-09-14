@@ -1,5 +1,6 @@
 """Negative controls for the internal writer's actual-file comparison."""
 import copy
+import os
 import unittest
 
 from pathlib import Path
@@ -20,6 +21,7 @@ from generated_tiff_write_matrix import (
     native_survivor_value,
     selected_rehearsal_contract,
 )
+import native_write_matrix as native
 from native_write_matrix import parse_tiff
 
 
@@ -296,6 +298,68 @@ class GeneratedTiffComparison(unittest.TestCase):
                     wrong = dict(entry); wrong["value_hex"] = (7).to_bytes(width, order).hex()
                     self.assertEqual(native_survivor_value({"value": 6}, wrong, order, capability), expected)
                     self.assertNotEqual(wrong["value_hex"], expected)
+
+    @unittest.skipUnless(os.environ.get("EXIFTOOL_PERL") and os.environ.get("OXIDEX_PINNED_EXIFTOOL"),
+                         "requires canonical EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL")
+    def test_pinned_native_ifd1_cleanup_uses_actual_fixed_width_tiff_and_jpeg_carriers(self):
+        """Drive IFD1:Artist removal against raw, source-derived TIFF records.
+
+        This is intentionally a native oracle fixture.  The matrix's Rust
+        driver consumes the same physical shape later; this test proves that
+        the fixture itself uses real file bytes and that native WriteExif,
+        rather than the checker, decides pruning.
+        """
+        perl = native.resolve_perl(Path(os.environ["EXIFTOOL_PERL"]))
+        library = native.resolve_library(Path(os.environ["OXIDEX_PINNED_EXIFTOOL"]))
+        native.assert_contract_version(native.native_identity(perl, library))
+        artist = next(target for target in generated_targets()
+                      if target.name == "Artist")
+        forms = (1, 6, 8, 9)
+        base = matrix.ROOT / "tests/fixtures/jpeg/edge_cases/orientation_2.jpg"
+        self.assertTrue(base.is_file(), "committed JPEG carrier is absent")
+        count_zero = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for carrier in ("tiff", "jpeg"):
+                for order in ("little", "big"):
+                    for field_type in forms:
+                        for count in (0, 1, 2):
+                            with self.subTest(carrier=carrier, order=order, field_type=field_type, count=count):
+                                raw = root / "raw.tif"
+                                metadata = native.make_mandatory_ifd1_survivor_tiff(
+                                    raw, order, field_type, count, artist.raw_tag_id
+                                )
+                                source = raw if carrier == "tiff" else root / "raw.jpg"
+                                if carrier == "jpeg":
+                                    native.wrap_tiff_exif_in_jpeg(source, base, raw.read_bytes())
+                                seeded = native.inspect(source, "tiff_" + order if carrier == "tiff" else "jpeg")
+                                child = (seeded if carrier == "tiff" else seeded["exif"])["children"]["NextIFD"]
+                                self.assertEqual(child["tags"][str(metadata["survivor_tag_id"])]["type"], field_type)
+                                self.assertEqual(child["tags"][str(metadata["survivor_tag_id"])]["count"], count)
+                                self.assertIn(str(artist.raw_tag_id), child["tags"])
+                                output = root / ("output.tif" if carrier == "tiff" else "output.jpg")
+                                output.unlink(missing_ok=True)
+                                call = native.run_native_batch(
+                                    perl, library, source, output,
+                                    [{"tag": "IFD1:Artist", "scalar": "undefined"}],
+                                )
+                                native.assert_native(call, f"{carrier}/{order}/{field_type}/{count}")
+                                observed = native.inspect(output, "tiff_" + order if carrier == "tiff" else "jpeg")
+                                root_after = observed if carrier == "tiff" else observed["exif"]
+                                after = root_after["children"].get("NextIFD")
+                                if count == 1:
+                                    self.assertIsNone(after, "matching one-scalar survivor must prune IFD1")
+                                    matrix.assert_prunable_ifd1(child, {str(artist.raw_tag_id)})
+                                else:
+                                    self.assertIsNotNone(after, "native non-scalar survivor must retain IFD1")
+                                    self.assertNotIn(str(artist.raw_tag_id), after["tags"])
+                                if count == 0:
+                                    count_zero.append((carrier, order, field_type, after is None))
+        # Count zero is not inferred from WriteValue's scalar probe: this
+        # assertion preserves the observed native classification in the file
+        # fixture.  A changed native outcome fails visibly here.
+        self.assertTrue(count_zero)
+        self.assertTrue(all(not pruned for _, _, _, pruned in count_zero), count_zero)
 
     def test_mandatory_ifd1_cleanup_rejects_mismatched_capture_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
