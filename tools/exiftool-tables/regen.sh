@@ -157,6 +157,25 @@ python3 "$HERE/setnewvalue_address_rust_codegen.py" "$JSON" "$ADDRESS_OBSERVATIO
     --write-ownership-ledger "$ADDRESS_OWNERSHIP" "${ADDRESS_LEDGER_ARGS[@]}"
 
 echo
+echo ">> generating composed public SetNewValue migration ownership"
+# This is deliberately a separate public fence.  It consumes the same fresh
+# selected dump as the address and final-scalar stages, but owns only their
+# authenticated intersection.  The larger address inventory remains legacy
+# routing scope until a matching final recipe is generated.
+PUBLIC_MIGRATION_REPORT="$CACHE/setnewvalue-public-migration-report-$VERSION.json"
+PUBLIC_MIGRATION_LEDGER="$(artifact_path setnewvalue-public-migration-ledger)"
+PUBLIC_MIGRATION_ARGS=(--prior-ledger "$PUBLIC_MIGRATION_LEDGER")
+if [[ ! -f "$PUBLIC_MIGRATION_LEDGER" ]]; then
+    # The first public migration boundary is an explicit bootstrap.  Later
+    # source upgrades validate and carry prior migrated identities forward.
+    PUBLIC_MIGRATION_ARGS=(--bootstrap)
+fi
+python3 "$HERE/setnewvalue_public_migration_ledger.py" "$JSON" \
+    --output "$(artifact_path setnewvalue-public-migration-rules)" \
+    --report "$PUBLIC_MIGRATION_REPORT" \
+    --write-ledger "$PUBLIC_MIGRATION_LEDGER" "${PUBLIC_MIGRATION_ARGS[@]}"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

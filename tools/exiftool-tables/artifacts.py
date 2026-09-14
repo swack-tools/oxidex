@@ -54,6 +54,8 @@ ARTIFACTS = (
     Artifact("setnewvalue-address-rules", 1, "setnewvalue_address_rust_codegen", "src/writers/generated_setnewvalue_address_rules.rs"),
     Artifact("setnewvalue-address-ledger", 1, "setnewvalue_address_rust_codegen", "tools/exiftool-tables/setnewvalue_address_ledger.json"),
     Artifact("setnewvalue-ownership-ledger", 1, "setnewvalue_address_rust_codegen", "tools/exiftool-tables/setnewvalue_ownership_ledger.json"),
+    Artifact("setnewvalue-public-migration-rules", 1, "setnewvalue_public_migration_ledger", "src/writers/generated_setnewvalue_public_migration_rules.rs"),
+    Artifact("setnewvalue-public-migration-ledger", 1, "setnewvalue_public_migration_ledger", "tools/exiftool-tables/setnewvalue_public_migration_ledger.json"),
     Artifact("filetypes", 1, "codegen_filetypes", "src/filetype/tables.rs"),
     Artifact("composite", 1, "codegen_composite", "src/composite/tables.rs"),
     Artifact("composite-compute", 1, "codegen_composite", "src/composite/generated_compute.rs"),

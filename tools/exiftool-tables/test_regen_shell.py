@@ -104,6 +104,15 @@ else:
         else:
             assert '--bootstrap-ownership-ledger' in args
         output(flag('--output'),name); output(flag('--report'),name+'-report'); output(flag('--write-ownership-ledger'),name+'-ownership')
+    elif name=='setnewvalue_public_migration_ledger.py':
+        dump(args[0])
+        selected={root/item.path for item in artifacts.select(producer='setnewvalue_public_migration_ledger')}
+        assert {flag('--output'),flag('--write-ledger')}==selected
+        if '--prior-ledger' in args:
+            assert flag('--prior-ledger')==artifact_path('setnewvalue-public-migration-ledger')
+        else:
+            assert '--bootstrap' in args
+        output(flag('--output'),name); output(flag('--report'),name+'-report'); output(flag('--write-ledger'),name+'-ledger')
     elif name=='verify_serial_directory.py':
         assert pathlib.Path(args[0]).resolve()==artifact('serial_directory')
         assert pathlib.Path(args[0]).read_text()=='generated explicit-A serial\n'
@@ -254,6 +263,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('setnewvalue_addressing.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_probe.pl'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_rust_codegen.py'), int(full))
+                self.assertEqual(names.count('setnewvalue_public_migration_ledger.py'), int(full))
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 if full:
                     self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
@@ -268,7 +278,8 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('final_scalar_stage.py'), names.index('setnewvalue_addressing.py'))
                     self.assertLess(names.index('setnewvalue_addressing.py'), names.index('setnewvalue_address_probe.pl'))
                     self.assertLess(names.index('setnewvalue_address_probe.pl'), names.index('setnewvalue_address_rust_codegen.py'))
-                    self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('setnewvalue_public_migration_ledger.py'))
+                    self.assertLess(names.index('setnewvalue_public_migration_ledger.py'), names.index('rustfmt'))
                     self.assertGreater(names.index('verify_serial_directory.py'), names.index('rustfmt'))
                 self.assertEqual(names.count('rustfmt'), 2 if full else 1)
                 format_calls = [c for c in calls if c['tool'] == 'rustfmt']
@@ -295,6 +306,31 @@ class RegenerationShellTests(unittest.TestCase):
         self.assertNotIn('--ownership-ledger', call['argv'])
         self.assertTrue((self.root / ownership.path).is_file())
 
+    def test_missing_public_migration_ledger_uses_only_explicit_bootstrap(self):
+        ledger = next(item for item in self.manifest.ARTIFACTS
+                      if item.key == 'setnewvalue-public-migration-ledger')
+        (self.root / ledger.path).unlink()
+        result, calls = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = next(call for call in calls if call['tool'] == 'setnewvalue_public_migration_ledger.py')
+        self.assertIn('--bootstrap', call['argv'])
+        self.assertNotIn('--prior-ledger', call['argv'])
+        self.assertTrue((self.root / ledger.path).is_file())
+
+    def test_public_migration_regeneration_is_stable_with_valid_prior(self):
+        result, _ = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rules = next(item for item in self.manifest.ARTIFACTS
+                     if item.key == 'setnewvalue-public-migration-rules')
+        ledger = next(item for item in self.manifest.ARTIFACTS
+                      if item.key == 'setnewvalue-public-migration-ledger')
+        before = ((self.root / rules.path).read_bytes(), (self.root / ledger.path).read_bytes())
+        result, calls = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = next(call for call in calls if call['tool'] == 'setnewvalue_public_migration_ledger.py')
+        self.assertIn('--prior-ledger', call['argv'])
+        self.assertEqual(before, ((self.root / rules.path).read_bytes(), (self.root / ledger.path).read_bytes()))
+
     def test_each_new_producer_or_verifier_failure_survives_exit_guard(self):
         for leaf in self.extra_leaves():
             with self.subTest(leaf=leaf):
@@ -306,7 +342,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_tier_one_producer_and_verifier_failures_survive_exit_guard(self):
-        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'verify_serial_directory.py'):
+        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'setnewvalue_public_migration_ledger.py', 'verify_serial_directory.py'):
             with self.subTest(leaf=leaf):
                 result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
                 self.assertEqual(result.returncode, 47, result.stdout + result.stderr)
