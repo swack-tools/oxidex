@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,8 +14,27 @@ import hydrated_catalog_reconcile as reconcile
 
 
 PRODUCER = HERE / "dump_hydrated_catalog.pl"
-CANONICAL_PERL = Path("/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2")
-CANONICAL_LIB = Path("/tmp/oxidex-exiftool-cache/exiftool/lib")
+LOCAL_PERL = "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2"
+LOCAL_LIBRARY = Path("/tmp/oxidex-exiftool-cache/exiftool/lib")
+
+
+def configured_perl() -> str:
+    return os.environ.get("EXIFTOOL_PERL", LOCAL_PERL)
+
+
+def configured_library() -> Path:
+    source = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", str(LOCAL_LIBRARY)))
+    # CI exports the ExifTool source root; local development commonly names lib.
+    return source / "lib" if (source / "lib").is_dir() else source
+
+
+def executable(command: str) -> bool:
+    return Path(command).is_file() if "/" in command else shutil.which(command) is not None
+
+
+CANONICAL_PERL = configured_perl()
+CANONICAL_LIB = configured_library()
+NATIVE_READY = executable(CANONICAL_PERL) and CANONICAL_LIB.is_dir()
 
 
 def table(module: str, name: str) -> dict:
@@ -111,17 +131,19 @@ class HydratedCatalogUniverse(unittest.TestCase):
             dump_path.write_text(json.dumps(dump()), encoding="utf-8")
             argv = [sys.executable, str(HERE / "hydrated_catalog_reconcile.py"), "--repo-root", str(root),
                     "--catalog", str(catalog_path), "--dump", str(dump_path), "--output", str(output)]
-            clean = subprocess.run(argv, text=True, capture_output=True)
+            refused_env = os.environ.copy()
+            refused_env.pop("OXIDEX_ALLOW_DIRTY_TREE", None)
+            clean = subprocess.run(argv, text=True, capture_output=True, env=refused_env)
             self.assertEqual(clean.returncode, 0, clean.stderr)
             self.assertIn("=== instrument: hydrated_catalog_reconcile.py ===", clean.stderr)
             (root / "dirty").write_text("x", encoding="utf-8")
-            dirty = subprocess.run(argv[:-1] + [str(base / "dirty-output.json")], text=True, capture_output=True)
+            dirty = subprocess.run(argv[:-1] + [str(base / "dirty-output.json")], text=True, capture_output=True, env=refused_env)
         self.assertNotEqual(dirty.returncode, 0)
         self.assertIn("refusing to measure against a dirty working tree", dirty.stderr)
 
-    @unittest.skipUnless(CANONICAL_PERL.is_file() and CANONICAL_LIB.is_dir(), "canonical pinned ExifTool is unavailable")
+    @unittest.skipUnless(NATIVE_READY, "configured pinned ExifTool is unavailable")
     def test_pinned_producer_emits_hydrated_universe_and_separate_shortcuts(self):
-        result = subprocess.run([str(CANONICAL_PERL), str(PRODUCER), str(CANONICAL_LIB)], check=True, text=True, capture_output=True,
+        result = subprocess.run([CANONICAL_PERL, str(PRODUCER), str(CANONICAL_LIB)], check=True, text=True, capture_output=True,
                                 env={key: value for key, value in os.environ.items() if key not in {"PERL5LIB", "PERLLIB", "PERL5OPT"}})
         document = json.loads(result.stdout)
         self.assertEqual(document["schema"], reconcile.CATALOG_SCHEMA)
@@ -134,12 +156,12 @@ class HydratedCatalogUniverse(unittest.TestCase):
         self.assertEqual(document["families"]["shortcuts"][0]["full_name"], "Image::ExifTool::Shortcuts::Main")
         self.assertNotIn("selected_library", document["producer"])
 
-    @unittest.skipUnless(CANONICAL_PERL.is_file() and CANONICAL_LIB.is_dir(), "canonical pinned ExifTool is unavailable")
+    @unittest.skipUnless(NATIVE_READY, "configured pinned ExifTool is unavailable")
     def test_producer_refuses_a_repo_pin_that_differs_from_loaded_library(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / ".exiftool-version").write_text("13.58\n", encoding="utf-8")
-            result = subprocess.run([str(CANONICAL_PERL), str(PRODUCER), "--repo-root", str(root), str(CANONICAL_LIB)], text=True, capture_output=True)
+            result = subprocess.run([CANONICAL_PERL, str(PRODUCER), "--repo-root", str(root), str(CANONICAL_LIB)], text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not match repository pin", result.stderr)
 

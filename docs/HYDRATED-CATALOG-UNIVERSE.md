@@ -24,12 +24,12 @@ the catalog and dump inputs.
 
 ## Verified 13.59 baseline
 
-Using canonical Perl
-`/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2` and pinned library
-`/tmp/oxidex-exiftool-cache/exiftool/lib`, the catalog contains 1,512 hydrated
-tables, 11 shortcut entries, 21,437 unique tag names, and 33,487 catalog tag
-entries. These last two figures are BuildTagLookup catalog counts, not parser or
-writer coverage.
+Using the gate-configured `EXIFTOOL_PERL` and `OXIDEX_PINNED_EXIFTOOL`, the
+catalog contains 1,512 hydrated tables, 11 shortcut entries, 21,437 unique tag
+names, and 33,487 catalog tag entries. `OXIDEX_PINNED_EXIFTOOL` may name either
+the pinned source root containing `lib/` or the `lib/` directory itself. These
+last two figures are BuildTagLookup catalog counts, not parser or writer
+coverage.
 
 Against the supplied 13.59 `source-family-goal-20260914/dump.json`, the
 structurally checked reconciliation is: 1,445 matched hydrated tables, 67
@@ -41,3 +41,13 @@ layouts are available to a generated reader. The next migration is to make the
 layout dump enumerate this sidecar's full names through `GetTagTable`, retaining
 full names as primary identities for nested package tables such as
 `QuickTime::Stream` and `XMP::SVG`.
+
+## Provenance and instrumentation limits
+
+The producer verifies the pin and hashes only the four bootstrap/catalog source
+files it directly names: `Image/ExifTool.pm`, `Image/ExifTool/Writer.pl`,
+`Image/ExifTool/BuildTagLookup.pm`, and `Image/ExifTool/Shortcuts.pm`. It does
+not attest every transitively loaded table module. It also does not emit a git
+instrument header or refuse a dirty checkout; the reconciliation CLI is the
+measurement instrument that records git state, input hashes, and the dirty-tree
+refusal.
