@@ -45,6 +45,20 @@ OMITTED_PC = {
  'd038778460baf97908e1d6246b60083b819e3ba8d7605f11a3e15441c81c79df',
  '5934a0489c7e95d2c7a2d733d8b0d6e8f5cd3af2530169a1f8ab54cc6c55c5d2',
 }
+# `Image/ExifTool/Nikon.pm`, MenuSettingsZ8v2 tag 0 (ExifTool 13.59).  This
+# is intentionally an exact source-body allowlist: the runtime hook models
+# this one layout adjustment, not arbitrary Perl attached to that table.
+MENU_SETTINGS_Z8V2_HOOK = (
+ '\n'
+ '            if ($$self{FirmwareVersion}) {\n'
+ '                if ($$self{FirmwareVersion} =~ /^02\\.10/) {\n'
+ '                    $varSize += 4;\n'
+ '                } elsif ($$self{FirmwareVersion} ge "03.0") {\n'
+ '                    $varSize += 8\n'
+ '                }\n'
+ '            }\n'
+ '        '
+)
 
 def fail(x): raise Unsupported(x)
 def u(v, bits=32):
@@ -162,7 +176,7 @@ def pc(row, maps):
  if h in SPECIAL_PC:return 'Pc::'+SPECIAL_PC[h]
  exact={'"$val fps"':'Pc::Suffix(" fps")','"$val Hz"':'Pc::Suffix(" Hz")','"$val mm"':'Pc::Suffix(" mm")','"+/-$val"':'Pc::Prefix("+/-")','Image::ExifTool::Exif::PrintExposureTime($val)':'Pc::ExposureTime','Image::ExifTool::Exif::PrintFraction($val)':'Pc::Fraction','int($val + 0.5)':'Pc::RoundHalfUp','sprintf("0x%02x", $val)':'Pc::Hex2','$val == 1? "1 Second" : sprintf("%.0f Seconds",$val)':'Pc::Seconds','$val>0.99 ? "Full" : sprintf("%.1f%%",$val*100)':'Pc::FullOrPercent','$val == 0? "No Delay" : sprintf("%.0f sec",$val)':'Pc::NoDelayOrSeconds','$val ? sprintf("%.1f sec",$val/1000) : "Off"':'Pc::SecondsDiv1000OrOff','$val > 0 ? sprintf("%.0f", $val) : ""':'Pc::PositiveOrBlank'}
  if s in exact:return exact[s]
- pats=[(r'sprintf\("f/%.1f",\$val/(\d+)\)','Pc::FNumberDiv100'),(r'sprintf\("%.1fmm",\$val/(\d+)\)','Pc::MmDiv({})'),(r'sprintf\("%.1f mm",\$val\)','Pc::FixedSuffix(1, " mm")'),(r'sprintf\("%.1f m", \$val/(\d+)\)','Pc::MetersDiv10'),(r'\$val \? sprintf\("%\+\.(\d)f", ?\$val\) : 0','Pc::SignedOrZero({})'),(r'sprintf\("%\+\.(\d)f",\$val\)','Pc::Signed({})'),(r'sprintf\("%\.(\d)f", ?\$val\)','Pc::Fixed({})')]
+ pats=[(r'sprintf\("f/%.1f",\$val/100\)','Pc::FNumberDiv100'),(r'sprintf\("%.1fmm",\$val/(\d+)\)','Pc::MmDiv({})'),(r'sprintf\("%.1f mm",\$val\)','Pc::FixedSuffix(1, " mm")'),(r'sprintf\("%.1f m", \$val/10\)','Pc::MetersDiv10'),(r'\$val \? sprintf\("%\+\.(\d)f", ?\$val\) : 0','Pc::SignedOrZero({})'),(r'sprintf\("%\+\.(\d)f",\$val\)','Pc::Signed({})'),(r'sprintf\("%\.(\d)f", ?\$val\)','Pc::Fixed({})')]
  for pat,out in pats:
   m=re.fullmatch(pat,s)
   if m:
@@ -198,10 +212,12 @@ def render(data):
    if guard:
     q=re.fullmatch(r'\$1 < (\d+)',guard)
     if q:cap=f'Some({u(q.group(1))})'
-    else:
-     vals=re.findall(r'\$count == (\d+)',guard)
-     if not vals:fail(f'unsupported root guard {guard!r}')
-     counts='&['+', '.join(vals)+']'
+    elif q:=re.fullmatch(r'\$count == (\d+)',guard):
+     counts='&['+str(u(q.group(1)))+']'
+    elif re.fullmatch(r'\(\$count == \d+(?: or \$count == \d+)+\)',guard):
+     vals=[u(part.removeprefix('$count == ')) for part in guard[1:-1].split(' or ')]
+     counts='&['+', '.join(str(value) for value in vals)+']'
+    else:fail(f'unsupported root guard {guard!r}')
    full=sd.get('TagTable'); tname,t=table(full)
    encrypted=None
    if 'ProcessProc' in sd or 'DecryptStart' in sd:
@@ -271,7 +287,7 @@ def render(data):
      q=re.fullmatch(r'\$varSize \+= (\d+) if \$\$self\{FirmwareVersion\} and \$\$self\{FirmwareVersion\} ge "([^"]+)"',h)
      if q:hook=f'Hook::AddIfFirmwareGe({u(q.group(1))}, {rs(q.group(2))})'
      elif (q:=re.fullmatch(r'\$varSize \+= (\d+) if \$\$self\{Model\} =~ /(.+)/ and \$\$self\{FirmwareVersion\} and \$\$self\{FirmwareVersion\} ge "([^"]+)"',h)):hook=f'Hook::AddIfModelAndFirmwareGe({u(q.group(1))}, {rs(q.group(2))}, {rs(q.group(3))})'
-     elif 'MenuSettingsZ8v2'==n:hook='Hook::MenuSettingsZ8v2'
+     elif n=='MenuSettingsZ8v2' and key=='0' and h==MENU_SETTINGS_Z8V2_HOOK:hook='Hook::MenuSettingsZ8v2'
      else:fail(f'{n}[{key}]: unsupported Hook')
     rawv,filterv=raw(expr(row,'RawConv')); unknown=flag(row.get('Unknown',False),'Unknown'); low=low_priority(row.get('Priority'))
     out.append(f'    BinTag {{ index: {m.group(1)}, frac: {m.group(2) or 0}, name: {rs(name)}, cond: {cond(row.get("Condition"))}, fmt: Fmt::{rf}, count: {count}, mask: 0x{mask:x}, shift: {shift}, raw: {rawv}, filter: {filterv}, vc: {vc(expr(row,"ValueConv"))}, pc: {pc(row,maps)}, hook: {hook}, print_hex: {flag(row.get("PrintHex",False),"PrintHex")}, unknown: {unknown}, low_priority: {low}, subdir: {sub} }},')

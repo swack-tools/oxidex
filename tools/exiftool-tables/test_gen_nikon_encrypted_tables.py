@@ -35,6 +35,25 @@ def fixture():
     }
 
 
+def add_menu_settings_z8v2(data, hook=generator.MENU_SETTINGS_Z8V2_HOOK):
+    tables = data["modules"]["Nikon"]["tables"]
+    tables["Test"]["tags"]["2"] = {
+        "Name": "NestedMenuSettings",
+        "SubDirectory": {"TagTable": "Image::ExifTool::Nikon::MenuSettingsZ8v2"},
+    }
+    tables["MenuSettingsZ8v2"] = {
+        "meta": {"FORMAT": "int8u"},
+        "tags": {
+            "0": {
+                "Name": "MenuSettingsZ8",
+                "Hook": hook,
+                "SubDirectory": {"TagTable": "Image::ExifTool::Nikon::MenuSettingsZ8"},
+            },
+        },
+    }
+    tables["MenuSettingsZ8"] = {"meta": {"FORMAT": "int8u"}, "tags": {}}
+
+
 class NikonEncryptedGeneratorTests(unittest.TestCase):
     def test_current_dump_code_provenance_is_accepted_but_unknown_fields_refuse(self):
         body = "registered test body"
@@ -104,6 +123,55 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
                 changed["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"][field] = value
                 with self.assertRaises(generator.Unsupported):
                     generator.render(changed)
+
+    def test_fixed_divisor_print_conversions_refuse_source_mutations(self):
+        def pc(expression):
+            return generator.pc({"PrintConv": {"kind": "expr", "expr": expression}}, {})
+
+        self.assertEqual(pc('sprintf("f/%.1f",$val/100)'), "Pc::FNumberDiv100")
+        self.assertEqual(pc('sprintf("%.1f m", $val/10)'), "Pc::MetersDiv10")
+        for expression in ('sprintf("f/%.1f",$val/200)',
+                           'sprintf("%.1f m", $val/20)'):
+            with self.subTest(expression=expression):
+                with self.assertRaises(generator.Unsupported):
+                    pc(expression)
+
+    def test_root_count_guard_requires_complete_native_grammar(self):
+        data = fixture()
+        root = data["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]
+        root["Condition"] = "$$valPt =~ /^0210/ and $count == 5399"
+        text, _ = generator.render(data)
+        self.assertIn("counts: &[5399]", text)
+
+        root["Condition"] = "$$valPt =~ /^0210/ and ($count == 5408 or $count == 5412)"
+        text, _ = generator.render(data)
+        self.assertIn("counts: &[5408, 5412]", text)
+
+        root["Condition"] = "$$valPt =~ /^0210/ and $count == 5399 and 0"
+        with self.assertRaises(generator.Unsupported):
+            generator.render(data)
+
+    def test_menu_settings_z8v2_hook_requires_exact_pinned_body_and_location(self):
+        data = fixture()
+        add_menu_settings_z8v2(data)
+        text, _ = generator.render(data)
+        self.assertIn("hook: Hook::MenuSettingsZ8v2", text)
+
+        changed = copy.deepcopy(data)
+        changed["modules"]["Nikon"]["tables"]["MenuSettingsZ8v2"]["tags"]["0"]["Hook"] += "\n$varSize += 99"
+        with self.assertRaises(generator.Unsupported):
+            generator.render(changed)
+
+        changed = fixture()
+        changed["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["Hook"] = generator.MENU_SETTINGS_Z8V2_HOOK
+        with self.assertRaises(generator.Unsupported):
+            generator.render(changed)
+
+        changed = copy.deepcopy(data)
+        z8v2 = changed["modules"]["Nikon"]["tables"]["MenuSettingsZ8v2"]["tags"]
+        z8v2["1"] = z8v2.pop("0")
+        with self.assertRaises(generator.Unsupported):
+            generator.render(changed)
 
 
 if __name__ == "__main__":
