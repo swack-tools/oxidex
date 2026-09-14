@@ -76,6 +76,7 @@ print JSON::PP->new->canonical->utf8->pretty->encode({
  schema=>1,kind=>'raw_jfif_native_fact',
  native_identity=>{perl=>$^X,perl_version=>"$^V",exiftool_version=>"$Image::ExifTool::VERSION"},
  loaded_closure=>\%closure,functions=>\%functions,
+ exif_header=>{binding=>'Image::ExifTool::exifAPP1hdr',source=>source($INC{'Image/ExifTool.pm'}),hex=>unpack('H*',$Image::ExifTool::exifAPP1hdr)},
  marker_names=>{binding=>'Image::ExifTool::jpegMarker',source=>source($INC{'Image/ExifTool.pm'}),entries=>plain(\%Image::ExifTool::jpegMarker)},
  table=>{binding=>'Image::ExifTool::JFIF::Main',source=>source($INC{'Image/ExifTool.pm'}),entries=>plain(\%Image::ExifTool::JFIF::Main)},
 });
