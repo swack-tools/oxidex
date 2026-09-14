@@ -257,7 +257,7 @@ def build_from_current(source: Mapping[str, Any], current: Mapping[tuple[str, st
     if prior is None:
         if not bootstrap:
             raise RecipeRefused("public migration ledger bootstrap must be explicit when no prior ledger exists")
-        old, sources, predecessor = {}, {}, None
+        old, sources, predecessor, predecessor_cohort = {}, {}, None, []
     else:
         prior = validate_ledger(prior)
         if prior["source_identity"] == source_identity:
@@ -267,6 +267,15 @@ def build_from_current(source: Mapping[str, Any], current: Mapping[tuple[str, st
         old = {_entry_key(entry): entry for entry in prior["entries"]}
         sources = dict(prior["sources"])
         predecessor = prior["ledger_sha256"]
+        predecessor_cohort = prior.get("predecessor_cohort")
+        if predecessor_cohort is None:
+            # One compatibility migration freezes the historical cohort before
+            # this source recapture appends a current event to every row.
+            predecessor_cohort = [{key: entry[key] for key in ("raw_tag_id", "name", "group0", "write_group")}
+                                  for entry in prior["entries"] if entry["state"] == "current"
+                                  and entry["first_seen"] != prior["source_identity"]]
+        if not isinstance(predecessor_cohort, list):
+            raise RecipeRefused("public migration predecessor cohort is malformed")
     if source_identity in sources and sources[source_identity] != source:
         raise RecipeRefused("public migration source identity collides with different facts")
     sources[source_identity] = source
@@ -290,9 +299,10 @@ def build_from_current(source: Mapping[str, Any], current: Mapping[tuple[str, st
             "source_control_sha256", "semantics_sha256")}
         entry.update({"state": state, "first_seen": first_seen, "last_seen": source_identity, "history": history})
         entries.append(entry)
+    cohort = sorted(predecessor_cohort, key=lambda item: (item["raw_tag_id"], item["name"], item["group0"], item["write_group"]))
     payload = {"schema": SCHEMA, "source": source, "source_identity": source_identity,
                "sources": {key: sources[key] for key in sorted(sources)}, "predecessor": predecessor,
-               "entries": entries}
+               "predecessor_cohort": cohort, "predecessor_cohort_sha256": _digest(cohort), "entries": entries}
     return {**payload, "ledger_sha256": _digest(payload)}
 
 

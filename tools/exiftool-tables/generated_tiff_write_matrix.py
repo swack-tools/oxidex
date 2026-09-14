@@ -322,6 +322,18 @@ def predecessor_public_targets(targets: tuple[GeneratedTarget, ...] | None = Non
         (target.raw_tag_id, target.name, target.table_group0, target.physical_write_group): target
         for target in targets
     }
+    frozen = ledger.get("predecessor_cohort")
+    if not isinstance(frozen, list):
+        raise ValueError("public migration ledger lacks a frozen predecessor cohort")
+    frozen_identities = {(item.get("raw_tag_id"), item.get("name"), item.get("group0"), item.get("write_group"))
+                         for item in frozen if isinstance(item, dict)}
+    if len(frozen_identities) != len(frozen) or not frozen_identities:
+        raise ValueError("public migration predecessor cohort is malformed")
+    import hashlib
+    rendered_cohort = json.dumps(sorted(frozen, key=lambda item: (item["raw_tag_id"], item["name"], item["group0"], item["write_group"])),
+                                sort_keys=True, separators=(",", ":")).encode()
+    if ledger.get("predecessor_cohort_sha256") != hashlib.sha256(rendered_cohort).hexdigest():
+        raise ValueError("public migration predecessor cohort integrity differs")
     migrated_current, preserved = [], []
     for entry in entries:
         if not isinstance(entry, dict) or entry.get("state") != "current":
@@ -329,19 +341,19 @@ def predecessor_public_targets(targets: tuple[GeneratedTarget, ...] | None = Non
         history = entry.get("history")
         if not isinstance(history, list) or not history:
             raise ValueError("public migration history is malformed")
-        prior_current = any(isinstance(event, dict) and event.get("state") == "current"
-                            and event.get("source_identity") != current_source for event in history)
         identity = (entry.get("raw_tag_id"), entry.get("name"), entry.get("group0"), entry.get("write_group"))
         if identity not in current_by_identity:
             raise ValueError("predecessor public migration is absent from current final recipes")
         target = current_by_identity[identity]
         migrated_current.append(target)
-        if prior_current:
+        if identity in frozen_identities:
             preserved.append(target)
     if set(migrated_current) != set(targets) or len(migrated_current) != len(targets):
         raise ValueError("current public migrations do not exactly join final recipes")
     if len(set(preserved)) != len(preserved) or not preserved:
         raise ValueError("predecessor public migration cohort is empty or ambiguous")
+    if { (target.raw_tag_id, target.name, target.table_group0, target.physical_write_group) for target in preserved } != frozen_identities:
+        raise ValueError("predecessor public migration cohort is absent from current final recipes")
     return tuple(sorted(preserved, key=lambda target: target.raw_tag_id))
 
 
