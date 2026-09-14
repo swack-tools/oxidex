@@ -118,16 +118,42 @@ def validate_provenance(catalog: dict, hydrated: dict) -> None:
             raise ValueError(f"source provenance mismatch: {key}")
 
 
-def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str) -> dict:
+def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | None) -> dict[tuple[str, str, str], dict]:
+    """Index emitted QuickTime selector facts by table, key, and source hash."""
+    if itemlist_ledger is None or capabilities is None:
+        return {}
+    if itemlist_ledger.get("schema") != "quicktime_generated_itemlist_specs_v1":
+        raise ValueError("unsupported QuickTime generated ledger schema")
+    rows = {}
+    for record in itemlist_ledger.get("ledger", []):
+        identity = record.get("identity", {})
+        if not isinstance(identity, dict) or identity.get("module") != "QuickTime":
+            raise ValueError("QuickTime generated ledger identity is malformed")
+        key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"))
+        if not all(isinstance(value, str) and value for value in key) or key in rows:
+            raise ValueError("QuickTime generated ledger identity is duplicated or malformed")
+        rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons")}
+    for family in capabilities.get("families", []):
+        for record in family.get("records", []):
+            identity = record.get("identity", {})
+            key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"))
+            if key in rows:
+                rows[key]["selector_reasons"] = record.get("reasons")
+    return rows
+
+
+def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
+          itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     catalog_by_id = validate_catalog(catalog)
     validate_provenance(catalog, hydrated)
     hydrated_by_id, table_hashes = source_rows(hydrated)
+    quicktime = quicktime_implementation(itemlist_ledger, quicktime_capabilities)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):
         raise ValueError("hydrated total_tag_entries differs from catalog denominator")
-    records, status_counts, family_counts = [], Counter(), defaultdict(Counter)
+    records, status_counts, implementation_counts, family_counts = [], Counter(), Counter(), defaultdict(Counter)
     for identity in sorted(catalog_by_id):
         entry, source = catalog_by_id[identity], hydrated_by_id.get(identity)
         if source is None:
@@ -141,10 +167,22 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str) ->
             row_hash, table_hash = canonical_hash(source), table_hashes[identity[0]]
         status_counts[status] += 1
         family_counts[entry["groups"]["1"]][status] += 1
+        implementation = "source_row_not_yet_consumed"
+        refusal = None
+        if source is not None and identity[0].startswith("Image::ExifTool::QuickTime::"):
+            candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], row_hash))
+            if candidate is not None:
+                if candidate["generated"]:
+                    implementation = "generated_reader_declaration_unobserved"
+                else:
+                    implementation = "blocked_generated_reader_refusal"
+                    refusal = candidate.get("reasons")
+        implementation_counts[implementation] += 1
         records.append({"identity": {"table": identity[0], "raw_key": identity[1], "variant_index": identity[2]},
                         "catalog": {"name": entry["name"], "normalized_name": entry["normalized_name"], "groups": entry["groups"]},
                         "source": {"state": state, "name": source_name, "row_sha256": row_hash, "table_sha256": table_hash},
-                        "source_layout_status": status, "source_derived_implementation": "not_assessed",
+                        "source_layout_status": status, "source_derived_implementation": implementation,
+                        "implementation_refusal_reasons": refusal,
                         "observed_read": "not_observed_yet", "observed_write": "not_observed_yet"})
     if len(records) != len(catalog_by_id) or sum(status_counts.values()) != len(records):
         raise ValueError("join conservation failed")
@@ -152,18 +190,21 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str) ->
         raise ValueError("family entry conservation failed")
     return {"schema": SCHEMA, "inputs": {"catalog_sha256": catalog_sha, "hydrated_sha256": hydrated_sha,
             "exiftool_version": catalog["exiftool_version"]}, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
-            "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items()))},
+            "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
+            "implementation": dict(sorted(implementation_counts.items()))},
             "families": {key: dict(sorted(value.items())) for key, value in sorted(family_counts.items())}, "entries": records}
 
 
 def report(join: dict) -> str:
     counts = join["counts"]
-    lines = ["# Catalog-to-hydrated source join", "", "This report is source inventory only. It makes no generated reader/writer or observed behavior claim.", "",
+    lines = ["# Catalog-to-hydrated source join", "", "This report records exact source and generated-declaration identities. Generated declarations remain unobserved until immutable fixture evidence joins them.", "",
              f"- ExifTool: `{join['inputs']['exiftool_version']}`", f"- Catalog SHA-256: `{join['inputs']['catalog_sha256']}`",
              f"- Hydrated SHA-256: `{join['inputs']['hydrated_sha256']}`", "", "| Measurement | Count |", "| --- | ---: |",
              f"| Ordinary catalog entries | {counts['catalog_ordinary_entries']} |", f"| Hydrated source coordinates | {counts['hydrated_source_rows']} |",
              f"| Preserved joined records | {counts['joined_records']} |"]
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["status"].items())
+    lines += ["", "## Source-derived implementation", "", "| Classification | Count |", "| --- | ---: |"]
+    lines.extend(f"| `{key}` | {value} |" for key, value in counts["implementation"].items())
     lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Each matched row records canonical row and table hashes for later implementation evidence.", "",
               "## Families", "", "| Family | Status counts |", "| --- | --- |"]
     lines.extend(f"| {key} | " + ", ".join(f"{name}: {count}" for name, count in value.items()) + " |" for key, value in join["families"].items())
@@ -205,12 +246,17 @@ def main() -> int:
     parser.add_argument("--hydrated", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--quicktime-itemlist-ledger", type=Path,
+                        default=Path(__file__).with_name("quicktime_generated_itemlist_ledger.json"))
+    parser.add_argument("--quicktime-source-capabilities", type=Path,
+                        default=Path(__file__).with_name("quicktime_source_capabilities.json"))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--replace", action="store_true")
     action.add_argument("--check", action="store_true")
     args = parser.parse_args()
     validate_destinations(args.catalog, args.hydrated, args.output, args.report)
-    join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated))
+    join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
+                 read_json(args.quicktime_itemlist_ledger), read_json(args.quicktime_source_capabilities))
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():

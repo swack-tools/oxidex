@@ -37,6 +37,13 @@ def hydrated(tags, sources=SOURCE, total=1):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
+    def quicktime_facts(self, source, *, generated, reasons):
+        identity = {"module": "QuickTime", "table": "ItemList", "raw_key": "titl",
+                    "source_sha256": join.canonical_hash(source), "variant_path": []}
+        return ({"schema": "quicktime_generated_itemlist_specs_v1",
+                 "ledger": [{"identity": identity, "generated": generated, "reasons": reasons}]},
+                {"families": [{"records": [{"identity": identity, "reasons": reasons}]}]})
+
     def test_exact_coordinate_variant_name_and_hash_join(self):
         result = join.build(catalog([entry("Title", "titl", 0), entry("Alternate", "titl", 1)]),
                             hydrated({"titl": {"_variants": [{"Name": "Title"}, {"Name": "Alternate"}]}}, total=2), "catalog", "hydrated")
@@ -50,6 +57,24 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertEqual(result["counts"]["status"], {"source_row_absent": 1, "source_row_name_conflict": 1})
         self.assertEqual({row["catalog"]["name"]: row["source"]["state"] for row in result["entries"]},
                          {"Title": "conflict", "Missing": "absent"})
+
+    def test_quicktime_exact_identity_joins_generated_and_refused_selector_facts(self):
+        source = {"Name": "Title"}
+        ledger, capabilities = self.quicktime_facts(source, generated=True, reasons=[])
+        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities)
+        self.assertEqual(result["entries"][0]["source_derived_implementation"],
+                         "generated_reader_declaration_unobserved")
+        ledger, capabilities = self.quicktime_facts(source, generated=False, reasons=["unsupported:conversion"])
+        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities)
+        self.assertEqual(result["entries"][0]["source_derived_implementation"], "blocked_generated_reader_refusal")
+        self.assertEqual(result["entries"][0]["implementation_refusal_reasons"], ["unsupported:conversion"])
+
+    def test_quicktime_name_or_hash_collision_cannot_consume_a_source_row(self):
+        source = {"Name": "Title"}
+        ledger, capabilities = self.quicktime_facts({"Name": "Other"}, generated=True, reasons=[])
+        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities)
+        self.assertEqual(result["entries"][0]["source_derived_implementation"], "source_row_not_yet_consumed")
+        self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
 
     def test_rejects_malformed_native_denominators_and_names(self):
         bad = catalog([entry()])
