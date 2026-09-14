@@ -64,6 +64,24 @@ class ScalarCheckTests(unittest.TestCase):
         self.assertEqual(evaluate_scalar_check(changed, NativeScalar("bytes", b"x"), "new-string", 2),
                          (NativeScalar("bytes", b"x\0"), None))
 
+    def test_inner_format_selector_is_independent_of_admitted_formats(self):
+        before, after = BODY.rsplit("'string'", 1)
+        changed = compile_scalar_check(fact(before + "'undef'" + after))
+        self.assertEqual(changed.formats, ("string", "undef"))
+        value = NativeScalar("bytes", b"abc")
+        self.assertEqual(evaluate_scalar_check(changed, value, "string", 3), (value, None))
+        self.assertEqual(evaluate_scalar_check(changed, value, "undef", 3),
+                         (value, "String too long"))
+
+    def test_final_callable_redirect_uses_its_captured_body(self):
+        redirected = fact(BODY.replace("String too long", "Redirected check"))
+        redirected["__name"] = "Image::ExifTool::ReplacementCheck"
+        recipe = compile_scalar_check(redirected)
+        self.assertEqual(recipe.provenance.requested_binding, "Image::ExifTool::CheckValue")
+        value = NativeScalar("bytes", b"abc")
+        self.assertEqual(evaluate_scalar_check(recipe, value, "string", 3),
+                         (value, "Redirected check"))
+
     def test_unproven_formats_and_count_types_refuse(self):
         with self.assertRaises(RecipeRefused):
             evaluate_scalar_check(self.recipe, NativeScalar("bytes", b"1"), "int8u", 1)

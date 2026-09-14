@@ -8,6 +8,9 @@ and padding. Unknown executable statements or local aliasing refuse. Numeric
 formats cannot enter this evaluator; their native tail remains unsupported.
 The parser binds requested/native callable provenance but does not use a
 stored body hash as semantic admission. A body hash alone is not a compiler.
+The inner format selector is independent of the outer admitted formats. A
+requested CheckValue binding may resolve to another named callable; execution
+uses that final callable's captured body rather than an older same-name rule.
 
 `evaluate_scalar_check` executes the compiled operations over `NativeScalar`.
 The scalar distinguishes undefined, byte strings and UTF8-flagged character
@@ -24,7 +27,7 @@ still precede any writer admission. No tag-specific code is removed here.
 
 ## Validation
 
-The eight source/unit tests include operator/error/format changes that alter
+The ten source/unit tests include operator/error/format changes that alter
 execution, explicit numeric/count refusals, and entry/branch statement or local
 alias mutations that cannot be admitted. The fixture in
 `testdata/checkvalue_scalar_body.txt` uses the canonical scalar prefix and an
@@ -35,7 +38,7 @@ The separate native differential test requires explicit
 the actual loaded helper source/body hashes and compares 240 scalar/format/count
 cases against actual Perl, including flags and raw output bytes. Without
 those inputs the native test reports a skip and cannot count as native proof.
-All nine tests were run with native inputs, with no skips.
+All eleven tests were run with native inputs, with no skips.
 
 Independent copied-source replay changed native `>=` to `>` and its error
 text, captured the changed helper fresh, and compared all 240 cases again:
