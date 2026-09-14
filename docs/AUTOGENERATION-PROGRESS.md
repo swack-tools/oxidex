@@ -129,8 +129,15 @@ return checks.
 Native capture and oracle startup now explicitly disable ambient ExifTool
 configuration. Clean and hostile-home native captures are byte-identical in
 the focused probe. This prevents personal configuration from being mistaken
-for the selected release's rules. Full 34-artifact regeneration and the full
-Python suite for this combined checkpoint are pending. No public writer route
+for the selected release's rules. Full 34-artifact regeneration passed in
+339.975 seconds. The first full Python run reached all 900 tests and failed two
+regeneration-shell controls because their simulated leaf executable did not
+recognize the new scalar helper producer. The repaired controls now pass all
+five tests, including selected-source/output routing and failure propagation
+for the new producer. Preserve the failed full run; its retry and full Rust
+validation are pending. The only regeneration difference was the recorded
+library path; regenerating the expression ledger through the canonical relative
+source path restores identical committed artifacts. No public writer route
 is enabled, no manual tag rule has been retired in this checkpoint, and no
 project-wide generation percentage has been remeasured.
 
