@@ -39,6 +39,19 @@ def hydrated(tags, sources=SOURCE, total=1):
         "tables": {TABLE: {"full_name": TABLE, "tags": tags}}}}
 
 
+def observation_rows(fixture_name, fixture_bytes, expected, actual):
+    native_json = json.dumps([expected], sort_keys=True)
+    oxidex_json = json.dumps([actual], sort_keys=True)
+    return [{"fixture": fixture_name, "mode": mode,
+             "fixture_sha256": hashlib.sha256(fixture_bytes).hexdigest(),
+             "native_json": native_json,
+             "native_json_sha256": hashlib.sha256(native_json.encode()).hexdigest(),
+             "oxidex_json": oxidex_json,
+             "oxidex_json_sha256": hashlib.sha256(oxidex_json.encode()).hexdigest(),
+             "expected": expected, "actual": actual, "matched": expected == actual}
+            for mode in ("print", "no-print-conv")]
+
+
 class CatalogHydratedJoinTests(unittest.TestCase):
     def replayed_quicktime_facts(self):
         source = json.loads((PATH.parent / "fixtures/quicktime_source_13_59.json").read_text())
@@ -157,11 +170,9 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                          if row["generated"] and row["identity"]["raw_key"] == "titl")
         digests = self.quicktime_digests(raw, ledger, capabilities, rust)
         fixture = read_verifier.baseline.fixture(b"titl", 1, b"Observed title")
-        observations = [{"fixture": "text.m4a", "mode": mode,
-                         "fixture_sha256": hashlib.sha256(fixture).hexdigest(),
-                         "expected": {"ItemList:Title": "Observed title"},
-                         "actual": {"ItemList:Title": "Observed title"}, "matched": True}
-                        for mode in ("print", "no-print-conv")]
+        observations = observation_rows("text.m4a", fixture,
+                                        {"ItemList:Title": "Observed title"},
+                                        {"ItemList:Title": "Observed title"})
         with patch.object(read_verifier, "cases", return_value={"text.m4a": fixture}):
             occurrences, identities, manifest = read_verifier.observation_evidence(observations, ledger["specs"])
             evidence = {"schema": join.QUICKTIME_READ_EVIDENCE_SCHEMA, "inputs": dict(sorted(digests.items())),
@@ -182,6 +193,22 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                     join.quicktime_observed_reads(changed, digests, ledger["specs"])
             changed = copy.deepcopy(evidence)
             changed["observations"][0]["actual"]["ItemList:Title"] = "Wrong"
+            with self.assertRaisesRegex(ValueError, "projection claim"):
+                join.quicktime_observed_reads(changed, digests, ledger["specs"])
+            changed = copy.deepcopy(evidence)
+            changed["observations"][0]["expected"] = {"ItemList:Title": "FORGED"}
+            changed["observations"][0]["actual"] = {"ItemList:Title": "FORGED"}
+            with self.assertRaisesRegex(ValueError, "projection claim"):
+                join.quicktime_observed_reads(changed, digests, ledger["specs"])
+            changed = copy.deepcopy(evidence)
+            wrong_json = json.dumps([{"ItemList:Title": "Wrong"}])
+            changed["observations"][0]["oxidex_json"] = wrong_json
+            with self.assertRaisesRegex(ValueError, "transcript hash"):
+                join.quicktime_observed_reads(changed, digests, ledger["specs"])
+            changed = copy.deepcopy(evidence)
+            changed["observations"][0]["oxidex_json"] = wrong_json
+            changed["observations"][0]["oxidex_json_sha256"] = hashlib.sha256(wrong_json.encode()).hexdigest()
+            changed["observations"][0]["actual"] = {"ItemList:Title": "Wrong"}
             with self.assertRaisesRegex(ValueError, "matched flag"):
                 join.quicktime_observed_reads(changed, digests, ledger["specs"])
             changed = copy.deepcopy(evidence)
@@ -196,10 +223,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
     def test_negative_fixture_cannot_supply_observed_read_identity(self):
         _, _, ledger, _, _ = self.replayed_quicktime_facts()
         fixture = read_verifier.baseline.fixture(b"zzzz", 1, b"unknown")
-        rows = [{"fixture": "unknown.m4a", "mode": mode,
-                 "fixture_sha256": hashlib.sha256(fixture).hexdigest(),
-                 "expected": {}, "actual": {}, "matched": True}
-                for mode in ("print", "no-print-conv")]
+        rows = observation_rows("unknown.m4a", fixture, {}, {})
         with patch.object(read_verifier, "cases", return_value={"unknown.m4a": fixture}):
             occurrences, identities, _ = read_verifier.observation_evidence(rows, ledger["specs"])
         self.assertEqual(occurrences, [])

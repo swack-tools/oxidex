@@ -59,8 +59,25 @@ def fixture_raw_key(contents: bytes) -> str:
     return items[0][0].decode("latin1")
 
 
+def transcript_projection(row: dict, transcript: str, claim: str) -> dict:
+    """Decode a hash-bound JSON transcript and verify its projected claim."""
+    raw = row.get(transcript)
+    digest = row.get(transcript + "_sha256")
+    if not isinstance(raw, str) or not isinstance(digest, str):
+        raise ValueError("read evidence transcript or hash is missing or malformed")
+    if hashlib.sha256(raw.encode()).hexdigest() != digest:
+        raise ValueError("read evidence transcript hash differs")
+    try:
+        projection = baseline.projection(json.loads(raw))
+    except (TypeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("read evidence transcript is not a projected metadata JSON document") from error
+    if row.get(claim) != projection:
+        raise ValueError("read evidence projection claim differs from transcript")
+    return projection
+
+
 def observation_evidence(rows: list, specs: list) -> tuple[list, list, str]:
-    """Recompute observed identities from fixture bytes and equal native output."""
+    """Recompute observed identities from fixture bytes and bound transcripts."""
     fixtures = cases()
     expected_pairs = {(name, mode) for name in fixtures for mode in ("print", "no-print-conv")}
     seen, occurrences = set(), []
@@ -78,9 +95,8 @@ def observation_evidence(rows: list, specs: list) -> tuple[list, list, str]:
         contents = fixtures[pair[0]]
         if row.get("fixture_sha256") != hashlib.sha256(contents).hexdigest():
             raise ValueError("read evidence fixture bytes differ")
-        expected, actual = row.get("expected"), row.get("actual")
-        if not isinstance(expected, dict) or not isinstance(actual, dict):
-            raise ValueError("read evidence lacks native and actual output")
+        expected = transcript_projection(row, "native_json", "expected")
+        actual = transcript_projection(row, "oxidex_json", "actual")
         matched = expected == actual
         if row.get("matched") is not matched:
             raise ValueError("read evidence matched flag disagrees with output")
@@ -191,6 +207,10 @@ def compare(tree: Path, output: Path, artifacts: tuple[Path, Path, Path, Path]):
                 raise ValueError(f"native fixture degraded: {name}/{mode}: {expected}")
             rows.append({"fixture": name, "mode": mode,
                          "fixture_sha256": hashlib.sha256(contents).hexdigest(),
+                         "native_json": native.stdout,
+                         "native_json_sha256": hashlib.sha256(native.stdout.encode()).hexdigest(),
+                         "oxidex_json": actual.stdout,
+                         "oxidex_json_sha256": hashlib.sha256(actual.stdout.encode()).hexdigest(),
                          "expected": expected, "actual": got, "matched": expected == got})
     if baseline.source_fingerprint(root) != fingerprint:
         raise ValueError("source changed during the comparison")
