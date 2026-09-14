@@ -66,6 +66,14 @@ capture closure identity, helper identity, row/query digests, type-sensitive
 source fingerprints, and per-name history. It does not use a historical
 handwritten tag list or authorize a legacy writer fallback.
 
+`setnewvalue_group_selectors.py` also compiles a bounded source-authenticated
+Writer group subset: last-colon splitting plus explicit family `0`/`1`
+selectors evaluated as a conjunction, returning the static row's exact
+`write_group`. Family `2` remains present in generated native lookup operands
+so external routing retains its source distinction, but family-2/ID/all,
+`AllowGroup`, language, shortcut, wildcard, and tag-key grammar execution are
+not writer admission yet.
+
 This does not implement public SetNewValue. Unsupported portions include
 wildcards, language suffixes, shortcuts, multiple/numbered/ID qualifiers,
 ExifIFD and other group forms, priority/preferred/avoid handling, protected

@@ -16,6 +16,7 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertTrue(report["emitted"])
         self.assertIn("SET_NEW_VALUE_ADDRESS_ROWS", rust)
         self.assertIn("SET_NEW_VALUE_LOOKUP", rust)
+        self.assertIn("group2", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_QUALIFIED", rust)
         self.assertIn("noallowlist", rust)
