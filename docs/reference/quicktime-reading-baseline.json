@@ -1,0 +1,65 @@
+{
+  "instrument": "explicit pinned ExifTool -j -a -G1 -s vs freshly built oxidex -j; ItemList-only projection",
+  "pin": "13.59",
+  "source_commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
+  "fixtures": [
+    {
+      "fixture": "enum.m4a",
+      "fixture_sha256": "22761e79da430d5e4791e4683ebcf49ccf7c12e5081a696156a644a8455088ce",
+      "expected": {
+        "ItemList:Compilation": "Yes"
+      },
+      "actual": {
+        "ItemList:Compilation": "Yes"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "text.m4a",
+      "fixture_sha256": "5fe40986942d6597fc135f67caa60d206977c0c25284a608e7d9fe138f3fafd3",
+      "expected": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "actual": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u16.m4a",
+      "fixture_sha256": "db2de190ffe762b9e7d3d98c63647d29ff7dfab87d70131eecb9613820bb14e3",
+      "expected": {
+        "ItemList:BeatsPerMinute": 257
+      },
+      "actual": {
+        "ItemList:BeatsPerMinute": "(Binary data 2 bytes, use -b option to extract)"
+      },
+      "matched": false
+    },
+    {
+      "fixture": "u64-max.m4a",
+      "fixture_sha256": "237ee4773bf37589a753c1b8e184c46f96b9b2ed48c131581f0c8038894e433e",
+      "expected": {
+        "ItemList:AlbumID": "18446744073709551615"
+      },
+      "actual": {
+        "ItemList:plID": "(Binary data 8 bytes, use -b option to extract)"
+      },
+      "matched": false
+    },
+    {
+      "fixture": "u64.m4a",
+      "fixture_sha256": "6cc8c8b1bed5e3746987ce7678e441b9529d27406f632a858ba0137ef1d11cc6",
+      "expected": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "actual": {
+        "ItemList:plID": "(Binary data 8 bytes, use -b option to extract)"
+      },
+      "matched": false
+    }
+  ],
+  "interpretation": "Observed pre-migration ItemList projection on five behavior fixtures only; not corpus conformance or writing coverage.",
+  "reading_matched_fixture_projections": 2,
+  "writing_observed": null
+}
