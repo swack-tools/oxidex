@@ -4,8 +4,8 @@
 //! artifacts: a public migration must still bind one address row and one final
 //! scalar recipe under the same captured native sources.  It contains no tag
 //! names, numeric IDs, or handwritten type choices.  If an upgraded generated
-//! artifact cannot satisfy that complete join, this fallback is absent rather
-//! than retaining an older descriptor or reverse spelling.
+//! artifact cannot satisfy that complete join, that public migration becomes
+//! terminal rather than retaining an older descriptor or reverse spelling.
 
 use std::sync::LazyLock;
 
@@ -27,7 +27,7 @@ use crate::writers::tiff_scalar_final_stage::{
 /// A descriptor class is admitted only after the final source recipe selected
 /// the corresponding native TIFF format.  The current scalar compiler can
 /// authenticate only the source literal `string`; a later literal must make
-/// the entire fallback unavailable until a source-derived mapping exists.
+/// that migration terminal until a source-derived mapping exists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SourceValueClass {
     String,
@@ -127,26 +127,43 @@ fn source_value_class(recipe: &TiffScalarFinalStageRecipe) -> Option<SourceValue
     }
 }
 
-fn compose(
+fn terminal_identity(migration: &StaticPublicSetNewValueMigration) -> TerminalScalarIdentity {
+    TerminalScalarIdentity {
+        raw_tag_id: migration.raw_tag_id,
+        name: migration.name,
+        group0: migration.group0,
+        physical_group: migration.write_group,
+    }
+}
+
+fn terminal_projection(migrations: &[StaticPublicSetNewValueMigration]) -> ComposedFacts {
+    ComposedFacts {
+        current: Vec::new(),
+        terminal: migrations.iter().map(terminal_identity).collect(),
+    }
+}
+
+fn compose_with_capture(
+    capture_valid: bool,
     address_rows: Option<&[StaticSetNewValueAddress]>,
     migrations: &[StaticPublicSetNewValueMigration],
     recipes: &[TiffScalarFinalStageRecipe],
     registry: Option<NativeTiffFormatRegistry>,
 ) -> Option<ComposedFacts> {
-    if !same_capture() || migrations.is_empty() {
-        return None;
+    if migrations.is_empty() {
+        return Some(terminal_projection(migrations));
     }
-    let address_rows = address_rows?;
-    let registry = registry?;
+    // A global capture or operand failure must not revive legacy descriptor or
+    // reverse-name facts for a public migrated identity.  It is terminal for
+    // the generated migration set only; unrelated legacy names still resolve.
+    if !capture_valid || address_rows.is_none() || registry.is_none() {
+        return Some(terminal_projection(migrations));
+    }
+    let address_rows = address_rows.expect("checked above");
+    let registry = registry.expect("checked above");
     let mut current: Vec<GeneratedScalarDescriptorFact> = Vec::with_capacity(migrations.len());
     let mut terminal = Vec::new();
     for migration in migrations {
-        let terminal_identity = || TerminalScalarIdentity {
-            raw_tag_id: migration.raw_tag_id,
-            name: migration.name,
-            group0: migration.group0,
-            physical_group: migration.write_group,
-        };
         // Historical public ownership is terminal only for its own identity.
         // Do not republish a stale descriptor, but do not make one removed row
         // suppress independently authenticated current migrations.
@@ -154,7 +171,7 @@ fn compose(
             || migration.group0 != "EXIF"
             || migration.group1 != migration.write_group
         {
-            terminal.push(terminal_identity());
+            terminal.push(terminal_identity(migration));
             continue;
         }
         let addresses: Vec<_> = address_rows
@@ -166,18 +183,18 @@ fn compose(
             .filter(|recipe| same_final(recipe, migration, registry))
             .collect();
         let (Some(address), Some(recipe)) = (addresses.first(), finals.first()) else {
-            terminal.push(terminal_identity());
+            terminal.push(terminal_identity(migration));
             continue;
         };
         if addresses.len() != 1
             || finals.len() != 1
             || address.write_group != recipe.physical_write_group
         {
-            terminal.push(terminal_identity());
+            terminal.push(terminal_identity(migration));
             continue;
         }
         let Some(value_class) = source_value_class(recipe) else {
-            terminal.push(terminal_identity());
+            terminal.push(terminal_identity(migration));
             continue;
         };
         if let Some(index) = current.iter().position(|fact| {
@@ -193,7 +210,7 @@ fn compose(
                 group0: previous.group0,
                 physical_group: previous.physical_group,
             });
-            terminal.push(terminal_identity());
+            terminal.push(terminal_identity(migration));
             continue;
         }
         current.push(GeneratedScalarDescriptorFact {
@@ -207,6 +224,32 @@ fn compose(
         });
     }
     Some(ComposedFacts { current, terminal })
+}
+
+fn compose(
+    address_rows: Option<&[StaticSetNewValueAddress]>,
+    migrations: &[StaticPublicSetNewValueMigration],
+    recipes: &[TiffScalarFinalStageRecipe],
+    registry: Option<NativeTiffFormatRegistry>,
+) -> Option<ComposedFacts> {
+    compose_with_capture(same_capture(), address_rows, migrations, recipes, registry)
+}
+
+fn terminal_descriptor_name_in(facts: &ComposedFacts, name: &str) -> bool {
+    let Some((group0, name)) = name.split_once(':') else {
+        return false;
+    };
+    facts
+        .terminal
+        .iter()
+        .any(|fact| fact.group0 == group0 && fact.name.eq_ignore_ascii_case(name))
+}
+
+fn terminal_reverse_in(facts: &ComposedFacts, raw_tag_id: u16, physical_group: &str) -> bool {
+    facts
+        .terminal
+        .iter()
+        .any(|fact| fact.raw_tag_id == raw_tag_id && fact.physical_group == physical_group)
 }
 
 static CURRENT: LazyLock<Option<ComposedFacts>> = LazyLock::new(|| {
@@ -230,15 +273,9 @@ pub(crate) fn descriptor_fact(name: &str) -> Option<&'static GeneratedScalarDesc
 }
 
 pub(crate) fn terminal_descriptor_name(name: &str) -> bool {
-    let Some((group0, name)) = name.split_once(':') else {
-        return false;
-    };
-    CURRENT.as_ref().is_some_and(|facts| {
-        facts
-            .terminal
-            .iter()
-            .any(|fact| fact.group0 == group0 && fact.name.eq_ignore_ascii_case(name))
-    })
+    CURRENT
+        .as_ref()
+        .is_some_and(|facts| terminal_descriptor_name_in(facts, name))
 }
 
 pub(crate) fn terminal_reverse(
@@ -247,12 +284,9 @@ pub(crate) fn terminal_reverse(
     physical_group: &str,
 ) -> bool {
     family == FormatFamily::EXIF
-        && CURRENT.as_ref().is_some_and(|facts| {
-            facts
-                .terminal
-                .iter()
-                .any(|fact| fact.raw_tag_id == raw_tag_id && fact.physical_group == physical_group)
-        })
+        && CURRENT
+            .as_ref()
+            .is_some_and(|facts| terminal_reverse_in(facts, raw_tag_id, physical_group))
 }
 
 pub(crate) fn reverse_name(
@@ -355,5 +389,26 @@ mod tests {
         assert_eq!(result.current[0].name, "DocumentName");
         assert_eq!(result.terminal.len(), 1);
         assert_eq!(result.terminal[0].name, "PageName");
+    }
+
+    #[test]
+    fn global_capture_failure_keeps_only_migrated_identities_terminal() {
+        let live = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[0], false);
+        let retired = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[1], true);
+        let result = compose_with_capture(false, None, &[live, retired], &[], None)
+            .expect("migration ownership must survive a global capture failure");
+
+        assert!(result.current.is_empty());
+        for migration in [live, retired] {
+            let descriptor_name = format!("{}:{}", migration.group0, migration.name);
+            assert!(terminal_descriptor_name_in(&result, &descriptor_name));
+            assert!(terminal_reverse_in(
+                &result,
+                migration.raw_tag_id,
+                migration.write_group
+            ));
+        }
+        assert!(!terminal_descriptor_name_in(&result, "EXIF:UnownedName"));
+        assert!(!terminal_reverse_in(&result, 0xffff, "IFD0"));
     }
 }
