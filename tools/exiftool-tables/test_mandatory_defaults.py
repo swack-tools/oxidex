@@ -201,7 +201,7 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
         from mandatory_defaults_codegen import generate
         assert NATIVE is not None
         canonical_fact = capture(NATIVE[1])
-        rendered, _report = generate(canonical_fact, self._document(canonical_fact), str(NATIVE[0]))
+        rendered, report = generate(canonical_fact, self._document(canonical_fact), str(NATIVE[0]))
         self.assertIn('tag_id: 0x0213, format_name: "int16u"', rendered)
         # IFD1 is selected by the same captured `$tagTablePtr->{id}` / WriteValue
         # path. These are source-captured defaults, not a handwritten IFD1 list.
@@ -209,6 +209,13 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
         self.assertIn('tag_id: 0x011a, format_name: "rational64u"', rendered)
         self.assertIn('tag_id: 0x011b, format_name: "rational64u"', rendered)
         self.assertIn('tag_id: 0x0128, format_name: "int16u"', rendered)
+        # The same `%mandatory` map also has an integer ExifIFD value. Its
+        # raw Exif/Main row lacks a direct WriteGroup, so it is retained as an
+        # explicit omission instead of causing a false IFD1 rejection or a
+        # guessed encoder.
+        self.assertEqual(report['recipe']['unencoded_numeric_defaults'], ({
+            'directory': 'ExifIFD', 'tag_id': 40961,
+            'reason': 'direct_write_group_unrepresented'},))
         # This calls the real selected Writer.pl helper.  WriteExif's proven
         # new-directory branch invokes this helper directly for these values.
         env = {key:value for key,value in os.environ.items() if key not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
