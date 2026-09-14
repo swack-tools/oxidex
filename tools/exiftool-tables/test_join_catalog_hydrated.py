@@ -56,6 +56,56 @@ def observation_rows(fixture_name, fixture_bytes, expected, actual):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
+    def ifd_facts(self):
+        document = {"exiftool_version": "13.59", "modules": {"Exif": {"tables": {"Main": {
+            "meta": {}, "tags": {"315": {"Name": "Artist", "Format": "int16u"},
+                                "316": {"Name": "Omitted", "Format": "int16u", "RawConv": "$val"}}}}}}}
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        source, binary, rust, ledger = (root / name for name in ("source.json", "binary.rs", "ifd.rs", "ledger.json"))
+        source.write_text(json.dumps(document))
+        command = ["python3", str(PATH.with_name("codegen.py")), str(source), "-o", str(binary),
+                   "--ifd-out", str(rust), "--ifd-identity-ledger-out", str(ledger)]
+        result = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return source.read_bytes(), json.loads(ledger.read_text()), rust.read_text()
+
+    def test_ifd_schema_declarations_replay_and_remain_unobserved(self):
+        source, ledger, rust = self.ifd_facts()
+        rows = join.ifd_implementation(source, ledger, rust)
+        self.assertEqual(rows[("Image::ExifTool::Exif::Main", "315", 0)]["reader_state"], "eligible")
+        self.assertEqual(rows[("Image::ExifTool::Exif::Main", "316", 0)]["reader_state"], "omitted")
+        entries = [
+            {"table": "Image::ExifTool::Exif::Main", "raw_key": "315", "variant_index": 0,
+             "name": "Artist", "normalized_name": "artist", "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}, "no_lookup": False, "unknown": False},
+            {"table": "Image::ExifTool::Exif::Main", "raw_key": "316", "variant_index": 0,
+             "name": "Omitted", "normalized_name": "omitted", "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}, "no_lookup": False, "unknown": False},
+        ]
+        cat = catalog(entries)
+        hyd = {"exiftool_version": "13.59", "hydrated_layouts": {
+            "catalog_counts": {"total_tag_entries": 2}, "source_provenance": {"sources": copy.deepcopy(SOURCE)},
+            "tables": {"Image::ExifTool::Exif::Main": {"full_name": "Image::ExifTool::Exif::Main", "tags": {
+                "315": {"Name": "Artist"}, "316": {"Name": "Omitted"}}}}}}
+        digests = {"source_sha256": hashlib.sha256(source).hexdigest(),
+                   "ledger_sha256": hashlib.sha256(json.dumps(ledger).encode()).hexdigest(),
+                   "rust_sha256": hashlib.sha256(rust.encode()).hexdigest()}
+        result = join.build(cat, hyd, "catalog", "hydrated", ifd_source=source, ifd_ledger=ledger,
+                            ifd_rust=rust, ifd_input_digests=digests)
+        states = {row["catalog"]["name"]: row for row in result["entries"]}
+        self.assertEqual(states["Artist"]["reader_implementation"], "ifd_schema_declaration_eligible_unobserved")
+        self.assertEqual(states["Omitted"]["reader_implementation"], "ifd_schema_declaration_omitted_unobserved")
+        self.assertEqual(states["Artist"]["observed_read"], "not_observed_yet")
+        self.assertEqual(result["inputs"]["ifd"], digests)
+        for bad_source, bad_ledger, bad_rust in (
+            (source + b" ", ledger, rust),
+            (source, {**ledger, "rows": ledger["rows"][:-1]}, rust),
+            (source, ledger, rust + "// tampered\n"),
+        ):
+            with self.subTest(mutated=True), self.assertRaises(ValueError):
+                join.ifd_implementation(bad_source, bad_ledger, bad_rust)
+
+
     def test_table_report_keeps_source_only_variants_and_separate_contexts(self):
         second = "Image::ExifTool::Other::Main"
         source_only = "Image::ExifTool::Other::Internal"

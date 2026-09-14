@@ -23,6 +23,7 @@ import quicktime_atom_tables as quicktime_selector
 import quicktime_generated_specs as quicktime_specs
 import quicktime_keys_specs
 import final_scalar_stage
+import codegen
 import setnewvalue_public_migration_ledger as public_migration
 import quicktime_baseline as baseline
 
@@ -269,6 +270,86 @@ def quicktime_rust_matches(expected: str, supplied: str) -> bool:
     return formatted[0] == formatted[1]
 
 
+def _ifd_catalog_variant(path: object) -> int:
+    if path == []:
+        return 0
+    if isinstance(path, list) and len(path) == 1 and type(path[0]) is int and path[0] >= 0:
+        return path[0]
+    raise ValueError("IFD ledger variant path is malformed")
+
+
+def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: str | None) -> dict:
+    """Authenticate IFD compiler rows as schema declarations only.
+
+    IFD codegen's Rust can contain oracle-approved conversions. The identity
+    ledger does not carry that oracle input, so replay uses no oracle and only
+    admits rows which remain free of withheld semantics in both results. This
+    deliberately never implies dispatch reachability or an observed read.
+    """
+    supplied = (source, ledger, emitted_rust)
+    if all(value is None for value in supplied):
+        return {}
+    if any(value is None for value in supplied) or not isinstance(source, bytes) or not isinstance(emitted_rust, str):
+        raise ValueError("IFD replay requires source, identity ledger, and Rust artifact together")
+    try:
+        document = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError("IFD source is malformed") from exc
+    if not isinstance(document, dict) or ledger.get("schema") != "oxidex_ifd_identity_ledger_v1":
+        raise ValueError("IFD source or identity ledger schema is malformed")
+    source_fact = require_mapping(ledger.get("source"), "IFD ledger source")
+    if source_fact.get("tables_json_sha256") != hashlib.sha256(source).hexdigest():
+        raise ValueError("IFD ledger source digest differs from supplied source")
+    if source_fact.get("ifd_rust_sha256") != codegen._canonical_ifd_rust_sha256(emitted_rust):
+        raise ValueError("IFD Rust artifact differs from ledger binding")
+    if ledger.get("exiftool_version") != document.get("exiftool_version"):
+        raise ValueError("IFD source and ledger version differ")
+    rows = ledger.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("IFD ledger rows are malformed")
+    # Replay the whole IFD compiler from these exact source objects. No oracle
+    # is intentionally supplied: accepting an oracle-dependent conversion
+    # without its immutable input would overclaim an implementation fact.
+    _, _, _, replay = codegen.gen_ifd_tables(document, sorted(document.get("modules", {})), None)
+    replay_by_id = {(row["full_name"], row["raw_key"], tuple(row["variant_path"])): row for row in replay}
+    if len(replay_by_id) != len(replay):
+        raise ValueError("IFD compiler replay has duplicate identities")
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("IFD ledger row is malformed")
+        table, raw_key, path = row.get("full_name"), row.get("raw_key"), row.get("variant_path")
+        key = (table, raw_key, tuple(path) if isinstance(path, list) else None)
+        expected = replay_by_id.get(key)
+        if (not isinstance(table, str) or not isinstance(raw_key, str) or key[2] is None or expected is None
+                or row.get("source_sha256") != expected["source_sha256"] or row.get("name") != expected["name"]):
+            raise ValueError("IFD ledger identity differs from compiler source replay")
+        if row.get("artifact_state") not in ("emitted", "refused") or row.get("state") != row.get("artifact_state"):
+            raise ValueError("IFD ledger artifact state is malformed")
+        if row.get("reader_state") not in ("eligible", "omitted", "refused") or not isinstance(row.get("reasons"), list) or not isinstance(row.get("omissions"), list):
+            raise ValueError("IFD ledger reader classification is malformed")
+        if row["artifact_state"] != expected["artifact_state"] or row["reasons"] != expected["reasons"]:
+            raise ValueError("IFD ledger artifact result differs from compiler replay")
+        # An oracle-free replay can only reduce eligible declarations.
+        if row["reader_state"] == "eligible" and expected["reader_state"] != "eligible":
+            raise ValueError("IFD ledger claims oracle-dependent reader eligibility")
+        variant = _ifd_catalog_variant(path)
+        identity = (table, raw_key, variant)
+        if identity in result:
+            raise ValueError("IFD ledger maps multiple rows to one catalog identity")
+        result[identity] = {
+            "artifact_state": row["artifact_state"], "reader_state": row["reader_state"],
+            "reasons": row["reasons"], "omissions": row["omissions"], "name": row["name"],
+            "source_sha256": row["source_sha256"],
+        }
+    if set(replay_by_id) != {(row["full_name"], row["raw_key"], tuple(row["variant_path"])) for row in rows}:
+        raise ValueError("IFD ledger/source row conservation failed")
+    counts = require_mapping(ledger.get("counts"), "IFD ledger counts")
+    if counts.get("rows") != len(rows) or counts.get("emitted") != sum(r["artifact_state"] == "emitted" for r in rows) or counts.get("refused") != sum(r["artifact_state"] == "refused" for r in rows):
+        raise ValueError("IFD ledger count conservation failed")
+    return result
+
+
 def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | None,
                              bounded_source: bytes | None, emitted_rust: str | None) -> dict[tuple[str, str, str, tuple[int, ...]], dict]:
     """Replay complete bounded artifacts before indexing their QuickTime identities."""
@@ -485,7 +566,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           writer_final_rust: str | None = None, writer_public_ledger: dict | None = None,
           writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None,
           quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
-          writer_read_evidence: dict | None = None, quicktime_keys_read_evidence: dict | None = None) -> dict:
+          writer_read_evidence: dict | None = None, quicktime_keys_read_evidence: dict | None = None,
+          ifd_source: bytes | None = None, ifd_ledger: dict | None = None, ifd_rust: str | None = None,
+          ifd_input_digests: dict[str, str] | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -511,6 +594,17 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
     keys = quicktime_keys_implementation(quicktime_keys_ledger, quicktime_bounded_source, quicktime_keys_rust)
+    ifd = ifd_implementation(ifd_source, ifd_ledger, ifd_rust)
+    if ifd and (ifd_input_digests is None or set(ifd_input_digests) != {"source_sha256", "ledger_sha256", "rust_sha256"}):
+        raise ValueError("IFD input digests are incomplete")
+    if ifd:
+        pin = (quicktime_selector.ROOT / ".exiftool-version").read_text().strip()
+        if (catalog.get("exiftool_version") != pin or hydrated.get("exiftool_version") != pin
+                or json.loads(ifd_source).get("exiftool_version") != pin):
+            raise ValueError("IFD source, catalog, or hydrated version differs from repository pin")
+        if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
+               for value in ifd_input_digests.values()):
+            raise ValueError("IFD input digest is malformed")
     observed_keys = quicktime_keys_observed_reads(quicktime_keys_read_evidence, quicktime_bounded_source,
                                                    quicktime_keys_ledger, quicktime_keys_rust, quicktime_input_digests)
     writer = writer_implementation(writer_source, writer_final_ledger, writer_final_rust, writer_public_ledger, writer_public_rust)
@@ -601,6 +695,12 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                     and (identity[1], variant_path, entry["name"]) in observed_keys
                     and entry["groups"]["1"] == "Keys"):
                 observed_read = "observed_matched_read"
+        ifd_candidate = ifd.get(identity)
+        if ifd_candidate is not None and state == "joined":
+            if ifd_candidate["name"] != entry["name"]:
+                raise ValueError("IFD ledger/catalog name identity differs")
+            implementation = reader_implementation = "ifd_schema_declaration_" + ifd_candidate["reader_state"] + "_unobserved"
+            refusal = (ifd_candidate["reasons"] + ifd_candidate["omissions"]) or None
         writer_candidate = writer.get(identity)
         if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
             writer_state = "generated_writer_declaration_unobserved"
@@ -636,6 +736,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         inputs["quicktime"] = dict(sorted(quicktime_input_digests.items()))
     if writer_input_digests is not None:
         inputs["writer"] = dict(sorted(writer_input_digests.items()))
+    if ifd_input_digests is not None:
+        inputs["ifd"] = dict(sorted(ifd_input_digests.items()))
     if quicktime_read_evidence is not None:
         inputs["quicktime_read_evidence"] = {"sha256": canonical_hash(quicktime_read_evidence),
                                              "producer": quicktime_read_evidence["producer"]}
@@ -684,11 +786,12 @@ def report(join: dict) -> str:
                   f"Distinct observed Group1 names: {writes['distinct_group1_names']}"]
     lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved.", "",
               "## Source-table progress", "",
-              "Declarations below are authenticated implementation facts, not observed coverage. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
+              "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations use an oracle-free replay and exclude rows with withheld semantics. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
               "| Source table | Source variants | Catalog entries | Reader declarations | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
               "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for table, value in join.get("source_tables", {}).items():
-        reader = sum(count for state, count in value["reader_implementation"].items() if state.startswith("generated_"))
+        reader = sum(count for state, count in value["reader_implementation"].items()
+                     if state.startswith("generated_") or state.startswith("ifd_schema_declaration_eligible"))
         writer = sum(count for state, count in value["writer_implementation"].items() if state.startswith("generated_"))
         reasons = "; ".join(f"{reason}: {count}" for reason, count in value["reader_refusal_reasons"].items()) or "—"
         lines.append(f"| {table} | {value['source_variant_rows']} | {value['catalog_entries']} | {reader} | {writer} | {value['observed_read_catalog_entries']} | {value['observed_write_catalog_entries']} | {reasons} |")
@@ -742,6 +845,9 @@ def main() -> int:
     parser.add_argument("--quicktime-read-evidence", type=Path)
     parser.add_argument("--quicktime-keys-read-evidence", type=Path)
     parser.add_argument("--writer-read-evidence", type=Path)
+    parser.add_argument("--ifd-source", type=Path)
+    parser.add_argument("--ifd-identity-ledger", type=Path)
+    parser.add_argument("--ifd-rust", type=Path)
     parser.add_argument("--writer-source", type=Path,
                         help="authenticated full native dump used by both writer compilers")
     parser.add_argument("--writer-final-ledger", type=Path)
@@ -753,13 +859,17 @@ def main() -> int:
     action.add_argument("--check", action="store_true")
     args = parser.parse_args()
     writer_paths = (args.writer_source, args.writer_final_ledger, args.writer_final_rust, args.writer_public_ledger, args.writer_public_rust)
+    ifd_paths = (args.ifd_source, args.ifd_identity_ledger, args.ifd_rust)
     if any(path is not None for path in writer_paths) and any(path is None for path in writer_paths):
         raise ValueError("writer join inputs must be supplied together")
+    if any(path is not None for path in ifd_paths) and any(path is None for path in ifd_paths):
+        raise ValueError("IFD join inputs must be supplied together")
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
                           args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
                           args.quicktime_keys_ledger, args.quicktime_keys_rust,
                           *(writer_paths if all(path is not None for path in writer_paths) else ()),
+                          *(ifd_paths if all(path is not None for path in ifd_paths) else ()),
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []),
                           *([args.quicktime_keys_read_evidence] if args.quicktime_keys_read_evidence else []),
                           *([args.writer_read_evidence] if args.writer_read_evidence else []))
@@ -775,6 +885,12 @@ def main() -> int:
                          "rust_sha256": hashlib.sha256(quicktime_rust.encode()).hexdigest(),
                          "keys_ledger_sha256": hashlib.sha256(keys_ledger).hexdigest(),
                          "keys_rust_sha256": hashlib.sha256(keys_rust.encode()).hexdigest()}
+    ifd_source = args.ifd_source.read_bytes() if args.ifd_source else None
+    ifd_ledger = args.ifd_identity_ledger.read_bytes() if args.ifd_identity_ledger else None
+    ifd_rust = args.ifd_rust.read_text(encoding="utf-8") if args.ifd_rust else None
+    ifd_digests = {"source_sha256": hashlib.sha256(ifd_source).hexdigest(),
+                   "ledger_sha256": hashlib.sha256(ifd_ledger).hexdigest(),
+                   "rust_sha256": hashlib.sha256(ifd_rust.encode()).hexdigest()} if ifd_source else None
     writer_source = args.writer_source.read_bytes() if args.writer_source else None
     writer_final = args.writer_final_ledger.read_bytes() if args.writer_final_ledger else None
     writer_final_rust = args.writer_final_rust.read_text(encoding="utf-8") if args.writer_final_rust else None
@@ -793,7 +909,9 @@ def main() -> int:
                  writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
                  writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,
                  writer_read_evidence=read_json(args.writer_read_evidence) if args.writer_read_evidence else None,
-                 quicktime_keys_read_evidence=read_json(args.quicktime_keys_read_evidence) if args.quicktime_keys_read_evidence else None)
+                 quicktime_keys_read_evidence=read_json(args.quicktime_keys_read_evidence) if args.quicktime_keys_read_evidence else None,
+                 ifd_source=ifd_source, ifd_ledger=json.loads(ifd_ledger) if ifd_ledger else None,
+                 ifd_rust=ifd_rust, ifd_input_digests=ifd_digests)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():
