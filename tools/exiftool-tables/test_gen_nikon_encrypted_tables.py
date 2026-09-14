@@ -217,6 +217,50 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
                 with self.assertRaises(generator.Unsupported):
                     generator.render(changed)
 
+    def test_dumped_extra_keys_must_be_empty(self):
+        data = fixture()
+        row = data["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]
+        row["_extra_keys"] = []
+        generator.render(data)
+        row["_extra_keys"] = ["NewExecutableField"]
+        with self.assertRaisesRegex(generator.Unsupported, "unrecognized dumped fields"):
+            generator.render(data)
+
+    def test_rust_string_escaping_preserves_literal_backslash_sequences(self):
+        self.assertEqual(generator.rs(r"a\nb\tc\rd"), r'"a\\nb\\tc\\rd"')
+        self.assertEqual(generator.rs("a\nb\tc\rd\x01"), r'"a\u{a}b\u{9}c\u{d}d\u{1}"')
+
+    def test_perl_only_regexes_refuse_before_emission(self):
+        self.assertEqual(generator.rust_regex(r"^NIKON (?:D[0-9])?\b"), r"^NIKON (?:D[0-9])?\b")
+        for pattern in (r"(?=D5)", r"(D5)\1", r"(?P<camera>D5)", r"D5\K",
+                        r"\X", r"\R", r"\o{123}", r"\j", r"D{2,}", r"[a[b]]", r"[a&&b]"):
+            with self.subTest(pattern=pattern), self.assertRaises(generator.Unsupported):
+                generator.rust_regex(pattern)
+        data = fixture()
+        data["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["Condition"] = r"$$self{Model} =~ /(?=D5)/"
+        with self.assertRaises(generator.Unsupported):
+            generator.render(data)
+
+    def test_graph_identity_keeps_nikon_and_nikoncustom_name_collisions_distinct(self):
+        data = fixture()
+        nikon = data["modules"]["Nikon"]["tables"]
+        custom = data["modules"]["NikonCustom"]["tables"]
+        nikon["Test"]["tags"].update({
+            "2": {"Name": "NikonChild", "SubDirectory": {"TagTable": "Image::ExifTool::Nikon::Shared"}},
+            "3": {"Name": "CustomChild", "SubDirectory": {"TagTable": "Image::ExifTool::NikonCustom::Shared"}},
+        })
+        nikon["Shared"] = {"meta": {"FORMAT": "int8u"}, "tags": {"1": {"Name": "NikonOnly"}}}
+        custom["Shared"] = {"meta": {"FORMAT": "int8u"}, "tags": {"1": {"Name": "CustomOnly"}}}
+        text, counts = generator.render(data)
+        self.assertEqual(counts["tables"], 3)
+        self.assertIn("static TAGS_NIKON_SHARED", text)
+        self.assertIn("static TAGS_NIKONCUSTOM_SHARED", text)
+        self.assertIn('name: "NikonOnly"', text)
+        self.assertIn('name: "CustomOnly"', text)
+        test_rows = text.split("static TAGS_TEST", 1)[1].split("];", 1)[0]
+        self.assertIn("subdir: Some(SubDir { table: 0", test_rows)
+        self.assertIn("subdir: Some(SubDir { table: 2", test_rows)
+
     def test_fixed_divisor_print_conversions_refuse_source_mutations(self):
         def pc(expression):
             return generator.pc({"PrintConv": {"kind": "expr", "expr": expression}}, {})
