@@ -597,6 +597,7 @@ class NativeWriteFacts(unittest.TestCase):
             self.assertEqual(
                 fact["requested_binding"],
                 {"write_value": "Image::ExifTool::WriteValue",
+                 "set_byte_order": "Image::ExifTool::SetByteOrder",
                  "check_value": "Image::ExifTool::CheckValue",
                  "sanitize": "Image::ExifTool::Sanitize",
                  "conv_inv": "Image::ExifTool::ConvInv",

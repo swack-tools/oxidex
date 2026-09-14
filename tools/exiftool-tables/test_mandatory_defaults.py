@@ -1,6 +1,7 @@
 """Facts and closed admission for WriteExif %mandatory defaults."""
 from __future__ import annotations
 from copy import deepcopy
+from functools import lru_cache
 import json, os, sys
 from pathlib import Path
 import shutil, subprocess, tempfile, unittest
@@ -178,15 +179,22 @@ fn main() {{
 
 class MandatoryNumericEncodingTests(unittest.TestCase):
     """Native direct WriteValue packing proof for source-derived IFD0 defaults."""
-    def _document(self, fact: dict) -> dict:
-        effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
-                     "source_sha256": fact["writer"]["source_sha256"]}
-        write_value = {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "my($proc) = $writeValueProc{$format}; if ($proc) { split(' ', $val, 0); ($packed .= &$proc($val)); }", "__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"], "lexical_hashes": {"bindings": {"%writeValueProc": {"resolved": True, "entries": {"int16u": {"resolved": True, "__perl": "CODE", "__name": "Image::ExifTool::Set16u", "__deparse": "Image::ExifTool::Set16u DoPackStd('S', @_)"}, "rational64u": {"resolved": True, "__perl": "CODE", "__name": "Image::ExifTool::SetRational64u", "__deparse": "Image::ExifTool::SetRational64u Rationalize($_[0], 4294967295) Set32u($numer) . Set32u($denom)"}}}}}}
-        return {"exiftool_version": fact["native_identity"]["exiftool_version"],
-                "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}},
-                "native_write_helpers": {"write_value": write_value},
-                "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}},
-                "native_write_format_registry": {"state": "resolved", "format_number": {"int16u": 3, "rational64u": 5}, "format_size": [None,1,1,2,4,8]}}
+    @staticmethod
+    @lru_cache(maxsize=8)
+    def _native_document(library: str, closure: tuple) -> dict:
+        # Fresh selected-native Exif-only capture, cached only for the exact
+        # library/loaded-source closure. No synthetic substring-only helper.
+        assert NATIVE is not None
+        env = {k:v for k,v in os.environ.items() if k not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
+        result = subprocess.run([str(NATIVE[0]), str(HERE / 'dump_tables.pl'), library, 'Exif'],
+                                env=env, check=True, capture_output=True, text=True)
+        document = json.loads(result.stdout)
+        return {key:value for key,value in document.items() if key.startswith('native_write_') or key == 'exiftool_version'}
+
+    def _document(self, fact: dict, library: Path | None = None) -> dict:
+        assert NATIVE is not None
+        return deepcopy(self._native_document(str(library or NATIVE[1]),
+                        tuple(sorted(fact['loaded_exiftool_closure'].items()))))
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_actual_writevalue_bytes_match_generated_ifd0_encoder_and_type_mutation_propagates(self):
@@ -228,7 +236,7 @@ fn main() {{
             anchor="0x213 => {\n        Name => 'YCbCrPositioning',\n        Protected => 1,\n        Writable => 'int16u',"
             self.assertEqual(body.count(anchor), 1)
             exif.write_text(body.replace(anchor, anchor.replace("'int16u'", "'rational64u'")))
-            changed_fact=capture(copied); changed,_=generate(changed_fact,self._document(changed_fact),str(NATIVE[0]))
+            changed_fact=capture(copied); changed,_=generate(changed_fact,self._document(changed_fact, copied),str(NATIVE[0]))
             self.assertIn('tag_id: 0x0213, format_name: "rational64u"',changed)
             generated = Path(temporary)/'changed.rs'; generated.write_text(changed)
             runtime = ROOT/'src/writers/mandatory_defaults_runtime.rs'; driver=Path(temporary)/'changed-driver.rs'; binary=Path(temporary)/'changed-driver'
@@ -293,5 +301,117 @@ fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", def
             self.assertIn('&$proc(0)', changed_document['native_write_helpers']['write_value']['__deparse'])
             with self.assertRaisesRegex(MandatoryRefused, 'numeric WriteValue dispatch'):
                 generate(capture(copied), changed_document, str(NATIVE[0]))
+
+    @unittest.skipUnless(NATIVE is not None, 'selected native source required')
+    def test_copied_numeric_statement_insertion_changes_native_bytes_and_refuses(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary) / 'lib'; shutil.copytree(NATIVE[1], copied)
+            writer = copied / 'Image/ExifTool/Writer.pl'
+            body = writer.read_text(); anchor = '$packed .= &$proc($val);'
+            self.assertEqual(body.count(anchor), 1)
+            writer.write_text(body.replace(anchor, '$val += 1; ' + anchor))
+            fact = capture(copied); document = self._document(fact, copied)
+            deparse = document['native_write_helpers']['write_value']['__deparse']
+            # All old required substring tokens survive this mutation.
+            for token in ("$writeValueProc{$format}", "if ($proc)", "split(' ', $val, 0)", "($packed .= &$proc($val))"):
+                self.assertIn(token, deparse)
+            env = {k:v for k,v in os.environ.items() if k not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
+            native = subprocess.run([str(NATIVE[0]), '-I'+str(copied), '-e',
+                "require Image::ExifTool; require q(Image/ExifTool/Writer.pl); print unpack('H*',Image::ExifTool::WriteValue(72,'int16u',1));"],
+                env=env, check=True, capture_output=True, text=True).stdout
+            self.assertEqual(native, '0049')
+            with self.assertRaisesRegex(MandatoryRefused, 'fully consumed grammar'):
+                generate(fact, document, str(NATIVE[0]))
+
+    @unittest.skipUnless(NATIVE is not None, 'selected native source required')
+    def test_validation_and_packing_dependency_insertions_and_provenance_refuse(self):
+        assert NATIVE is not None
+        fact = capture(NATIVE[1]); original = self._document(fact)
+        def functions(document):
+            write = document['native_write_helpers']['write_value']
+            dispatch = write['lexical_hashes']['bindings']['%writeValueProc']['entries']
+            result = []
+            def walk(helper):
+                if helper.get('resolved') is not True: return
+                result.append(helper)
+                for dep in helper.get('dependencies', {}).values(): walk(dep)
+            walk(write)
+            for name in ('int16u', 'rational64u'): walk(dispatch[name])
+            return result
+        expected = {'WriteValue', 'IsInt', 'IsHex', 'IsFloat', 'IsRational',
+                    'Set16u', 'SetRational64u', 'Rationalize', 'AssembleRational', 'Set32u', 'DoPackStd'}
+        self.assertEqual({f['__name'].rsplit('::', 1)[1] for f in functions(original)}, expected)
+        for index, function in enumerate(functions(original)):
+            with self.subTest(helper=function['__name']):
+                changed = deepcopy(original); helper = functions(changed)[index]
+                helper['__deparse'] = helper['__deparse'].replace('use strict;', 'use strict; ($_[0] += 1);')
+                with self.assertRaisesRegex(MandatoryRefused, 'fully consumed grammar'):
+                    compile_mandatory_joined(fact, changed)
+                changed = deepcopy(original); functions(changed)[index]['source_sha256'] = '0' * 64
+                with self.assertRaisesRegex(MandatoryRefused, 'join'):
+                    compile_mandatory_joined(fact, changed)
+        for key in ('source', 'format_name', 'format_size'):
+            changed = deepcopy(original)
+            if key == 'source': changed['native_write_format_registry'][key]['sha256'] = '0' * 64
+            else: changed['native_write_format_registry'][key][3] = 'int32u' if key == 'format_name' else 4
+            with self.subTest(registry=key), self.assertRaises(MandatoryRefused):
+                compile_mandatory_joined(fact, changed)
+        for name in ('%unpackMotorola', '%unpackIntel'):
+            changed = deepcopy(original)
+            changed['native_write_helpers']['set_byte_order']['lexical_hashes']['bindings'][name]['entries']['S'] = 'C'
+            with self.subTest(packing_map=name), self.assertRaisesRegex(MandatoryRefused, 'packing templates'):
+                compile_mandatory_joined(fact, changed)
+
+    @unittest.skipUnless(NATIVE is not None, 'selected native source required')
+    def test_copied_native_packing_dependencies_and_format_registry_refuse(self):
+        assert NATIVE is not None
+        mutations = (
+            ('Image/ExifTool.pm', "sub Set16u(@) { return DoPackStd('S', @_); }", "sub Set16u(@) { $_[0] += 1; return DoPackStd('S', @_); }"),
+            ('Image/ExifTool.pm', "sub Set32u(@) { return DoPackStd('L', @_); }", "sub Set32u(@) { $_[0] += 1; return DoPackStd('L', @_); }"),
+            ('Image/ExifTool.pm', 'my $val = pack($unpackStd{$_[0]}, $_[1]);', 'my $val = pack($unpackStd{$_[0]}, $_[1]); $val .= chr(0);'),
+            ('Image/ExifTool/Writer.pl', "return (0, 1) if $val == 0;", "return (0, 1) if $val == 0; $val += 1;"),
+            ('Image/ExifTool.pm', "my %unpackMotorola = ( S => 'n',", "my %unpackMotorola = ( S => 'v',"),
+        )
+        for relative, before, after in mutations:
+            with self.subTest(mutation=before), tempfile.TemporaryDirectory() as temporary:
+                copied = Path(temporary) / 'lib'; shutil.copytree(NATIVE[1], copied)
+                target = copied / relative; body = target.read_text()
+                self.assertEqual(body.count(before), 1); target.write_text(body.replace(before, after))
+                fact = capture(copied); document = self._document(fact, copied)
+                with self.assertRaises(MandatoryRefused): compile_mandatory_joined(fact, document)
+
+    @unittest.skipUnless(NATIVE is not None, 'selected native source required')
+    def test_native_integer_boundaries_match_rust_in_both_byte_orders(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        fact = capture(NATIVE[1]); rendered, _ = generate(fact, self._document(fact))
+        env = {k:v for k,v in os.environ.items() if k not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
+        native = subprocess.run([str(NATIVE[0]), '-I'+str(NATIVE[1]), '-e',
+            "require Image::ExifTool; require q(Image/ExifTool/Writer.pl); for my $order (qw(MM II)) { Image::ExifTool::SetByteOrder($order); for my $fmt (qw(int16u rational64u)) { my @vals = $fmt eq 'int16u' ? (0,1,65535) : (0,1,65535,4294967295); for my $v (@vals) { print unpack('H*',Image::ExifTool::WriteValue($v,$fmt,1)),qq(\\n); } } }"],
+            env=env, check=True, capture_output=True, text=True).stdout.splitlines()
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary=Path(temporary); generated=temporary/'generated.rs'; generated.write_text(rendered)
+            runtime=ROOT/'src/writers/mandatory_defaults_runtime.rs'; driver=temporary/'driver.rs'; binary=temporary/'driver'
+            driver.write_text(f'''mod writers {{ #[path = "{runtime}"] pub mod mandatory_defaults_runtime; #[path = "{generated}"] pub mod generated; }}
+use writers::mandatory_defaults_runtime::*;
+fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS;
+ for order in [TiffByteOrder::Big,TiffByteOrder::Little] {{
+  for (tag,values) in [(531,&[0,1,65535][..]),(282,&[0,1,65535,4294967295][..])] {{ for value in values {{
+   let input=[MandatoryDefault{{tag_id:tag,value:MandatoryValue::Integer(*value)}}];
+   let encoded=encode_ifd0_defaults(r,&input,order).unwrap();
+   assert_eq!(encoded[0].count,1); for b in &encoded[0].bytes {{ print!("{{:02x}}",b); }} println!();
+  }} }}
+ }}
+ for (tag,value) in [(531,-1),(531,65536),(282,-1),(282,4294967296)] {{
+  assert!(encode_ifd0_defaults(r,&[MandatoryDefault{{tag_id:tag,value:MandatoryValue::Integer(value)}}],TiffByteOrder::Big).is_err());
+ }}
+ assert!(encode_ifd0_defaults(r,&[MandatoryDefault{{tag_id:531,value:MandatoryValue::Text("1.5")}}],TiffByteOrder::Big).is_err());
+}}''')
+            subprocess.run(['rustc','--edition=2021',str(driver),'-o',str(binary)],check=True,capture_output=True,text=True)
+            actual=subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout.splitlines()
+        self.assertEqual(len(native),14)
+        self.assertEqual(actual,native)
 
 if __name__ == '__main__': unittest.main()

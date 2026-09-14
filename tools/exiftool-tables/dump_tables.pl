@@ -1076,6 +1076,9 @@ sub native_write_helper_facts {
     my ($lib_abs, $status) = @_;
     my %bindings = (
         write_value => 'Image::ExifTool::WriteValue',
+        # Numeric WriteValue's DoPackStd reads the map selected by this
+        # helper. Capture its final CV and lexical endian maps together.
+        set_byte_order => 'Image::ExifTool::SetByteOrder',
         check_value => 'Image::ExifTool::CheckValue',
         sanitize => 'Image::ExifTool::Sanitize',
         conv_inv => 'Image::ExifTool::ConvInv',

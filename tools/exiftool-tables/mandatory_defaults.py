@@ -166,20 +166,23 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
         raise MandatoryRefused("mandatory defaults do not join the captured WriteValue helper")
     generic_context = _mapping(document.get("native_write_capture_context"), "native_write_capture_context")
     loaded = _mapping(generic_context.get("loaded_modules"), "native_write_capture_context.loaded_modules")
-    if loaded.get("Image/ExifTool/Writer.pl") != write_value["source_sha256"]:
+    if (generic_context.get("resolved") is not True
+            or loaded.get("Image/ExifTool/Writer.pl") != write_value["source_sha256"]):
         raise MandatoryRefused("mandatory WriteValue helper does not join the generic loaded closure")
-    numeric = re.sub(r"\s+", " ", write_value["__deparse"])
-    required_numeric = ("$writeValueProc{$format}", "if ($proc)", "split(' ', $val, 0)", "($packed .= &$proc($val))")
-    if any(token not in numeric for token in required_numeric):
-        raise MandatoryRefused("mandatory numeric WriteValue dispatch is outside the closed grammar")
-    lexical = _mapping(_mapping(write_value.get("lexical_hashes"), "WriteValue lexical hashes").get("bindings"), "WriteValue lexical bindings")
-    dispatch = _mapping(lexical.get("%writeValueProc"), "WriteValue numeric dispatch")
-    if dispatch.get("resolved") is not True:
-        raise MandatoryRefused("mandatory numeric WriteValue dispatch is unresolved")
-    dispatch_entries = _mapping(dispatch.get("entries"), "WriteValue numeric dispatch entries")
+    from writevalue_recipes import RecipeRefused, compile_numeric_write
+    try:
+        numeric = compile_numeric_write(helpers, mandatory_closure, loaded)
+    except RecipeRefused as error:
+        raise MandatoryRefused(str(error)) from error
 
     registry = _mapping(document.get("native_write_format_registry"), "native_write_format_registry")
-    if registry.get("state") != "resolved": raise MandatoryRefused("mandatory TIFF format registry is unresolved")
+    source = _mapping(registry.get("source"), "mandatory TIFF format registry provenance")
+    registry_file = source.get("library_relative_path")
+    registry_sha = source.get("sha256")
+    if (registry.get("state") != "resolved" or registry_file != "Image/ExifTool/Exif.pm"
+            or registry_sha != mandatory_closure.get(registry_file)
+            or registry_sha != loaded.get(registry_file)):
+        raise MandatoryRefused("mandatory TIFF format registry does not join the native source closures")
     numbers = _mapping(registry.get("format_number"), "mandatory TIFF format numbers")
 
     rows = _mapping(fact.get("raw_exif_main_row_properties"), "raw_exif_main_row_properties")
@@ -205,16 +208,16 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
             if present(name) is not None:
                 raise MandatoryRefused(f"mandatory row {name} changes direct WriteValue semantics")
         format_name = str(present("Writable"))
-        proc = _mapping(dispatch_entries.get(format_name), f"WriteValue dispatch {format_name}")
-        body = re.sub(r"\s+", " ", str(proc.get("__deparse", "")))
-        expected_name, required_proc = {"int16u": ("Image::ExifTool::Set16u", ("DoPackStd('S', @_)",)),
-                         "rational64u": ("Image::ExifTool::SetRational64u", ("Rationalize($_[0], 4294967295)", "Set32u($numer) . Set32u($denom)"))}[format_name]
-        if proc.get("resolved") is not True or proc.get("__perl") != "CODE" or proc.get("__name") != expected_name or any(token not in body for token in required_proc):
-            raise MandatoryRefused("mandatory numeric WriteValue procedure is outside the closed grammar")
+        if format_name not in numeric.formats:
+            raise MandatoryRefused("mandatory numeric WriteValue format is unsupported")
         type_code = numbers.get(format_name)
         sizes = registry.get("format_size")
-        if (type(type_code) is not int or type_code <= 0 or not isinstance(sizes, list)
-                or type_code >= len(sizes) or sizes[type_code] != (2 if format_name == "int16u" else 8)):
+        if (type(type_code) is not int or not 0 < type_code <= 65535 or not isinstance(sizes, list)
+                or type_code >= len(sizes) or type(sizes[type_code]) is not int
+                or sizes[type_code] != (2 if format_name == "int16u" else 8)
+                or not isinstance(registry.get("format_name"), list)
+                or type_code >= len(registry["format_name"])
+                or registry["format_name"][type_code] != format_name):
             raise MandatoryRefused("mandatory TIFF format registry entry is unsupported")
         encodings.append(DefaultEncoding(tag_id, format_name, type_code))
     return replace(recipe, encodings=tuple(encodings), write_value_source_sha256=str(write_value["source_sha256"]))
