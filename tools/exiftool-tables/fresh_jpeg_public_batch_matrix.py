@@ -32,6 +32,8 @@ RULES = ROOT / "src/writers/generated_tiff_scalar_final_rules.rs"
 MANDATORY_LEDGER = ROOT / "tools/exiftool-tables/mandatory_defaults_ledger.json"
 ADDRESS_RULES = ROOT / "src/writers/generated_setnewvalue_address_rules.rs"
 
+INSTRUMENT = "fresh_jpeg_public_batch_matrix_v2"
+
 BATCH_CASES = (
     "generated-delete-legacy-set",
     "generated-set-mandatory-override",
@@ -344,12 +346,39 @@ def compare_batch(source: Path, native_output: Path, generated_output: Path,
         raise AssertionError("mixed public mandatory type/count/value bytes differ")
 
 
+def persist_report(output: Path, report: dict[str, Any]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
                ledger: Path, rules: Path, mandatory_ledger: Path, address_rules: Path) -> dict[str, Any]:
+    report: dict[str, Any] = {"instrument": INSTRUMENT, "declared": 0, "passed": 0,
+                              "rows": [], "state": "pre-driver-pending"}
+    persist_report(output, report)
+    try:
+        return _run_matrix(test_binary=test_binary, perl=perl, library=library, output=output,
+                           ledger=ledger, rules=rules, mandatory_ledger=mandatory_ledger,
+                           address_rules=address_rules, report=report)
+    except Exception as error:
+        phase = "driver-failed" if str(report.get("state", "")).startswith("driver-") else "pre-driver-failed"
+        report.update(state=phase, error=str(error))
+        persist_report(output, report)
+        raise
+
+
+def _run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
+                ledger: Path, rules: Path, mandatory_ledger: Path, address_rules: Path,
+                report: dict[str, Any]) -> dict[str, Any]:
     if not hasattr(native, "run_native_batch"):
         raise RuntimeError("fresh public batch matrix requires the committed native batch oracle helper")
     all_targets = generated_targets(ledger, rules)
     targets = tuple(target for target in all_targets if target.case_family == "native_string_scalar")
+    report.update(anchor_case_family="native_string_scalar",
+                  numeric_cohort_instrument="generated_scalar_write_matrix_v4",
+                  non_anchor_source_targets=[asdict(target) for target in all_targets if target.case_family != "native_string_scalar"])
+    if not targets:
+        raise ValueError("no admitted string anchor targets in source ledger")
     root = output.parent / "fresh-jpeg-public-batch-files"
     root.mkdir(parents=True, exist_ok=False)
     # Candidate admission is a source/native fact: Protected and PrintConv
@@ -358,6 +387,8 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
         perl=perl, library=library, root=root, target=targets[0],
         ledger_path=mandatory_ledger, address_path=address_rules,
     )
+    report.update(mandatory_candidate=asdict(mandatory), mandatory_selection_probes=mandatory_probes)
+    persist_report(output, report)
     jfif_candidates: dict[str, MandatoryCandidate] = {}
     jfif_probes: dict[str, list[dict[str, Any]]] = {}
     for carrier in CARRIERS:
@@ -367,7 +398,11 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
                 ledger_path=mandatory_ledger, address_path=address_rules,
             )
             jfif_candidates[carrier.label], jfif_probes[carrier.label] = candidate, probes
+            report.update(jfif_adjusted_candidates={k: asdict(v) for k, v in jfif_candidates.items()},
+                          jfif_adjusted_selection_probes=jfif_probes)
+            persist_report(output, report)
     rows, requests = [], []
+    report["rows"] = rows
     for carrier in CARRIERS:
         source = root / f"{carrier.label}-source.jpg"
         write_carrier(source, carrier)
@@ -380,33 +415,59 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
                     spec = batch_case(target, active_mandatory, case)
                     stem = f"{carrier.label}-{target.raw_tag_id:04x}-{source_kind}-{active_mandatory.raw_tag_id:04x}-{case}"
                     native_output, generated_output = root / f"{stem}-native.jpg", root / f"{stem}-generated.jpg"
+                    row = {"id": stem, "carrier": asdict(carrier), "case": case,
+                           "target": asdict(target), "mandatory": asdict(active_mandatory),
+                           "mandatory_source": source_kind, "spec": spec, "source": str(source),
+                           "native_output": str(native_output), "output": str(generated_output),
+                           "state": "native-pending"}
+                    rows.append(row)
+                    report["declared"] = len(rows)
+                    persist_report(output, report)
                     native_call = native.run_native_batch(perl, library, source, native_output, spec["native"])
+                    row["native_call"] = native_call
+                    persist_report(output, report)
                     assert_native_batch(native_call, stem, spec["native"])
+                    row["state"] = "native-passed"
                     requests.append({"route": "public-batch", "carrier": "jpeg", "input": str(source),
                                      "output": str(generated_output), "batch": spec["public"]})
-                    rows.append({"id": stem, "carrier": asdict(carrier), "case": case,
-                                 "target": asdict(target), "mandatory": asdict(active_mandatory), "mandatory_source": source_kind, "spec": spec,
-                                 "source": str(source), "native_output": str(native_output),
-                                 "output": str(generated_output), "native_call": native_call})
     request_path, result_path = root / "requests.json", root / "results.json"
     request_path.write_text(json.dumps(requests, indent=2) + "\n", encoding="utf-8")
     env = os.environ.copy() | {"OXIDEX_SCALAR_WRITE_REQUESTS": str(request_path),
                                "OXIDEX_SCALAR_WRITE_RESULTS": str(result_path)}
-    completed = subprocess.run([str(test_binary), DRIVER, "--exact", "--ignored", "--nocapture"],
-                               env=env, text=True, capture_output=True, timeout=180)
+    report.update({"declared": len(rows), "mandatory_candidate": asdict(mandatory),
+                   "mandatory_selection_probes": mandatory_probes,
+                   "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
+                   "jfif_adjusted_selection_probes": jfif_probes, "rows": rows,
+                   "state": "driver-pending"})
+    persist_report(output, report)
+    try:
+        completed = subprocess.run([str(test_binary), DRIVER, "--exact", "--ignored", "--nocapture"],
+                                   env=env, text=True, capture_output=True, timeout=180)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        stdout, stderr = getattr(error, "stdout", "") or "", getattr(error, "stderr", "") or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        (root / "driver.log").write_text(str(stdout) + str(stderr) + f"\n{error}\n", encoding="utf-8")
+        report.update(state="driver-failed", error=str(error))
+        persist_report(output, report)
+        raise
     (root / "driver.log").write_text(completed.stdout + completed.stderr, encoding="utf-8")
-    completed.check_returncode()
-    results = json.loads(result_path.read_text(encoding="utf-8"))
+    if completed.returncode:
+        report.update(state="driver-failed", returncode=completed.returncode)
+        persist_report(output, report)
+        completed.check_returncode()
+    try:
+        results = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        report.update(state="driver-failed", error=str(error))
+        persist_report(output, report)
+        raise
     if not isinstance(results, list) or len(results) != len(rows):
+        report.update(state="driver-failed", error="public batch fixture results differ from requests")
+        persist_report(output, report)
         raise AssertionError("public batch fixture results differ from requests")
-    report: dict[str, Any] = {"instrument": "fresh_jpeg_public_batch_matrix_v2", "declared": len(rows),
-        "anchor_case_family": "native_string_scalar",
-        "numeric_cohort_instrument": "generated_scalar_write_matrix_v4",
-        "non_anchor_source_targets": [asdict(target) for target in all_targets if target.case_family != "native_string_scalar"],
-                              "passed": 0, "mandatory_candidate": asdict(mandatory),
-                              "mandatory_selection_probes": mandatory_probes,
-                              "jfif_adjusted_candidates": {key: asdict(value) for key, value in jfif_candidates.items()},
-                              "jfif_adjusted_selection_probes": jfif_probes, "rows": rows}
     for row, result in zip(rows, results, strict=True):
         row["driver_result"] = result
         try:
@@ -418,7 +479,9 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
             report["passed"] += 1
         except (AssertionError, OSError, ValueError) as error:
             row.update(state="failed", error=str(error))
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        persist_report(output, report)
+    report["state"] = "passed" if report["passed"] == report["declared"] else "failed"
+    persist_report(output, report)
     return report
 
 
@@ -446,7 +509,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     declared = len(CARRIERS) * len(targets) * len(BATCH_CASES) + sum(
         2 * len(targets) for carrier in CARRIERS if carrier.jfif.unit is not None
     )
-    print_header(tool="fresh_jpeg_public_batch_matrix_v1", git=state, binary=binary,
+    print_header(tool=INSTRUMENT, git=state, binary=binary,
                  dirty_overridden=overridden,
                  extra=[f"native: {identity}", f"{declared} fresh/empty public batches"])
     report = run_matrix(test_binary=binary.path, perl=perl, library=library, output=args.output,

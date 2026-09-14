@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fresh_jpeg_public_batch_matrix as matrix
@@ -13,6 +14,61 @@ from generated_tiff_write_matrix import GeneratedTarget
 
 
 class FreshJpegPublicBatchMatrixTests(unittest.TestCase):
+    def test_instrument_identifier_is_single_sourced(self) -> None:
+        self.assertEqual(matrix.INSTRUMENT, "fresh_jpeg_public_batch_matrix_v2")
+
+    def test_predriver_failure_persists_terminal_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "report.json"
+            with mock.patch.object(matrix, "generated_targets", side_effect=ValueError("bad ledger")):
+                with self.assertRaisesRegex(ValueError, "bad ledger"):
+                    matrix.run_matrix(test_binary=Path("driver"), perl=Path("perl"), library=Path("lib"),
+                                      output=output, ledger=Path("ledger"), rules=Path("rules"),
+                                      mandatory_ledger=Path("mandatory"), address_rules=Path("addresses"))
+            report = __import__("json").loads(output.read_text())
+            self.assertEqual(report["state"], "pre-driver-failed")
+            self.assertIn("bad ledger", report["error"])
+
+    def test_driver_timeout_persists_terminal_report_and_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "report.json"
+            candidate = matrix.MandatoryCandidate(1, "Tag", "EXIF", "IFD0", "IFD0", 1, 2)
+            with (mock.patch.object(matrix, "CARRIERS", ()),
+                  mock.patch.object(matrix, "BATCH_CASES", ()),
+                  mock.patch.object(matrix, "generated_targets", return_value=(GeneratedTarget(1, "Tag", "EXIF", "IFD0"),)),
+                  mock.patch.object(matrix, "select_native_mandatory_candidate", return_value=(candidate, [])),
+                  mock.patch.object(matrix.subprocess, "run", side_effect=__import__("subprocess").TimeoutExpired("driver", 180, output="partial", stderr="late"))):
+                with self.assertRaises(__import__("subprocess").TimeoutExpired):
+                    matrix.run_matrix(test_binary=Path("driver"), perl=Path("perl"), library=Path("lib"),
+                                      output=output, ledger=Path("ledger"), rules=Path("rules"),
+                                      mandatory_ledger=Path("mandatory"), address_rules=Path("addresses"))
+            report = __import__("json").loads(output.read_text())
+            self.assertEqual(report["state"], "driver-failed")
+            self.assertIn("partial", (root / "fresh-jpeg-public-batch-files" / "driver.log").read_text())
+
+    def test_rejected_native_call_and_selection_probes_survive_predriver_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "report.json"
+            candidate = matrix.MandatoryCandidate(1, "Tag", "EXIF", "IFD0", "IFD0", 1, 2)
+            carrier = next(c for c in matrix.CARRIERS if c.jfif.unit is None)
+            native_call = {"returncode": 1, "stderr": "native failure"}
+            with (mock.patch.object(matrix, "CARRIERS", (carrier,)),
+                  mock.patch.object(matrix, "BATCH_CASES", (matrix.BATCH_CASES[0],)),
+                  mock.patch.object(matrix, "generated_targets", return_value=(GeneratedTarget(1, "Tag", "EXIF", "IFD0"),)),
+                  mock.patch.object(matrix, "select_native_mandatory_candidate", return_value=(candidate, [{"selected": True}])),
+                  mock.patch.object(matrix.native, "run_native_batch", return_value=native_call),
+                  mock.patch.object(matrix, "assert_native_batch", side_effect=AssertionError("native rejected"))):
+                with self.assertRaisesRegex(AssertionError, "native rejected"):
+                    matrix.run_matrix(test_binary=Path("driver"), perl=Path("perl"), library=Path("lib"),
+                                      output=output, ledger=Path("ledger"), rules=Path("rules"),
+                                      mandatory_ledger=Path("mandatory"), address_rules=Path("addresses"))
+            report = __import__("json").loads(output.read_text())
+            self.assertEqual(report["state"], "pre-driver-failed")
+            self.assertEqual(report["rows"][0]["native_call"], native_call)
+            self.assertEqual(report["mandatory_selection_probes"], [{"selected": True}])
+            self.assertEqual(report["anchor_case_family"], "native_string_scalar")
+
     def test_mandatory_candidates_join_generated_source_artifacts(self) -> None:
         candidates = matrix.mandatory_legacy_candidates()
         self.assertGreater(len(candidates), 0)

@@ -113,6 +113,8 @@ pub(crate) struct PublicWritePlan {
     pub legacy_metadata: MetadataMap,
     pub legacy_removed: Vec<String>,
     pub has_legacy_changes: bool,
+    /// Preserve a whole-EXIF clear before generated rows are masked from legacy.
+    pub whole_exif_clear: bool,
 }
 
 pub(crate) fn plan_public_write(
@@ -120,6 +122,21 @@ pub(crate) fn plan_public_write(
     desired: &MetadataMap,
     removed: &[String],
 ) -> Result<PublicWritePlan> {
+    // The public clear operation supplies an empty replacement map without
+    // named removals. A targeted delete may also leave the map empty, but must
+    // preserve entries the reader did not expose (including IFD1 defaults).
+    let whole_exif_clear = desired.is_empty() && removed.is_empty();
+    if whole_exif_clear {
+        // Clearing the carrier is not a series of individual tag writes. Do
+        // not resolve an unsupported spelling merely to remove the carrier.
+        return Ok(PublicWritePlan {
+            generated: Vec::new(),
+            legacy_metadata: desired.clone(),
+            legacy_removed: Vec::new(),
+            has_legacy_changes: true,
+            whole_exif_clear,
+        });
+    }
     let rules = generated_write_address::generated_rules();
     let baseline_rows: Vec<_> = baseline
         .iter()
@@ -215,6 +232,7 @@ pub(crate) fn plan_public_write(
         legacy_metadata,
         legacy_removed,
         has_legacy_changes: !plan.outside.is_empty(),
+        whole_exif_clear,
     })
 }
 
@@ -333,6 +351,38 @@ mod tests {
     }
 
     #[test]
+    fn whole_exif_clear_survives_generated_masking() {
+        let mut original = MetadataMap::new();
+        original.insert("EXIF:HostComputer", TagValue::new_string("old"));
+        original.insert("IFD0:Artist", TagValue::new_string("legacy"));
+        let plan = plan_public_write(&original, &MetadataMap::new(), &[]).unwrap();
+        assert!(plan.generated.is_empty());
+        assert!(plan.whole_exif_clear);
+
+        let mut generated_only = MetadataMap::new();
+        generated_only.insert("EXIF:HostComputer", TagValue::new_string("old"));
+        let targeted = plan_public_write(
+            &generated_only,
+            &MetadataMap::new(),
+            &["EXIF:HostComputer".into()],
+        )
+        .unwrap();
+        assert!(!targeted.whole_exif_clear);
+        assert_eq!(targeted.generated.len(), 1);
+
+        let mut thumbnail_only = MetadataMap::new();
+        thumbnail_only.insert(
+            "IFD1:Artist",
+            TagValue::new_string("retained thumbnail metadata"),
+        );
+        assert!(
+            !plan_public_write(&thumbnail_only, &thumbnail_only, &[])
+                .unwrap()
+                .whole_exif_clear
+        );
+    }
+
+    #[test]
     fn source_inventory_only_names_keep_legacy_routing() {
         let legacy_key = inventory_only_key();
         let mut desired = MetadataMap::new();
@@ -395,6 +445,10 @@ mod tests {
             let mut desired = MetadataMap::new();
             desired.insert(key, value);
             let plan = plan_public_write(&MetadataMap::new(), &desired, &[]).unwrap();
+            assert!(
+                !plan.whole_exif_clear,
+                "{key} must retain its EXIF directory"
+            );
             assert!(!plan.has_legacy_changes);
             assert_eq!(plan.generated.len(), 1);
             assert_eq!(plan.generated[0].value, Scalar::Utf8(scalar.into()));

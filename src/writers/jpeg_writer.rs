@@ -189,6 +189,29 @@ fn is_exif_segment(segment: &Segment) -> bool {
     segment.is_app1() && segment.data.starts_with(EXIF_IDENTIFIER)
 }
 
+/// Writer.pl calls a later APP1 block ExtendedEXIF only after an IFD0 or
+/// ExtendedEXIF directory, with no leading bytes before `Exif\0\0`, and only
+/// when the bytes following that identifier are not a fresh TIFF header.
+fn is_extended_exif_continuation(previous_was_exif_directory: bool, segment: &Segment) -> bool {
+    previous_was_exif_directory
+        && is_exif_segment(segment)
+        && !segment.data[EXIF_IDENTIFIER.len()..].starts_with(b"MM\0*")
+        && !segment.data[EXIF_IDENTIFIER.len()..].starts_with(b"II*\0")
+}
+
+/// Writer.pl also recognizes case variants and up to four leading junk bytes.
+/// These are outside the canonical carrier adapter: refuse them before treating
+/// a JPEG as fresh, so an unrecognized EXIF directory cannot bypass its barrier.
+fn has_unmodelled_exif_signature(segment: &Segment) -> bool {
+    segment.is_app1()
+        && !is_exif_segment(segment)
+        && (0..=4).any(|offset| {
+            segment.data.get(offset..).is_some_and(|data| {
+                data.len() >= 7 && data[..4].eq_ignore_ascii_case(b"Exif") && data[4] == 0
+            })
+        })
+}
+
 /// Inactive carrier adapter for already resolved raw IFD edits. Requires one
 /// existing EXIF block; choosing defaults for a new block belongs to the
 /// source-derived writer contract. Copy all bytes outside that block verbatim.
@@ -245,6 +268,9 @@ pub(crate) fn write_public_exif_transaction(
 ) -> Result<Vec<u8>> {
     use crate::writers::mandatory_defaults_runtime as mandatory;
     use crate::writers::tiff_surgical::{self, entry_edits, generated_scalar};
+    if plan.whole_exif_clear {
+        return transform_exif(reader, |_, _| Ok((Vec::new(), ()))).map(|(bytes, ())| bytes);
+    }
     if plan.generated.is_empty() {
         return write_exif_to_jpeg_with_removals(
             reader,
@@ -511,17 +537,45 @@ fn transform_exif<T>(
     }) {
         return Err(ExifToolError::parse_error("Invalid JPEG header marker"));
     }
-    let mut exif = head
-        .iter()
-        .enumerate()
-        .filter(|(_, seg)| is_exif_segment(seg));
-    let existing = exif.next();
-    if exif.next().is_some() {
+    if head.iter().any(has_unmodelled_exif_signature) {
+        return Err(ExifToolError::unsupported_format(
+            "Noncanonical EXIF directory requires a generated carrier protocol",
+        ));
+    }
+    let mut ordinary_exif = Vec::new();
+    let mut previous_was_exif_directory = false;
+    let mut has_extended_exif = false;
+    for (index, segment) in head.iter().enumerate() {
+        if is_exif_segment(segment) {
+            if is_extended_exif_continuation(previous_was_exif_directory, segment) {
+                has_extended_exif = true;
+            } else {
+                ordinary_exif.push((index, segment));
+            }
+            previous_was_exif_directory = true;
+        } else if (0xffe0..=0xffef).contains(&segment.marker) {
+            // A later APP directory changes Writer.pl's dirOrder. Treat an
+            // unmodelled APP directory conservatively: it cannot authorize a
+            // continuation in this raw carrier adapter.
+            previous_was_exif_directory = false;
+        }
+    }
+    if ordinary_exif.len() > 1 {
         return Err(ExifToolError::parse_error(
             "Ambiguous multiple JPEG EXIF blocks",
         ));
     }
     let policy = &crate::writers::generated_raw_jfif::RAW_JFIF;
+    if has_extended_exif
+        && policy
+            .creation_wait_for_directories
+            .contains(&"ExtendedEXIF")
+    {
+        return Err(ExifToolError::unsupported_format(
+            "ExtendedEXIF carrier requires a generated directory barrier",
+        ));
+    }
+    let existing = ordinary_exif.into_iter().next();
     let target_index = if let Some((index, _)) = existing {
         if !policy.creation_wait_for_directories.contains(&"IFD0") {
             return Err(ExifToolError::unsupported_format(
@@ -1210,6 +1264,100 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("APP1 size limit"));
+    }
+
+    #[test]
+    fn public_whole_clear_drops_exif_after_generated_partitioning() {
+        let mut baseline = MetadataMap::new();
+        baseline.insert("EXIF:HostComputer", TagValue::new_string("generated"));
+        baseline.insert("IFD0:Artist", TagValue::new_string("legacy"));
+        let plan = crate::writers::generated_public_write::plan_public_write(
+            &baseline,
+            &MetadataMap::new(),
+            &[],
+        )
+        .unwrap();
+        assert!(plan.whole_exif_clear);
+        let bytes = write_public_exif_transaction(
+            &TestReader::new(create_jpeg_with_exif()),
+            &baseline,
+            plan,
+        )
+        .unwrap();
+        assert!(
+            !parse_segments(&TestReader::new(bytes))
+                .unwrap()
+                .iter()
+                .any(is_exif_segment)
+        );
+    }
+
+    #[test]
+    fn extended_exif_barrier_allows_no_second_tiff_to_be_misclassified() {
+        let standard = Segment::new(APP1_MARKER, 0, b"Exif\0\0II*\0\x08\0\0\0");
+        let continuation = Segment::new(APP1_MARKER, 0, b"Exif\0\0continuation");
+        let repeated_tiff = Segment::new(APP1_MARKER, 0, b"Exif\0\0MM\0*\0\0\0\x08");
+        assert!(is_extended_exif_continuation(true, &continuation));
+        assert!(!is_extended_exif_continuation(true, &repeated_tiff));
+        assert!(!is_extended_exif_continuation(false, &continuation));
+        assert!(is_exif_segment(&standard));
+
+        let mut extended_file = vec![0xff, 0xd8];
+        write_segment(&mut extended_file, APP1_MARKER, standard.data).unwrap();
+        write_segment(&mut extended_file, APP1_MARKER, continuation.data).unwrap();
+        extended_file.extend_from_slice(&[0xff, 0xd9]);
+        let extended_error = rewrite_generated_exif_scalars(
+            &TestReader::new(extended_file),
+            vec![
+                crate::writers::tiff_surgical::generated_scalar::ScalarWriteRequest {
+                    key: "EXIF:HostComputer",
+                    value: crate::writers::generated_scalar::Scalar::Bytes(b"x".to_vec()),
+                },
+            ],
+            &crate::writers::tiff_surgical::generated_scalar::generated_rules(),
+        )
+        .unwrap_err();
+        assert!(extended_error.to_string().contains("ExtendedEXIF"));
+
+        let mut repeated_file = vec![0xff, 0xd8];
+        write_segment(&mut repeated_file, APP1_MARKER, standard.data).unwrap();
+        write_segment(&mut repeated_file, APP1_MARKER, repeated_tiff.data).unwrap();
+        repeated_file.extend_from_slice(&[0xff, 0xd9]);
+        let repeated_error = rewrite_generated_exif_scalars(
+            &TestReader::new(repeated_file),
+            vec![
+                crate::writers::tiff_surgical::generated_scalar::ScalarWriteRequest {
+                    key: "EXIF:HostComputer",
+                    value: crate::writers::generated_scalar::Scalar::Bytes(b"x".to_vec()),
+                },
+            ],
+            &crate::writers::tiff_surgical::generated_scalar::generated_rules(),
+        )
+        .unwrap_err();
+        assert!(repeated_error.to_string().contains("Ambiguous multiple"));
+    }
+
+    #[test]
+    fn noncanonical_exif_cannot_bypass_the_fresh_directory_barrier() {
+        for payload in [
+            b"exif\0xII*\0data".as_slice(),
+            b"junkExif\0\0data".as_slice(),
+        ] {
+            let segment = Segment::new(APP1_MARKER, 0, payload);
+            assert!(has_unmodelled_exif_signature(&segment));
+            let mut file = vec![0xff, 0xd8];
+            write_segment(&mut file, APP1_MARKER, payload).unwrap();
+            file.extend_from_slice(&[0xff, 0xd9]);
+            let result: Result<(Vec<u8>, ())> = transform_exif(&TestReader::new(file), |_, _| {
+                panic!("unmodelled directory must refuse before mutation")
+            });
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Noncanonical EXIF")
+            );
+        }
     }
 
     #[test]
