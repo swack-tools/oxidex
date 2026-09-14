@@ -42,8 +42,10 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         identity = {"module": "QuickTime", "table": "ItemList", "raw_key": "titl",
                     "source_sha256": join.quicktime_selector.digest(source), "variant_path": []}
         return ({"schema": "quicktime_generated_itemlist_specs_v1",
+                 "source": {"exiftool_version": "13.59"}, "specs": [],
+                 "identity_counts": {"source_records": 1, "generated": 1 if generated else 0},
                  "ledger": [{"identity": identity, "generated": generated, "reasons": reasons}]},
-                {"families": [{"records": [{"identity": identity, "reasons": reasons}]}]})
+                {"exiftool_version": "13.59", "families": [{"records": [{"identity": identity, "reasons": reasons}]}]})
 
     def test_exact_coordinate_variant_name_and_hash_join(self):
         result = join.build(catalog([entry("Title", "titl", 0), entry("Alternate", "titl", 1)]),

@@ -154,7 +154,15 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
     if itemlist_ledger.get("schema") != "quicktime_generated_itemlist_specs_v1":
         raise ValueError("unsupported QuickTime generated ledger schema")
     bounded = read_json(Path(__file__).with_name("fixtures") / "quicktime_source_13_59.json")
+    if bounded.get("exiftool_version") != itemlist_ledger.get("source", {}).get("exiftool_version"):
+        raise ValueError("QuickTime generated ledger and bounded source versions differ")
+    if capabilities.get("exiftool_version") != bounded.get("exiftool_version"):
+        raise ValueError("QuickTime capabilities and bounded source versions differ")
     tables = bounded["modules"]["QuickTime"]["tables"]
+    if not isinstance(itemlist_ledger.get("ledger"), list) or not isinstance(itemlist_ledger.get("specs"), list):
+        raise ValueError("QuickTime generated ledger rows are malformed")
+    if itemlist_ledger.get("identity_counts", {}).get("source_records") != len(itemlist_ledger["ledger"]):
+        raise ValueError("QuickTime generated ledger denominator is inconsistent")
     rows = {}
     for record in itemlist_ledger.get("ledger", []):
         identity = record.get("identity", {})
@@ -179,6 +187,8 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
         if key in rows:
             raise ValueError("QuickTime semantic identity collision")
         rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons")}
+    if sum(value["generated"] for value in rows.values()) != itemlist_ledger["identity_counts"].get("generated"):
+        raise ValueError("QuickTime generated acceptance denominator is inconsistent")
     for family in capabilities.get("families", []):
         for record in family.get("records", []):
             identity = record.get("identity", {})
