@@ -95,6 +95,34 @@ def generated_targets(ledger_path: Path = LEDGER, rules_path: Path = RULES) -> t
     return result
 
 
+def selected_rehearsal_contract(identity: dict, release: str, pin_file: Path, ledger_path: Path) -> dict:
+    """Bind an opt-in historical rehearsal without changing the 13.59 gate.
+
+    This is deliberately separate from native.assert_contract_version(): the
+    normal command remains the reviewed 13.59 acceptance baseline. Historical
+    execution instead requires one selected release to agree across the owned
+    checkout pin, live native identity, and freshly regenerated writer ledger.
+    """
+    if not isinstance(release, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", release):
+        raise ValueError("selected rehearsal release is malformed")
+    try:
+        pin = pin_file.read_text(encoding="utf-8").strip()
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("selected rehearsal pin or ledger is unreadable") from error
+    if pin != release:
+        raise ValueError("owned checkout pin differs from selected rehearsal release")
+    if identity.get("result", {}).get("exiftool_version") != release:
+        raise ValueError("selected native identity differs from rehearsal release")
+    if ledger.get("exiftool_version") != release:
+        raise ValueError("generated final-stage ledger differs from rehearsal release")
+    if ledger.get("emitted") is not True or ledger.get("reason") is not None:
+        raise ValueError("generated final-stage ledger did not emit a rehearsal cohort")
+    return {"mode": "selected-release-rehearsal", "release": release, "pin": str(pin_file.resolve()),
+            "pin_sha256": hashlib.sha256(pin_file.read_bytes()).hexdigest(),
+            "ledger_exiftool_version": ledger["exiftool_version"]}
+
+
 def changed_tag_ids(target_tag_id: int | set[int] | frozenset[int] | None) -> set[str]:
     """Normalize a source-derived changed physical identity set for comparison."""
     if target_tag_id is None:
@@ -160,9 +188,13 @@ def main():
     parser.add_argument("--jpeg-base", type=Path, help="also exercise generated JPEG cohort operations")
     parser.add_argument("--ledger", type=Path, default=LEDGER, help="emitted final-stage ledger")
     parser.add_argument("--rules", type=Path, default=RULES, help="rendered final-stage Rust rules")
+    parser.add_argument("--rehearsal-release", help="opt-in selected native release for version rehearsal")
+    parser.add_argument("--rehearsal-pin", type=Path, help="owned checkout .exiftool-version for rehearsal")
     parser.add_argument("--route", choices=("final-key", "resolved-address", "public-api"), default="final-key",
                         help="dispatch path exercised; public-api calls public modify_tag/remove_tag")
     args = parser.parse_args()
+    if (args.rehearsal_release is None) != (args.rehearsal_pin is None):
+        parser.error("--rehearsal-release and --rehearsal-pin must be supplied together")
     carriers = ("tiff_little", "tiff_big") + (("jpeg",) if args.jpeg_base else ())
     targets = generated_targets(args.ledger, args.rules)
     declared = len(carriers) * sum(len(target.qualifiers) for target in targets) * len(native.CASES)
@@ -175,10 +207,15 @@ def main():
         raise RuntimeError(note)
     perl, library = native.resolve_perl(args.perl), native.resolve_library(args.lib)
     identity = native.native_identity(perl, library)
-    native.assert_contract_version(identity)
+    contract = (selected_rehearsal_contract(identity, args.rehearsal_release, args.rehearsal_pin, args.ledger)
+                if args.rehearsal_release is not None else None)
+    if contract is None:
+        native.assert_contract_version(identity)
+        contract = {"mode": "pinned-13.59-contract", "release": native.CONTRACT_EXIFTOOL_RELEASE}
     print_header(tool="generated_scalar_write_matrix_v2", git=state, binary=binary,
                  dirty_overridden=overridden,
-                 extra=[f"native: {identity}", f"{declared} TIFF/JPEG operations via {args.route}; existing EXIF blocks"])
+                 extra=[f"native: {identity}", f"contract: {contract['mode']} {contract['release']}",
+                        f"{declared} TIFF/JPEG operations via {args.route}; existing EXIF blocks"])
     root = args.output.parent / "generated-tiff-matrix-files"
     root.mkdir(parents=True, exist_ok=False)
     rows, requests = [], []
@@ -208,6 +245,7 @@ def main():
     result.check_returncode()
     results = json.loads(result_path.read_text())
     report = {"instrument": "generated_scalar_write_matrix_v2", "route": args.route, "native_identity": identity,
+              "contract": contract,
               "source_commit": state.commit, "dirty_files": state.dirty_files,
               "test_binary_sha256": hashlib.sha256(binary.path.read_bytes()).hexdigest(),
               "ledger_sha256": hashlib.sha256(args.ledger.read_bytes()).hexdigest(),
@@ -216,7 +254,9 @@ def main():
                           "table_group0": target.table_group0, "physical_write_group": target.physical_write_group,
                           "qualifiers": list(target.qualifiers)} for target in targets],
               "declared": declared, "passed": 0, "rows": rows,
-              "limitations": ["New JPEG EXIF blocks and empty existing IFDs remain untested; public modify/remove covered only with route public-api.", "Generated final-scalar ledger cohort only, selected 13.59 only; this does not establish public SetNewValue admission."]}
+              "limitations": ["New JPEG EXIF blocks and empty existing IFDs remain untested; public modify/remove covered only with route public-api.",
+                              "Generated final-scalar ledger cohort only; this does not establish public SetNewValue admission.",
+                              f"Native contract mode: {contract['mode']} for release {contract['release']}."]}
     if len(results) != len(requests) or len(requests) != declared:
         raise AssertionError("fixture driver result population differs")
     for row, result in zip(rows, results, strict=True):

@@ -15,6 +15,7 @@ The config supplied to `init` is JSON with this shape:
   "execution_source_commit": "full OxiDex commit object id",
   "perls": { "11.78": "/absolute/perl", "12.64": "/absolute/perl" },
   "native_cases": { "11.78": [{ "name": "case", "fixture": "/fixture.jpg", "read": { "query": "FileType", "expectation": "value", "value": "JPEG" }, "write": { "operation": "set", "tag": "Comment", "value": "probe", "readback": "probe" } }], "12.64": [{ "name": "case", "fixture": "/fixture.jpg", "read": { "query": "FileType", "expectation": "value", "value": "JPEG" }, "write": { "operation": "set", "tag": "Comment", "value": "probe", "readback": "probe" } }] },
+  "write_fixture_manifests": { "11.78": "/absolute/write-fixtures.json", "12.64": "/absolute/write-fixtures.json" },
   "commands": {
     "generate": { "argv": ["python3", "generator.py", "{native_source}", "{report}"] },
     "build": { "argv": ["python3", "build-release.py", "--report", "{report}"] },
@@ -79,6 +80,17 @@ later stages may not change source entries.
 The native stage itself calls `version_rehearsal_native_oracle` with the
 release's own explicit Perl, materialized `lib`, and program before either
 comparison command can run.
+
+When `write` is configured, `write_fixture_manifests` is required for every
+selected release. `init` captures each absolute manifest's content hash, byte
+count, and every listed JPEG source identity into immutable config. Loading or
+executing a run rechecks that binding, so changing a manifest or a source JPEG
+after initialization refuses before the stage starts. The runner provides
+`{write_fixture_manifest}` and `OXIDEX_REHEARSAL_WRITE_FIXTURE_MANIFEST` to
+the configured write command. A write result must prove the build's
+`writer_binary` and its distinct staged fixture corpus; the executor rehashes
+both and rejects a substituted reader CLI, read fixture manifest, or writer
+driver.
 
 One explicit absolute host lock from immutable config covers checkout, native probe, generation, build and
 both comparisons. An interruption leaves the active stage `running`; `recover`

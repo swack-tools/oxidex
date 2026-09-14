@@ -37,7 +37,9 @@ COMMAND_TIMEOUT_SECONDS = 3600
 _PLACEHOLDERS = {
     "release", "checkout", "target", "report", "native_source", "native_lib",
     "native_program", "native_perl", "native_probe", "native_probe_sha256", "source_commit",
+    "write_fixture_manifest",
 }
+_WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
 
 
 class Refused(ValueError):
@@ -68,6 +70,50 @@ def _safe_name(release: str) -> str:
     if _SAFE_RELEASE.fullmatch(release) is None:
         raise Refused("unsafe release name")
     return "release-" + release.replace(".", "-")
+
+
+def _sha_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_fixture_binding(value: Any) -> dict[str, Any]:
+    """Capture a write fixture manifest and every requested JPEG identity.
+
+    The path alone cannot be immutable execution input: both the manifest and
+    its listed source fixtures must still equal this snapshot at execution.
+    """
+    if not isinstance(value, str) or not os.path.isabs(value) or "\x00" in value:
+        raise Refused("write fixture manifest path is malformed")
+    manifest = _regular(Path(value), "write fixture manifest")
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise Refused("write fixture manifest is unreadable") from exc
+    if (not isinstance(document, dict) or document.get("schema") != 1
+            or document.get("kind") != _WRITE_FIXTURE_KIND
+            or not isinstance(document.get("fixtures"), list) or not document["fixtures"]):
+        raise Refused("write fixture manifest schema is unsupported")
+    fixtures = []
+    for item in document["fixtures"]:
+        if (not isinstance(item, dict) or set(item) != {"path", "sha256", "bytes"}
+                or not isinstance(item["path"], str) or not os.path.isabs(item["path"])
+                or not isinstance(item["sha256"], str) or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+                or type(item["bytes"]) is not int or item["bytes"] < 1):
+            raise Refused("write fixture manifest item is malformed")
+        fixture = _regular(Path(item["path"]), "write fixture")
+        if _sha_file(fixture) != item["sha256"] or fixture.stat().st_size != item["bytes"]:
+            raise Refused("write fixture differs from immutable manifest")
+        if fixture.read_bytes()[:2] != b"\xff\xd8":
+            raise Refused("write fixture manifest contains a non-JPEG fixture")
+        fixtures.append({"path": str(fixture), "sha256": item["sha256"], "bytes": item["bytes"]})
+    if len({(item["path"], item["sha256"]) for item in fixtures}) != len(fixtures):
+        raise Refused("write fixture manifest has duplicate fixture identity")
+    return {"path": str(manifest), "sha256": _sha_file(manifest), "bytes": manifest.stat().st_size,
+            "fixtures": fixtures}
 
 
 def _config(value: Any, releases: list[str]) -> dict[str, Any]:
@@ -104,7 +150,20 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
     source_commit = value.get("execution_source_commit")
     if not isinstance(source_commit, str) or rehearsal.GIT_OID_RE.fullmatch(source_commit) is None:
         raise Refused("config must bind an immutable execution source commit")
-    return value
+    has_write = "write" in commands
+    manifests, bindings = value.get("write_fixture_manifests"), value.get("write_fixture_bindings")
+    if not has_write:
+        if manifests is not None or bindings is not None:
+            raise Refused("write fixture bindings require a configured write command")
+        return value
+    if not isinstance(manifests, dict) or set(manifests) != set(releases):
+        raise Refused("write command requires one immutable fixture manifest per selected release")
+    current = {release: _write_fixture_binding(manifests[release]) for release in releases}
+    if bindings is not None and bindings != current:
+        raise Refused("write fixture manifest or requested JPEG scope changed after initialization")
+    normalized = dict(value)
+    normalized["write_fixture_bindings"] = current
+    return normalized
 
 
 def _input_documents(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -168,7 +227,7 @@ def initialize_run(run_dir: Path, capture: dict[str, Any], catalog: dict[str, An
     rehearsal.verify_plan(plan, catalog)
     catalog_stage.verify_source_resolution(resolution, plan, catalog, capture)
     releases = _selected(plan)
-    _config(config, releases)
+    config = _config(config, releases)
     if run_dir.exists() or run_dir.is_symlink():
         raise Refused("execution run directory already exists")
     run_dir.mkdir(parents=True)
@@ -371,9 +430,11 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
             if target is None:
                 raise Refused("stage result binary target was not supplied")
             _require_binary_proof(result, target)
-            if stage == "build" and "writer_binary" in result:
-                _require_binary_proof(result, target, "writer_binary")
-        if stage == "read":
+        if stage in {"build", "write"}:
+            if target is None:
+                raise Refused("stage result writer binary target was not supplied")
+            _require_binary_proof(result, target, "writer_binary")
+        if stage in {"read", "write"}:
             _require_fixture_proof(result)
     return result
 
@@ -501,13 +562,15 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
               "native_source": str(source), "native_lib": str(lib), "native_program": str(program),
               "native_perl": perl, "native_probe": str(_result_path(run_dir, release, "native")),
               "native_probe_sha256": str(native_probe.get("probe_sha256", "")),
+              "write_fixture_manifest": str(config.get("write_fixture_bindings", {}).get(release, {}).get("path", "")),
               "source_commit": config["execution_source_commit"]}
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), OXIDEX_REHEARSAL_RELEASE=release,
                OXIDEX_REHEARSAL_NATIVE_SOURCE=str(source), OXIDEX_REHEARSAL_NATIVE_LIB=str(lib),
                OXIDEX_REHEARSAL_NATIVE_PROGRAM=str(program), OXIDEX_REHEARSAL_NATIVE_PERL=perl,
                OXIDEX_REHEARSAL_NATIVE_PROBE=values["native_probe"], OXIDEX_REHEARSAL_REPORT=str(output),
                OXIDEX_REHEARSAL_NATIVE_PROBE_SHA256=values["native_probe_sha256"],
-               OXIDEX_REHEARSAL_CHECKOUT=str(checkout), OXIDEX_REHEARSAL_SOURCE_COMMIT=config["execution_source_commit"])
+               OXIDEX_REHEARSAL_CHECKOUT=str(checkout), OXIDEX_REHEARSAL_SOURCE_COMMIT=config["execution_source_commit"],
+               OXIDEX_REHEARSAL_WRITE_FIXTURE_MANIFEST=values["write_fixture_manifest"])
     def started(pid: int, pgid: int) -> None:
         journal["active"]["child"] = {"pid": pid, "pgid": pgid}
         _store_journal(run_dir, journal)
@@ -527,6 +590,16 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("binary") != build_report.get("binary"):
                 raise Refused("read result did not use the proven build binary")
+        if stage == "write":
+            build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
+            if result.get("writer_binary") != build_report.get("writer_binary"):
+                raise Refused("write result did not use the proven writer driver")
+            fixture_binding = config["write_fixture_bindings"][release]
+            fixture_report = result.get("fixtures", {})
+            if (not isinstance(fixture_report, dict)
+                    or fixture_report.get("manifest") != fixture_binding["path"]
+                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]):
+                raise Refused("write result did not use the immutable selected JPEG fixture manifest")
     except Refused as exc:
         journal["releases"][release]["stages"][stage] = "failed"
         journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": command_log}

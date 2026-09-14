@@ -26,6 +26,8 @@ import version_rehearsal_executor as executor
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
+READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
+WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
 
 
 class Refused(ValueError):
@@ -240,11 +242,12 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
     return result
 
 
-def _prior(report: Path, stage: str, args: argparse.Namespace, identity: dict[str, Any]) -> dict[str, Any]:
+def _prior(report: Path, stage: str, args: argparse.Namespace, identity: dict[str, Any], checkout: Path) -> dict[str, Any]:
     value = _json(report.parent / f"{stage}.json")
     if (value.get("schema") != executor.SCHEMA or value.get("kind") != executor.RESULT_KIND
             or value.get("stage") != stage or value.get("state") != "passed" or value.get("release") != args.release
-            or value.get("source_commit") != args.source_commit or value.get("native_identity") != identity):
+            or value.get("source_commit") != args.source_commit or value.get("native_identity") != identity
+            or value.get("source_tree_sha256") != _source_tree(checkout)):
         raise Refused("prior stage is not bound to this release, source, and native identity")
     return value
 
@@ -283,7 +286,7 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     checkout, target, report, perl, _source, native_lib, identity = _common(args, run)
     if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
         raise Refused("build checkout is not pinned to selected release")
-    generated = _validate_artifacts(checkout, _prior(report, "generate", args, identity).get("generated_artifacts"))
+    generated = _validate_artifacts(checkout, _prior(report, "generate", args, identity, checkout).get("generated_artifacts"))
     env = _environment(perl, native_lib, target)
     records = []
     for command in (["cargo", "build", "--all-features", "--message-format=json", "--bin", "oxidex"],
@@ -306,11 +309,11 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     _atomic(report, result); return result
 
 
-def _fixtures(manifest: Path, target: Path) -> tuple[list[dict[str, Any]], str, Path]:
+def _fixtures(manifest: Path, target: Path, *, kind: str, subtarget: str) -> tuple[list[dict[str, Any]], str, Path]:
     source = _json(manifest)
-    if source.get("schema") != 1 or source.get("kind") != "oxidex_version_rehearsal_fixture_manifest" or not isinstance(source.get("fixtures"), list) or not source["fixtures"]:
+    if source.get("schema") != 1 or source.get("kind") != kind or not isinstance(source.get("fixtures"), list) or not source["fixtures"]:
         raise Refused("fixture manifest schema is unsupported")
-    digest = _sha(manifest); corpus = target / "rehearsal-fixtures" / digest
+    digest = _sha(manifest); corpus = target / subtarget / digest
     if corpus.exists() or corpus.is_symlink(): raise Refused("fixture corpus already exists")
     corpus.mkdir(parents=True)
     rows = []
@@ -327,8 +330,20 @@ def _fixtures(manifest: Path, target: Path) -> tuple[list[dict[str, Any]], str, 
     return rows, digest, corpus
 
 
+def _write_fixtures(manifest: Path, target: Path) -> tuple[list[dict[str, Any]], str, Path]:
+    rows, digest, corpus = _fixtures(manifest, target, kind=WRITE_FIXTURE_KIND,
+                                     subtarget="rehearsal-write-fixtures")
+    for row in rows:
+        if _regular(Path(row["corpus_path"]), "staged JPEG write fixture").read_bytes()[:2] != b"\xff\xd8":
+            raise Refused("write fixture manifest contains a non-JPEG fixture")
+    return rows, digest, corpus
+
+
 def _verify_staged_fixtures(rows: list[dict[str, Any]]) -> None:
     for row in rows:
+        source = _regular(Path(row["source"]), "fixture source")
+        if _sha(source) != row["sha256"] or source.stat().st_size != row["bytes"]:
+            raise Refused("fixture source changed during comparison")
         staged = _regular(Path(row["corpus_path"]), "staged fixture")
         if (_sha(staged) != row["sha256"] or staged.stat().st_size != row["bytes"]
                 or row.get("corpus_sha256") != row["sha256"] or row.get("corpus_bytes") != row["bytes"]):
@@ -356,13 +371,14 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     checkout, target, report, perl, native_source, native_lib, identity = _common(args, run)
     if re.fullmatch(r"[0-9a-f]{64}", args.native_probe_sha256) is None:
         raise Refused("native probe digest is malformed")
-    previous = _prior(report, "build", args, identity)
+    previous = _prior(report, "build", args, identity, checkout)
     generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
     binary = previous.get("binary")
     if not isinstance(binary, dict) or not isinstance(binary.get("path"), str) or not isinstance(binary.get("sha256"), str): raise Refused("build binary proof is malformed")
     executable = _regular(Path(binary["path"]), "built oxidex executable")
     if _sha(executable) != binary["sha256"] or executable.stat().st_size != binary.get("bytes"): raise Refused("built oxidex executable changed")
-    fixtures, fixture_digest, corpus = _fixtures(Path(args.fixture_manifest), target)
+    fixtures, fixture_digest, corpus = _fixtures(Path(args.fixture_manifest), target,
+                                                  kind=READ_FIXTURE_KIND, subtarget="rehearsal-fixtures")
     comparison = report.parent / "raw" / "read-conformance.json"
     command = [sys.executable, str(checkout / "tools" / "exiftool-tables" / "conformance.py"), str(corpus), "--recursive", "--exiftool-dir", str(native_source), "--oxidex", str(executable), "--min-files", str(len(fixtures)), "--min-tags", "1", "--json-out", str(comparison)]
     env = _environment(perl, native_lib, target); env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
@@ -388,22 +404,108 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     return result
 
 
-def write(args: argparse.Namespace) -> dict[str, Any]:
-    report = Path(args.report).absolute()
-    if report.exists() or report.is_symlink(): raise Refused("stage report already exists")
-    result = {"schema": executor.SCHEMA, "kind": executor.RESULT_KIND, "stage": "write", "release": args.release,
-              "state": "unsupported", "reason": "generated writer public acceptance contract is not implemented; no historical baseline substituted"}
-    _atomic(report, result); return result
+def _build_binary(previous: dict[str, Any], target: Path, field: str, label: str) -> dict[str, Any]:
+    row = previous.get(field)
+    if (not isinstance(row, dict) or not isinstance(row.get("path"), str)
+            or not isinstance(row.get("sha256"), str) or type(row.get("bytes")) is not int):
+        raise Refused(f"build {label} proof is malformed")
+    binary = _regular(Path(row["path"]), f"built {label}")
+    if (not binary.is_relative_to(target.resolve()) or _sha(binary) != row["sha256"]
+            or binary.stat().st_size != row["bytes"]):
+        raise Refused(f"built {label} changed after build")
+    return {"path": str(binary), "sha256": _sha(binary), "bytes": binary.stat().st_size}
+
+
+def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, native_lib: Path,
+                   writer: dict[str, Any], ledger: Path, rules: Path) -> dict[str, Any]:
+    value = _json(path)
+    contract = value.get("contract")
+    matrix_native = value.get("native_identity")
+    rows = value.get("rows")
+    if (value.get("instrument") != "generated_scalar_write_matrix_v2" or value.get("route") != "public-api"
+            or not isinstance(matrix_native, dict)
+            or not isinstance(matrix_native.get("result"), dict)
+            or not isinstance(matrix_native.get("command"), list)
+            or matrix_native.get("result", {}).get("exiftool_version") != args.release
+            or matrix_native.get("command", [None, None])[:2] != [str(native_perl), "-I" + str(native_lib)]
+            or value.get("source_commit") != args.source_commit
+            or not isinstance(contract, dict) or contract.get("mode") != "selected-release-rehearsal"
+            or contract.get("release") != args.release or contract.get("ledger_exiftool_version") != args.release
+            or value.get("test_binary_sha256") != writer["sha256"]
+            or value.get("ledger_sha256") != _sha(ledger) or value.get("rules_sha256") != _sha(rules)
+            or type(value.get("declared")) is not int or value["declared"] < 1
+            or type(value.get("passed")) is not int or not 0 <= value["passed"] <= value["declared"]
+            or not isinstance(rows, list) or len(rows) != value["declared"]
+            or any(not isinstance(row, dict) or row.get("state") not in {"passed", "failed"}
+                   or not isinstance(row.get("driver_result"), dict) for row in rows)
+            or value["passed"] != sum(row["state"] == "passed" for row in rows)):
+        raise Refused("generated write matrix report is not bound to the selected build and native release")
+    return {"path": str(path), "sha256": _sha(path), "declared": value["declared"],
+            "passed": value["passed"], "mismatched": value["declared"] - value["passed"]}
+
+
+def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
+    checkout, target, report, perl, _native_source, native_lib, identity = _common(args, run)
+    if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
+        raise Refused("write checkout is not pinned to selected release")
+    previous = _prior(report, "build", args, identity, checkout)
+    generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
+    writer = _build_binary(previous, target, "writer_binary", "writer driver")
+    fixtures, fixture_digest, _corpus = _write_fixtures(Path(args.fixture_manifest), target)
+    ledger = checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json"
+    rules = checkout / "src/writers/generated_tiff_scalar_final_rules.rs"
+    _regular(ledger, "generated final-stage ledger"); _regular(rules, "generated final-stage rules")
+    matrix_root = report.parent / "raw" / "write-matrix"
+    if matrix_root.exists() or matrix_root.is_symlink():
+        raise Refused("write matrix evidence directory already exists")
+    records, matrix_reports = [], []
+    env = _environment(perl, native_lib, target)
+    env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
+    for index, fixture in enumerate(fixtures):
+        output = matrix_root / f"{index:04d}" / "report.json"
+        command = [sys.executable, str(checkout / "tools/exiftool-tables/generated_tiff_write_matrix.py"),
+                   "--test-binary", writer["path"], "--perl", str(perl), "--lib", str(native_lib),
+                   "--jpeg-base", fixture["corpus_path"], "--output", str(output), "--ledger", str(ledger),
+                   "--rules", str(rules), "--route", "public-api", "--rehearsal-release", args.release,
+                   "--rehearsal-pin", str(checkout / ".exiftool-version")]
+        record = _run(command, cwd=checkout, env=env, run=run)
+        records.append(record)
+        if not output.is_file() or output.is_symlink():
+            _raw(report, "write", {"commands": records, "state": "failed"})
+            raise Refused("generated write matrix did not publish a report")
+        matrix_reports.append(_matrix_report(output, args=args, native_perl=perl, native_lib=native_lib, writer=writer,
+                                             ledger=ledger, rules=rules))
+    raw = _raw(report, "write", {"commands": records, "matrix_reports": matrix_reports,
+                                  "state": "ok" if all(record["state"] == "ok" for record in records) else "failed"})
+    _verify_staged_fixtures(fixtures)
+    declared = sum(row["declared"] for row in matrix_reports)
+    passed = sum(row["passed"] for row in matrix_reports)
+    mismatched = declared - passed
+    result = {**_base("write", args, checkout, identity), "state": "passed" if mismatched == 0 else "failed",
+              "denominator": declared, "native_release": args.release,
+              "native_probe_sha256": args.native_probe_sha256,
+              "comparison": {"kind": "oxidex_vs_native", "native_release": args.release,
+                             "matched": passed, "mismatched": mismatched},
+              "generated_artifacts": generated, "writer_binary": writer,
+              "fixtures": {"manifest": str(Path(args.fixture_manifest).absolute()),
+                           "manifest_sha256": fixture_digest, "entries": fixtures},
+              "matrix_reports": matrix_reports, "raw_report": raw,
+              "write_mode": {"kind": "selected-release-live-native", "release": args.release,
+                             "ledger_sha256": _sha(ledger), "rules_sha256": _sha(rules)},
+              "scope": "selected-release public-api generated scalar cohort on staged JPEG fixtures plus synthetic little- and big-endian TIFF carriers",
+              "limitations": ["Only the emitted TIFF/JPEG scalar cohort is exercised.",
+                              "Fresh/empty EXIF, other writer grammars, and non-JPEG formats remain outside this rehearsal stage."]}
+    _atomic(report, result)
+    return result
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest="stage", required=True)
-    for name in ("generate", "build", "read"):
+    for name in ("generate", "build", "read", "write"):
         command = sub.add_parser(name)
         for option in ("checkout", "target", "report", "release", "source-commit", "native-source", "native-lib", "native-perl"):
             command.add_argument("--" + option, required=True)
-        if name == "read": command.add_argument("--fixture-manifest", required=True); command.add_argument("--native-probe-sha256", required=True)
-    command = sub.add_parser("write"); command.add_argument("--report", required=True); command.add_argument("--release", required=True)
+        if name in {"read", "write"}: command.add_argument("--fixture-manifest", required=True); command.add_argument("--native-probe-sha256", required=True)
     return parser
 
 

@@ -41,15 +41,21 @@ class ExecutorTests(unittest.TestCase):
         self.fixture = self.root / "fixture.jpg"; self.fixture.write_bytes(b"fixture")
         self.fixture_manifest = self.root / "fixtures.json"
         self.fixture_manifest.write_text(json.dumps({"fixtures": [str(self.fixture)]}))
+        self.write_fixture = self.root / "write.jpg"; self.write_fixture.write_bytes(b"\xff\xd8fixture")
+        self.write_fixture_manifest = self.root / "write-fixtures.json"
+        self.write_fixture_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.write_fixture), "sha256": __import__("hashlib").sha256(self.write_fixture.read_bytes()).hexdigest(), "bytes": self.write_fixture.stat().st_size}]}))
 
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
         if write:
             commands["write"] = {"argv": ["write"]}
-        return {"schema": executor.SCHEMA, "commands": commands, "host_lock": str(self.lock),
+        result = {"schema": executor.SCHEMA, "commands": commands, "host_lock": str(self.lock),
                 "execution_source_commit": self.plan["repository_commit"],
                 "perls": {release: str(Path(sys.executable).resolve()) for release in self.releases},
                 "native_cases": {release: [{"case": release}] for release in self.releases}}
+        if write:
+            result["write_fixture_manifests"] = {release: str(self.write_fixture_manifest) for release in self.releases}
+        return result
 
     def initialize(self, config):
         return executor.initialize_run(self.run_dir, self.capture, self.catalog, self.plan,
@@ -91,9 +97,15 @@ class ExecutorTests(unittest.TestCase):
             "lib": {"path": str(native_lib.resolve()), "exiftool_pm_sha256": __import__("hashlib").sha256((native_lib / "Image/ExifTool.pm").read_bytes()).hexdigest()}}
         binary = Path(env["CARGO_TARGET_DIR"]) / "debug" / "oxidex"; binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"binary")
         body["binary"] = {"path": str(binary), "sha256": __import__("hashlib").sha256(binary.read_bytes()).hexdigest(), "bytes": binary.stat().st_size}
-        staged = Path(env["CARGO_TARGET_DIR"]) / "fixtures" / "fixture.jpg"; staged.parent.mkdir(parents=True, exist_ok=True); staged.write_bytes(self.fixture.read_bytes())
-        fixture_sha = __import__("hashlib").sha256(self.fixture.read_bytes()).hexdigest()
-        body["fixtures"] = {"manifest": str(self.fixture_manifest), "manifest_sha256": __import__("hashlib").sha256(self.fixture_manifest.read_bytes()).hexdigest(), "entries": [{"source": str(self.fixture), "sha256": fixture_sha, "bytes": self.fixture.stat().st_size, "corpus_path": str(staged), "corpus_sha256": fixture_sha, "corpus_bytes": staged.stat().st_size}]}
+        writer = Path(env["CARGO_TARGET_DIR"]) / "debug" / "oxidex-writer"; writer.write_bytes(b"writer")
+        body["writer_binary"] = {"path": str(writer), "sha256": __import__("hashlib").sha256(writer.read_bytes()).hexdigest(), "bytes": writer.stat().st_size}
+        write = stage == "write"
+        fixture = (self.write_fixture if write else self.fixture).resolve()
+        manifest = (self.write_fixture_manifest if write else self.fixture_manifest).resolve()
+        staged = Path(env["CARGO_TARGET_DIR"]) / ("write-fixtures" if write else "fixtures") / fixture.name
+        staged.parent.mkdir(parents=True, exist_ok=True); staged.write_bytes(fixture.read_bytes())
+        fixture_sha = __import__("hashlib").sha256(fixture.read_bytes()).hexdigest()
+        body["fixtures"] = {"manifest": str(manifest), "manifest_sha256": __import__("hashlib").sha256(manifest.read_bytes()).hexdigest(), "entries": [{"source": str(fixture), "sha256": fixture_sha, "bytes": fixture.stat().st_size, "corpus_path": str(staged), "corpus_sha256": fixture_sha, "corpus_bytes": staged.stat().st_size}]}
         if stage in {"read", "write"}:
             body.update(native_release=env["OXIDEX_REHEARSAL_RELEASE"],
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],
@@ -261,6 +273,33 @@ class ExecutorTests(unittest.TestCase):
         failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
         self.assertEqual(failure["stage"], "generate")
         self.assertIn("non-generated source", failure["detail"])
+
+    def test_write_fixture_manifest_and_jpeg_scope_are_bound_at_init_and_rechecked(self):
+        journal = self.initialize(self.config())
+        binding = json.loads((self.run_dir / "inputs" / "config.json").read_text())["write_fixture_bindings"]
+        self.assertEqual(binding[self.releases[0]]["sha256"], __import__("hashlib").sha256(self.write_fixture_manifest.read_bytes()).hexdigest())
+        self.write_fixture.write_bytes(b"changed")
+        with self.assertRaisesRegex(executor.Refused, "write fixture"):
+            self.execute()
+        self.assertEqual(journal["phase"], "planned")
+
+    def test_write_stage_refuses_replaced_writer_binary_or_read_fixture_substitution(self):
+        self.initialize(self.config())
+        original = self.command
+        def replaced_writer(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "write":
+                report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                body = json.loads(report.read_text())
+                body["writer_binary"] = body["binary"]
+                report.write_text(json.dumps(body))
+            return result
+        self.command = replaced_writer
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "write")
+        self.assertIn("writer", failure["detail"])
 
 
 if __name__ == "__main__":

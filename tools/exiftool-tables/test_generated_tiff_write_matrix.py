@@ -6,11 +6,39 @@ from pathlib import Path
 import json
 import tempfile
 
-from generated_tiff_write_matrix import GeneratedTarget, RULES, compare, compare_carrier, generated_targets
+from generated_tiff_write_matrix import (
+    GeneratedTarget,
+    RULES,
+    compare,
+    compare_carrier,
+    generated_targets,
+    selected_rehearsal_contract,
+)
 from native_write_matrix import parse_tiff
 
 
 class GeneratedTiffComparison(unittest.TestCase):
+    def test_selected_release_contract_requires_pin_native_and_regenerated_ledger_to_agree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pin, ledger = root / ".exiftool-version", root / "ledger.json"
+            pin.write_text("11.78\n")
+            ledger.write_text(json.dumps({"exiftool_version": "11.78", "emitted": True, "reason": None}))
+            identity = {"result": {"exiftool_version": "11.78"}}
+            contract = selected_rehearsal_contract(identity, "11.78", pin, ledger)
+            self.assertEqual(contract["mode"], "selected-release-rehearsal")
+            self.assertEqual(contract["ledger_exiftool_version"], "11.78")
+            pin.write_text("12.64\n")
+            with self.assertRaisesRegex(ValueError, "checkout pin"):
+                selected_rehearsal_contract(identity, "11.78", pin, ledger)
+            pin.write_text("11.78\n")
+            ledger.write_text(json.dumps({"exiftool_version": "12.64", "emitted": True, "reason": None}))
+            with self.assertRaisesRegex(ValueError, "ledger"):
+                selected_rehearsal_contract(identity, "11.78", pin, ledger)
+            ledger.write_text(json.dumps({"exiftool_version": "11.78", "emitted": False, "reason": "unsupported"}))
+            with self.assertRaisesRegex(ValueError, "did not emit"):
+                selected_rehearsal_contract(identity, "11.78", pin, ledger)
+
     def test_relocated_ifd_targets_match_but_changed_target_data_and_cycles_refuse(self):
         def file_at(offset, color=1):
             root = (b"II\x2a\0\x08\0\0\0\x01\0\x69\x87\x04\0\x01\0\0\0"

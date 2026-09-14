@@ -76,7 +76,32 @@ python3 tools/exiftool-tables/version_rehearsal_stage_adapter.py generate
 The executor exposes `{source_commit}` and the equivalent
 `OXIDEX_REHEARSAL_SOURCE_COMMIT` environment value for this purpose.
 
-`write` always writes an `unsupported` result and exits nonzero. It does not
-run a legacy 13.59 writer, infer a writer result from a read result, or create
-a public writer route. A generated writer acceptance contract is still needed
-before write can be configured in a rehearsal.
+`write` is an actual, bounded selected-release acceptance stage. It requires
+the build report's separately proven `writer_binary`, rechecks every generated
+artifact and source identity, stages a dedicated immutable JPEG fixture
+manifest under `rehearsal-write-fixtures/`, and invokes
+`generated_tiff_write_matrix.py --route public-api` once per staged JPEG. The
+matrix also exercises its existing synthetic little- and big-endian TIFF
+carriers. It does not reuse or overwrite the read corpus.
+
+Historical write mode is opt-in: it binds the selected release to the owned
+checkout pin, the selected native identity, and the regenerated
+`tiff_scalar_final_ledger.json` version. The normal matrix still defaults to
+its independent reviewed 13.59 contract. A write report passes only with a
+positive real matrix denominator and zero mismatches. Its scope is limited to
+the emitted TIFF/JPEG scalar cohort; fresh/empty EXIF, other writer grammars,
+and non-JPEG formats remain explicitly unexercised.
+
+Write fixtures use a separate manifest kind:
+
+```json
+{
+  "schema": 1,
+  "kind": "oxidex_version_rehearsal_write_fixture_manifest",
+  "fixtures": [{"path": "/absolute/input.jpg", "sha256": "...", "bytes": 123}]
+}
+```
+
+Every requested fixture must be a nonempty JPEG and match its hash before and
+after the matrix. A stale, changed, missing, or non-JPEG write fixture refuses
+the stage; it is never silently skipped.

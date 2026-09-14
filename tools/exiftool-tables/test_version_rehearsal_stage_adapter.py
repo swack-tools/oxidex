@@ -32,10 +32,13 @@ class AdapterTests(unittest.TestCase):
         self.perl = self.root / "perl"; self.perl.write_text("perl"); self.perl.chmod(0o755)
         self.fixture = self.root / "fixture.jpg"; self.fixture.write_bytes(b"fixture")
         self.manifest = self.root / "fixtures.json"; self.manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [{"path": str(self.fixture), "sha256": adapter._sha(self.fixture), "bytes": self.fixture.stat().st_size}]}))
+        self.jpeg = self.root / "write.jpg"; self.jpeg.write_bytes(b"\xff\xd8fixture")
+        self.write_manifest = self.root / "write-fixtures.json"; self.write_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.jpeg), "sha256": adapter._sha(self.jpeg), "bytes": self.jpeg.stat().st_size}]}))
         self.seen = []; self.diff_output = ".exiftool-version\n"
 
     def args(self, stage, **extra):
-        values = dict(stage=stage, checkout=str(self.checkout), target=str(self.target), report=str(self.reports / f"{stage}.json"), release="11.78", source_commit=COMMIT, native_source=str(self.native), native_lib=str(self.native / "lib"), native_perl=str(self.perl), fixture_manifest=str(self.manifest), native_probe_sha256="b" * 64)
+        manifest = self.write_manifest if stage == "write" else self.manifest
+        values = dict(stage=stage, checkout=str(self.checkout), target=str(self.target), report=str(self.reports / f"{stage}.json"), release="11.78", source_commit=COMMIT, native_source=str(self.native), native_lib=str(self.native / "lib"), native_perl=str(self.perl), fixture_manifest=str(manifest), native_probe_sha256="b" * 64)
         values.update(extra); return argparse.Namespace(**values)
 
     def fake_run(self, argv, **kwargs):
@@ -50,6 +53,17 @@ class AdapterTests(unittest.TestCase):
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
             binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"writer" if test else b"binary"); binary.chmod(0o755)
             return subprocess.CompletedProcess(argv, 0, json.dumps({"reason": "compiler-artifact", "manifest_path": str(self.checkout / "Cargo.toml"), "profile": {"test": test}, "target": {"name": "oxidex", "kind": ["lib"] if test else ["bin"]}, "executable": str(binary)}) + "\n", "")
+        if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
+            output = Path(argv[argv.index("--output") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
+            writer = Path(argv[argv.index("--test-binary") + 1]); ledger = Path(argv[argv.index("--ledger") + 1]); rules = Path(argv[argv.index("--rules") + 1])
+            perl = argv[argv.index("--perl") + 1]; native_lib = argv[argv.index("--lib") + 1]
+            output.write_text(json.dumps({"instrument": "generated_scalar_write_matrix_v2", "route": "public-api",
+                "native_identity": {"command": [perl, "-I" + native_lib], "result": {"exiftool_version": "11.78"}},
+                "contract": {"mode": "selected-release-rehearsal", "release": "11.78", "ledger_exiftool_version": "11.78"},
+                "source_commit": COMMIT, "test_binary_sha256": adapter._sha(writer), "ledger_sha256": adapter._sha(ledger), "rules_sha256": adapter._sha(rules),
+                "declared": 3, "passed": 3,
+                "rows": [{"state": "passed", "driver_result": {"ok": True}} for _ in range(3)]}))
+            return subprocess.CompletedProcess(argv, 0, "matrix", "")
         if argv[0] == sys.executable:
             output = Path(argv[argv.index("--json-out") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             corpus = Path(argv[2]); fixture = next(corpus.iterdir())
@@ -172,10 +186,53 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(adapter.Refused, "executable changed"):
             adapter.read(self.args("read"), run=self.fake_run)
 
-    def test_write_is_explicitly_unsupported(self):
-        result = adapter.write(self.args("write"))
-        self.assertEqual(result["state"], "unsupported")
-        self.assertIn("not implemented", result["reason"])
+    def test_write_uses_proven_writer_binary_and_dedicated_staged_jpeg_scope(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); built = adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.write(self.args("write"), run=self.fake_run)
+        self.assertEqual(result["state"], "passed")
+        self.assertEqual(result["writer_binary"], built["writer_binary"])
+        self.assertEqual(result["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 3, "mismatched": 0})
+        self.assertIn("rehearsal-write-fixtures", result["fixtures"]["entries"][0]["corpus_path"])
+        matrix = next(row for row in self.seen if row[0][0] == sys.executable and row[0][1].endswith("generated_tiff_write_matrix.py"))
+        self.assertIn("--rehearsal-release", matrix[0]); self.assertIn("--route", matrix[0]); self.assertEqual(matrix[0][matrix[0].index("--route") + 1], "public-api")
+
+    def test_write_refuses_non_jpeg_or_changed_fixture_scope(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
+        self.jpeg.write_bytes(b"changed")
+        with self.assertRaisesRegex(adapter.Refused, "fixture changed"):
+            adapter.write(self.args("write"), run=self.fake_run)
+        self.jpeg.write_bytes(b"not jpeg")
+        self.write_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.jpeg), "sha256": adapter._sha(self.jpeg), "bytes": self.jpeg.stat().st_size}]}))
+        with self.assertRaisesRegex(adapter.Refused, "non-JPEG"):
+            adapter.write(self.args("write"), run=self.fake_run)
+
+    def test_write_refuses_source_or_checkout_changes_after_build(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+        def alters_source(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
+                self.jpeg.write_bytes(b"changed")
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "fixture source changed"):
+            adapter.write(self.args("write"), run=alters_source)
+        self.jpeg.write_bytes(b"\xff\xd8fixture")
+        (self.checkout / "unexpected.rs").write_text("changed")
+        with self.assertRaisesRegex(adapter.Refused, "prior stage"):
+            adapter.write(self.args("write"), run=self.fake_run)
+
+    def test_write_refuses_aggregate_success_without_driver_rows(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+        def removes_driver_evidence(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
+                output = Path(argv[argv.index("--output") + 1]); data = json.loads(output.read_text())
+                data["rows"] = [{"state": "passed"} for _ in range(3)]
+                output.write_text(json.dumps(data))
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "matrix report"):
+            adapter.write(self.args("write"), run=removes_driver_evidence)
 
     def test_executor_timeout_kills_adapter_nested_child_and_releases_lock(self):
         """Exercise executor -> adapter._run -> sleeping child with real PIDs."""
