@@ -14,7 +14,7 @@ from final_scalar_stage import FinalScalarRecipe, NativeFormatRegistryArtifact
 from setnewvalue_addressing import AddressRow, Addressing
 from setnewvalue_public_migration_ledger import (
     build_from_current, compile_current, render_rust, validate_ledger,
-    _current_from_authenticated,
+    _current_from_authenticated, _digest,
 )
 
 
@@ -96,6 +96,23 @@ class PublicMigrationLedgerTest(unittest.TestCase):
         entry = upgraded["entries"][0]
         self.assertEqual(entry["state"], "current")
         self.assertNotEqual(entry["history"][0]["semantics_sha256"], entry["history"][-1]["semantics_sha256"])
+
+    def test_legacy_cohort_migrates_on_same_source_then_stays_frozen(self):
+        source0, current0 = self.current([row("Old", "315")], [recipe("Old", 315)])
+        prior0 = build_from_current(source0, current0, None, bootstrap=True)
+        source1, current1 = self.current([row("Old", "315"), row("New", "316")],
+                                         [replace(recipe("Old", 315), main_source_sha256=h("7")), replace(recipe("New", 316), main_source_sha256=h("7"))],
+                                         {**CAPTURE, "main_source_sha256": h("7")})
+        prior1 = build_from_current(source1, current1, prior0, bootstrap=False)
+        # Model the committed pre-schema ledger: Old predates source1; New does not.
+        legacy = dict(prior1); legacy.pop("predecessor_cohort"); legacy.pop("predecessor_cohort_sha256")
+        legacy.pop("ledger_sha256"); legacy["ledger_sha256"] = _digest(legacy)
+        migrated = build_from_current(source1, current1, legacy, bootstrap=False)
+        self.assertEqual(migrated["predecessor_cohort"], [{"raw_tag_id": 315, "name": "Old", "group0": "EXIF", "write_group": "IFD0"}])
+        self.assertEqual(build_from_current(source1, current1, migrated, bootstrap=False), migrated)
+        tampered = dict(migrated); tampered["predecessor_cohort"] = []; tampered.pop("ledger_sha256"); tampered["ledger_sha256"] = _digest(tampered)
+        with self.assertRaisesRegex(RecipeRefused, "cohort"):
+            validate_ledger(tampered)
 
     def test_ambiguous_or_unjoined_final_identity_refuses(self):
         with self.assertRaisesRegex(RecipeRefused, "lacks one exact"):

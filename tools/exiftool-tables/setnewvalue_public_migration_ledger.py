@@ -192,7 +192,7 @@ def _source_valid(value: Any) -> dict[str, Any]:
     return source
 
 
-def validate_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
+def validate_ledger(ledger: Mapping[str, Any], *, allow_legacy_cohort: bool = False) -> dict[str, Any]:
     ledger = dict(_mapping(ledger, "public migration ledger"))
     if ledger.get("schema") != SCHEMA:
         raise RecipeRefused("public migration ledger schema is unsupported")
@@ -241,6 +241,21 @@ def validate_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
     predecessor = ledger.get("predecessor")
     if predecessor is not None:
         _sha(predecessor, "public migration predecessor")
+    cohort = ledger.get("predecessor_cohort")
+    cohort_digest = ledger.get("predecessor_cohort_sha256")
+    if cohort is None and cohort_digest is None:
+        if not allow_legacy_cohort:
+            raise RecipeRefused("public migration ledger lacks a frozen predecessor cohort")
+    else:
+        if not isinstance(cohort, list) or not isinstance(cohort_digest, str) or _HEX.fullmatch(cohort_digest) is None:
+            raise RecipeRefused("public migration predecessor cohort is malformed")
+        required = {"raw_tag_id", "name", "group0", "write_group"}
+        if any(not isinstance(item, dict) or set(item) != required or type(item["raw_tag_id"]) is not int
+               or any(not isinstance(item[key], str) and item[key] for key in required - {"raw_tag_id"}) for item in cohort):
+            raise RecipeRefused("public migration predecessor cohort is malformed")
+        ordered = sorted(cohort, key=lambda item: (item["raw_tag_id"], item["name"], item["group0"], item["write_group"]))
+        if cohort != ordered or len({tuple(item[key] for key in ("raw_tag_id", "name", "group0", "write_group")) for item in cohort}) != len(cohort) or _digest(cohort) != cohort_digest:
+            raise RecipeRefused("public migration predecessor cohort is tampered or stale")
     ledger["ledger_sha256"] = digest
     return ledger
 
@@ -259,8 +274,8 @@ def build_from_current(source: Mapping[str, Any], current: Mapping[tuple[str, st
             raise RecipeRefused("public migration ledger bootstrap must be explicit when no prior ledger exists")
         old, sources, predecessor, predecessor_cohort = {}, {}, None, []
     else:
-        prior = validate_ledger(prior)
-        if prior["source_identity"] == source_identity:
+        prior = validate_ledger(prior, allow_legacy_cohort=True)
+        if prior["source_identity"] == source_identity and "predecessor_cohort" in prior:
             if prior["source"] != source:
                 raise RecipeRefused("public migration source identity collides with different facts")
             return prior
