@@ -99,6 +99,13 @@ class GitBlobTests(unittest.TestCase):
 
 
 class JoinConservationTests(unittest.TestCase):
+    def test_runtime_evidence_distinguishes_absent_unenabled_and_unknown(self):
+        self.assertEqual(join.runtime_evidence("binary", {"definition": "absent"})["state"], "unknown")
+        self.assertEqual(join.runtime_evidence("binary", {"definition": "present", "registry_listed": False})["state"], "not_enabled")
+        self.assertEqual(join.runtime_evidence("other_unclassified", {})["state"], "unknown")
+        self.assertEqual(join.runtime_evidence("binary", {"definition": "present", "registry_listed": True}, set(), ("Any", "Main"))["state"], "not_enabled")
+        self.assertEqual(join.runtime_evidence("binary", {"definition": "present", "registry_listed": True}, {("Any", "Main")}, ("Any", "Main"), False)["state"], "unverified")
+
     def test_preserves_every_source_identity_including_unclassified_and_absent_artifacts(self):
         rows = [
             {"module": "Any", "table": "Binary", "selection": "binary"},
