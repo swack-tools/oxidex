@@ -17,6 +17,44 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NativeWriteMatrixTests(unittest.TestCase):
+    def test_native_resolution_rationals_and_numeric_storage_are_preserved(self):
+        import struct
+        # One classic TIFF directory with inline and offset-stored values.
+        # Include the RATIONAL type ExifTool adds to new JPEG EXIF blocks.
+        for order, endian in (("little", "<"), ("big", ">")):
+            with self.subTest(order=order):
+                records = [
+                    (282, 5, struct.pack(endian + "II", 72, 1)),
+                    (65000, 6, bytes([255])),
+                    (65001, 7, b"a\0b"),
+                    (65002, 8, struct.pack(endian + "h", -42)),
+                    (65003, 9, struct.pack(endian + "i", -100000)),
+                    (65004, 10, struct.pack(endian + "ii", -1, 3)),
+                    (65005, 11, struct.pack(endian + "f", 1.5)),
+                    (65006, 12, struct.pack(endian + "d", -2.25)),
+                ]
+                header = (b"II" if order == "little" else b"MM") + struct.pack(endian + "HI", 42, 8)
+                tail_offset = 8 + 2 + len(records) * 12 + 4
+                entries, tail = bytearray(), bytearray()
+                for tag, kind, value in records:
+                    count = len(value) if kind == 7 else 1
+                    slot = (value.ljust(4, b"\0") if len(value) <= 4 else
+                            struct.pack(endian + "I", tail_offset + len(tail)))
+                    entries += struct.pack(endian + "HHI", tag, kind, count) + slot
+                    if len(value) > 4:
+                        tail += value
+                data = header + struct.pack(endian + "H", len(records)) + entries + bytes(4) + tail
+                result = module.parse_tiff(data, require_strip=False)
+                for tag, kind, value in records:
+                    self.assertEqual(result["tags"][str(tag)]["value_hex"], value.hex())
+                    self.assertEqual(result["tags"][str(tag)]["type"], kind)
+                with self.assertRaisesRegex(ValueError, "out of bounds"):
+                    module.parse_tiff(data[:-1], require_strip=False)
+                unknown = bytearray(data)
+                unknown[12:14] = struct.pack(endian + "H", 15)
+                with self.assertRaisesRegex(ValueError, "unsupported TIFF type 15"):
+                    module.parse_tiff(unknown, require_strip=False)
+
     def test_repository_upgrade_refuses_stale_baseline_even_with_old_library(self):
         with tempfile.TemporaryDirectory() as temporary:
             pin = Path(temporary) / ".exiftool-version"
