@@ -90,12 +90,12 @@ class MandatoryTests(unittest.TestCase):
         fact = capture(NATIVE[1])
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
-        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}, "native_write_helpers": {"write_value": {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "native WriteValue body", "__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}, "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
+        document = MandatoryNumericEncodingTests()._document(fact)
         compile_mandatory_joined(fact, document)
-        effective["source_sha256"] = '0' * 64
+        document["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["source_sha256"] = '0' * 64
         with self.assertRaisesRegex(MandatoryRefused, 'do not join'):
             compile_mandatory_joined(fact, document)
-        effective["source_sha256"] = fact["writer"]["source_sha256"]
+        document["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["source_sha256"] = fact["writer"]["source_sha256"]
         document["native_write_helpers"]["write_value"]["requested_binding"] = "Image::ExifTool::BorrowedWriteValue"
         with self.assertRaisesRegex(MandatoryRefused, 'WriteValue helper'):
             compile_mandatory_joined(fact, document)
@@ -142,14 +142,14 @@ fn main() {{
         fact = capture(NATIVE[1])
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
-        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}, "native_write_helpers": {"write_value": {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "native WriteValue body", "__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}, "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
+        document = MandatoryNumericEncodingTests()._document(fact)
         source, report = generate(fact, document)
         self.assertTrue(report['writer_tables_joined'])
         self.assertIn(fact['writer']['source_sha256'], source)
         self.assertNotIn(str(NATIVE[0]), json.dumps(report))
         with self.assertRaisesRegex(MandatoryRefused, 'Perl differs'):
             generate(fact, document, '/nonexistent/perl')
-        effective["source_sha256"] = '0' * 64
+        document["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["source_sha256"] = '0' * 64
         with self.assertRaisesRegex(MandatoryRefused, 'do not join'):
             generate(fact, document)
         for missing in ('Image/ExifTool.pm', 'Image/ExifTool/Writer.pl', 'Image/ExifTool/Exif.pm'):
@@ -275,5 +275,23 @@ use writers::mandatory_defaults_runtime::*;
 fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", defaults_for_new_directory(r,"IFD0",false,0,Some(JfifValues{{x:Some(72),y:None,resolution_unit:Some(1)}})).unwrap().len()); println!("{{}}", defaults_for_new_directory(r,"IFD0",false,0,Some(JfifValues{{x:None,y:Some(72),resolution_unit:Some(1)}})).is_err()); }}''')
             subprocess.run(['rustc','--edition=2021',str(driver),'-o',str(binary)],check=True,capture_output=True,text=True)
             self.assertEqual(subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout.splitlines(), ['1','true'])
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_copied_native_writevalue_dispatch_mutation_refuses_fresh_capture(self):
+        """A changed executable numeric dispatch cannot reuse old Rust packing."""
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        dumper = ROOT / 'tools/exiftool-tables/dump_tables.pl'
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary) / 'lib'; shutil.copytree(NATIVE[1], copied)
+            writer = copied / 'Image/ExifTool/Writer.pl'; body = writer.read_text()
+            anchor = '$packed .= &$proc($val);'
+            self.assertEqual(body.count(anchor), 1)
+            writer.write_text(body.replace(anchor, '$packed .= &$proc(0);'))
+            env = {key:value for key,value in os.environ.items() if key not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
+            changed_document = json.loads(subprocess.run([str(NATIVE[0]), str(dumper), str(copied)], env=env, check=True, capture_output=True, text=True).stdout)
+            self.assertIn('&$proc(0)', changed_document['native_write_helpers']['write_value']['__deparse'])
+            with self.assertRaisesRegex(MandatoryRefused, 'numeric WriteValue dispatch'):
+                generate(capture(copied), changed_document, str(NATIVE[0]))
 
 if __name__ == '__main__': unittest.main()
