@@ -180,6 +180,19 @@ def resolve_library(value: Path) -> Path:
     return (path / "lib").resolve() if (path / "lib").is_dir() else path
 
 
+def optional_native_configuration(perl_value: str | None, library_value: str | None) -> tuple[Path, Path] | None:
+    """Resolve explicit native inputs; missing optional inputs leave a test skippable."""
+    if perl_value is None and library_value is None:
+        return None
+    if not perl_value or not library_value:
+        raise ValueError("EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL must be supplied together")
+    perl, library = resolve_perl(Path(perl_value)), resolve_library(Path(library_value))
+    if not perl.is_file():
+        raise ValueError(f"selected Perl executable is not a file: {perl}")
+    validate_library(library)
+    return perl, library
+
+
 def validate_library(library: Path) -> None:
     for name in ("Image/ExifTool.pm", "Image/ExifTool/Writer.pl"):
         path = library / name

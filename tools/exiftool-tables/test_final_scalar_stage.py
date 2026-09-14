@@ -12,15 +12,15 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import final_scalar_stage
+from native_write_matrix import optional_native_configuration
 from final_scalar_stage import FinalStageRefused, compile_final_scalar_rows, compile_final_scalar_stage, generate, render_rust
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DUMP = ROOT / "tools/exiftool-tables/dump_tables.pl"
-PERL = Path(os.environ["EXIFTOOL_PERL"]) if os.environ.get("EXIFTOOL_PERL") else None
-_native_root = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
-LIB = (Path(_native_root) / "lib") if _native_root and (Path(_native_root) / "lib").is_dir() else (Path(_native_root) if _native_root else None)
-NATIVE_READY = PERL is not None and LIB is not None and PERL.is_file() and LIB.is_dir()
+_NATIVE_CONFIGURATION = optional_native_configuration(os.environ.get("EXIFTOOL_PERL"), os.environ.get("OXIDEX_PINNED_EXIFTOOL"))
+PERL, LIB = _NATIVE_CONFIGURATION if _NATIVE_CONFIGURATION else (None, None)
+NATIVE_READY = PERL is not None
 
 
 def native_document(lib=None):
