@@ -429,10 +429,10 @@ fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", def
                 result.append(helper)
                 for dep in helper.get('dependencies', {}).values(): walk(dep)
             walk(write)
-            for name in ('int16u', 'rational64u'): walk(dispatch[name])
+            for name in ('int8u', 'int8s', 'int16s', 'int16u', 'int32s', 'int32u', 'rational64u'): walk(dispatch[name])
             return result
         expected = {'WriteValue', 'IsInt', 'IsHex', 'IsFloat', 'IsRational',
-                    'Set16u', 'SetRational64u', 'Rationalize', 'AssembleRational', 'Set32u', 'DoPackStd'}
+                    'Set8u', 'Set8s', 'Set16s', 'Set16u', 'Set32s', 'Set32u', 'SetRational64u', 'Rationalize', 'AssembleRational', 'DoPackStd'}
         self.assertEqual({f['__name'].rsplit('::', 1)[1] for f in functions(original)}, expected)
         for index, function in enumerate(functions(original)):
             with self.subTest(helper=function['__name']):
