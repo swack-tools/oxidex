@@ -138,7 +138,7 @@ fn compose(
     }
     let address_rows = address_rows?;
     let registry = registry?;
-    let mut current = Vec::with_capacity(migrations.len());
+    let mut current: Vec<GeneratedScalarDescriptorFact> = Vec::with_capacity(migrations.len());
     let mut terminal = Vec::new();
     for migration in migrations {
         let terminal_identity = || TerminalScalarIdentity {

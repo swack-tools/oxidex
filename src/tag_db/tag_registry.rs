@@ -1014,32 +1014,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
     );
 
     registry.insert(
-        "EXIF:DocumentName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x010d),
-            "EXIF:DocumentName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Name of the scanned document".to_string(),
-            vec!["Document1".to_string(), "Page1".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:PageName",
-        TagDescriptor::new(
-            TagId::new_numeric(0x011d),
-            "EXIF:PageName".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Name of the page".to_string(),
-            vec!["Page 1".to_string(), "Cover".to_string()],
-        ),
-    );
-
-    registry.insert(
         "EXIF:XPosition",
         TagDescriptor::new(
             TagId::new_numeric(0x011e),
@@ -1283,19 +1257,6 @@ static TAG_REGISTRY: LazyLock<HashMap<&'static str, TagDescriptor>> = LazyLock::
             ValueType::Integer,
             "Dot gain percentage range".to_string(),
             vec!["0".to_string(), "100".to_string()],
-        ),
-    );
-
-    registry.insert(
-        "EXIF:TargetPrinter",
-        TagDescriptor::new(
-            TagId::new_numeric(0x0151),
-            "EXIF:TargetPrinter".to_string(),
-            FormatFamily::EXIF,
-            true,
-            ValueType::String,
-            "Target printer description".to_string(),
-            vec!["Epson".to_string(), "Canon".to_string()],
         ),
     );
 
@@ -7213,7 +7174,9 @@ pub fn tag_count() -> usize {
     }
     tags.extend(YAML_TAG_ENTRIES.keys().map(String::as_str));
 
-    tags.len()
+    tags.into_iter()
+        .filter(|name| get_tag_descriptor(name).is_some())
+        .count()
 }
 
 #[cfg(test)]
@@ -7268,13 +7231,34 @@ mod tests {
 
     #[test]
     fn terminal_generated_identity_refuses_manual_and_yaml_descriptor_fallbacks() {
-        let manual = TAG_REGISTRY
-            .get("EXIF:DocumentName")
-            .expect("current manual compatibility entry");
+        let stale_manual = YAML_TAG_ENTRIES["EXIF:DocumentName"].descriptor.clone();
+        let manual = &stale_manual;
         let yaml = &YAML_TAG_ENTRIES["EXIF:DocumentName"].descriptor;
         assert!(
             select_descriptor_unless_terminal(true, Some(manual), None, None, Some(yaml)).is_none()
         );
+    }
+
+    #[test]
+    fn migrated_scalar_descriptors_remain_writable_without_manual_registry_entries() {
+        for fact in crate::tag_db::generated_scalar_descriptor_fallback::facts()
+            .expect("current generated facts")
+        {
+            let name = format!("{}:{}", fact.group0, fact.name);
+            assert!(
+                !TAG_REGISTRY.contains_key(name.as_str()),
+                "manual entry remains: {name}"
+            );
+            let descriptor =
+                get_tag_descriptor(&name).expect("generated descriptor is publicly reachable");
+            assert!(descriptor.is_writable(), "{name}");
+            assert_eq!(descriptor.value_type(), ValueType::String, "{name}");
+            crate::writers::exif_surgical::validate_changed(
+                &name,
+                &crate::core::TagValue::String("source-backed value".into()),
+            )
+            .expect("legacy surgical validation consumes generated descriptor");
+        }
     }
 
     #[test]
@@ -7959,47 +7943,4 @@ mod tests {
         assert!(tag.is_writable());
         assert_eq!(tag.value_type(), ValueType::String);
     }
-}
-
-/// Numeric IDs that ExifTool declares, the manual write registry carries, and
-/// the YAML-built read index does NOT — so they write correctly and read back
-/// under their hex spelling (the W8 write/read asymmetry recorded in
-/// `src/bin/jpeg-tag-matrix/report.rs`).
-///
-/// This is deliberately an explicit allowlist rather than a general reverse
-/// view of [`TAG_REGISTRY`], because a general view is provably wrong in two
-/// ways that only surfaced under test:
-///
-/// * It ignores IFD scope. `TAG_REGISTRY` holds `EXIF:ThumbnailLength` at
-///   0x0202, but that tag is IFD1-only; a blanket reverse lookup renamed
-///   `IFD0:0x0202` to `IFD0:ThumbnailLength`, which ExifTool never emits.
-///   `TagDescriptor` carries no `WriteGroup`, so the scope cannot be checked.
-/// * The hex spelling is load-bearing for the writer. `exif_surgical` relies
-///   on MakerNote keys staying hex to detect changed/removed keys instead of
-///   silently dropping them.
-///
-/// Closing W8 generally therefore needs `WriteGroup` in the descriptor, which
-/// is a schema change, not a lookup change. Until then each entry here is
-/// added with its Exif.pm citation and its IFD scope stated.
-const MANUAL_ONLY_NUMERIC_NAMES: &[(u16, FormatFamily, &str, &str)] = &[
-    // Exif.pm:1050-1054 -- `Writable => 'string'`, `WriteGroup => 'IFD0'`.
-    (0x0151, FormatFamily::EXIF, "IFD0", "TargetPrinter"),
-];
-
-/// Looks up a name for a numeric ID that only the manual registry knows.
-///
-/// `ifd_name` is matched against the entry's declared `WriteGroup`, so a tag
-/// scoped to one IFD can never leak into another.
-#[must_use]
-pub fn manual_only_name_for_id(
-    tag_id: u16,
-    format_family: FormatFamily,
-    ifd_name: &str,
-) -> Option<&'static str> {
-    MANUAL_ONLY_NUMERIC_NAMES
-        .iter()
-        .find(|(id, family, scope, _)| {
-            *id == tag_id && *family == format_family && *scope == ifd_name
-        })
-        .map(|(_, _, _, name)| *name)
 }

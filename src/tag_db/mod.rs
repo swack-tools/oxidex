@@ -275,15 +275,6 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         return format!("{ifd_name}:{name}");
     }
 
-    // The generated fallback missed. Before giving up on a name, consult the manual
-    // registry's numeric view: the write path resolves through it, so a tag
-    // present only there would otherwise write correctly and read back as hex
-    // (the W8 write/read asymmetry). Consulted only after the generated index,
-    // so it can never override a generated name.
-    if let Some(name) = tag_registry::manual_only_name_for_id(tag_id, format_family, ifd_name) {
-        return format!("{ifd_name}:{name}");
-    }
-
     // Fallback: return hex format if tag not found in either database
     format!("{}:0x{:04X}", ifd_name, tag_id)
 }
@@ -324,15 +315,10 @@ mod tests {
         assert_eq!(lookup_tag_name(0x920D, "ExifIFD"), "ExifIFD:Noise");
     }
 
-    /// `Exif.pm:1050-1054` declares 0x151 as TargetPrinter (`Writable =>
-    /// 'string'`, `WriteGroup => 'IFD0'`), and oxidex's manual write registry
-    /// carries it -- but the YAML-built read index does not, so it used to
-    /// write correctly and read back as `IFD0:0x0151`. That hex spelling was
-    /// invisible until Step 21 began stripping hex-fallback names from default
-    /// output, at which point the tag vanished from read-back entirely and the
-    /// jpeg-tag-matrix ratchet caught it (full 136 -> 135).
+    /// The scoped generated identity must retain read-back naming after the
+    /// manual write descriptor and reverse-name exception are removed.
     #[test]
-    fn manual_registry_ids_absent_from_the_yaml_index_still_resolve_by_name() {
+    fn generated_scalar_ids_absent_from_yaml_still_resolve_by_name() {
         assert_eq!(lookup_tag_name(0x0151, "IFD0"), "IFD0:TargetPrinter");
         // A genuinely unknown ID must still fall through to hex.
         assert_eq!(lookup_tag_name(0xF999, "IFD0"), "IFD0:0xF999");
