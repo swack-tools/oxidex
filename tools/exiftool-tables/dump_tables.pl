@@ -958,11 +958,11 @@ sub effective_write_code_fact {
     };
 }
 
-# These helpers supply the first UTF-8 scalar writer's value validation and
-# serialization path.  Capture their *final loaded* bindings separately from
-# table WRITE_PROC/CHECK_PROC provenance: a later mechanism compiler must
-# recognize their bodies before it can execute them.  code_source_fact keeps
-# the established depth/cycle limits and makes a missing helper explicit.
+# These helpers supply source-selected writer composition facts. Capture their
+# *final loaded* bindings separately from table WRITE_PROC/CHECK_PROC
+# provenance: a later mechanism compiler must recognize their bodies before it
+# can execute them. code_source_fact keeps the established depth/cycle limits
+# and makes a missing helper explicit.
 sub hydrate_write_helpers {
     # Writer.pl defines the shared WriteValue/CheckValue helpers but is not
     # necessarily loaded by a table's WriteExif implementation.  This is a
@@ -1023,6 +1023,7 @@ sub native_write_helper_facts {
         check_value => 'Image::ExifTool::CheckValue',
         sanitize => 'Image::ExifTool::Sanitize',
         conv_inv => 'Image::ExifTool::ConvInv',
+        set_new_value => 'Image::ExifTool::SetNewValue',
     );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';

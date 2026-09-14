@@ -16,6 +16,8 @@ import unittest
 
 import write_descriptors
 from sanitize_recipes import _CANONICAL as SANITIZE_BODY, compile_sanitize
+from checkexif_recipes import RecipeRefused
+from setnewvalue_convinv_recipes import compile_setnewvalue_convinv
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -132,7 +134,8 @@ class NativeWriteFacts(unittest.TestCase):
 
     def write_writer_helpers(self, *, write_body="return Image::ExifTool::WriterHelper($_[0]);",
                              check_body="return Image::ExifTool::CheckHelper($_[0]);",
-                             sanitize_body="return Encode::encode('utf8', $_[1]);"):
+                             sanitize_body="return Encode::encode('utf8', $_[1]);",
+                             set_new_value_body="return 1;"):
         self.writer_helpers.write_text(textwrap.dedent(f"""\
             package Image::ExifTool;
             sub WriterHelper($) {{ return $_[0]; }}
@@ -140,6 +143,8 @@ class NativeWriteFacts(unittest.TestCase):
             sub WriteValue($$) {{ {write_body} }}
             sub CheckValue($$) {{ {check_body} }}
             sub Sanitize($$) {{ {sanitize_body} }}
+            sub ConvInv($$$$$$) {{ return; }}
+            sub SetNewValue($;$$%) {{ {set_new_value_body} }}
             1;
         """), encoding="utf-8")
 
@@ -409,6 +414,32 @@ class NativeWriteFacts(unittest.TestCase):
                              hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
             self.assertIn("Image::ExifTool::SetWarning", recipe.callback_references)
 
+    def test_captures_final_setnewvalue_binding(self):
+        fact = self.dump()["native_write_helpers"]["set_new_value"]
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::SetNewValue")
+        self.assertEqual(fact["__name"], "Image::ExifTool::SetNewValue")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/Writer.pl")
+        self.assertEqual(fact["source_sha256"], hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+
+    def test_setnewvalue_defined_false_source_mutation_is_captured_and_refused(self):
+        self.write_writer_helpers(set_new_value_body=textwrap.dedent("""\
+            my ($val, $e) = $self->ConvInv($val, $tagInfo, $tag, $wgrp1, $convType, $wantGroup);
+            if (defined $e) { $e or return; }
+            return;
+        """))
+        before = self.dump()["native_write_helpers"]["set_new_value"]
+        self.write_writer_helpers(set_new_value_body=textwrap.dedent("""\
+            my ($val, $e) = $self->ConvInv($val, $tagInfo, $tag, $wgrp1, $convType, $wantGroup);
+            if ($e) { return; }
+            return;
+        """))
+        after = self.dump()["native_write_helpers"]["set_new_value"]
+        self.assertNotEqual(before["source_sha256"], after["source_sha256"])
+        self.assertNotEqual(before["__deparse"], after["__deparse"])
+        with self.assertRaisesRegex(RecipeRefused, "caller control flow"):
+            compile_setnewvalue_convinv(after)
+
     def test_helper_rebinding_and_body_mutation_are_captured_after_writer_autoload(self):
         before = self.dump()
         self.write_writer("return 1;", extra=textwrap.dedent("""\
@@ -540,7 +571,8 @@ class NativeWriteFacts(unittest.TestCase):
                 {"write_value": "Image::ExifTool::WriteValue",
                  "check_value": "Image::ExifTool::CheckValue",
                  "sanitize": "Image::ExifTool::Sanitize",
-                 "conv_inv": "Image::ExifTool::ConvInv"}[key],
+                 "conv_inv": "Image::ExifTool::ConvInv",
+                 "set_new_value": "Image::ExifTool::SetNewValue"}[key],
             )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):
