@@ -142,6 +142,21 @@ class SonyPlainGeneratorTests(unittest.TestCase):
                 with self.assertRaises(generator.Unsupported):
                     generator.render(data)
 
+    def test_printconv_columns_is_positive_display_only_metadata(self):
+        baseline, _ = generator.render(fixture())
+        for value in (2, "2", "3"):
+            with self.subTest(value=value):
+                data = fixture()
+                table(data)["tags"]["1"]["PrintConvColumns"] = value
+                self.assertEqual(generator.render(data)[0], baseline)
+
+        for value in (True, 0, -1, "0", "02", "two", {"__perl": "CODE"}):
+            with self.subTest(value=value):
+                data = fixture()
+                table(data)["tags"]["1"]["PrintConvColumns"] = value
+                with self.assertRaises(generator.Unsupported):
+                    generator.render(data)
+
     def test_malformed_tag_ids_names_and_format_refuse(self):
         for key in ("1.", "1.0", "01", "-1", "4294967296", "4294967296.1", "1e2", "276.10",
                     "+1", "NaN", "Infinity", "1.01x", " 1", "1\n", "1.1\n"):
