@@ -4,7 +4,8 @@
 //! encoded bytes in the file's byte order. This layer never consults tag names
 //! or the tag registry. It copies changed directories to the end of the file,
 //! retaining every untouched record, value offset and next-directory pointer.
-//! Production writers do not call this primitive yet.
+//! Public generated writers use this primitive for their admitted directories.
+//! IFD1 carrier support awaits source-derived public operation admission.
 
 use super::*;
 use crate::parsers::common::exif_types::ExifType;
