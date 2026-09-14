@@ -85,6 +85,7 @@ export default defineConfig({
             { text: 'ExifTool Coverage', link: '/reference/tag-coverage-analysis' },
             { text: 'Source Catalog Baseline', link: '/reference/catalog-baseline' },
             { text: 'Hydrated Reader Source', link: '/reference/hydrated-reader-layout-baseline' },
+            { text: 'Catalog to Source Ledger', link: '/reference/catalog-hydrated-join' },
             { text: 'BinaryData Engine', link: '/reference/binary-data-engine' }
           ]
         },
