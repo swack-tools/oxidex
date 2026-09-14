@@ -84,6 +84,9 @@ else:
         assert pathlib.Path(args[0]).resolve()==artifact('serial_directory')
         assert pathlib.Path(args[0]).read_text()=='generated explicit-A serial\n'
         dump(args[1])
+    elif name=='gen_nikon_encrypted_tables.py':
+        dump(args[0]);assert flag('-o')==artifact('gen_nikon_encrypted_tables')
+        output(flag('-o'),name)
     elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_nikon_settings_tables.py','gen_sony_plain_tables.py'):
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
@@ -236,6 +239,7 @@ class RegenerationShellTests(unittest.TestCase):
                 'dump_lens_alternatives.pl', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',
+                'gen_nikon_encrypted_tables.py',
                 'gen_sony_plain_tables.py', 'verify_sony_plain.py']
 
     def test_both_tiers_and_tier2_use_selected_source_and_complete_checks(self):

@@ -64,7 +64,13 @@ def rs(v):
  if not isinstance(v,str) or any(0xd800<=ord(c)<=0xdfff for c in v): fail(f'invalid Rust string: {v!r}')
  return json.dumps(v,ensure_ascii=False).replace('\\n','\\u{a}').replace('\\t','\\u{9}').replace('\\r','\\u{d}')
 def code(v):
- if not isinstance(v,dict) or v.get('__perl')!='CODE' or set(v)-{'__perl','__opaque','__name','__deparse'}: fail(f'bad CODE: {v!r}')
+ base={'__perl','__opaque','__name','__deparse'}
+ provenance={'resolved','source_file','source_sha256'}
+ allowed=base|provenance|{'dependencies'}
+ if not isinstance(v,dict) or set(v)-allowed or not base <= set(v) or v.get('__perl')!='CODE' or v.get('__opaque') not in (True,1) or not isinstance(v.get('__name'),str) or not isinstance(v.get('__deparse'),str): fail(f'bad CODE: {v!r}')
+ present=set(v)&provenance
+ if present and (present != provenance or v['resolved'] is not True or not isinstance(v['source_file'],str) or not re.fullmatch(r'[A-Za-z0-9_./-]+',v['source_file']) or v['source_file'].startswith('/') or '..' in v['source_file'].split('/') or not isinstance(v['source_sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',v['source_sha256'])): fail(f'bad CODE provenance: {v!r}')
+ if 'dependencies' in v and (not isinstance(v['dependencies'],dict) or not v['dependencies']): fail(f'bad CODE dependencies: {v!r}')
  pair=(v.get('__name'),hashlib.sha256(v.get('__deparse','').encode()).hexdigest())
  if pair not in CODE: fail(f'unregistered native CODE body: {pair[0]!r} {pair[1]}')
  return pair[0]

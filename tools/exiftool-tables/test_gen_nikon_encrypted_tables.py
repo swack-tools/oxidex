@@ -36,6 +36,23 @@ def fixture():
 
 
 class NikonEncryptedGeneratorTests(unittest.TestCase):
+    def test_current_dump_code_provenance_is_accepted_but_unknown_fields_refuse(self):
+        body = "registered test body"
+        pair = ("Image::ExifTool::Test", generator.hashlib.sha256(body.encode()).hexdigest())
+        generator.CODE.add(pair)
+        self.addCleanup(generator.CODE.remove, pair)
+        code = {
+            "__perl": "CODE", "__opaque": True,
+            "__name": pair[0], "__deparse": body,
+            "resolved": True, "source_file": "Image/ExifTool.pm",
+            "source_sha256": "0" * 64,
+            "dependencies": {"Image::ExifTool::Get16u": {"resolved": True}},
+        }
+        self.assertEqual(generator.code(code), pair[0])
+        code["unrecognized"] = True
+        with self.assertRaises(generator.Unsupported):
+            generator.code(code)
+
     def test_native_rows_maps_and_numeric_order_project(self):
         text, counts = generator.render(fixture())
         self.assertEqual(counts, {"tables": 1, "rows": 1, "maps": 1})
