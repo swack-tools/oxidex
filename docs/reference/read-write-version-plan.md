@@ -70,8 +70,15 @@ previous complete regeneration covered 44 artifacts.
 
 The integrated public-migration ledger passed 11 tests with selected native
 Perl/ExifTool, including a copied-source rename and a mismatched final Writer
-source refusal. Its runtime consumer and official artifact registration remain
-unfinished.
+source refusal. The public transaction planner and official artifact registration are now
+implemented. Registration totals 51 artifacts (29 tier 1, 22 tier 2), with
+27 manifest and regeneration-shell tests passing. The planner joins the
+migration ledger to current final controls, partitions generated and legacy
+edits, retains aliases, and refuses removed or unsupported migrated rules.
+The writer test instrument passed 200 tests (two explicit fixture drivers
+ignored); workspace/all-features Clippy with warnings denied passed. File
+execution is not yet connected, so these are planning checks, not public
+write conformance. Full real regeneration of all 51 remains outstanding.
 
 Public migration must use the generated intersection of complete address and
 final-writer identities, with retained history for previously migrated entries.
@@ -86,9 +93,11 @@ executable grammar still needs compilation; a source hash and nonempty body
 are not proof of automatic behavior adoption. New JPEG EXIF creation stays
 unfinished until this is repaired and tested through native file operations.
 
-PR #768 remains open at `68b30d5f`: both hosted table-check attempts ended in
-runner shutdown during the tier-2 dump, so neither gives a completed drift
-verdict. All review threads must be addressed and resolved, alongside passing
+PR #768 remains open at `7ff727aa`. Earlier table-check attempts ended in
+runner shutdown during the tier-2 dump. The explicit reader-only tier-2
+capture now passes regeneration and drift checks in 40 seconds; its separate
+cache leaves normal writer-complete capture intact. A later verification
+step failed in hosted job `103929195894` and is being diagnosed. All review threads must be addressed and resolved, alongside passing
 required checks on the exact head, before merge.
 
 The persisted 11.78/12.64 rehearsal has not passed. Its first 11.78 dump succeeded,

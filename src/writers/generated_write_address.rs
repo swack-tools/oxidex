@@ -151,12 +151,19 @@ pub(crate) fn plan_requests<'a, 'k, V: PartialEq>(
     requests: impl IntoIterator<Item = (&'k str, V)>,
     rules: &AddressRules<'a>,
 ) -> Result<AddressPlan<'a, 'k, V>, &'static str> {
+    plan_requests_with(requests, |key| resolve(key, rules))
+}
+
+pub(crate) fn plan_requests_with<'a, 'k, V: PartialEq>(
+    requests: impl IntoIterator<Item = (&'k str, V)>,
+    resolver: impl Fn(&str) -> Resolution<'a>,
+) -> Result<AddressPlan<'a, 'k, V>, &'static str> {
     let mut plan = AddressPlan {
         generated: Vec::new(),
         outside: Vec::new(),
     };
     for (key, value) in requests {
-        match resolve(key, rules) {
+        match resolver(key) {
             Resolution::Resolved(row) => {
                 if let Some((_, prior)) = plan
                     .generated
@@ -187,6 +194,15 @@ pub(crate) fn plan_metadata_delta<'a, 'k, V: PartialEq>(
     removed: &[&'k str],
     rules: &AddressRules<'a>,
 ) -> Result<AddressPlan<'a, 'k, Option<&'k V>>, &'static str> {
+    plan_metadata_delta_with(baseline, desired, removed, |key| resolve(key, rules))
+}
+
+pub(crate) fn plan_metadata_delta_with<'a, 'k, V: PartialEq>(
+    baseline: &[(&'k str, &'k V)],
+    desired: &[(&'k str, &'k V)],
+    removed: &[&'k str],
+    resolver: impl Fn(&str) -> Resolution<'a>,
+) -> Result<AddressPlan<'a, 'k, Option<&'k V>>, &'static str> {
     let mut requests = Vec::new();
     for &(key, value) in desired {
         let unchanged = baseline.iter().any(|&(old_key, old_value)| {
@@ -196,7 +212,7 @@ pub(crate) fn plan_metadata_delta<'a, 'k, V: PartialEq>(
             if old_key == key {
                 return true;
             }
-            matches!((resolve(old_key, rules), resolve(key, rules)),
+            matches!((resolver(old_key), resolver(key)),
                 (Resolution::Resolved(old), Resolution::Resolved(new)) if same_physical(old, new))
         });
         if !unchanged {
@@ -207,9 +223,9 @@ pub(crate) fn plan_metadata_delta<'a, 'k, V: PartialEq>(
         if desired.iter().any(|&(new_key, _)| new_key == key) {
             continue;
         }
-        let replacement = match resolve(key, rules) {
+        let replacement = match resolver(key) {
             Resolution::Resolved(old) => desired.iter().any(|&(new_key, _)| {
-                matches!(resolve(new_key, rules), Resolution::Resolved(new) if same_physical(old, new))
+                matches!(resolver(new_key), Resolution::Resolved(new) if same_physical(old, new))
             }),
             _ => false,
         };
@@ -218,7 +234,7 @@ pub(crate) fn plan_metadata_delta<'a, 'k, V: PartialEq>(
         }
     }
     requests.extend(removed.iter().map(|&key| (key, None)));
-    plan_requests(requests, rules)
+    plan_requests_with(requests, resolver)
 }
 
 #[cfg(test)]
