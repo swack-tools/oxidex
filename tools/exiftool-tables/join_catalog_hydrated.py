@@ -106,6 +106,32 @@ def source_rows(hydrated: dict) -> tuple[dict[tuple[str, str, int], dict], dict[
     return rows, table_hashes
 
 
+def quicktime_selector_projection(table: str, raw_key: str, row: dict) -> dict:
+    """Invert only verified dump wrappers before using the selector's digest."""
+    if not {"TagID", "Table", "Groups", "_extra_properties"} & set(row):
+        return row
+    projected = dict(row)
+    tag_id = projected.pop("TagID", raw_key)
+    table_fact = projected.pop("Table", None)
+    groups = projected.pop("Groups", None)
+    extras = projected.pop("_extra_properties", {})
+    if tag_id != raw_key or not isinstance(table_fact, dict) or table not in table_fact.get("table_full_names", []):
+        raise ValueError("QuickTime hydrated wrapper identity is malformed")
+    if not isinstance(groups, dict) or groups.get("__ref") != "HASH":
+        raise ValueError("QuickTime hydrated wrapper groups are malformed")
+    if not isinstance(extras, dict):
+        raise ValueError("QuickTime hydrated wrapper has unprojected source properties")
+    semantic = set(extras) - {"GotGroups", "Preferred"}
+    if any(key in projected for key in semantic):
+        raise ValueError("QuickTime wrapper conflicts with explicit source property")
+    if semantic:
+        existing = projected.get("_extra_keys", [])
+        if not isinstance(existing, list) or not all(isinstance(key, str) for key in existing):
+            raise ValueError("QuickTime source extra-key projection is malformed")
+        projected["_extra_keys"] = sorted(set(existing) | semantic)
+    return projected
+
+
 def validate_provenance(catalog: dict, hydrated: dict) -> None:
     catalog_sources = require_mapping(require_mapping(catalog.get("producer"), "catalog producer").get("sources"),
                                       "catalog producer sources")
@@ -174,9 +200,12 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         family_counts[entry["groups"]["1"]][status] += 1
         implementation = "source_row_not_yet_consumed"
         refusal = None
+        selector_hash = None
         if source is not None and identity[0].startswith("Image::ExifTool::QuickTime::"):
             variant_path = (identity[2],) if "_variants" in hydrated["hydrated_layouts"]["tables"][identity[0]]["tags"][identity[1]] else ()
-            candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], quicktime_selector.digest(source), variant_path))
+            projected = quicktime_selector_projection(identity[0], identity[1], source)
+            selector_hash = quicktime_selector.digest(projected)
+            candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
             if candidate is not None:
                 if candidate["generated"]:
                     implementation = "generated_reader_declaration_unobserved"
@@ -186,7 +215,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         implementation_counts[implementation] += 1
         records.append({"identity": {"table": identity[0], "raw_key": identity[1], "variant_index": identity[2]},
                         "catalog": {"name": entry["name"], "normalized_name": entry["normalized_name"], "groups": entry["groups"]},
-                        "source": {"state": state, "name": source_name, "row_sha256": row_hash, "table_sha256": table_hash},
+                        "source": {"state": state, "name": source_name, "row_sha256": row_hash, "selector_row_sha256": selector_hash, "table_sha256": table_hash},
                         "source_layout_status": status, "source_derived_implementation": implementation,
                         "implementation_refusal_reasons": refusal,
                         "observed_read": "not_observed_yet", "observed_write": "not_observed_yet"})
