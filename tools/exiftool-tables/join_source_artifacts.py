@@ -35,6 +35,129 @@ ARTIFACT_TYPES = {
     "ifd": ("IfdTable", "ALL_IFD_TABLES", None),
     "keyed": ("KeyedDirectoryTable", "ALL_KEYED_TABLES", "OmittedKeyedNativeRow"),
 }
+ENABLEMENT_PATHS = {"binary": ("src/exiftool_tables/enabled.rs", "ENABLED"), "ifd": ("src/exiftool_tables/enabled_ifd.rs", "ENABLED_IFD")}
+# Candidate executor locations, not proof of a registry call or file-format
+# dispatch. Immutable snapshots prove only source presence; observations and
+# verified caller evidence remain separate.
+RUNTIME_CONSUMERS = {
+    "binary": {"kind": "generic_binary_engine", "refs": ["src/exiftool_tables/engine.rs"]},
+    "ifd": {"kind": "generic_ifd_engine", "refs": ["src/core/exif_dir_engine.rs"]},
+    "keyed": {"kind": "generic_keyed_directory", "refs": ["src/exiftool_tables/keyed_engine.rs"]},
+}
+
+def consumer_snapshot(repo: Path, commit: str) -> dict[str, Any]:
+    result = {}
+    for kind, route in RUNTIME_CONSUMERS.items():
+        blobs = []
+        for path in route["refs"]:
+            blob = git_blob_or_none(repo, commit, path)
+            if blob is None:
+                result[kind] = {"state": "missing", "path": path}; break
+            blobs.append({"path": path, "sha256": sha(blob)})
+        else:
+            result[kind] = {"state": "present_static_ref", "refs": blobs}
+    return result
+
+def policy_source(text: str) -> tuple[str, str]:
+    """Blank comments and separately mask literals when locating declarations."""
+    import re
+
+    code, declarations = list(text), list(text)
+    at = 0
+    while at < len(text):
+        end = at
+        comment = False
+        if text.startswith("//", at):
+            end = text.find("\n", at)
+            end = len(text) if end < 0 else end
+            comment = True
+        elif text.startswith("/*", at):
+            depth, end = 1, at + 2
+            while end < len(text) and depth:
+                if text.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif text.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            if depth:
+                raise ValueError("unterminated block comment")
+            comment = True
+        elif re.match(r'r#*"', text[at:]):
+            raise ValueError("raw Rust literals are unsupported in enablement policy")
+        elif text[at] == '"':
+            end = at + 1
+            while end < len(text) and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            if end >= len(text):
+                raise ValueError("unterminated string")
+            end += 1
+        elif (char := re.match(r"'(?:\\.|[^'\\])'", text[at:])):
+            end = at + len(char.group())
+        if end > at:
+            for index in range(at, end):
+                if text[index] != "\n":
+                    declarations[index] = " "
+                    if comment:
+                        code[index] = " "
+            at = end
+        else:
+            at += 1
+    return "".join(code), "".join(declarations)
+
+
+def parse_enabled(text: str, symbol: str) -> set[tuple[str, str]]:
+    import re
+
+    code, declarations = policy_source(text)
+    pattern = (rf"\bpub\s+static\s+{re.escape(symbol)}\s*:\s*"
+               r"&\s*\[\s*\(\s*&str\s*,\s*&str\s*\)\s*\]\s*=\s*&\s*\[")
+    markers = list(re.finditer(pattern, declarations))
+    if len(markers) != 1:
+        raise ValueError(f"expected exactly one {symbol} declaration")
+    start, end = brace_span(code, markers[0].end() - 1, "[", "]")
+    if not code[end:].lstrip().startswith(";"):
+        raise ValueError(f"unterminated {symbol} declaration")
+    body = code[start + 1:end - 1]
+    entry = re.compile(r'\s*\(\s*"([^"\\\r\n]+)"\s*,\s*"([^"\\\r\n]+)"\s*\)\s*')
+    result, at = set(), 0
+    while body[at:].strip():
+        match = entry.match(body, at)
+        if match is None:
+            raise ValueError(f"unrecognised {symbol} entry syntax")
+        identity = match.group(1), match.group(2)
+        if identity in result:
+            raise ValueError(f"duplicate {symbol} entry")
+        result.add(identity)
+        at = match.end()
+        if not body[at:].strip():
+            break
+        if body[at] != ",":
+            raise ValueError(f"unrecognised {symbol} entry separator")
+        at += 1
+    return result
+
+
+def runtime_evidence(selection: str, artifact: dict[str, Any], enabled: set[tuple[str, str]] | None = None, identity: tuple[str, str] | None = None, consumer_verified: bool = False) -> dict[str, Any]:
+    """Classify static route evidence without inventing dynamic reachability."""
+    if selection not in RUNTIME_CONSUMERS:
+        return {"state": "unknown", "reason": "no_protocol_consumer_manifest", "refs": [], "observed": {"read": None, "write": None}}
+    if artifact.get("definition") != "present":
+        return {"state": "unknown", "reason": "absent_from_this_generated_registry", "refs": [], "observed": {"read": None, "write": None}}
+    if not artifact.get("registry_listed"):
+        return {"state": "not_enabled", "reason": "definition_not_listed_in_generated_registry", "refs": [], "observed": {"read": None, "write": None}}
+    if artifact.get("gate_a_blocked_by"):
+        return {"state": "not_enabled", "reason": "gate_a_blocked", "refs": [], "observed": {"read": None, "write": None}}
+    if enabled is None:
+        return {"state": "unknown", "reason": "enablement_policy_missing", "refs": [], "observed": {"read": None, "write": None}}
+    if identity not in enabled:
+        return {"state": "not_enabled", "reason": "not_in_commit_pinned_enablement_allowlist", "refs": [], "observed": {"read": None, "write": None}}
+    if not consumer_verified:
+        return {"state": "unverified", "reason": "executor_dispatch_not_proven", "refs": [], "observed": {"read": None, "write": None}}
+    route = RUNTIME_CONSUMERS[selection]
+    return {"state": "known_generic_route", "reason": "static_protocol_registry_route", "kind": route["kind"], "refs": route["refs"], "observed": {"read": None, "write": None}}
 
 
 def sha(data: bytes) -> str:
@@ -264,6 +387,14 @@ def artifact_snapshot(repo: Path, commit: str) -> tuple[dict[str, Any], dict[str
             **accounting,
             "sidecar_omitted_rows": sum(sidecars[kind].values()),
         }
+    snapshot["enablement"] = {}
+    for kind, (path, symbol) in ENABLEMENT_PATHS.items():
+        blob = git_blob_or_none(repo, commit, path)
+        snapshot["enablement"][kind] = ({"state": "missing", "path": path} if blob is None else {
+            "state": "present", "path": path, "sha256": sha(blob),
+            "tables": sorted(parse_enabled(blob.decode("utf-8"), symbol)),
+        })
+    snapshot["consumers"] = consumer_snapshot(repo, commit)
     return snapshot, parsed, sidecars
 
 
@@ -275,7 +406,7 @@ def source_rows(out: Path, repo: Path, selector_commit: str, entries: list[tuple
     for (module, table, data, meta, tags), result in zip(entries, selected):
         selection = (
             "binary" if result.get("binary") else
-            "keyed" if result.get("keyed_profile") else
+            "keyed" if result.get("keyed_profile") or result.get("keyed_word_candidate") else
             "ifd" if result.get("ifd") else
             "other_unclassified"
         )
@@ -287,6 +418,7 @@ def source_rows(out: Path, repo: Path, selector_commit: str, entries: list[tuple
             "processor_identity": processor_identity,
             "processor_shape": processor_shape,
             "selection": selection,
+            "selection_evidence": result,
             "declared_tag_count": data["tag_count"],
             "counts": dict(sorted(source_inventory.count_rows(tags).items())),
         })
@@ -294,14 +426,15 @@ def source_rows(out: Path, repo: Path, selector_commit: str, entries: list[tuple
     return rows, snapshot
 
 
-def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str], dict[str, Any]]], sidecars: dict[str, Counter[tuple[str, str]]], artifact_states: dict[str, str] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str], dict[str, Any]]], sidecars: dict[str, Counter[tuple[str, str]]], artifact_states: dict[str, str] | None = None, enablement: dict[str, Any] | None = None, consumers: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     source_keys = {(row["module"], row["table"]) for row in rows}
     artifact_states = artifact_states or {kind: "present" for kind in ARTIFACT_PATHS}
     for kind, tables in parsed.items():
         orphan = sorted(set(tables) - source_keys)
         if orphan:
             raise ValueError(f"{kind} artifact has generated table identities absent from source: {orphan[:5]}")
-        wrong_family = sorted(key for key in tables if next(row["selection"] for row in rows if (row["module"], row["table"]) == key) != kind)
+        selection_by_identity = {(row["module"], row["table"]): row["selection"] for row in rows}
+        wrong_family = sorted(key for key in tables if selection_by_identity[key] != kind)
         if wrong_family:
             raise ValueError(f"{kind} artifact table identities disagree with source selection: {wrong_family[:5]}")
         sidecar_orphan = sorted(set(sidecars[kind]) - source_keys)
@@ -352,7 +485,11 @@ def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str]
                         totals[kind]["zero_emitted_definitions"] += 1
                     if table["gate_a_blocked_by"]:
                         totals[kind]["gate_a_refused_tables"] += 1
-        joined.append({**row, "artifacts": present})
+        selected_artifact = present.get(row["selection"], {})
+        enabled = None if not enablement or enablement.get(row["selection"], {}).get("state") != "present" else set(map(tuple, enablement[row["selection"]]["tables"]))
+        joined.append({**row, "artifacts": present,
+                       "candidate_executor_source": (consumers or {}).get(row["selection"], {"state": "not_in_manifest"}),
+                       "runtime_consumer": runtime_evidence(row["selection"], selected_artifact, enabled, (row["module"], row["table"]), False)})
     source_inventory.require(len(joined) == len(rows), "join does not conserve source rows")
     return joined, {kind: dict(sorted(counts.items())) for kind, counts in sorted(totals.items())}
 
@@ -416,13 +553,21 @@ def main() -> None:
     rows, selector_snapshot = source_rows(args.out, args.repo, selector_commit, entries)
     artifact_states = {kind: value["state"] for kind, value in artifacts["artifacts"].items()}
     try:
-        joined, artifact_totals = join_rows(rows, parsed, sidecars, artifact_states)
+        joined, artifact_totals = join_rows(rows, parsed, sidecars, artifact_states, artifacts.get("enablement"), artifacts.get("consumers"))
     except ValueError as exc:
         raise SystemExit(f"invalid source/artifact accounting: {exc}") from exc
     selection_counts = Counter(row["selection"] for row in rows)
+    runtime_counts = Counter(row["runtime_consumer"]["state"] for row in joined)
+    families = defaultdict(Counter)
+    for row in joined:
+        key = f"{row.get('processor_identity') or 'default'}|{row.get('processor_shape')}"
+        families[key]["tables"] += 1
+        families[key]["declared_rows"] += row.get("declared_tag_count", 0)
+        families[key][row["runtime_consumer"]["state"]] += 1
     gate_a_blockers = gate_a_blocker_counts(joined)
     summary = {
         "runner_sha256": runner_sha,
+        "source_inventory_helper_sha256": source_inventory.sha_file(Path(source_inventory.__file__).resolve()),
         "scope": "one recorded dump plus immutable generated artifact shapes; not generated acceptance, runtime reachability, manual maintenance, output parity, or an automation percentage",
         "dump": {"sha256": dump_sha, "exiftool_version": document.get("exiftool_version"), "table_records": len(rows)},
         "selector_snapshot": selector_snapshot,
@@ -431,6 +576,8 @@ def main() -> None:
             "source_table_records": len(rows),
             "joined_table_records": len(joined),
             "selection_table_counts": dict(sorted(selection_counts.items())),
+            "runtime_consumer_table_counts": dict(sorted(runtime_counts.items())),
+            "processor_families": {key: dict(sorted(value.items())) for key, value in sorted(families.items())},
             "artifact_accounting": artifact_totals,
             "gate_a_blocker_counts": {kind: dict(sorted(counts.items())) for kind, counts in sorted(gate_a_blockers.items())},
         },

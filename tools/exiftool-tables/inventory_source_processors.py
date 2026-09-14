@@ -52,7 +52,7 @@ def archive_tools(repo: Path, commit: str, out: Path) -> dict[str, Any]:
                 raise RuntimeError(f"linked archive member is unsupported: {member.name!r}")
         tf.extractall(extract, members=members)
     tools = extract / "tools/exiftool-tables"
-    required = ("codegen.py", "keyed_directory.py", "conds.py", "subdirs.py")
+    required = ("codegen.py", "keyed_directory.py", "word_directory.py", "conds.py", "subdirs.py")
     missing = [name for name in required if not (tools / name).is_file()]
     if missing:
         raise RuntimeError(f"selector archive lacks required files: {', '.join(missing)}")
@@ -72,12 +72,14 @@ import json, sys
 sys.path.insert(0, sys.argv[1])
 import codegen
 import keyed_directory
+import word_directory
 metas = json.load(sys.stdin)
 print(json.dumps([
     {
         "binary": codegen.is_binary_table(meta),
         "ifd": codegen.is_ifd_table(meta),
         "keyed_profile": keyed_directory.is_keyed_directory_table(meta),
+        "keyed_word_candidate": word_directory.is_candidate(meta.get("PROCESS_PROC")),
     }
     for meta in metas
 ]))
@@ -281,6 +283,8 @@ def main() -> None:
             selection = "binary"
         elif result.get("keyed_profile"):
             selection = "keyed_profile"
+        elif result.get("keyed_word_candidate"):
+            selection = "keyed_word_candidate"
         elif result.get("ifd"):
             selection = "ifd"
         else:

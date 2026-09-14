@@ -1,0 +1,988 @@
+{
+  "artifact_snapshot": {
+    "artifacts": {
+      "binary": {
+        "path": "src/exiftool_tables/binary_tables.rs",
+        "registry_entries": 624,
+        "sha256": "7dabe9a80922de712780ab758805fa578e22e4eac23e239725faa2108f04ce06",
+        "sidecar_omitted_rows": 1278,
+        "state": "present",
+        "table_definitions": 624
+      },
+      "ifd": {
+        "path": "src/exiftool_tables/ifd_tables.rs",
+        "registry_entries": 496,
+        "sha256": "ed6e48b6596f16abe0b1cfc8f0d365d8a319e4cb88b418c91db0f34d0ec08b89",
+        "sidecar_omitted_rows": 0,
+        "state": "present",
+        "table_definitions": 496
+      },
+      "keyed": {
+        "path": "src/exiftool_tables/keyed_tables.rs",
+        "registry_entries": 10,
+        "sha256": "4b0fe9ebeb508e513244d786d0a88434deddc79d0acf861313def3cc4b4991ab",
+        "sidecar_omitted_rows": 4,
+        "state": "present",
+        "table_definitions": 10
+      }
+    },
+    "commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
+    "consumers": {
+      "binary": {
+        "refs": [
+          {
+            "path": "src/exiftool_tables/engine.rs",
+            "sha256": "79a26bc512b833573ff78e51ea5b00b7470ffa52f88373cf462a84adc4ae3008"
+          }
+        ],
+        "state": "present_static_ref"
+      },
+      "ifd": {
+        "refs": [
+          {
+            "path": "src/core/exif_dir_engine.rs",
+            "sha256": "327009f0489cd9f40f9c8c68a087b8c80ac4887e3733ea5f65ebd229639d097b"
+          }
+        ],
+        "state": "present_static_ref"
+      },
+      "keyed": {
+        "refs": [
+          {
+            "path": "src/exiftool_tables/keyed_engine.rs",
+            "sha256": "346dd687a256df97d06771de56efe6807350d8aa8db13c4d13d0d45a788a17bd"
+          }
+        ],
+        "state": "present_static_ref"
+      }
+    },
+    "enablement": {
+      "binary": {
+        "path": "src/exiftool_tables/enabled.rs",
+        "sha256": "450c00878557b2be81418d0061f10408ecc4a4f84e7003b03c7d3dff85edb1a8",
+        "state": "present",
+        "tables": [
+          [
+            "APE",
+            "NewHeader"
+          ],
+          [
+            "Canon",
+            "CMP1"
+          ],
+          [
+            "Font",
+            "PFM"
+          ],
+          [
+            "H264",
+            "RecInfo"
+          ],
+          [
+            "ICC_Profile",
+            "Header"
+          ],
+          [
+            "ID3",
+            "v1"
+          ],
+          [
+            "MPF",
+            "MPImage"
+          ],
+          [
+            "Olympus",
+            "AFInfo"
+          ],
+          [
+            "Olympus",
+            "AFTargetInfo"
+          ],
+          [
+            "Olympus",
+            "SubjectDetectInfo"
+          ],
+          [
+            "Pentax",
+            "MOV"
+          ],
+          [
+            "Sony",
+            "Panorama"
+          ],
+          [
+            "Sony",
+            "Tag202a"
+          ]
+        ]
+      },
+      "ifd": {
+        "path": "src/exiftool_tables/enabled_ifd.rs",
+        "sha256": "47ca8d78524514f20f632030e6cf4f2d79ddc139fb8d00b47501eae4bb1753c7",
+        "state": "present",
+        "tables": [
+          [
+            "Canon",
+            "Main"
+          ],
+          [
+            "Exif",
+            "Main"
+          ],
+          [
+            "FujiFilm",
+            "Main"
+          ],
+          [
+            "Olympus",
+            "CameraSettings"
+          ],
+          [
+            "Olympus",
+            "Equipment"
+          ],
+          [
+            "Olympus",
+            "FocusInfo"
+          ],
+          [
+            "Olympus",
+            "ImageProcessing"
+          ],
+          [
+            "Olympus",
+            "Main"
+          ],
+          [
+            "Olympus",
+            "RawDevelopment"
+          ],
+          [
+            "Olympus",
+            "RawDevelopment2"
+          ],
+          [
+            "Olympus",
+            "RawInfo"
+          ]
+        ]
+      }
+    }
+  },
+  "conservation": {
+    "artifact_accounting": {
+      "binary": {
+        "definitions_absent": 27,
+        "definitions_absent_without_sidecar": 19,
+        "definitions_present": 624,
+        "emitted_row_literals": 7002,
+        "gate_a_refused_tables": 129,
+        "sidecar_omitted_rows": 1278,
+        "sidecar_only_tables": 8,
+        "source_selected_tables": 651
+      },
+      "ifd": {
+        "definitions_present": 496,
+        "emitted_row_literals": 6117,
+        "gate_a_refused_tables": 228,
+        "sidecar_omitted_rows": 0,
+        "source_selected_tables": 496,
+        "zero_emitted_definitions": 218
+      },
+      "keyed": {
+        "definitions_absent": 3,
+        "definitions_absent_without_sidecar": 3,
+        "definitions_present": 10,
+        "emitted_row_literals": 189,
+        "gate_a_refused_tables": 1,
+        "sidecar_omitted_rows": 4,
+        "source_selected_tables": 13,
+        "zero_emitted_definitions": 1
+      }
+    },
+    "gate_a_blocker_counts": {
+      "binary": {
+        "expr_unsupported": 70,
+        "offsets_sound_until": 7,
+        "other_unregistered": 49,
+        "subdir_refused_processproc": 4,
+        "tag_bad_index": 4,
+        "tag_fmt_unsupported": 65,
+        "tag_var_format": 15,
+        "tag_variant_cond_unsupported": 2,
+        "tag_variant_field_unsupported": 4,
+        "tag_variant_skipped": 6
+      },
+      "ifd": {
+        "ifd_format_unsupported": 274,
+        "ifd_subdir_refused_start": 1,
+        "ifd_subdir_refused_unmodeled_key": 1,
+        "ifd_tag_id_unrepresentable": 10926,
+        "tag_no_name": 3,
+        "tag_variant_cond_unsupported": 18,
+        "tag_variant_field_unsupported": 5,
+        "tag_variant_skipped": 23
+      },
+      "keyed": {
+        "keyed_edge_unwalked": 1,
+        "keyed_format": 1,
+        "keyed_raw_id": 3
+      }
+    },
+    "joined_table_records": 1512,
+    "processor_families": {
+      "Image::ExifTool::AFCP::ProcessAFCP|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::AIFF::ProcessComment|deparsed_named_function": {
+        "declared_rows": 3,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::APP12::ProcessAPP12|deparsed_named_function": {
+        "declared_rows": 29,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::APP12::ProcessDucky|deparsed_named_function": {
+        "declared_rows": 3,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ASF::ProcessASF|deparsed_named_function": {
+        "declared_rows": 36,
+        "tables": 3,
+        "unknown": 3
+      },
+      "Image::ExifTool::ASF::ProcessCodecList|deparsed_named_function": {
+        "declared_rows": 6,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ASF::ProcessContentBranding|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ASF::ProcessContentDescription|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ASF::ProcessExtendedContentDescription|deparsed_named_function": {
+        "declared_rows": 156,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ASF::ProcessPicture|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Audible::ProcessAudible_cvrx|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Audible::ProcessAudible_meta|deparsed_named_function": {
+        "declared_rows": 11,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::CBOR::ProcessCBOR|deparsed_named_function": {
+        "declared_rows": 9,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Canon::ProcessCTMD|deparsed_named_function": {
+        "declared_rows": 6,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Canon::ProcessExifInfo|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Canon::ProcessFilters|deparsed_named_function": {
+        "declared_rows": 10,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Canon::ProcessSerialData|deparsed_named_function": {
+        "declared_rows": 130,
+        "tables": 8,
+        "unknown": 8
+      },
+      "Image::ExifTool::CanonCustom::ProcessCanonCustom2|deparsed_named_function": {
+        "declared_rows": 100,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::CanonCustom::ProcessCanonCustom|deparsed_named_function": {
+        "declared_rows": 132,
+        "tables": 9,
+        "unknown": 9
+      },
+      "Image::ExifTool::CanonRaw::ProcessCanonRaw|deparsed_named_function": {
+        "declared_rows": 55,
+        "not_enabled": 1,
+        "tables": 1
+      },
+      "Image::ExifTool::CanonVRD::ProcessCanonVRD|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::CanonVRD::ProcessDR4|deparsed_named_function": {
+        "declared_rows": 75,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::CanonVRD::ProcessEditData|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::CanonVRD::ProcessIHL|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::DJI::ProcessDJIInfo|deparsed_named_function": {
+        "declared_rows": 15,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::DJI::ProcessSettings|deparsed_named_function": {
+        "declared_rows": 15,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::DNG::ProcessAdobeData|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::DNG::ProcessOriginalRaw|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::DjVu::ProcessAnt|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::DjVu::ProcessMeta|deparsed_named_function": {
+        "declared_rows": 34,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Exif::ProcessExif|deparsed_named_function": {
+        "declared_rows": 13,
+        "not_enabled": 1,
+        "tables": 1
+      },
+      "Image::ExifTool::FLAC::ProcessBitStream|deparsed_named_function": {
+        "declared_rows": 29,
+        "tables": 5,
+        "unknown": 5
+      },
+      "Image::ExifTool::FLIR::ProcessFLIRText|deparsed_named_function": {
+        "declared_rows": 13,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::FLIR::ProcessFLIR|deparsed_named_function": {
+        "declared_rows": 14,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::FLIR::ProcessMeasInfo|deparsed_named_function": {
+        "declared_rows": 3,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Flash::ProcessMeta|deparsed_named_function": {
+        "declared_rows": 45,
+        "tables": 3,
+        "unknown": 3
+      },
+      "Image::ExifTool::FlashPix::ProcessFPXR|deparsed_named_function": {
+        "declared_rows": 26,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::FlashPix::ProcessProperties|deparsed_named_function": {
+        "declared_rows": 185,
+        "tables": 11,
+        "unknown": 11
+      },
+      "Image::ExifTool::FlashPix::ProcessWordDocument|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::FotoStation::ProcessFotoStation|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::FujiFilm::ProcessFaceRec|deparsed_named_function": {
+        "declared_rows": 24,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::FujiFilm::ProcessFujiDir|deparsed_named_function": {
+        "declared_rows": 24,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::FujiFilm::ProcessMRAW|deparsed_named_function": {
+        "declared_rows": 6,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::GIMP::ProcessParasites|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::GM::Process_marl|deparsed_named_function": {
+        "declared_rows": 76,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::GM::Process_mrld|deparsed_named_function": {
+        "declared_rows": 1,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::GM::Process_mrlv|deparsed_named_function": {
+        "declared_rows": 9,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::GoPro::ProcessGoPro|deparsed_named_function": {
+        "declared_rows": 122,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::GoPro::ProcessString|deparsed_named_function": {
+        "declared_rows": 48,
+        "tables": 5,
+        "unknown": 5
+      },
+      "Image::ExifTool::Google::ProcessHDRP|deparsed_named_function": {
+        "declared_rows": 37,
+        "tables": 4,
+        "unknown": 4
+      },
+      "Image::ExifTool::H264::ProcessSEI|deparsed_named_function": {
+        "declared_rows": 39,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::HP::ProcessHP|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::HP::ProcessTDHD|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ICC_Profile::ProcessICC_Profile|deparsed_named_function": {
+        "declared_rows": 158,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ICC_Profile::ProcessMetadata|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ID3::ProcessGEOB|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ID3::ProcessID3Dir|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ID3::ProcessID3v2|deparsed_named_function": {
+        "declared_rows": 234,
+        "tables": 3,
+        "unknown": 3
+      },
+      "Image::ExifTool::ID3::ProcessPrivate|deparsed_named_function": {
+        "declared_rows": 9,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ID3::ProcessSynText|deparsed_named_function": {
+        "declared_rows": 3,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::IPTC::ProcessIPTC|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::JPEG::ProcessJPEG_HDR|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::JPEG::ProcessOcad|deparsed_named_function": {
+        "declared_rows": 1,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::JSON::ProcessJSON|deparsed_named_function": {
+        "declared_rows": 84,
+        "tables": 7,
+        "unknown": 7
+      },
+      "Image::ExifTool::JVC::ProcessJVCText|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Jpeg2000::ProcessJUMD|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Jpeg2000::ProcessJpeg2000Box|deparsed_named_function": {
+        "declared_rows": 57,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Kandao::ProcessKandao|deparsed_named_function": {
+        "declared_rows": 63,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Kodak::ProcessKodakIFD|deparsed_named_function": {
+        "declared_rows": 34,
+        "tables": 6,
+        "unknown": 6
+      },
+      "Image::ExifTool::Kodak::ProcessKodakText|deparsed_named_function": {
+        "declared_rows": 32,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Kodak::ProcessPose|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::LNK::ProcessItemID|deparsed_named_function": {
+        "declared_rows": 21,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::LNK::ProcessLinkInfo|deparsed_named_function": {
+        "declared_rows": 11,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::LNK::ProcessURI|deparsed_named_function": {
+        "declared_rows": 19,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Leaf::ProcessLeaf|deparsed_named_function": {
+        "declared_rows": 140,
+        "tables": 15,
+        "unknown": 15
+      },
+      "Image::ExifTool::MIE::ProcessMIE|deparsed_named_function": {
+        "declared_rows": 162,
+        "tables": 20,
+        "unknown": 20
+      },
+      "Image::ExifTool::MISB::ProcessKLV|deparsed_named_function": {
+        "declared_rows": 142,
+        "tables": 4,
+        "unknown": 4
+      },
+      "Image::ExifTool::Microsoft::ProcessXtra|deparsed_named_function": {
+        "declared_rows": 452,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::MinoltaRaw::ProcessMRW|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Nikon::ProcessNikonAVI|deparsed_named_function": {
+        "declared_rows": 32,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::Nikon::ProcessNikonCaptureOffsets|deparsed_named_function": {
+        "declared_rows": 3,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Nikon::ProcessNikonEncrypted|deparsed_named_function": {
+        "declared_rows": 183,
+        "tables": 29,
+        "unknown": 29
+      },
+      "Image::ExifTool::Nikon::ProcessNikonMOV|deparsed_named_function": {
+        "declared_rows": 66,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Nikon::ProcessNikon|deparsed_named_function": {
+        "declared_rows": 112,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::NikonCapture::ProcessNikonCapture|deparsed_named_function": {
+        "declared_rows": 39,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::NikonSettings::ProcessNikonSettings|deparsed_named_function": {
+        "declared_rows": 203,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PDF::ProcessAF|deparsed_named_function": {
+        "declared_rows": 1,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PDF::ProcessAcroForm|deparsed_named_function": {
+        "declared_rows": 0,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PLIST::ProcessBinaryPLIST|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PLIST::ProcessPLIST|deparsed_named_function": {
+        "declared_rows": 31,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PNG::ProcessPNG_tEXt|deparsed_named_function": {
+        "declared_rows": 30,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PSP::ProcessExtData|deparsed_named_function": {
+        "declared_rows": 9,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::Palm::ProcessEXTH|deparsed_named_function": {
+        "declared_rows": 44,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PanasonicRaw::ProcessDistortionInfo|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Parrot::Process_mett|deparsed_named_function": {
+        "declared_rows": 12,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PhaseOne::ProcessPhaseOne|deparsed_named_function": {
+        "declared_rows": 63,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::Photoshop::ProcessChannelOptions|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Photoshop::ProcessDocumentData|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Photoshop::ProcessLayers|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Photoshop::ProcessPhotoshop|deparsed_named_function": {
+        "declared_rows": 86,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PostScript::ProcessPS|deparsed_named_function": {
+        "declared_rows": 28,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::PrintIM::ProcessPrintIM|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::ProcessBinaryData|deparsed_named_function": {
+        "declared_rows": 8142,
+        "not_enabled": 611,
+        "tables": 651,
+        "unknown": 27,
+        "unverified": 13
+      },
+      "Image::ExifTool::Protobuf::ProcessProtobuf|deparsed_named_function": {
+        "declared_rows": 210,
+        "tables": 5,
+        "unknown": 5
+      },
+      "Image::ExifTool::Qualcomm::ProcessDualCamera|deparsed_named_function": {
+        "declared_rows": 43,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Qualcomm::ProcessQualcomm|deparsed_named_function": {
+        "declared_rows": 1188,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::QuickTime::ProcessEncodingParams|deparsed_named_function": {
+        "declared_rows": 24,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::QuickTime::ProcessHybrid|deparsed_named_function": {
+        "declared_rows": 49,
+        "tables": 5,
+        "unknown": 5
+      },
+      "Image::ExifTool::QuickTime::ProcessKeys|deparsed_named_function": {
+        "declared_rows": 92,
+        "tables": 3,
+        "unknown": 3
+      },
+      "Image::ExifTool::QuickTime::ProcessMOV|deparsed_named_function": {
+        "declared_rows": 547,
+        "tables": 41,
+        "unknown": 41
+      },
+      "Image::ExifTool::QuickTime::ProcessMetaData|deparsed_named_function": {
+        "declared_rows": 7,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::QuickTime::ProcessNextbase|deparsed_named_function": {
+        "declared_rows": 65,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::QuickTime::ProcessRights|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::RIFF::ProcessChunks|deparsed_named_function": {
+        "declared_rows": 155,
+        "tables": 7,
+        "unknown": 7
+      },
+      "Image::ExifTool::RIFF::ProcessStreamData|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::RSRC::ProcessRSRC|deparsed_named_function": {
+        "declared_rows": 9,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Real::ProcessRealMeta|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Real::ProcessRealProperties|deparsed_named_function": {
+        "declared_rows": 14,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Ricoh::ProcessRicohRDT|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 4,
+        "unknown": 4
+      },
+      "Image::ExifTool::Ricoh::ProcessRicohRMETA|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Ricoh::ProcessRicohText|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Samsung::ProcessINFO|deparsed_named_function": {
+        "declared_rows": 2,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Samsung::ProcessSamsungIFD|deparsed_named_function": {
+        "declared_rows": 0,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Samsung::ProcessSamsungMeta|deparsed_named_function": {
+        "declared_rows": 28,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Samsung::ProcessSamsung|deparsed_named_function": {
+        "declared_rows": 24,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Scalado::ProcessScalado|deparsed_named_function": {
+        "declared_rows": 4,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::SigmaRaw::ProcessX3FDirectory|deparsed_named_function": {
+        "declared_rows": 6,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::SigmaRaw::ProcessX3FHeader|deparsed_named_function": {
+        "declared_rows": 8,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::SigmaRaw::ProcessX3FProperties|deparsed_named_function": {
+        "declared_rows": 43,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Sony::ProcessEnciphered|deparsed_named_function": {
+        "declared_rows": 506,
+        "tables": 32,
+        "unknown": 32
+      },
+      "Image::ExifTool::Sony::ProcessMoreInfo|deparsed_named_function": {
+        "declared_rows": 5,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Sony::ProcessSR2|deparsed_named_function": {
+        "declared_rows": 6,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Sony::ProcessSRF|deparsed_named_function": {
+        "declared_rows": 28,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::Sony::ProcessSonyPIC|deparsed_named_function": {
+        "declared_rows": 11,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::Sony::Process_rtmd|deparsed_named_function": {
+        "declared_rows": 43,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::TNEF::ProcessProps|deparsed_named_function": {
+        "declared_rows": 53,
+        "tables": 2,
+        "unknown": 2
+      },
+      "Image::ExifTool::Vorbis::ProcessComments|deparsed_named_function": {
+        "declared_rows": 32,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::WTV::ProcessMetadata|deparsed_named_function": {
+        "declared_rows": 73,
+        "tables": 1,
+        "unknown": 1
+      },
+      "Image::ExifTool::XMP::ProcessXMP|deparsed_named_function": {
+        "declared_rows": 203,
+        "tables": 11,
+        "unknown": 11
+      },
+      "Image::ExifTool::XMP::ProcessXMP|literal_processor_name": {
+        "declared_rows": 10,
+        "tables": 1,
+        "unknown": 1
+      },
+      "default|absent_default_ProcessExif_candidate": {
+        "declared_rows": 17184,
+        "not_enabled": 484,
+        "tables": 495,
+        "unverified": 11
+      }
+    },
+    "runtime_consumer_table_counts": {
+      "not_enabled": 1097,
+      "unknown": 391,
+      "unverified": 24
+    },
+    "selection_table_counts": {
+      "binary": 651,
+      "ifd": 496,
+      "keyed": 13,
+      "other_unclassified": 352
+    },
+    "source_table_records": 1512
+  },
+  "dump": {
+    "exiftool_version": "13.59",
+    "sha256": "05c13f3ee804838a6d8db5b2f8d64156883dd98afe5a5b0983b6870a8a561556",
+    "table_records": 1512
+  },
+  "gaps": [
+    "Artifact presence is not runtime reachability, manual maintenance, output parity, or an automation percentage.",
+    "A keyed schema without a committed keyed generated artifact is recorded as absent_at_commit.",
+    "Gate A is recorded only where a generated table literal exposes GateA; unavailable is not a refusal reason.",
+    "The recorded dump is not a whole-source module-discovery or dispatch inventory."
+  ],
+  "joined_tables_sha256": "e9c05fac5318308bd2d343b09b33228922496c9138bad9ad3b03df1b82bb3ac3",
+  "observed": {
+    "read": null,
+    "write": null
+  },
+  "runner_sha256": "5d148633648445b1cc5d3a488b86f0d6e555a2d52c9371cd313f78a1e6d18905",
+  "scope": "one recorded dump plus immutable generated artifact shapes; not generated acceptance, runtime reachability, manual maintenance, output parity, or an automation percentage",
+  "selector_snapshot": {
+    "archive": "selector-snapshot.tar",
+    "archive_sha256": "aa36b6ea27b27091c20407d5931970619ce92f26ed18d8396f726d23673aadfe",
+    "commit": "72ed1397f526faab71c46f11cbcf0bea9137e844",
+    "key_files": {
+      "codegen.py": "ef11567ec0cf3a400b4ea7cb8a939d4c325c9665c8c6d33d81404955447496a0",
+      "conds.py": "3ac8adfae601cdc3824186fad77575a4ab6b2c77a78e7cb9178a31950b9f7c0c",
+      "keyed_directory.py": "1834b03feb86f3418287ab080e380c5ff4f8874c88b08d88f63114f2c2d37296",
+      "subdirs.py": "99a784df8a8a8debecaf77cab8ec3a97e11c9616b857a627a8616c8f77c6835c",
+      "word_directory.py": "4854e258d336d162246e90be0dd5c5661ebb39e63524a7af5be4a79ea6062d54"
+    },
+    "tools_directory": "selector-snapshot/tools/exiftool-tables"
+  },
+  "source_inventory_helper_sha256": "128b9a83bb588a9cadea736814714cc160a67a38ae7b33ddffe8b4da8ca02a30"
+}
