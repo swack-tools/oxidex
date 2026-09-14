@@ -127,6 +127,8 @@ OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" \
     --dump "$HYDRATED_JSON" --replace
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_keys_specs.py" \
     --dump "$HYDRATED_JSON" --replace
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_userdata_specs.py" \
+    --dump "$HYDRATED_JSON" --replace
 
 echo
 echo ">> generating inactive serial-directory facts"

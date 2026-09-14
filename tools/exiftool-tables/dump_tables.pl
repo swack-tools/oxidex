@@ -419,6 +419,52 @@ sub quicktime_itemlist_reader_protocol_fact {
     };
 }
 
+# Direct movie-level UserData atoms have no `data` header. Capture their
+# effective caller, option default, helpers and single-byte map separately.
+sub quicktime_userdata_reader_protocol_fact {
+    my ($lib_abs) = @_;
+    require Image::ExifTool::Charset;
+    require Image::ExifTool::XMP;
+    my $et = Image::ExifTool->new;
+    my $charset = $et->Options('CharsetQuickTime');
+    my $map_fact = quicktime_charset_map_fact($charset, $lib_abs);
+    my $map = Image::ExifTool::Charset::LoadCharset($charset);
+    $map_fact->{operands} = $map if ref($map) eq 'HASH';
+    no strict 'refs';
+    my %dependencies;
+    for my $name (qw(Image::ExifTool::ReadValue Image::ExifTool::IsUTF8
+                    Image::ExifTool::Decode Image::ExifTool::FoundTag
+                    Image::ExifTool::Charset::Decompose
+                    Image::ExifTool::Charset::LoadCharset
+                    Image::ExifTool::Charset::Recompose
+                    Image::ExifTool::XMP::FixUTF8)) {
+        $dependencies{$name} = code_source_fact($name, $lib_abs, undef, undef, 0);
+    }
+    return {
+        kind => 'quicktime_userdata_reader_protocol_v1',
+        caller_processors => {
+            Main => code_ref_fact($Image::ExifTool::QuickTime::Main{PROCESS_PROC},
+                'Image::ExifTool::QuickTime::ProcessMOV', $lib_abs, undef, undef, 0),
+            Movie => code_ref_fact($Image::ExifTool::QuickTime::Movie{PROCESS_PROC},
+                'Image::ExifTool::QuickTime::ProcessMOV', $lib_abs, undef, undef, 0),
+        },
+        caller_meta => {
+            Main => { map { $_ => scrub($Image::ExifTool::QuickTime::Main{$_}, 0) }
+                grep { /^[A-Z_]+$/ && (length($_) != 4 || $_ eq 'VARS') && $_ ne 'PROCESS_PROC' && $_ ne 'WRITE_PROC' }
+                keys %Image::ExifTool::QuickTime::Main },
+            Movie => { map { $_ => scrub($Image::ExifTool::QuickTime::Movie{$_}, 0) }
+                grep { /^[A-Z_]+$/ && (length($_) != 4 || $_ eq 'VARS') && $_ ne 'PROCESS_PROC' && $_ ne 'WRITE_PROC' }
+                keys %Image::ExifTool::QuickTime::Movie },
+        },
+        default_charset => $charset,
+        charset_type => $Image::ExifTool::Charset::csType{$charset},
+        charset_map => $map_fact,
+        movie_userdata_edge => scrub($Image::ExifTool::QuickTime::Movie{udta}, 0),
+        main_movie_edge => scrub($Image::ExifTool::QuickTime::Main{moov}, 0),
+        dependencies => \%dependencies,
+    };
+}
+
 sub collect_subdirectory_validate_function_names {
     my ($value, $names, $seen, $depth) = @_;
     return if !defined $value || $depth > 24;
@@ -1926,11 +1972,15 @@ my $hydrated_layouts = $HYDRATED_LAYOUTS
     ? dump_hydrated_layout_projection()
     : undef;
 
-my $quicktime_itemlist_reader_protocol;
+my ($quicktime_itemlist_reader_protocol, $quicktime_userdata_reader_protocol);
 if (exists $out{QuickTime}
     && exists $out{QuickTime}{tables}{ItemList}) {
     $quicktime_itemlist_reader_protocol = quicktime_itemlist_reader_protocol_fact(
         $EXIFTOOL_LIB_ABS);
+}
+
+if (exists $out{QuickTime} && exists $out{QuickTime}{tables}{UserData}) {
+    $quicktime_userdata_reader_protocol = quicktime_userdata_reader_protocol_fact($EXIFTOOL_LIB_ABS);
 }
 
 my ($write_autoload_router_status, $native_write_capture_context,
@@ -2006,6 +2056,8 @@ my %document = (
     native_runtime_contracts => { utf8 => {
         kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
     } },
+    (defined $quicktime_userdata_reader_protocol
+        ? (quicktime_userdata_reader_protocol => $quicktime_userdata_reader_protocol) : ()),
     (defined $quicktime_itemlist_reader_protocol
         ? (quicktime_itemlist_reader_protocol => $quicktime_itemlist_reader_protocol) : ()),
 );

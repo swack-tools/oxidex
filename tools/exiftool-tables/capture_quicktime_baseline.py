@@ -114,6 +114,8 @@ def extract(document, *, full_hash, source_commit, perl_version, tool_hash):
                               "dump_tool_sha256": tool_hash, "perl_version": perl_version,
                               "projection": "effective hydrated rows with authenticated wrapper removal"}}
 
+    if "quicktime_userdata_reader_protocol" in document:
+        result["quicktime_userdata_reader_protocol"] = document["quicktime_userdata_reader_protocol"]
     if "quicktime_itemlist_reader_protocol" in document:
         result["quicktime_itemlist_reader_protocol"] = document["quicktime_itemlist_reader_protocol"]
     return result

@@ -1963,6 +1963,9 @@ fn extract_user_data_atoms(udta: &Atom, metadata: &mut MetadataMap) -> Result<()
 
     for atom in children {
         let atom_bytes = atom.atom_type.as_bytes();
+        if super::userdata_reader::read_item(atom_bytes, atom.data, metadata) {
+            continue;
+        }
 
         // QuickTime user data atoms start with © character (0xA9)
         if atom_bytes[0] == 0xA9 {

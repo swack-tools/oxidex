@@ -83,6 +83,21 @@ pub(crate) fn decode_data_atom(spec: &ItemListSpec, data: &[u8]) -> Option<(TagV
     }
 }
 
+/// Direct ReadValue with declared width, without ItemList's payload-size
+/// adjustment. UserData's direct Format branch passes the whole raw atom.
+pub(crate) fn decode_direct_unsigned(
+    spec: &ItemListSpec,
+    value: &[u8],
+    width: u8,
+) -> Option<(TagValue, TagValue)> {
+    if !matches!(width, 8 | 16 | 32 | 64) {
+        return None;
+    }
+    decode_array(spec, value, width / 8, |chunk| {
+        decode_unsigned(chunk, width / 8).map(unsigned_raw)
+    })
+}
+
 fn decode_text_flag(flags: u32, value: &[u8]) -> Option<String> {
     let decoded = match flags {
         1 | 4 => std::str::from_utf8(value).ok()?.to_owned(),
@@ -200,7 +215,11 @@ fn unsigned_raw(value: u64) -> TagValue {
     }
 }
 
-fn numeric_values(spec: &ItemListSpec, raw_text: String, raw: TagValue) -> (TagValue, TagValue) {
+pub(crate) fn numeric_values(
+    spec: &ItemListSpec,
+    raw_text: String,
+    raw: TagValue,
+) -> (TagValue, TagValue) {
     let display = if spec.safe_enum_operands.is_empty() {
         raw.clone()
     } else if let Some(operand) = spec

@@ -179,9 +179,13 @@ def report(raw: bytes):
         # from the current tool.  Never let an undocumented stale tool hash
         # pass as a fresh capture.
         refresh = capture.get("source_fact_refresh")
-        protocol = document.get("quicktime_itemlist_reader_protocol")
+        protocol_key = {
+            "quicktime_itemlist_reader_protocol_from_canonical_perl": "quicktime_itemlist_reader_protocol",
+            "quicktime_userdata_reader_protocol_from_canonical_perl": "quicktime_userdata_reader_protocol",
+        }.get(refresh.get("kind")) if isinstance(refresh, dict) else None
+        protocol = document.get(protocol_key) if protocol_key else None
         if (not isinstance(refresh, dict)
-                or refresh.get("kind") != "quicktime_itemlist_reader_protocol_from_canonical_perl"
+                or protocol_key is None
                 or refresh.get("dump_tool_sha256") != tool_sha256
                 or refresh.get("captured_dump_tool_sha256") != capture["dump_tool_sha256"]
                 or refresh.get("exiftool_version") != pinned
