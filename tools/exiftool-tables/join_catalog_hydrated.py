@@ -419,7 +419,12 @@ def quicktime_keys_observed_reads(evidence: dict | None, source: bytes | None, l
     if evidence.get("schema") != SCHEMA:
         raise ValueError("QuickTime Keys read evidence schema is unsupported")
     producer = require_mapping(evidence.get("producer"), "QuickTime Keys evidence producer")
-    if producer.get("source_dirty") is not False or producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip():
+    from verify_quicktime_keys_reader import cases, sha, canonical
+    if (producer.get("source_dirty") is not False or producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip()
+            or producer.get("runtime_input_manifest_sha256") != runtime_inputs.runtime_input_manifest(quicktime_selector.ROOT)
+            or re.fullmatch(r"[a-f0-9]{40}", str(producer.get("source_commit", ""))) is None
+            or re.fullmatch(r"[a-f0-9]{64}", str(producer.get("runtime_artifact_sha256", ""))) is None
+            or producer.get("fixture_manifest_sha256") != sha(canonical({name: sha(data) for name, data in cases().items()}))):
         raise ValueError("QuickTime Keys read evidence is not clean/pinned")
     if not isinstance(input_digests, dict):
         raise ValueError("QuickTime Keys evidence input digests are missing")
@@ -429,6 +434,13 @@ def quicktime_keys_observed_reads(evidence: dict | None, source: bytes | None, l
     if evidence.get("inputs") != expected_inputs:
         raise ValueError("QuickTime Keys evidence artifact binding differs")
     credited = validate_report(evidence, ledger)
+    identities = sorted({f"{row['group1']}:{row['tag_name']}" for row in credited})
+    metric = evidence.get("metric_c")
+    if (evidence.get("matched_occurrences") != credited or evidence.get("observed_identities") != identities
+            or not isinstance(metric, dict) or metric.get("distinct_group1_tag_identities") != len(identities)
+            or metric.get("fixture_tag_occurrences") != len({(row["fixture"], row["group1"], row["tag_name"]) for row in credited})
+            or metric.get("matched_mode_observations") != len(credited)):
+        raise ValueError("QuickTime Keys read evidence counts differ from transcripts")
     return {(row["source_identity"]["raw_key"], tuple(row["source_identity"]["variant_path"]), row["tag_name"]) for row in credited}
 
 

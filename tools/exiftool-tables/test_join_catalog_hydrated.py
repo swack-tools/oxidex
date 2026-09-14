@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 import verify_quicktime_reader as read_verifier
+import verify_quicktime_keys_reader as keys_verifier
 
 PATH = Path(__file__).with_name("join_catalog_hydrated.py")
 spec = importlib.util.spec_from_file_location("join_catalog_hydrated", PATH)
@@ -55,6 +56,41 @@ def observation_rows(fixture_name, fixture_bytes, expected, actual):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
+    def test_keys_evidence_import_replays_complete_grid_and_deduplicates_modes(self):
+        source = (PATH.parent / "fixtures/quicktime_source_13_59.json").read_bytes()
+        ledger = join.quicktime_keys_specs.compile_document(json.loads(source))
+        rust = join.quicktime_keys_specs.render_rust(ledger)
+        rows = []
+        for fixture, data in keys_verifier.cases().items():
+            spec = keys_verifier.resolved_spec(keys_verifier.fixture_identity(data), ledger)
+            expected = {} if spec is None else {"Keys:" + spec["name"]: "value"}
+            transcript = json.dumps([expected], sort_keys=True)
+            for mode in keys_verifier.MODES:
+                rows.append({"fixture": fixture, "mode": mode, "fixture_sha256": keys_verifier.sha(data),
+                             "fixture_identity": keys_verifier.fixture_identity(data), "expected": expected, "actual": expected,
+                             "native_json": transcript, "native_json_sha256": keys_verifier.sha(transcript.encode()),
+                             "oxidex_json": transcript, "oxidex_json_sha256": keys_verifier.sha(transcript.encode()), "matched": True})
+        inputs = {"source_sha256": hashlib.sha256(source).hexdigest(),
+                  "keys_ledger_sha256": hashlib.sha256(json.dumps(ledger).encode()).hexdigest(),
+                  "keys_rust_sha256": hashlib.sha256(rust.encode()).hexdigest()}
+        credited = keys_verifier.validate_report({"schema": keys_verifier.SCHEMA, "observations": rows}, ledger)
+        identities = sorted({f"{row['group1']}:{row['tag_name']}" for row in credited})
+        evidence = {"schema": keys_verifier.SCHEMA, "inputs": {"source_sha256": inputs["source_sha256"], "ledger_sha256": inputs["keys_ledger_sha256"], "rust_sha256": inputs["keys_rust_sha256"]},
+                    "producer": {"source_dirty": False, "pin": "13.59", "source_commit": "a" * 40, "runtime_artifact_sha256": "b" * 64,
+                                 "runtime_input_manifest_sha256": runtime_inputs.runtime_input_manifest(join.quicktime_selector.ROOT),
+                                 "fixture_manifest_sha256": keys_verifier.sha(keys_verifier.canonical({n: keys_verifier.sha(d) for n, d in keys_verifier.cases().items()}))},
+                    "observations": rows, "matched_occurrences": credited, "observed_identities": identities,
+                    "metric_c": {"distinct_group1_tag_identities": len(identities), "fixture_tag_occurrences": len({(x['fixture'], x['group1'], x['tag_name']) for x in credited}), "matched_mode_observations": len(credited)}}
+        observed = join.quicktime_keys_observed_reads(evidence, source, ledger, rust, inputs)
+        self.assertGreater(len(observed), 0)
+        self.assertEqual(len(observed), len({(raw, path, name) for raw, path, name in observed}))
+        for mutate in (lambda d: d["inputs"].update(ledger_sha256="0" * 64), lambda d: d["observations"].pop(),
+                       lambda d: d["observations"][0].update(native_json="[]"),
+                       lambda d: d["producer"].update(runtime_input_manifest_sha256="0" * 64),
+                       lambda d: d["metric_c"].update(fixture_tag_occurrences=0)):
+            bad = copy.deepcopy(evidence); mutate(bad)
+            with self.assertRaises(ValueError):
+                join.quicktime_keys_observed_reads(bad, source, ledger, rust, inputs)
     def test_write_observations_have_separate_operation_and_group1_counts(self):
         import write_readback_evidence
         table = "Image::ExifTool::Exif::Main"
