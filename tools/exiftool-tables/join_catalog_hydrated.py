@@ -10,12 +10,16 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import shutil
+import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
 import tempfile
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quicktime_atom_tables as quicktime_selector
+import quicktime_generated_specs as quicktime_specs
 
 SCHEMA = "oxidex_catalog_hydrated_join_v2"
 CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
@@ -147,24 +151,47 @@ def validate_provenance(catalog: dict, hydrated: dict) -> None:
             raise ValueError(f"source provenance mismatch: {key}")
 
 
-def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | None) -> dict[tuple[str, str, str, tuple[int, ...]], dict]:
-    """Index emitted QuickTime selector facts by table, key, and source hash."""
-    if itemlist_ledger is None or capabilities is None:
+def quicktime_rust_matches(expected: str, supplied: str) -> bool:
+    """Accept the replayed artifact, allowing only rustfmt-equivalent layout."""
+    if supplied == expected:
+        return True
+    rustfmt = shutil.which("rustfmt")
+    if rustfmt is None:
+        return False
+    formatted = []
+    for source in (expected, supplied):
+        result = subprocess.run([rustfmt, "--edition", "2024", "--emit", "stdout"], input=source,
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode:
+            return False
+        formatted.append(result.stdout)
+    return formatted[0] == formatted[1]
+
+
+def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | None,
+                             bounded_source: bytes | None, emitted_rust: str | None) -> dict[tuple[str, str, str, tuple[int, ...]], dict]:
+    """Replay complete bounded artifacts before indexing their QuickTime identities."""
+    if all(value is None for value in (itemlist_ledger, capabilities, bounded_source, emitted_rust)):
         return {}
-    if itemlist_ledger.get("schema") != "quicktime_generated_itemlist_specs_v1":
-        raise ValueError("unsupported QuickTime generated ledger schema")
-    bounded = read_json(Path(__file__).with_name("fixtures") / "quicktime_source_13_59.json")
-    if bounded.get("exiftool_version") != itemlist_ledger.get("source", {}).get("exiftool_version"):
-        raise ValueError("QuickTime generated ledger and bounded source versions differ")
-    if capabilities.get("exiftool_version") != bounded.get("exiftool_version"):
-        raise ValueError("QuickTime capabilities and bounded source versions differ")
+    if any(value is None for value in (itemlist_ledger, capabilities, bounded_source, emitted_rust)):
+        raise ValueError("QuickTime replay requires bounded source, ledger, capabilities, and Rust artifact together")
+    if not isinstance(bounded_source, bytes) or not isinstance(emitted_rust, str):
+        raise ValueError("QuickTime bounded source or Rust artifact is malformed")
+    bounded = json.loads(bounded_source)
+    if not isinstance(bounded, dict):
+        raise ValueError("QuickTime bounded source is malformed")
+    expected_ledger = quicktime_specs.compile_document(bounded)
+    expected_capabilities = quicktime_selector.report(bounded_source)
+    expected_rust = quicktime_specs.render_rust(expected_ledger)
+    if itemlist_ledger != expected_ledger:
+        raise ValueError("QuickTime generated ledger differs from complete bounded-source replay")
+    if capabilities != expected_capabilities:
+        raise ValueError("QuickTime capabilities differ from complete bounded-source replay")
+    if not quicktime_rust_matches(expected_rust, emitted_rust):
+        raise ValueError("QuickTime Rust artifact differs from bounded-source replay")
     tables = bounded["modules"]["QuickTime"]["tables"]
-    if not isinstance(itemlist_ledger.get("ledger"), list) or not isinstance(itemlist_ledger.get("specs"), list):
-        raise ValueError("QuickTime generated ledger rows are malformed")
-    if itemlist_ledger.get("identity_counts", {}).get("source_records") != len(itemlist_ledger["ledger"]):
-        raise ValueError("QuickTime generated ledger denominator is inconsistent")
     rows = {}
-    for record in itemlist_ledger.get("ledger", []):
+    for record in expected_ledger["ledger"]:
         identity = record.get("identity", {})
         if not isinstance(identity, dict) or identity.get("module") != "QuickTime":
             raise ValueError("QuickTime generated ledger identity is malformed")
@@ -187,9 +214,9 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
         if key in rows:
             raise ValueError("QuickTime semantic identity collision")
         rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons")}
-    if sum(value["generated"] for value in rows.values()) != itemlist_ledger["identity_counts"].get("generated"):
+    if sum(value["generated"] for value in rows.values()) != expected_ledger["identity_counts"]["generated"]:
         raise ValueError("QuickTime generated acceptance denominator is inconsistent")
-    for family in capabilities.get("families", []):
+    for family in expected_capabilities["families"]:
         for record in family.get("records", []):
             identity = record.get("identity", {})
             path = identity.get("variant_path")
@@ -200,13 +227,30 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
 
 
 def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
-          itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None) -> dict:
+          itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
+          quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
+          quicktime_input_digests: dict[str, str] | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
+    supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
+    if any(value is not None for value in supplied_quicktime):
+        if any(value is None for value in supplied_quicktime):
+            raise ValueError("QuickTime join inputs must be supplied together")
+        bounded = json.loads(quicktime_bounded_source)
+        if not isinstance(bounded, dict):
+            raise ValueError("QuickTime bounded source is malformed")
+        pin = (quicktime_selector.ROOT / ".exiftool-version").read_text().strip()
+        if catalog.get("exiftool_version") != pin or bounded.get("exiftool_version") != pin:
+            raise ValueError("QuickTime bounded source, catalog, or hydrated version differs from repository pin")
+        if quicktime_input_digests is None or set(quicktime_input_digests) != {"source_sha256", "ledger_sha256", "capabilities_sha256", "rust_sha256"}:
+            raise ValueError("QuickTime input digests are incomplete")
+        if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
+               for value in quicktime_input_digests.values()):
+            raise ValueError("QuickTime input digest is malformed")
     catalog_by_id = validate_catalog(catalog)
     validate_provenance(catalog, hydrated)
     hydrated_by_id, table_hashes = source_rows(hydrated)
-    quicktime = quicktime_implementation(itemlist_ledger, quicktime_capabilities)
+    quicktime = quicktime_implementation(*supplied_quicktime)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):
         raise ValueError("hydrated total_tag_entries differs from catalog denominator")
@@ -249,8 +293,11 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         raise ValueError("join conservation failed")
     if sum(sum(counts.values()) for counts in family_counts.values()) != len(records):
         raise ValueError("family entry conservation failed")
-    return {"schema": SCHEMA, "inputs": {"catalog_sha256": catalog_sha, "hydrated_sha256": hydrated_sha,
-            "exiftool_version": catalog["exiftool_version"]}, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
+    inputs = {"catalog_sha256": catalog_sha, "hydrated_sha256": hydrated_sha,
+              "exiftool_version": catalog["exiftool_version"]}
+    if quicktime_input_digests is not None:
+        inputs["quicktime"] = dict(sorted(quicktime_input_digests.items()))
+    return {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
             "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
             "implementation": dict(sorted(implementation_counts.items()))},
             "families": {key: dict(sorted(value.items())) for key, value in sorted(family_counts.items())}, "entries": records}
@@ -307,18 +354,28 @@ def main() -> int:
     parser.add_argument("--hydrated", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
-    parser.add_argument("--quicktime-itemlist-ledger", type=Path,
-                        default=Path(__file__).with_name("quicktime_generated_itemlist_ledger.json"))
-    parser.add_argument("--quicktime-source-capabilities", type=Path,
-                        default=Path(__file__).with_name("quicktime_source_capabilities.json"))
+    parser.add_argument("--quicktime-bounded-source", required=True, type=Path)
+    parser.add_argument("--quicktime-itemlist-ledger", required=True, type=Path)
+    parser.add_argument("--quicktime-source-capabilities", required=True, type=Path)
+    parser.add_argument("--quicktime-itemlist-rust", required=True, type=Path)
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--replace", action="store_true")
     action.add_argument("--check", action="store_true")
     args = parser.parse_args()
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
-                          args.quicktime_itemlist_ledger, args.quicktime_source_capabilities)
+                          args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
+                          args.quicktime_source_capabilities, args.quicktime_itemlist_rust)
+    quicktime_source = args.quicktime_bounded_source.read_bytes()
+    quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
+    quicktime_capabilities = args.quicktime_source_capabilities.read_bytes()
+    quicktime_rust = args.quicktime_itemlist_rust.read_text(encoding="utf-8")
+    quicktime_digests = {"source_sha256": hashlib.sha256(quicktime_source).hexdigest(),
+                         "ledger_sha256": hashlib.sha256(quicktime_ledger).hexdigest(),
+                         "capabilities_sha256": hashlib.sha256(quicktime_capabilities).hexdigest(),
+                         "rust_sha256": hashlib.sha256(quicktime_rust.encode()).hexdigest()}
     join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
-                 read_json(args.quicktime_itemlist_ledger), read_json(args.quicktime_source_capabilities))
+                 json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
+                 quicktime_digests)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():

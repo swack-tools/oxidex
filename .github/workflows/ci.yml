@@ -527,6 +527,10 @@ jobs:
           python3 tools/exiftool-tables/join_catalog_hydrated.py \
             --catalog "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" \
             --hydrated "$RUNNER_TEMP/hydrated-reader.json" \
+            --quicktime-bounded-source "tools/exiftool-tables/fixtures/quicktime_source_13_59.json" \
+            --quicktime-itemlist-ledger "tools/exiftool-tables/quicktime_generated_itemlist_ledger.json" \
+            --quicktime-source-capabilities "tools/exiftool-tables/quicktime_source_capabilities.json" \
+            --quicktime-itemlist-rust "src/parsers/quicktime/generated_itemlist_specs.rs" \
             --output "$RUNNER_TEMP/catalog-hydrated-join.json" \
             --report "$RUNNER_TEMP/catalog-hydrated-join.md"
           python3 - "$RUNNER_TEMP/catalog-hydrated-join.json" \
@@ -537,6 +541,7 @@ jobs:
           # Retain exact per-row/table hashes, catalog hash and all status fields.
           for document in (actual, expected):
               document['inputs'].pop('hydrated_sha256')
+              document['inputs'].pop('quicktime', None)
           if actual != expected:
               raise SystemExit('catalog/source ledger drift: regenerate and review')
           print('=== instrument: catalog/source ledger semantic check ===')
