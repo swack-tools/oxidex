@@ -101,6 +101,8 @@ else:
             assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
         output(flag('--output'),name);output(flag('--report'),name+'-ledger')
     elif name=='setnewvalue_addressing.py':
+        assert 'hydrated_layouts' not in json.loads(pathlib.Path(args[0]).read_text())
+        assert 'reader_only' not in json.loads(pathlib.Path(args[0]).read_text())
         dump(args[0]); flag('--rows').write_text(json.dumps({'marker':'explicit-A'})); output(flag('--report'),name+'-report')
     elif name=='setnewvalue_address_rust_codegen.py':
         dump(args[0]); assert json.loads(pathlib.Path(args[1]).read_text())['marker']=='explicit-A'
@@ -148,6 +150,8 @@ else:
         assert args == ['--dump', str(pathlib.Path(args[1]).resolve()), '--replace']
         dump(flag('--dump'))
         assert json.loads(flag('--dump').read_text())['hydrated_layouts']['selection']=='full_hydrated_catalog'
+        assert json.loads(flag('--dump').read_text())['reader_only'] is True
+        assert flag('--dump').name.startswith('tables-hydrated-reader-')
         for item in artifacts.select(producer=name.removesuffix('.py')):
             output(root/item.path,name)
     elif name=='codegen_subdirs.py':
@@ -310,7 +314,7 @@ class RegenerationShellTests(unittest.TestCase):
                 for name in self.extra_leaves():
                     self.assertEqual(names.count(name), 1, names)
                 # QuickTime owns fixed manifest paths, so it runs only with
-                # tier 1's complete writer dump and not in the reader-only
+                # tier 1's dedicated hydrated reader dump and not in the
                 # tier-2 refresh.
                 self.assertEqual(names.count('quicktime_generated_specs.py'), int(full), names)
                 self.assertEqual(names.count('quicktime_keys_specs.py'), int(full), names)
@@ -335,9 +339,11 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
                 if full:
-                    self.assertEqual(len(dump_calls), 2)
-                    self.assertEqual(dump_calls[0]['argv'][0], '--hydrated-layouts')
-                    self.assertEqual(dump_calls[1]['argv'][0], '--reader-only')
+                    self.assertEqual(len(dump_calls), 3)
+                    self.assertEqual(dump_calls[0]['argv'], [str(self.source / 'lib')])
+                    self.assertEqual(dump_calls[1]['argv'],
+                                     ['--reader-only', '--hydrated-layouts', str(self.source / 'lib')])
+                    self.assertEqual(dump_calls[2]['argv'], ['--reader-only', str(self.source / 'lib')])
                 else:
                     self.assertEqual(len(dump_calls), 1)
                     self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')

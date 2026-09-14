@@ -54,6 +54,7 @@ IFD_OUT="$(artifact_path ifd)"
 KEYED_OUT="$(artifact_path keyed)"
 SERIAL_OUT="$(artifact_path serial)"
 JSON="$CACHE/tables-$VERSION.json"
+HYDRATED_JSON="$CACHE/tables-hydrated-reader-$VERSION.json"
 EXPR_LEDGER="$(artifact_path expr-ledger)"
 VALUE_CONV_LEDGER="$(artifact_path value-ledger)"
 
@@ -67,9 +68,13 @@ fi
 [[ -d "$LIB" ]] || { echo "no ExifTool lib at $LIB" >&2; exit 1; }
 
 echo ">> extracting tag tables from Perl symbol table"
-# Capture the effective post-hydration rows as well as the legacy projection.
-# QuickTime selectors and catalog joins must not consume the earlier snapshot.
-"$PERL" "$HERE/dump_tables.pl" --hydrated-layouts "$LIB" > "$JSON"
+# Keep writer capture separate from reader hydration. Hydration attaches a
+# large native object graph; traversing it again in the writer projection is
+# unnecessary. Both captures are fresh, using this exact interpreter/library,
+# and each consumer records the digest of its own source document.
+"$PERL" "$HERE/dump_tables.pl" "$LIB" > "$JSON"
+echo ">> extracting effective hydrated reader tables"
+"$PERL" "$HERE/dump_tables.pl" --reader-only --hydrated-layouts "$LIB" > "$HYDRATED_JSON"
 
 echo ">> coverage analysis"
 python3 "$HERE/analyze.py" "$JSON"
@@ -116,12 +121,12 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
 echo
 echo ">> generating QuickTime ItemList declarations from the fresh hydrated dump"
 # Unlike the bounded fixture used by its unit tests, this invocation consumes
-# this regeneration's $JSON. Ordinary new source rows therefore enter the
+# this regeneration's $HYDRATED_JSON. Ordinary new source rows therefore enter the
 # declaration artifact without hand-editing the captured fixture.
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" \
-    --dump "$JSON" --replace
+    --dump "$HYDRATED_JSON" --replace
 OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_keys_specs.py" \
-    --dump "$JSON" --replace
+    --dump "$HYDRATED_JSON" --replace
 
 echo
 echo ">> generating inactive serial-directory facts"
