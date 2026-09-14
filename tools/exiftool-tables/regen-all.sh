@@ -43,6 +43,10 @@ if [[ "${1:-}" == "--tier2-only" ]]; then
     TIER1=0
     shift
 fi
+if [[ "$#" -ne 0 ]]; then
+    echo "usage: $0 [--tier2-only]" >&2
+    exit 2
+fi
 
 PIN_FILE="$ROOT/.exiftool-version"
 [[ -r "$PIN_FILE" ]] || { echo "no ExifTool pin at $PIN_FILE" >&2; exit 1; }
@@ -97,10 +101,21 @@ if [[ "$LIB_VERSION" != "$PIN" ]]; then
     echo "refusing: $LIB is ExifTool '${LIB_VERSION:-<unreadable>}' but $PIN_FILE pins $PIN" >&2
     exit 1
 fi
-JSON="$CACHE/tables-$PIN.json"
-echo ">> refreshing the tier-2 dump from $LIB with $PERL"
+if [[ "$TIER1" == "1" ]]; then
+    JSON="$CACHE/tables-$PIN.json"
+    DUMP_ARGS=("$LIB")
+    echo ">> refreshing the full dump from $LIB with $PERL"
+else
+    # Tier 2 consumes only the detached read projection.  Full writer facts
+    # remain required and captured by regen.sh during an ordinary full run.
+    # Keep its cache separate: a tier-2-only run must never replace a complete
+    # writer-capable dump with the reduced reader schema.
+    JSON="$CACHE/tables-reader-$PIN.json"
+    DUMP_ARGS=(--reader-only "$LIB")
+    echo ">> refreshing the reader-only tier-2 dump from $LIB with $PERL"
+fi
 mkdir -p "$CACHE"
-"$PERL" "$HERE/dump_tables.pl" "$LIB" > "$JSON"
+"$PERL" "$HERE/dump_tables.pl" "${DUMP_ARGS[@]}" > "$JSON"
 
 # Every tier-2 generator that shells out to Perl reads $OXIDEX_EXIFTOOL_LIB in
 # preference to its own default (scripts/lib/ExiftoolPin.pm), so this is the

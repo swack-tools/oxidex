@@ -168,12 +168,16 @@ class NativeWriteFacts(unittest.TestCase):
             1;
         """), encoding="utf-8")
 
-    def dump(self, extra_env: dict[str, str] | None = None):
+    def dump(self, extra_env: dict[str, str] | None = None, *, reader_only: bool = False):
         env = os.environ.copy()
         if extra_env:
             env.update(extra_env)
+        argv = [PERL, str(DUMP)]
+        if reader_only:
+            argv.append("--reader-only")
+        argv.extend([str(self.lib), "Exif", "Later"])
         result = subprocess.run(
-            [PERL, str(DUMP), str(self.lib), "Exif", "Later"],
+            argv,
             check=True, text=True, capture_output=True, env=env,
         )
         return json.loads(result.stdout)
@@ -181,6 +185,27 @@ class NativeWriteFacts(unittest.TestCase):
     @staticmethod
     def sidecar(doc, table="Main"):
         return doc["native_write_tables"]["Exif"][table]
+
+    def test_reader_only_omits_writer_facts_without_changing_reader_projection(self):
+        full = self.dump()
+        reader_only = self.dump(reader_only=True)
+        writer_keys = ("native_write_autoload", "native_write_capture_context",
+                       "native_write_tables", "native_write_helpers",
+                       "native_write_format_registry", "native_capture_context",
+                       "native_find_tag_info_warmup")
+        self.assertEqual(reader_only,
+                         {key: value for key, value in full.items() if key not in writer_keys})
+        for key in writer_keys:
+            self.assertNotIn(key, reader_only)
+            self.assertIn(key, full)
+
+    def test_reader_only_parser_refuses_unknown_option(self):
+        result = subprocess.run(
+            [PERL, str(DUMP), "--not-a-mode", str(self.lib), "Exif"],
+            text=True, capture_output=True, env=os.environ.copy(),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown dump_tables.pl option: --not-a-mode", result.stderr)
 
     def test_writer_capture_context_loads_selected_modules_without_erasing_prototype_calls(self):
         self.write_writer("return Image::ExifTool::Canon::ReadODD(@_);")

@@ -51,6 +51,7 @@ elif mode=='chosen-perl':
         assert pathlib.Path(args[0]).resolve()==lib
         print(json.dumps({'marker':'explicit-A'}))
     elif name in ('dump_tables.pl','dump_filetypes.pl'):
+        reader_only=args.pop(0)=='--reader-only' if args[0]=='--reader-only' else False
         assert pathlib.Path(args[0]).resolve()==lib
         print(json.dumps({'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}))
     elif name=='dump_af_points.pl':
@@ -246,6 +247,35 @@ class RegenerationShellTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
+    def test_tier2_only_keeps_a_complete_cache_and_writes_a_distinct_reader_cache(self):
+        self.log.unlink(missing_ok=True)
+        full_cache = self.cache / f'tables-{self.pin}.json'
+        full_bytes = b'{"complete-writer-capture":"must-survive"}\n'
+        full_cache.write_bytes(full_bytes)
+        reader_cache = self.cache / f'tables-reader-{self.pin}.json'
+        reader_cache.unlink(missing_ok=True)
+        result = subprocess.run(
+            ['bash', str(self.tools / 'regen-all.sh'), '--tier2-only'],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=45,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(full_cache.read_bytes(), full_bytes)
+        self.assertEqual(json.loads(reader_cache.read_text())['marker'], 'explicit-A')
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        dump_calls = [call for call in calls if call['tool'] == 'dump_tables.pl']
+        self.assertEqual(len(dump_calls), 1)
+        self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')
+
+    def test_regeneration_refuses_unknown_arguments_before_any_leaf_runs(self):
+        self.log.unlink(missing_ok=True)
+        result = subprocess.run(
+            ['bash', str(self.tools / 'regen-all.sh'), '--not-a-mode'],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=45,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('usage:', result.stderr)
+        self.assertFalse(self.log.exists())
+
     def extra_leaves(self):
         # This is the invocation contract, not another output-path manifest.
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
@@ -281,6 +311,13 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('fresh_jpeg_byte_order_native.py'), int(full))
                 self.assertEqual(names.count('fresh_jpeg_byte_order_codegen.py'), int(full))
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
+                dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
+                if full:
+                    self.assertTrue(dump_calls)
+                    self.assertTrue(all(c['argv'][0] != '--reader-only' for c in dump_calls))
+                else:
+                    self.assertEqual(len(dump_calls), 1)
+                    self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')
                 if full:
                     self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
                     self.assertLess(names.index('scalar_helper_codegen.py'), names.index('rustfmt'))
@@ -311,7 +348,8 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertTrue(all(c['target'] == str(self.base / 'oracle-target') for c in calls))
                 for name in (n for n in self.extra_leaves() if n.startswith('verify_')):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
-                self.assertEqual(json.loads((self.cache / f'tables-{self.pin}.json').read_text())['marker'], 'explicit-A')
+                dump_cache = self.cache / (f'tables-{self.pin}.json' if full else f'tables-reader-{self.pin}.json')
+                self.assertEqual(json.loads(dump_cache.read_text())['marker'], 'explicit-A')
                 self.assertIn('regeneration write-set PASS', result.stdout)
                 self.assertEqual('unexpected PATH Perl' in result.stderr, False)
 

@@ -352,7 +352,21 @@ sub to_text {
     return defined $d ? $d : decode('ISO-8859-1', $s);
 }
 
-my $EXIFTOOL_LIB = shift @ARGV or die "usage: $0 <exiftool-lib-dir> [module...]\n";
+# Reader-only mode is intentionally a separate invocation contract for the
+# tier-2 generators.  They consume the detached `modules` projection only;
+# omitting the write sidecar there keeps the ordinary full dump available to
+# the writer codegens without making an unused writer graph a CI requirement.
+my $READER_ONLY = 0;
+while (@ARGV && $ARGV[0] =~ /^--/) {
+    my $option = shift @ARGV;
+    if ($option eq '--reader-only' && !$READER_ONLY) {
+        $READER_ONLY = 1;
+        next;
+    }
+    die "unknown dump_tables.pl option: $option\n";
+}
+my $EXIFTOOL_LIB = shift @ARGV
+    or die "usage: $0 [--reader-only] <exiftool-lib-dir> [module...]\n";
 unshift @INC, $EXIFTOOL_LIB;
 
 my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
@@ -1345,13 +1359,15 @@ sub dump_module {
                 cv => $hash->{PROCESS_PROC}, module => $module, table => $sym,
             };
         }
-        # The write sidecar owns a raw reference to every live tag table, not
-        # only tables which currently look writable.  A later compiler must be
-        # able to tell absent controls from an unsupported or newly introduced
-        # one, and zero-row tables are source facts too.
-        $write_tables->{"${pkg}::${sym}"} = {
-            hash => $hash, module => $module, table => $sym,
-        };
+        if ($write_tables) {
+            # The write sidecar owns a raw reference to every live tag table,
+            # not only tables which currently look writable.  A later compiler
+            # must be able to tell absent controls from an unsupported or newly
+            # introduced one, and zero-row tables are source facts too.
+            $write_tables->{"${pkg}::${sym}"} = {
+                hash => $hash, module => $module, table => $sym,
+            };
+        }
 
         $tables{$sym} = {
             full_name => "${pkg}::${sym}",
@@ -1425,7 +1441,8 @@ my %write_tables;
 my %native_write_tables;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables, \%write_tables);
+    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables,
+        $READER_ONLY ? undef : \%write_tables);
     if ($r->{error}) {
         $failed++;
         warn "SKIP $m: $r->{error}";
@@ -1454,49 +1471,53 @@ for my $full_name (sort keys %processor_tables) {
     $out{$entry->{module}}{tables}{$entry->{table}}{meta}{PROCESS_PROC} = $fact;
 }
 
-# Resolve prototype-only writer declarations after every selected module is
-# loaded.  This is intentionally after the read dump was built: writer module
-# loading must not alter the existing read projection.  The sidecar gets the
-# table's stored CV, its final implementation source fact, and raw source
-# controls separately.
-$WRITE_EFFECTIVE_ET = eval {
-    my $et = Image::ExifTool->new;
-    $et->{IsWriting} = 1;
-    $et;
-};
-my $write_autoload_router = write_autoload_router_fact($EXIFTOOL_LIB_ABS);
-my $write_autoload_router_status = {
-    router => $write_autoload_router,
-    supported => write_autoload_router_supported($write_autoload_router) ? JSON::PP::true : JSON::PP::false,
-};
-my $write_autoload_status = hydrate_write_procedures(\%write_tables, $write_autoload_router_status);
-# Settle shared helper bindings before deparsing table callbacks too. B::Deparse
-# observes callee prototypes/globs: loading Writer.pl after CheckExif was captured
-# changed its call spelling despite an identical CV. All writer facts must share
-# the final loaded state. The read projection above is already detached.
-my $write_helper_status = hydrate_write_helpers();
-my $native_write_capture_context = final_write_capture_context($EXIFTOOL_LIB_ABS);
-for my $full_name (sort keys %write_tables) {
-    my $entry = $write_tables{$full_name};
-    my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash}, $EXIFTOOL_LIB_ABS);
-    $fact->{effective_write_proc} = effective_write_code_fact(
-        $entry->{hash}, 'WRITE_PROC', "${full_name}::WRITE_PROC",
-        $EXIFTOOL_LIB_ABS, $write_autoload_status);
-    $fact->{effective_check_proc} = effective_write_code_fact(
-        $entry->{hash}, 'CHECK_PROC', "${full_name}::CHECK_PROC",
-        $EXIFTOOL_LIB_ABS, $write_autoload_status);
-    $native_write_tables{$entry->{module}}{$entry->{table}} = $fact;
+my ($write_autoload_router_status, $native_write_capture_context,
+    $native_write_helpers, $native_write_format_registry,
+    $find_tag_info_warmup, $native_capture_context);
+unless ($READER_ONLY) {
+    # Resolve prototype-only writer declarations after every selected module is
+    # loaded.  This is intentionally after the read dump was built: writer module
+    # loading must not alter the existing read projection.  The sidecar gets the
+    # table's stored CV, its final implementation source fact, and raw source
+    # controls separately.
+    $WRITE_EFFECTIVE_ET = eval {
+        my $et = Image::ExifTool->new;
+        $et->{IsWriting} = 1;
+        $et;
+    };
+    my $write_autoload_router = write_autoload_router_fact($EXIFTOOL_LIB_ABS);
+    $write_autoload_router_status = {
+        router => $write_autoload_router,
+        supported => write_autoload_router_supported($write_autoload_router) ? JSON::PP::true : JSON::PP::false,
+    };
+    my $write_autoload_status = hydrate_write_procedures(\%write_tables, $write_autoload_router_status);
+    # Settle shared helper bindings before deparsing table callbacks too. B::Deparse
+    # observes callee prototypes/globs: loading Writer.pl after CheckExif was captured
+    # changed its call spelling despite an identical CV. All writer facts must share
+    # the final loaded state. The read projection above is already detached.
+    my $write_helper_status = hydrate_write_helpers();
+    $native_write_capture_context = final_write_capture_context($EXIFTOOL_LIB_ABS);
+    for my $full_name (sort keys %write_tables) {
+        my $entry = $write_tables{$full_name};
+        my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash}, $EXIFTOOL_LIB_ABS);
+        $fact->{effective_write_proc} = effective_write_code_fact(
+            $entry->{hash}, 'WRITE_PROC', "${full_name}::WRITE_PROC",
+            $EXIFTOOL_LIB_ABS, $write_autoload_status);
+        $fact->{effective_check_proc} = effective_write_code_fact(
+            $entry->{hash}, 'CHECK_PROC', "${full_name}::CHECK_PROC",
+            $EXIFTOOL_LIB_ABS, $write_autoload_status);
+        $native_write_tables{$entry->{module}}{$entry->{table}} = $fact;
+    }
+
+    # Capture helper facts in the same settled state as the table callbacks above.
+    $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+    $find_tag_info_warmup = warm_find_tag_info_closure(\%native_write_tables, $native_write_helpers);
+    $native_capture_context = native_capture_context($EXIFTOOL_LIB_ABS);
+
+    # The registry is intentionally captured after the writer helpers have settled
+    # and before JSON emission.  It has no effect on the detached read projection.
+    $native_write_format_registry = final_native_write_format_registry($EXIFTOOL_LIB_ABS);
 }
-
-# Capture helper facts in the same settled state as the table callbacks above.
-# This does not alter the read projection or route a native writer.
-my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
-my $find_tag_info_warmup = warm_find_tag_info_closure(\%native_write_tables, $native_write_helpers);
-my $native_capture_context = native_capture_context($EXIFTOOL_LIB_ABS);
-
-# The registry is intentionally captured after the writer helpers have settled
-# and before JSON emission.  It has no effect on the detached read projection.
-my $native_write_format_registry = final_native_write_format_registry($EXIFTOOL_LIB_ABS);
 
 # The child captures byte-order state without changing this table-walking
 # process. These facts prove that the final loaded CODE refs are the same ones
@@ -1513,24 +1534,27 @@ my $unsigned_reader_contract = OxiDex::NativeReaderContract::finalise_loaded_con
 # up as an invalid 0xA9 in the output.
 my $json = JSON::PP->new->utf8->canonical->pretty;
 my $final_utf8 = OxiDex::Utf8PrimitiveContract::capture_final();
-print $json->encode({
+my %document = (
     exiftool_version => $Image::ExifTool::VERSION,
     modules_ok       => $ok,
     modules_failed   => $failed,
     modules          => \%out,
-    # Facts only: no reader or writer consumes this sidecar yet.  Keeping it
-    # separate prevents write-only properties from becoming accidental read
-    # admission or changing the existing module/table/tag projection.
-    native_write_autoload => $write_autoload_router_status,
-    native_write_capture_context => $native_write_capture_context,
-    native_write_tables => \%native_write_tables,
-    native_write_helpers => $native_write_helpers,
-    native_write_format_registry => $native_write_format_registry,
-    native_capture_context => $native_capture_context,
-    native_find_tag_info_warmup => $find_tag_info_warmup,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
     native_runtime_contracts => { utf8 => {
         kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
     } },
-});
+);
+unless ($READER_ONLY) {
+    # Facts only: no reader or writer consumes this sidecar yet.  Keeping it
+    # separate prevents write-only properties from becoming accidental read
+    # admission or changing the existing module/table/tag projection.
+    $document{native_write_autoload} = $write_autoload_router_status;
+    $document{native_write_capture_context} = $native_write_capture_context;
+    $document{native_write_tables} = \%native_write_tables;
+    $document{native_write_helpers} = $native_write_helpers;
+    $document{native_write_format_registry} = $native_write_format_registry;
+    $document{native_capture_context} = $native_capture_context;
+    $document{native_find_tag_info_warmup} = $find_tag_info_warmup;
+}
+print $json->encode(\%document);
