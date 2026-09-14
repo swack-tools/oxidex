@@ -289,7 +289,7 @@ fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", def
             self.assertEqual(body.count(anchor), 1)
             writer.write_text(body.replace(anchor, '$packed .= &$proc(0);'))
             env = {key:value for key,value in os.environ.items() if key not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
-            changed_document = json.loads(subprocess.run([str(NATIVE[0]), str(dumper), str(copied)], env=env, check=True, capture_output=True, text=True).stdout)
+            changed_document = json.loads(subprocess.run([str(NATIVE[0]), str(dumper), str(copied), "Exif"], env=env, check=True, capture_output=True, text=True).stdout)
             self.assertIn('&$proc(0)', changed_document['native_write_helpers']['write_value']['__deparse'])
             with self.assertRaisesRegex(MandatoryRefused, 'numeric WriteValue dispatch'):
                 generate(capture(copied), changed_document, str(NATIVE[0]))
