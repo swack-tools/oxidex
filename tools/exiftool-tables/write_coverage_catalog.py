@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA = "oxidex_native_write_definition_catalog_v1"
+SCHEMA = "oxidex_native_write_definition_catalog_v2"
 UNEXERCISED = "unexercised_no_validated_operation"
 
 
@@ -99,18 +99,23 @@ def _name_hint(entry: Mapping[str, Any]) -> Any:
     return value if state == "present" and isinstance(value, str) else None
 
 
-def _alternatives(entry: Any, path: tuple[int, ...] = ()) -> list[tuple[tuple[int, ...], Any]]:
-    """Flatten every array alternative while retaining its complete source shape."""
+def _alternatives(entry: Any, path: tuple[int, ...] = ()) -> list[tuple[tuple[int, ...], Any, str]]:
+    """Flatten arrays; an empty or malformed array remains an explicit record."""
     if isinstance(entry, Mapping) and entry.get("entry_kind") == "ARRAY" and isinstance(entry.get("alternatives"), list):
+        if not entry["alternatives"]:
+            return [(path, entry, "unresolved_empty_alternatives")]
         result: list[tuple[tuple[int, ...], Any]] = []
         for index, child in enumerate(entry["alternatives"]):
             result.extend(_alternatives(child, path + (index,)))
         return result
-    return [(path, entry)]
+    if isinstance(entry, Mapping) and entry.get("entry_kind") == "ARRAY":
+        return [(path, entry, "unresolved_malformed_alternatives")]
+    return [(path, entry, "resolved_source_variant")]
 
 
 def _row_record(module: str, table_name: str, table: Mapping[str, Any], raw_id: str,
-                source_row: Any, variant_path: tuple[int, ...], variant: Any) -> dict[str, Any]:
+                table_context_ref: str, source_entry_ref: str, variant_path: tuple[int, ...],
+                variant: Any, variant_state: str) -> dict[str, Any]:
     entry = variant if isinstance(variant, Mapping) else {}
     return {
         "identity": {
@@ -120,23 +125,19 @@ def _row_record(module: str, table_name: str, table: Mapping[str, Any], raw_id: 
             "raw_id": raw_id,
             "variant_path": list(variant_path),
             "tag_name_hint": _name_hint(entry),
+            "table_context_ref": table_context_ref,
+            "source_entry_ref": source_entry_ref,
+            "source_variant_sha256": _canonical_sha256(variant),
+            "source_variant_state": variant_state,
         },
         "native_definition": {
             "effective_writable": _effective_writable(entry),
             "effective_write_directory": _write_directory(entry),
-            "table_write_controls": table.get("write_controls"),
             "row_write_controls": entry.get("write_controls"),
-            "table_unknown_controls": table.get("unknown_table_properties"),
             "row_unknown_controls": entry.get("unknown_properties"),
             "effective_resolution": entry.get("effective_resolution"),
             "effective_table_binding": entry.get("effective_table_binding"),
-            "effective_write_proc": table.get("effective_write_proc"),
-            "effective_check_proc": table.get("effective_check_proc"),
         },
-        # This keeps unhandled entry kinds and conditional source declarations
-        # available to a future runner instead of filtering them out now.
-        "source_entry": source_row,
-        "source_variant": variant,
         "operation_coverage": {
             "state": UNEXERCISED,
             "carrier_route": "not_inferred_from_definition_inventory",
@@ -145,11 +146,64 @@ def _row_record(module: str, table_name: str, table: Mapping[str, Any], raw_id: 
     }
 
 
+def _table_context(context_id: str, module: str, table_name: str, table: Mapping[str, Any]) -> dict[str, Any]:
+    """Store the full shared table context once, excluding only its row map."""
+    return {
+        "id": context_id,
+        "module": module,
+        "table": table_name,
+        "full_name": table.get("full_name"),
+        "table_properties": table.get("table_properties"),
+        "write_controls": table.get("write_controls"),
+        "unknown_table_properties": table.get("unknown_table_properties"),
+        "effective_write_proc": table.get("effective_write_proc"),
+        "effective_check_proc": table.get("effective_check_proc"),
+        "effective_row_resolver": table.get("effective_row_resolver"),
+        "effective_row_context": table.get("effective_row_context"),
+    }
+
+
+def resolve_source_variant(catalog: Mapping[str, Any], record: Mapping[str, Any]) -> Any:
+    """Return a record's retained source branch, for consumers and regression tests."""
+    identity = _mapping(record.get("identity"), "record.identity")
+    source_id = identity.get("source_entry_ref")
+    entries = _mapping(catalog.get("source_entries"), "catalog.source_entries")
+    source = _mapping(entries.get(source_id), "catalog source entry")
+    value = source.get("entry")
+    for index in identity.get("variant_path", []):
+        node = _mapping(value, "source variant array")
+        alternatives = node.get("alternatives")
+        if node.get("entry_kind") != "ARRAY" or not isinstance(alternatives, list) or not isinstance(index, int):
+            raise CatalogError("record variant path cannot be resolved from retained source entry")
+        value = alternatives[index]
+    return value
+
+
+def _root_fact(document: Mapping[str, Any], name: str) -> dict[str, Any]:
+    return {"present": name in document, "value": document.get(name)} if name in document else {"present": False}
+
+
+def _global_capture_completeness(document: Mapping[str, Any]) -> str:
+    failed = document.get("modules_failed")
+    load_errors = document.get("load_errors")
+    if isinstance(failed, int) and failed > 0:
+        return "partial_modules_failed"
+    if isinstance(load_errors, list) and load_errors:
+        return "partial_load_errors"
+    if not isinstance(document.get("modules"), Mapping) or not isinstance(document.get("modules_ok"), int):
+        return "unknown_module_capture"
+    # ``modules_ok`` only says the supplied module selection loaded.  A narrow
+    # Exif-only capture must never masquerade as a complete all-module capture.
+    return "no_reported_module_failures_scope_unknown"
+
+
 def build_catalog(document: Mapping[str, Any], *, dump_sha256: str) -> dict[str, Any]:
     """Compile all native-write rows into deterministic, unexercised records."""
     document = _mapping(document, "dump document")
     tables = _mapping(document.get("native_write_tables"), "native_write_tables")
     records: list[dict[str, Any]] = []
+    contexts: dict[str, dict[str, Any]] = {}
+    source_entries: dict[str, dict[str, Any]] = {}
     table_count = 0
     raw_row_count = 0
 
@@ -159,15 +213,27 @@ def build_catalog(document: Mapping[str, Any], *, dump_sha256: str) -> dict[str,
             table = _mapping(table_map[table_name], f"native_write_tables[{module!r}][{table_name!r}]")
             rows = _mapping(table.get("rows"), f"{module}::{table_name}.rows")
             table_count += 1
+            table_context_ref = f"table-{table_count:05d}"
+            contexts[table_context_ref] = _table_context(table_context_ref, module, table_name, table)
             for raw_id in sorted(rows):
                 raw_row_count += 1
                 source_row = rows[raw_id]
-                for path, variant in _alternatives(source_row):
-                    records.append(_row_record(module, table_name, table, raw_id, source_row, path, variant))
+                source_entry_ref = f"row-{raw_row_count:07d}"
+                source_entries[source_entry_ref] = {
+                    "id": source_entry_ref,
+                    "module": module,
+                    "table": table_name,
+                    "raw_id": raw_id,
+                    "entry_sha256": _canonical_sha256(source_row),
+                    "entry": source_row,
+                }
+                for path, variant, variant_state in _alternatives(source_row):
+                    records.append(_row_record(module, table_name, table, raw_id, table_context_ref,
+                                               source_entry_ref, path, variant, variant_state))
 
     records.sort(key=lambda item: (
         item["identity"]["module"], item["identity"]["table"], item["identity"]["raw_id"],
-        item["identity"]["variant_path"], json.dumps(item["source_variant"], sort_keys=True, separators=(",", ":")),
+        item["identity"]["variant_path"], item["identity"]["source_variant_sha256"],
     ))
     writable_counts = Counter(record["native_definition"]["effective_writable"]["state"] for record in records)
     directory_counts = Counter(record["native_definition"]["effective_write_directory"]["state"] for record in records)
@@ -185,11 +251,16 @@ def build_catalog(document: Mapping[str, Any], *, dump_sha256: str) -> dict[str,
             "exiftool_version": document.get("exiftool_version"),
             "capture_completeness": {
                 "native_write_tables": "present",
-                "native_write_capture_context": capture_status,
-                "native_write_format_registry": registry_status,
+                "global_module_capture": _global_capture_completeness(document),
+                "native_writer_context": capture_status,
+                "native_tiff_type_registry": registry_status,
             },
-            "native_write_capture_context": capture,
-            "native_write_format_registry": registry,
+            "root_module_facts": {name: _root_fact(document, name) for name in
+                                  ("modules", "modules_ok", "modules_failed", "load_errors")},
+            "native_writer_context": capture,
+            # This is Exif.pm's TIFF field-type registry, never a file-format
+            # or carrier-reachability assertion.
+            "native_tiff_type_registry": registry,
         },
         "metrics": {
             "native_definition_tables": table_count,
@@ -201,6 +272,8 @@ def build_catalog(document: Mapping[str, Any], *, dump_sha256: str) -> dict[str,
             "coverage_percentage": None,
             "coverage_reason": "No validated OxiDex/native write observations are present in a source definition catalog.",
         },
+        "table_contexts": contexts,
+        "source_entries": source_entries,
         "records": records,
     }
 
