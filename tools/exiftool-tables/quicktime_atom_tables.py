@@ -24,7 +24,7 @@ FORMATS = {None, "string", "int8u", "int16u", "int32u", "int64u"}
 NON_READING_PROPERTIES = {
     "Name", "Description", "Notes", "Groups", "_shorthand", "Avoid",
     "Writable", "WriteGroup", "Preferred", "SeparateTable", "ValueConvInv",
-    "PrintConvInv", "Format", "PrintConv",
+    "PrintConvInv", "Format", "PrintConv", "PrintConvColumns",
 }
 
 
@@ -86,6 +86,14 @@ def inspect_row(table_name, table, raw_key, path, row, structural_reason):
                            if key != "PrintConvColumns")
         else:
             reasons.append("unsupported_source_property:" + prop)
+    # This captured field controls catalog enum-table presentation, not reads.
+    # Its old uncaptured-key form is handled above; validate the newly exposed
+    # scalar so an unsupported replacement is still visible in the ledger.
+    if "PrintConvColumns" in row:
+        columns = row["PrintConvColumns"]
+        if not ((type(columns) is int and columns > 0)
+                or (isinstance(columns, str) and re.fullmatch(r"[1-9][0-9]*", columns))):
+            reasons.append("unsupported_display_column_count")
     pc = row.get("PrintConv")
     enum = None
     if pc is not None:

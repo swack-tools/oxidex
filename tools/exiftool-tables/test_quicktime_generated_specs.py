@@ -68,6 +68,20 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertFalse(rejected['generated'])
         self.assertIn('uncaptured_source_property:FutureReaderRule', rejected['reasons'])
 
+    def test_captured_catalog_columns_preserve_reading_and_reject_malformed_facts(self):
+        document = fresh_dump()
+        source = document['modules']['QuickTime']['tables']['ItemList']['tags']['plID']
+        for columns in (2, "2", "5"):
+            source['PrintConvColumns'] = columns
+            result = specs.compile_document(document)
+            self.assertTrue(any(row['name'] == 'AlbumID' for row in result['specs']))
+        for columns in (True, 0, "two", {"__perl": "CODE"}):
+            source['PrintConvColumns'] = columns
+            result = specs.compile_document(document)
+            rejected = next(row for row in result['ledger'] if row['identity']['raw_key'] == 'plID')
+            self.assertFalse(rejected['generated'])
+            self.assertIn('unsupported_display_column_count', rejected['reasons'])
+
     def test_literal_source_group_override_generates_and_dynamic_group_refuses(self):
         document = fresh_dump()
         source = document['modules']['QuickTime']['tables']['ItemList']['tags']['plID']

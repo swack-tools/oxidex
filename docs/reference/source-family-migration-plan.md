@@ -125,14 +125,19 @@ and committed/merged state. Keep every denominator and fixture/corpus scope visi
   corpus comparison changed matched occurrences from 622 to 620, VALUE from
   2 to 1, MISSING from 234 to 240, and EXTRA from 114 to 86. Those results are
   not an aggregate conformance pass.
-- The permanent source join exists, but its generated-artifact and observed
-  read/write joins remain incomplete. A draft QuickTime implementation join
-  still needs complete input validation and reconciliation of hydrated source
-  wrappers with selector inputs before publication. Other protocol families
-  must also be joined; unobserved entries must remain visibly unobserved.
+- The permanent source join now authenticates QuickTime ledger, capabilities
+  and emitted Rust by complete generator replay, retaining all four input hashes.
+  Of 330 catalog entries in ItemList/UserData/Keys, 92 join generated reader
+  declarations and 211 join explicit refusals; 27 still need source-shape
+  reconciliation. Across the full catalog, 33,184 entries remain unconsumed by
+  this implementation join. Every read/write observation remains explicitly
+  unobserved until fixture evidence is attached. These counts measure accounting,
+  not an increase in parsing coverage.
 - Writing fixes, numeric directory selection, Nikon generator recovery and
-  upgrade-rehearsal fixes are consolidated in #779. Full regeneration currently
-  fails at the Nikon encrypted-callback contract. It also exposed a separate
+  upgrade-rehearsal fixes are consolidated in #779. The last full regeneration
+  stopped at the Nikon encrypted-callback contract. Its repair is now integrated:
+  an actual canonical Nikon reader dump generates 91 tables and 2,317 rows, with
+  17 focused tests passing; the full combined regeneration still needs rerunning. It also exposed a separate
   native address-probe load-context mismatch; the repaired probe emits 191
   address rows and 1,261 candidates against the fresh dump, with six native
   probe tests passing. The focused integrated checks now pass: 219 writer tests

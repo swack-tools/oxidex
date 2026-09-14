@@ -741,11 +741,11 @@
     },
     {
       "generated": true,
-      "generated_spec_sha256": "3e9e7e7539a8e1f994ec4552018ba2b8324c57a3ae64c806d3c1eb31072316ad",
+      "generated_spec_sha256": "7ca3907839c58ba376d73bcea0780c6704a101219348d7fc14fa0d36464126c1",
       "identity": {
         "module": "QuickTime",
         "raw_key": "stik",
-        "source_sha256": "ce30412579ebb939e8ca7a94436c6e59a50af0b45091df9ff1e79cda190495ed",
+        "source_sha256": "6243120734182a58da35027b5fa8dce37449fa397e2d7e7e9e8d3da1b5614473",
         "table": "ItemList",
         "variant_path": []
       },
@@ -5477,7 +5477,7 @@
   "source": {
     "exiftool_version": "13.59",
     "table_sha256": {
-      "ItemList": "cbf711d4902c540c30f958df3c25f9a98677e1454855ef0afb7d48180d746d77",
+      "ItemList": "c5ac0eee4f0b50de161061210968db3d4b07cd850f63c8153733254679faa5ea",
       "Keys": "aaee996cd5d419249f363097c97c58d75712868290510d02d5332a217aa3b912",
       "UserData": "8d6d85aefae27a60f52a5e87c9a49b5edd0cc122041671c77403b23833be97a8"
     }
@@ -17691,7 +17691,7 @@
       "source_identity": {
         "module": "QuickTime",
         "raw_key": "stik",
-        "source_sha256": "ce30412579ebb939e8ca7a94436c6e59a50af0b45091df9ff1e79cda190495ed",
+        "source_sha256": "6243120734182a58da35027b5fa8dce37449fa397e2d7e7e9e8d3da1b5614473",
         "table": "ItemList",
         "variant_path": []
       }

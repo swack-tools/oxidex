@@ -15,7 +15,7 @@
         "unsupported_source_property:ValueConv": 6
       },
       "refused_records": 13,
-      "source_table_sha256": "cbf711d4902c540c30f958df3c25f9a98677e1454855ef0afb7d48180d746d77",
+      "source_table_sha256": "c5ac0eee4f0b50de161061210968db3d4b07cd850f63c8153733254679faa5ea",
       "table": "ItemList",
       "variant_records": 105
     },
@@ -68,11 +68,11 @@
   "scope": "source capability candidates; no generated runtime or observed support claimed",
   "source": {
     "capture_scope": {
-      "dump_tool_sha256": "a6efcbcbe12b13d5651a7c6d84f02cffa843f8e1afafe59c874c5cb0bc2b1d28",
-      "full_dump_sha256": "716f6a295e83711c60ef672762734c9e6034324b8a9f4f03289856713c86185e",
+      "dump_tool_sha256": "2495cf251b2ef614a4b7fa0f7a69b7c0cd5f77b62f4905df6adc8a51fe41f829",
+      "full_dump_sha256": "7f528a2998f963422a90ee25df3a80b4f615815a615aca018059999d22aecda4",
       "kind": "verbatim selected tables from hydrated dump",
       "perl_version": "5.38.2",
-      "source_commit": "b8414c60d9442cc5682c7fee8841c20725cf9ad0",
+      "source_commit": "9a14b40efdb453d20ada85e0779702262311ea73",
       "source_module_table_count": 87,
       "tables": [
         "QuickTime::ItemList",
@@ -80,7 +80,7 @@
         "QuickTime::Keys"
       ]
     },
-    "dump_sha256": "e97cba4210265925bcee1a6813c9ec9fdba752dd1acb0f19844353f1aa3d91ae",
-    "selector_sha256": "5db9156b29d0ea1ccd8c128f4a8b8a600a30678cfac0153be7480fac3dea636c"
+    "dump_sha256": "94e8e016c55a20e90d36ac19d5255ab91ae28ff1e48e6114a2d4a6483756bf9b",
+    "selector_sha256": "a94a5c470dfd49ec70ea4b4db481610c70ffee2a848da5c0cb973792286abd8d"
   }
 }

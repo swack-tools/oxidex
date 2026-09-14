@@ -147,3 +147,17 @@ do 18 native mandatory-default tests and six native address-probe tests using
 Perl 5.38.2 and ExifTool 13.59. Full regeneration still stops at the Nikon
 encrypted-callback contract; these focused checks do not replace the combined
 workspace/native matrix gate or resolve its pending review evidence.
+
+### Authenticated implementation accounting
+
+The fresh full capture and catalog join conserve all 33,487 entries. Complete
+QuickTime compiler/selector replay binds the bounded source, declaration ledger,
+capability ledger and emitted Rust. The joined ledger classifies 92 catalog entries
+as generated reader declarations, 211 as explicit reader refusals and 33,184 as
+not yet consumed by this implementation join. All observed read/write fields remain
+unobserved. Fourteen join tests and 33 QuickTime baseline/generator tests pass.
+The generated QuickTime Rust is byte-identical to the previous artifact.
+
+The Nikon repair is integrated and generates 91 tables/2,317 rows from an actual
+canonical native reader capture; 17 focused tests pass. Full regeneration is the
+next check. No broader parity or completed review gate is claimed here.

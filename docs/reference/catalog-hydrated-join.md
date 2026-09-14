@@ -1,10 +1,10 @@
 # Catalog-to-hydrated source join
 
-This report is source inventory only. It makes no generated reader/writer or observed behavior claim.
+This report records exact source and generated-declaration identities. Generated declarations remain unobserved until immutable fixture evidence joins them.
 
 - ExifTool: `13.59`
 - Catalog SHA-256: `a1e4db23b9da36a63cb9aad7e3cbd4158d43cafc374bf99b5dabc4f76d205e05`
-- Hydrated SHA-256: `b5260651673610c61040343a107a62fe1ea18ec1803a192a946fb09b696adc4d`
+- Hydrated SHA-256: `7f528a2998f963422a90ee25df3a80b4f615815a615aca018059999d22aecda4`
 
 | Measurement | Count |
 | --- | ---: |
@@ -12,6 +12,14 @@ This report is source inventory only. It makes no generated reader/writer or obs
 | Hydrated source coordinates | 35886 |
 | Preserved joined records | 33487 |
 | `source_row_joined` | 33487 |
+
+## Source-derived implementation
+
+| Classification | Count |
+| --- | ---: |
+| `blocked_generated_reader_refusal` | 211 |
+| `generated_reader_declaration_unobserved` | 92 |
+| `source_row_not_yet_consumed` | 33184 |
 
 A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Each matched row records canonical row and table hashes for later implementation evidence.
 
