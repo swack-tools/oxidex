@@ -28,8 +28,13 @@ name, group, implicit/string/unsigned-width source format and safe enum operands
 including the existing 14 ItemList refusals plus distinct UserData and Keys
 protocol refusals. The generator requires the captured ItemList processor
 contract; a missing or changed processor makes every ItemList row explicitly
-refused. These declarations have no Rust runtime consumer and are not reading
-or writing coverage.
+refused. Its fresh-regeneration path consumes `regen.sh`'s hydrated full dump,
+not this bounded fixture, so a newly declared eligible ItemList row generates
+without an edited snapshot. The fixture remains the deterministic test input.
+The whole `QuickTime.pm` source hash is recorded as provenance only; eligibility
+checks the deparsed `ProcessMOV` behavior and ItemList protocol metadata. These
+declarations have no Rust runtime consumer and are not reading or writing
+coverage.
 
 ## Reproduce and check staleness
 

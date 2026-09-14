@@ -23,9 +23,10 @@ EXPECTED_PROCESSOR = {
     "__name": "Image::ExifTool::QuickTime::ProcessMOV",
     "__perl": "CODE",
     "__opaque": True,
-    "source_file": "Image/ExifTool/QuickTime.pm",
-    "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e",
 }
+EXPECTED_PROCESSOR_DEPARSE_SHA256 = "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be8bb9eaa81fb47d43c5005"
+EXPECTED_TABLE_CONTRACT = {"FORMAT": "string", "GROUPS.1": "ItemList",
+                           "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo"}
 
 
 def source_format(value):
@@ -46,12 +47,25 @@ def processor_reason(document):
         return "missing_or_changed_processor_contract:PROCESS_PROC"
     if any(processor.get(key) != value for key, value in EXPECTED_PROCESSOR.items()):
         return "missing_or_changed_processor_contract:PROCESS_PROC"
+    body = processor.get("__deparse")
+    if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != EXPECTED_PROCESSOR_DEPARSE_SHA256:
+        return "missing_or_changed_processor_contract:PROCESS_PROC"
+    meta = document["modules"]["QuickTime"]["tables"]["ItemList"].get("meta", {})
+    if (meta.get("FORMAT") != EXPECTED_TABLE_CONTRACT["FORMAT"]
+            or meta.get("GROUPS", {}).get("1") != EXPECTED_TABLE_CONTRACT["GROUPS.1"]
+            or meta.get("LANG_INFO", {}).get("__name") != EXPECTED_TABLE_CONTRACT["LANG_INFO.__name"]):
+        return "missing_or_changed_processor_contract:ItemList_metadata"
     return None
 
 
-def compile_document(document, *, raw=None):
-    source = raw if raw is not None else selector.serialized(document).encode()
-    base = selector.report(source)
+def compile_document(document):
+    pin = (ROOT / ".exiftool-version").read_text().strip()
+    if document.get("exiftool_version") != pin:
+        raise ValueError("fresh source dump differs from repository pin")
+    # Do not call selector.report(): its capture provenance assertions belong to
+    # the bounded baseline snapshot, whereas regeneration consumes a full fresh
+    # hydrated dump. inventory() is the shared pure source-row selection.
+    base = selector.inventory(document)
     blocked_protocol = processor_reason(document)
     specs = []
     ledger = []
@@ -85,8 +99,15 @@ def compile_document(document, *, raw=None):
     return {
         "schema": "quicktime_generated_itemlist_specs_v1",
         "scope": "generated declarations only; no runtime connection or observed support claimed",
-        "source": base["source"],
-        "protocol": {"table": "ItemList", "processor_contract": EXPECTED_PROCESSOR,
+        "source": {"exiftool_version": base["exiftool_version"],
+                   "table_sha256": {family["table"]: family["source_table_sha256"]
+                                    for family in base["families"]}},
+        "protocol": {"table": "ItemList", "processor_contract": {
+            **EXPECTED_PROCESSOR, "__deparse_sha256": EXPECTED_PROCESSOR_DEPARSE_SHA256,
+            **EXPECTED_TABLE_CONTRACT},
+                     "processor_provenance": {
+                         "source_file": document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"]["PROCESS_PROC"].get("source_file"),
+                         "source_sha256": document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"]["PROCESS_PROC"].get("source_sha256")},
                      "eligible": blocked_protocol is None,
                      "reason": blocked_protocol},
         "specs": specs,
@@ -168,7 +189,8 @@ def serialized(result):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+    parser.add_argument("--dump", type=Path, default=SNAPSHOT,
+                        help="full fresh dump for regeneration, or bounded fixture for checks")
     parser.add_argument("--ledger", type=Path, default=LEDGER)
     parser.add_argument("--rust", type=Path, default=RUST)
     parser.add_argument("--check", action="store_true")
@@ -176,8 +198,17 @@ def main():
     args = parser.parse_args()
     if args.check and args.replace:
         parser.error("--check and --replace are mutually exclusive")
-    raw = args.snapshot.read_bytes()
-    result = compile_document(json.loads(raw), raw=raw)
+    try:
+        selector.validate_outputs(args.dump, [args.ledger, args.rust],
+                                  replace=args.replace, check=args.check)
+    except ValueError as exc:
+        parser.error(str(exc))
+    state = selector.instrument.git_state(ROOT)
+    overridden = selector.instrument.refuse_if_dirty(state, "quicktime_generated_specs.py")
+    selector.instrument.print_header(
+        tool="quicktime_generated_specs.py", git=state, dirty_overridden=overridden,
+        extra=["scope: generated declarations only; no runtime support claim", f"source: {args.dump}"])
+    result = compile_document(json.loads(args.dump.read_text()))
     outputs = [(args.ledger, serialized(result)), (args.rust, render_rust(result))]
     if args.check:
         for path, contents in outputs:
@@ -187,8 +218,8 @@ def main():
         for path, contents in outputs:
             if path.exists() and not args.replace:
                 parser.error(f"output exists: {path}; use --replace")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents)
+            with path.open("w" if args.replace else "x") as output:
+                output.write(contents)
 
 
 if __name__ == "__main__":

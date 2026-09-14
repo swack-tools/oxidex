@@ -87,11 +87,12 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
-echo ">> checking bounded QuickTime generated ItemList declarations"
-# This source snapshot is deliberately bounded and independently captured.  It
-# is not regenerated from the broad dump above; check it here so a full regen
-# cannot silently carry a stale declaration/omission pair.
-OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" --check
+echo ">> generating QuickTime ItemList declarations from the fresh hydrated dump"
+# Unlike the bounded fixture used by its unit tests, this invocation consumes
+# this regeneration's $JSON. Ordinary new source rows therefore enter the
+# declaration artifact without hand-editing the captured fixture.
+OXIDEX_ALLOW_DIRTY_TREE=1 python3 "$HERE/quicktime_generated_specs.py" \
+    --dump "$JSON" --replace
 
 echo
 echo ">> generating inactive serial-directory facts"

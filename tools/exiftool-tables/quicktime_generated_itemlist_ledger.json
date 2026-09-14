@@ -5376,9 +5376,15 @@
   "protocol": {
     "eligible": true,
     "processor_contract": {
+      "FORMAT": "string",
+      "GROUPS.1": "ItemList",
+      "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo",
+      "__deparse_sha256": "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be8bb9eaa81fb47d43c5005",
       "__name": "Image::ExifTool::QuickTime::ProcessMOV",
       "__opaque": true,
-      "__perl": "CODE",
+      "__perl": "CODE"
+    },
+    "processor_provenance": {
       "source_file": "Image/ExifTool/QuickTime.pm",
       "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e"
     },
@@ -5388,21 +5394,12 @@
   "schema": "quicktime_generated_itemlist_specs_v1",
   "scope": "generated declarations only; no runtime connection or observed support claimed",
   "source": {
-    "capture_scope": {
-      "dump_tool_sha256": "976d227873ed625baa3bafec03c486694246cae6eb4009ac32041559b82ff533",
-      "full_dump_sha256": "05c13f3ee804838a6d8db5b2f8d64156883dd98afe5a5b0983b6870a8a561556",
-      "kind": "verbatim selected tables from hydrated dump",
-      "perl_version": "5.38.2",
-      "source_commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
-      "source_module_table_count": 87,
-      "tables": [
-        "QuickTime::ItemList",
-        "QuickTime::UserData",
-        "QuickTime::Keys"
-      ]
-    },
-    "dump_sha256": "e89388d385985db660fc084d409c25d4712678ff62c770e91e1aaa978ecd2e15",
-    "selector_sha256": "9019edae77672d45d20a78c612a028a21a91a99c1076576a93d0e937c2ad9bed"
+    "exiftool_version": "13.59",
+    "table_sha256": {
+      "ItemList": "cbf711d4902c540c30f958df3c25f9a98677e1454855ef0afb7d48180d746d77",
+      "Keys": "aaee996cd5d419249f363097c97c58d75712868290510d02d5332a217aa3b912",
+      "UserData": "8d6d85aefae27a60f52a5e87c9a49b5edd0cc122041671c77403b23833be97a8"
+    }
   },
   "specs": [
     {
