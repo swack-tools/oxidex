@@ -231,8 +231,9 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
         self.assertEqual(generator.rs("a\nb\tc\rd\x01"), r'"a\u{a}b\u{9}c\u{d}d\u{1}"')
 
     def test_perl_only_regexes_refuse_before_emission(self):
-        self.assertEqual(generator.rust_regex(r"^NIKON (?:D[0-9]+)\b"), r"^NIKON (?:D[0-9]+)\b")
-        for pattern in (r"(?=D5)", r"(D5)\1", r"(?P<camera>D5)", r"D5\K"):
+        self.assertEqual(generator.rust_regex(r"^NIKON (?:D[0-9])?\b"), r"^NIKON (?:D[0-9])?\b")
+        for pattern in (r"(?=D5)", r"(D5)\1", r"(?P<camera>D5)", r"D5\K",
+                        r"\X", r"\R", r"\o{123}", r"\j", r"D{2,}", r"[a[b]]", r"[a&&b]"):
             with self.subTest(pattern=pattern), self.assertRaises(generator.Unsupported):
                 generator.rust_regex(pattern)
         data = fixture()

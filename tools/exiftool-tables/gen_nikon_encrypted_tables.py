@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse, hashlib, json, re, sys
 from pathlib import Path
 
+import conds
+
 
 class Unsupported(ValueError): pass
 
@@ -129,37 +131,33 @@ def rs(v):
  return '"'+''.join(escaped)+'"'
 
 def rust_regex(pattern):
- """Admit only the Perl regex subset consumed by Rust's ``regex`` crate.
+ """Admit the shared, structurally validated Perl/Rust regex subset.
 
- The runtime fails closed if compilation fails, but that is too late for a
- generator: a new Perl-only construct would silently make its tag unreachable.
- Keep this grammar deliberately narrower than either engine and refuse every
- unsupported assertion, backreference, named construct, and control byte.
+ ``conds`` owns the AST grammar used by the runtime condition generator.  It
+ rejects general repetition, lookarounds, backreferences and unrecognised
+ escapes before a Rust literal exists.  Rust-only character-class set syntax
+ has different Perl meaning, so Nikon additionally refuses it here.
  """
  if not isinstance(pattern,str) or any(ord(char)<0x20 or 0xd800<=ord(char)<=0xdfff for char in pattern):
   fail(f'invalid Rust regex: {pattern!r}')
- index=0; in_class=False; depth=0
+ if re.search(r'\(\?(?:P<|<)',pattern):
+  fail(f'capture or lookbehind regex group is outside the generated condition model: {pattern!r}')
+ index=0; in_class=False
  while index<len(pattern):
   char=pattern[index]
   if char=='\\':
    if index+1>=len(pattern): fail(f'invalid Rust regex escape: {pattern!r}')
-   escaped=pattern[index+1]
-   if escaped.isdigit() or escaped in 'gkCKQEN':
-    fail(f'Perl-only regex escape: {pattern!r}')
    index+=2; continue
   if char=='[' and not in_class: in_class=True
+  elif in_class and (char=='[' or pattern.startswith('&&',index) or pattern.startswith('--',index) or pattern.startswith('~~',index)):
+   fail(f'Rust-only character-class set syntax: {pattern!r}')
   elif char==']' and in_class: in_class=False
-  elif not in_class and char=='(':
-   if pattern.startswith('(?', index) and not pattern.startswith('(?:', index):
-    fail(f'Perl-only regex group: {pattern!r}')
-   depth+=1
-  elif not in_class and char==')':
-   depth-=1
-   if depth<0: fail(f'unbalanced Rust regex: {pattern!r}')
   index+=1
- if in_class or depth:
-  fail(f'unbalanced Rust regex: {pattern!r}')
- return pattern
+ if in_class: fail(f'unbalanced Rust regex: {pattern!r}')
+ try:
+  return conds._validate_regex_pattern(pattern,ascii_source_only=True)
+ except conds.CondCompileError as error:
+  fail(f'regex outside shared Rust-compatible grammar: {pattern!r}: {error}')
 def code(v):
  base={'__perl','__opaque','__name','__deparse'}
  provenance={'resolved','source_file','source_sha256'}
