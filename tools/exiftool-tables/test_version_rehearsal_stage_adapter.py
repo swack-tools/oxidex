@@ -64,6 +64,7 @@ class AdapterTests(unittest.TestCase):
         bash, env = next(row for row in self.seen if row[0][0] == "bash")
         self.assertEqual(Path(bash[-1]).resolve(), self.checkout.resolve() / "tools/exiftool-tables/regen-all.sh")
         self.assertEqual(Path(env["EXIFTOOL_PERL"]).resolve(), self.perl.resolve()); self.assertEqual(Path(env["OXIDEX_EXIFTOOL_LIB"]).resolve(), (self.native / "lib").resolve()); self.assertEqual(Path(env["OXIDEX_ET_CACHE"]).resolve(), (self.target / "exiftool-cache").resolve()); self.assertEqual(Path(env["CARGO_TARGET_DIR"]).resolve(), self.target.resolve())
+        self.assertEqual(env["OXIDEX_ALLOW_DIRTY_TREE"], "1")
         self.assertEqual(len(result["generated_artifacts"]), len(artifacts.ARTIFACTS))
 
     def test_build_and_actual_read_bind_binary_fixture_and_zero_mismatches(self):

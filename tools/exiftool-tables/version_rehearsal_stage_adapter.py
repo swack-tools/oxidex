@@ -221,6 +221,11 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
     if _git(checkout, ["diff", "--name-only"], run) not in {"", ".exiftool-version"}:
         raise Refused("only the owned checkout pin may change before generation")
     env = _environment(perl, native_lib, target)
+    # Selection changes only this owned checkout's pin before the sanctioned
+    # generator runs.  Its Tier 1 expression verification invokes the shared
+    # measurement guard, which otherwise rejects that required, attributable
+    # pin diff before generation can reach its artifact proof.
+    env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
     record = _run(["bash", str(checkout / "tools" / "exiftool-tables" / "regen-all.sh")], cwd=checkout, env=env, run=run)
     raw = _raw(report, "generate", record)
     if record["state"] != "ok":
