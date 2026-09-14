@@ -154,6 +154,66 @@ pub(crate) fn ifd1_entry_count(file: &[u8]) -> Result<Option<u16>> {
         .map(|at| read_u16(&file[at..at + 2], scan.byte_order)))
 }
 
+/// Remove IFD1 when each physical survivor is one captured mandatory value.
+/// The caller owns the source-derived value matcher because WriteExif packs a
+/// mandatory value using each surviving record's format and count.
+pub(crate) fn remove_ifd1_if_matching(
+    file: &[u8],
+    mandatory_tag_ids: &[u16],
+    source_predicate: bool,
+    matches_value: impl Fn(u16, u16, u32, &[u8], ByteOrder) -> Result<bool>,
+) -> Result<Vec<u8>> {
+    if !source_predicate {
+        return Ok(file.to_vec());
+    }
+    let scan = scan_tiff(file)?;
+    let layout = validate_directory_layout(file, &scan)?;
+    let Some(ifd1_at) = layout.ifd1_offset else {
+        return Ok(file.to_vec());
+    };
+    let (records, next) = directory_records(file, ifd1_at, scan.byte_order)?;
+    if nonzero_offset(&next, scan.byte_order).is_some() || records.len() > mandatory_tag_ids.len() {
+        return Ok(file.to_vec());
+    }
+    for record in &records {
+        let tag_id = read_u16(&record[..2], scan.byte_order);
+        if mandatory_tag_ids.iter().filter(|id| **id == tag_id).count() != 1 {
+            return Ok(file.to_vec());
+        }
+        let field_type = read_u16(&record[2..4], scan.byte_order);
+        let count = read_u32(&record[4..8], scan.byte_order);
+        let width = ExifType::from_u16(field_type)
+            .ok_or_else(|| invalid("Mandatory IFD1 field type is unsupported"))?
+            .size_in_bytes();
+        let size = (count as usize)
+            .checked_mul(width)
+            .ok_or_else(|| invalid("Mandatory IFD1 value length overflows"))?;
+        let value = if size <= 4 {
+            &record[8..8 + size]
+        } else {
+            let at = read_u32(&record[8..12], scan.byte_order) as usize;
+            file.get(
+                at..at
+                    .checked_add(size)
+                    .ok_or_else(|| invalid("Mandatory IFD1 value length overflows"))?,
+            )
+            .ok_or_else(|| invalid("Mandatory IFD1 value is outside the TIFF carrier"))?
+        };
+        if !matches_value(tag_id, field_type, count, value, scan.byte_order)? {
+            return Ok(file.to_vec());
+        }
+    }
+    let removals: Vec<_> = mandatory_tag_ids
+        .iter()
+        .map(|tag_id| ScopedEntryEdit {
+            ifd: IfdKind::Ifd1,
+            tag_id: *tag_id,
+            mutation: EntryMutation::Delete,
+        })
+        .collect();
+    apply_entry_edits(file, &removals)
+}
+
 /// Apply the captured WriteExif mandatory-only cleanup rule for IFD1.
 ///
 /// WriteExif removes a directory after a deletion when every remaining entry
@@ -1048,6 +1108,132 @@ mod tests {
             );
             let removed = remove_ifd1_if_only_mandatory(&shrunk, &mandatory, true).unwrap();
             assert_eq!(ifd1_entry_count(&removed).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn raw_scoped_ifd1_count_two_survivor_keeps_directory_after_selected_delete() {
+        use crate::writers::{
+            generated_mandatory_defaults::MANDATORY_DEFAULTS,
+            mandatory_defaults_runtime as mandatory,
+        };
+
+        let defaults = MANDATORY_DEFAULTS
+            .directories
+            .iter()
+            .find(|directory| directory.directory == "IFD1")
+            .expect("tier-1 capture includes WriteExif IFD1 defaults");
+        // Choose the captured source value rather than a tag-specific fixture.
+        let selected = defaults
+            .defaults
+            .iter()
+            .find(|default| matches!(default.value, mandatory::MandatoryValue::Integer(_)))
+            .expect("captured IFD1 defaults include an integer WriteValue operand");
+        let mandatory_tag_ids = defaults
+            .defaults
+            .iter()
+            .map(|default| default.tag_id)
+            .collect::<Vec<_>>();
+
+        for (bo, order) in [
+            (ByteOrder::LittleEndian, mandatory::TiffByteOrder::Little),
+            (ByteOrder::BigEndian, mandatory::TiffByteOrder::Big),
+        ] {
+            let fixture = ifd1_fixture(bo, true);
+            let ifd1_at = fixture.original_ifd1_at.unwrap();
+            let (original_entries, _) = read_test_directory(&fixture.file, ifd1_at, bo);
+            let mut no_next = fixture.file.clone();
+            let next_at = ifd1_at + 2 + original_entries.len() * 12;
+            write_test_u32(&mut no_next[next_at..next_at + 4], 0, bo);
+            let empty_ifd1 = apply_entry_edits(
+                &no_next,
+                &original_entries
+                    .iter()
+                    .map(|entry| ScopedEntryEdit {
+                        ifd: IfdKind::Ifd1,
+                        tag_id: entry.tag_id,
+                        mutation: EntryMutation::Delete,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            let mut setup =
+                mandatory::encode_mandatory_defaults(&MANDATORY_DEFAULTS, defaults.defaults, order)
+                    .unwrap()
+                    .into_iter()
+                    .map(|entry| ScopedEntryEdit {
+                        ifd: IfdKind::Ifd1,
+                        tag_id: entry.tag_id,
+                        mutation: EntryMutation::Set {
+                            field_type: entry.tiff_type,
+                            count: entry.count,
+                            bytes: entry.bytes,
+                        },
+                    })
+                    .collect::<Vec<_>>();
+            setup.push(raw_ascii(0x013b, b"Artist\0"));
+            let with_defaults = apply_entry_edits(&empty_ifd1, &setup).unwrap();
+
+            // WriteValue(6, int32u, 2) is undef: native does delete Artist,
+            // but does not classify this survivor as mandatory.  The cleanup
+            // must therefore retain IFD1 instead of rejecting the transaction.
+            let mandatory_value = match selected.value {
+                mandatory::MandatoryValue::Integer(value) => u32::try_from(value).unwrap(),
+                mandatory::MandatoryValue::Text(_) => unreachable!(),
+            };
+            let twice = match bo {
+                ByteOrder::LittleEndian => {
+                    [mandatory_value.to_le_bytes(), mandatory_value.to_le_bytes()].concat()
+                }
+                ByteOrder::BigEndian => {
+                    [mandatory_value.to_be_bytes(), mandatory_value.to_be_bytes()].concat()
+                }
+            };
+            let with_count_two = apply_entry_edits(
+                &with_defaults,
+                &[ScopedEntryEdit {
+                    ifd: IfdKind::Ifd1,
+                    tag_id: selected.tag_id,
+                    mutation: EntryMutation::Set {
+                        field_type: 4,
+                        count: 2,
+                        bytes: twice,
+                    },
+                }],
+            )
+            .unwrap();
+            let shrunk = apply_entry_edits(
+                &with_count_two,
+                &[ScopedEntryEdit {
+                    ifd: IfdKind::Ifd1,
+                    tag_id: 0x013b,
+                    mutation: EntryMutation::Delete,
+                }],
+            )
+            .unwrap();
+            let kept = remove_ifd1_if_matching(
+                &shrunk,
+                &mandatory_tag_ids,
+                true,
+                |tag_id, field_type, count, value, actual_order| {
+                    let default = defaults
+                        .defaults
+                        .iter()
+                        .find(|default| default.tag_id == tag_id)
+                        .expect("captured id remains bound");
+                    let actual = match actual_order {
+                        ByteOrder::LittleEndian => mandatory::TiffByteOrder::Little,
+                        ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
+                    };
+                    mandatory::matches_existing_mandatory_value(
+                        *default, field_type, count, value, actual,
+                    )
+                    .map_err(|reason| invalid(&reason))
+                },
+            )
+            .unwrap();
+            assert_eq!(kept, shrunk, "count-two survivor is a native non-match");
+            assert_eq!(ifd1_entry_count(&kept).unwrap(), Some(4));
         }
     }
 
