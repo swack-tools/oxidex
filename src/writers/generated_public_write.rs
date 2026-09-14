@@ -6,8 +6,8 @@
 use super::generated_scalar::Scalar;
 use super::generated_setnewvalue_address_rules::StaticSetNewValueAddress;
 use super::generated_setnewvalue_public_migration_rules::{
-    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
-    StaticPublicSetNewValueMigration as Migration,
+    StaticPublicSetNewValueMigration as Migration, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
+    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE,
 };
 use super::generated_write_address::{self, AddressRules, Resolution};
 use super::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest;
@@ -277,18 +277,59 @@ pub(crate) fn rewrite_tiff_transaction(
     if plan.generated.is_empty() {
         return Ok(legacy);
     }
-    let result = super::tiff_surgical::generated_scalar::rewrite_resolved_generated_scalars(
+    // Compile first so the cleanup guard sees the source-authorized physical
+    // operation, rather than inferring a delete from a public spelling.
+    let scalar_plan = super::tiff_surgical::generated_scalar::plan_resolved_generated_scalars(
         &legacy,
         plan.generated,
         &super::tiff_surgical::generated_scalar::generated_rules(),
     )?;
-    cleanup_source_mandatory_ifd1(&result.bytes)
+    let has_ifd1_delete = has_selected_ifd1_delete(&scalar_plan.edits);
+    let ifd1_entries_before = if has_ifd1_delete {
+        super::tiff_surgical::entry_edits::ifd1_entry_count(&legacy)?
+    } else {
+        None
+    };
+    let result = scalar_plan.apply(&legacy)?;
+    let ifd1_entries_after = if has_ifd1_delete {
+        super::tiff_surgical::entry_edits::ifd1_entry_count(&result.bytes)?
+    } else {
+        None
+    };
+    if should_cleanup_mandatory_ifd1(has_ifd1_delete, ifd1_entries_before, ifd1_entries_after) {
+        cleanup_source_mandatory_ifd1(&result.bytes)
+    } else {
+        Ok(result.bytes)
+    }
+}
+
+fn has_selected_ifd1_delete(
+    edits: &[crate::writers::tiff_surgical::entry_edits::ScopedEntryEdit],
+) -> bool {
+    edits.iter().any(|edit| {
+        edit.ifd == crate::writers::exif_surgical::IfdKind::Ifd1
+            && matches!(
+                &edit.mutation,
+                &crate::writers::tiff_surgical::entry_edits::EntryMutation::Delete
+            )
+    })
+}
+
+/// Native WriteExif's mandatory-only IFD1 cleanup follows a selected physical
+/// deletion which actually shrinks that directory. An unrelated root edit must
+/// not remove a pre-existing thumbnail directory that happens to hold defaults.
+fn should_cleanup_mandatory_ifd1(
+    selected_ifd1_delete: bool,
+    before: Option<u16>,
+    after: Option<u16>,
+) -> bool {
+    selected_ifd1_delete && after.unwrap_or(0) < before.unwrap_or(0)
 }
 
 /// Apply only the generated WriteExif mandatory-only predicate after a scalar
 /// deletion has shrunk IFD1. Tag IDs and encodings come from the capture.
 fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
-    use crate::writers::exif_surgical::{IfdKind, scan_exif_entries};
+    use crate::writers::exif_surgical::{scan_exif_entries, IfdKind};
     use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
     use crate::writers::{
         generated_mandatory_defaults::MANDATORY_DEFAULTS, mandatory_defaults_runtime as mandatory,
@@ -558,5 +599,60 @@ mod tests {
                 .value,
             Scalar::Utf8("1.5".into())
         );
+    }
+
+    #[test]
+    fn mandatory_ifd1_cleanup_requires_the_compiled_delete_and_a_real_shrink() {
+        use crate::writers::exif_surgical::IfdKind;
+        use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
+
+        // A root edit may rewrite the TIFF carrier, but must not remove an
+        // existing IFD1 just because its entries happen to be defaults.
+        let root_edit = ScopedEntryEdit {
+            ifd: IfdKind::Ifd0,
+            tag_id: 0x013b,
+            mutation: EntryMutation::Delete,
+        };
+        assert!(!has_selected_ifd1_delete(&[root_edit]));
+        assert!(!should_cleanup_mandatory_ifd1(false, Some(4), Some(4)));
+
+        let selected_ifd1_delete = ScopedEntryEdit {
+            ifd: IfdKind::Ifd1,
+            tag_id: 0x013b,
+            mutation: EntryMutation::Delete,
+        };
+        assert!(has_selected_ifd1_delete(&[selected_ifd1_delete]));
+        assert!(!should_cleanup_mandatory_ifd1(true, Some(4), Some(4)));
+        assert!(should_cleanup_mandatory_ifd1(true, Some(5), Some(4)));
+        assert!(should_cleanup_mandatory_ifd1(true, Some(1), None));
+    }
+
+    #[test]
+    fn mandatory_ifd1_cleanup_uses_the_captured_writeexif_defaults() {
+        use crate::writers::{
+            generated_mandatory_defaults::MANDATORY_DEFAULTS,
+            mandatory_defaults_runtime as mandatory,
+        };
+
+        mandatory::require_ifd1_mandatory_cleanup(&MANDATORY_DEFAULTS).unwrap();
+        let ifd1 = MANDATORY_DEFAULTS
+            .directories
+            .iter()
+            .find(|directory| directory.directory == "IFD1")
+            .expect("tier-1 capture includes WriteExif IFD1 defaults");
+        for order in [
+            mandatory::TiffByteOrder::Little,
+            mandatory::TiffByteOrder::Big,
+        ] {
+            let encoded =
+                mandatory::encode_mandatory_defaults(&MANDATORY_DEFAULTS, ifd1.defaults, order)
+                    .expect("captured WriteValue operands encode every IFD1 default");
+            assert_eq!(encoded.len(), ifd1.defaults.len());
+            assert!(encoded.iter().all(|entry| {
+                ifd1.defaults
+                    .iter()
+                    .any(|default| default.tag_id == entry.tag_id)
+            }));
+        }
     }
 }

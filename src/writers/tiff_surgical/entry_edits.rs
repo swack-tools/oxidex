@@ -974,6 +974,84 @@ mod tests {
     }
 
     #[test]
+    fn raw_scoped_ifd1_cleanup_matches_captured_writeexif_defaults_after_delete() {
+        use crate::writers::{
+            generated_mandatory_defaults::MANDATORY_DEFAULTS,
+            mandatory_defaults_runtime as mandatory,
+        };
+
+        mandatory::require_ifd1_mandatory_cleanup(&MANDATORY_DEFAULTS).unwrap();
+        let defaults = MANDATORY_DEFAULTS
+            .directories
+            .iter()
+            .find(|directory| directory.directory == "IFD1")
+            .expect("tier-1 capture includes WriteExif IFD1 defaults");
+        for (bo, order) in [
+            (ByteOrder::LittleEndian, mandatory::TiffByteOrder::Little),
+            (ByteOrder::BigEndian, mandatory::TiffByteOrder::Big),
+        ] {
+            let fixture = ifd1_fixture(bo, true);
+            let ifd1_at = fixture.original_ifd1_at.unwrap();
+            let (original_entries, _) = read_test_directory(&fixture.file, ifd1_at, bo);
+            let mut no_next = fixture.file.clone();
+            let next_at = ifd1_at + 2 + original_entries.len() * 12;
+            write_test_u32(&mut no_next[next_at..next_at + 4], 0, bo);
+
+            let mandatory =
+                mandatory::encode_mandatory_defaults(&MANDATORY_DEFAULTS, defaults.defaults, order)
+                    .unwrap()
+                    .into_iter()
+                    .map(|entry| ScopedEntryEdit {
+                        ifd: IfdKind::Ifd1,
+                        tag_id: entry.tag_id,
+                        mutation: EntryMutation::Set {
+                            field_type: entry.tiff_type,
+                            count: entry.count,
+                            bytes: entry.bytes,
+                        },
+                    })
+                    .collect::<Vec<_>>();
+
+            // Recreate an IFD1 containing the exact capture defaults plus a
+            // normal public tag. Its selected deletion is the source case.
+            let remove_originals = original_entries
+                .iter()
+                .map(|entry| ScopedEntryEdit {
+                    ifd: IfdKind::Ifd1,
+                    tag_id: entry.tag_id,
+                    mutation: EntryMutation::Delete,
+                })
+                .collect::<Vec<_>>();
+            // `apply_entry_edits` intentionally rejects two mutations to one
+            // physical entry in one transaction, so clear the seed IFD before
+            // creating the source-default carrier.
+            let empty_ifd1 = apply_entry_edits(&no_next, &remove_originals).unwrap();
+            let mut setup = mandatory.clone();
+            setup.push(raw_ascii(0x013b, b"Artist\0"));
+            let before_delete = apply_entry_edits(&empty_ifd1, &setup).unwrap();
+            assert_eq!(ifd1_entry_count(&before_delete).unwrap(), Some(5));
+
+            let shrunk = apply_entry_edits(
+                &before_delete,
+                &[ScopedEntryEdit {
+                    ifd: IfdKind::Ifd1,
+                    tag_id: 0x013b,
+                    mutation: EntryMutation::Delete,
+                }],
+            )
+            .unwrap();
+            assert_eq!(ifd1_entry_count(&shrunk).unwrap(), Some(4));
+            assert_eq!(
+                remove_ifd1_if_only_mandatory(&shrunk, &mandatory, false).unwrap(),
+                shrunk,
+                "without the selected-delete condition, pre-existing defaults survive"
+            );
+            let removed = remove_ifd1_if_only_mandatory(&shrunk, &mandatory, true).unwrap();
+            assert_eq!(ifd1_entry_count(&removed).unwrap(), None);
+        }
+    }
+
+    #[test]
     fn raw_scoped_ifd1_update_delete_and_add_keep_downstream_chain_byte_identical() {
         for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
             let fixture = ifd1_fixture(bo, true);
