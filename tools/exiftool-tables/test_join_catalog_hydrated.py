@@ -158,6 +158,16 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertEqual(result["entries"][0]["source_derived_implementation"], "source_row_not_yet_consumed")
         self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
 
+    def test_catalog_name_conflict_cannot_inherit_generated_source_support(self):
+        raw, bounded, ledger, capabilities, rust = self.replayed_quicktime_facts()
+        source = bounded["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
+        result = join.build(catalog([entry("DifferentCatalogName")]), hydrated({"titl": source}),
+                            "c", "h", ledger, capabilities, raw, rust,
+                            self.quicktime_digests(raw, ledger, capabilities, rust))
+        record = result["entries"][0]
+        self.assertEqual(record["source"]["state"], "conflict")
+        self.assertEqual(record["source_derived_implementation"], "source_row_not_yet_consumed")
+
     def test_rejects_malformed_native_denominators_and_names(self):
         bad = catalog([entry()])
         bad["counts"]["catalog_total_tag_entries"] = 2

@@ -25,8 +25,10 @@ axes:
 
 - `source_layout_status` records whether its exact hydrated row exists and has
   the same public name.
-- `source_derived_implementation` remains `not_assessed` until a separate
-  generated-reader/writer selector or refusal ledger supplies evidence.
+- `source_derived_implementation` records `generated_reader_declaration_unobserved`
+  or `blocked_generated_reader_refusal` when authenticated QuickTime artifacts
+  match the exact source identity. Other entries remain `source_row_not_yet_consumed`.
+  A name conflict cannot inherit a generated declaration from a different tag.
 - `observed_read` and `observed_write` remain `not_observed_yet` until pinned
   ExifTool fixture evidence exists.
 
@@ -43,8 +45,11 @@ conflicts remain explicit records as `source_row_absent` and
 `source_row_name_conflict`; a coordinate/name match is `source_row_joined`.
 
 Each joined or conflicting record includes canonical SHA-256 hashes of its hydrated
-row and containing table. These are source evidence for a future implementation
-decision, not evidence that the implementation exists today.
+row and containing table. A separate selector hash normalizes only proven
+reader-inert wrappers: inherited group defaults, matching variant Index metadata,
+and the dumper's shorthand marker. Full hashes retain the original evidence.
+The generated-declaration classification does not establish observed reading;
+write observations require an actual write followed by pinned native read-back.
 
 `--check` reads and compares both existing rendered outputs without writing them.
 Normal execution refuses existing destinations; `--replace` is the explicit update
@@ -56,9 +61,11 @@ either destination is replaced.
 
 The Pages report `docs/reference/catalog-hydrated-join.md` and machine ledger
 `docs/public/measurements/catalog-hydrated-join-13.59.json` preserve all 33,487
-ordinary entries. All have exact source matches. Every implementation state is
-`not_assessed`; every observed read/write state is `not_observed_yet`. These are
-explicit outstanding joins, not statements that OxiDex cannot read those tags.
+ordinary entries. Every entry retains its exact source coordinate. The generated
+QuickTime implementation/refusal join is separate from the remaining unconsumed
+source rows, and every observed read/write state remains `not_observed_yet` until
+fixture evidence is attached. Unconsumed or unobserved is not a claim that OxiDex
+cannot read a tag through an existing route.
 
 CI rebuilds the ledger from the fresh audited full capture and compares every
 identity, status and row/table hash against the committed ledger. Only the full

@@ -321,7 +321,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                                                        variant_path=variant_path)
             selector_hash = quicktime_selector.digest(quicktime_selector.semantic_normal_form(projected))
             candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
-            if candidate is not None:
+            if candidate is not None and state == "joined":
                 if candidate["generated"]:
                     implementation = "generated_reader_declaration_unobserved"
                 else:
