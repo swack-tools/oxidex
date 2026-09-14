@@ -127,3 +127,19 @@ still need their own proof.
 There is no new production writer or manual-rule retirement to count at this
 checkpoint. Helper proof, complete file behavior and release conformance remain
 separate measurements.
+
+## Remaining final file stage
+
+The [native final-stage audit](../../tools/exiftool-tables/NATIVE_SCALAR_WRITE_FINAL_STAGE_AUDIT.md)
+records the remaining source controls between the scalar helper and the actual
+IFD edit. Resolve conversion format and on-wire type before WriteValue, then
+apply any source-selected charset recoding and calculate the final count.
+New and existing entries use different format selection rules. Preserve native
+NoOverwrite/warning outcomes rather than substituting a fatal error and calling
+it parity. Unicode text and embedded NUL remain part of the default scalar path;
+explicit CharsetEXIF recoding is additional behavior to implement.
+
+The source's TIFF format name/number/size registries are not currently in the
+write sidecar. Capturing those actual final-loaded registries is the next fact
+extraction task; hardcoded TIFF type choices cannot stand in for upstream type
+changes. The audit proposes a contract and requirements, not completed runtime.
