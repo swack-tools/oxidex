@@ -149,6 +149,36 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertEqual(result["entries"][0]["source_derived_implementation"],
                          "generated_reader_declaration_unobserved")
 
+    def test_authenticated_observed_read_requires_exact_generated_identity(self):
+        raw, bounded, ledger, capabilities, rust = self.replayed_quicktime_facts()
+        generated = next(row for row in ledger["ledger"]
+                         if row["generated"] and row["identity"]["raw_key"] == "titl")
+        digests = self.quicktime_digests(raw, ledger, capabilities, rust)
+        evidence = {"schema": join.QUICKTIME_READ_EVIDENCE_SCHEMA, "inputs": dict(sorted(digests.items())),
+                    "producer": {"source_dirty": False, "source_commit": "a" * 40,
+                                 "source_fingerprint": "b" * 64, "runtime_artifact_sha256": "c" * 64,
+                                 "fixture_manifest_sha256": "d" * 64, "pin": "13.59"},
+                    "observed_identities": [{"source_identity": generated["identity"], "group1": "ItemList",
+                                               "tag_name": "Title", "matched": True}]}
+        source = bounded["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
+        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
+                            digests, evidence)
+        self.assertEqual(result["entries"][0]["observed_read"], "observed_matched_read")
+        evidence["observed_identities"][0]["source_identity"] = dict(generated["identity"], raw_key="cpil")
+        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
+                            digests, evidence)
+        self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
+        evidence["observed_identities"][0]["source_identity"] = generated["identity"]
+        evidence["observed_identities"][0]["tag_name"] = "WrongName"
+        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
+                            digests, evidence)
+        self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
+
+    def test_historical_or_unbound_observed_read_evidence_is_refused(self):
+        raw, _, ledger, capabilities, rust = self.replayed_quicktime_facts()
+        with self.assertRaisesRegex(ValueError, "historical"):
+            join.quicktime_observed_reads({"instrument": "historical"}, self.quicktime_digests(raw, ledger, capabilities, rust))
+
     def test_quicktime_name_or_hash_collision_cannot_consume_a_source_row(self):
         raw, bounded, ledger, capabilities, rust = self.replayed_quicktime_facts()
         source = copy.deepcopy(bounded["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"])
