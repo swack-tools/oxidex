@@ -2603,28 +2603,6 @@ fn preserve_refused_keys_behavior(name: &str, data: &[u8], metadata: &mut Metada
         _ => {}
     }
 }
-fn extract_itunes_data_value(data: &[u8]) -> Option<TagValue> {
-    if data.len() < 8 {
-        return None;
-    }
-    let value = &data[8..];
-    match u32::from_be_bytes(data[..4].try_into().ok()?) {
-        1 => String::from_utf8(value.to_vec()).ok().map(TagValue::String),
-        2 => decode_utf16(value).map(TagValue::String),
-        21 => match value.len() {
-            1 => Some(TagValue::Integer(value[0] as i64)),
-            2 => Some(TagValue::Integer(
-                i16::from_be_bytes(value.try_into().ok()?) as i64,
-            )),
-            4 => Some(TagValue::Integer(
-                i32::from_be_bytes(value.try_into().ok()?) as i64,
-            )),
-            _ => None,
-        },
-        _ => Some(TagValue::Binary(value.to_vec())),
-    }
-}
-
 /// Extract string value from QuickTime user data atom
 fn extract_string_value(data: &[u8]) -> Option<String> {
     // QuickTime user data format:
