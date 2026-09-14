@@ -137,6 +137,26 @@ python3 "$HERE/mandatory_defaults_codegen.py" "$MANDATORY_FACT" \
     --report "$(artifact_path mandatory-default-ledger)"
 
 echo
+echo ">> generating authenticated SetNewValue address operands"
+ADDRESS_ROWS="$CACHE/setnewvalue-address-rows-$VERSION.json"
+ADDRESS_REPORT="$CACHE/setnewvalue-address-report-$VERSION.json"
+ADDRESS_OBSERVATIONS="$CACHE/setnewvalue-address-observations-$VERSION.json"
+ADDRESS_OWNERSHIP="$(artifact_path setnewvalue-ownership-ledger)"
+python3 "$HERE/setnewvalue_addressing.py" "$JSON" \
+    --rows "$ADDRESS_ROWS" --report "$ADDRESS_REPORT"
+"$PERL" "$HERE/setnewvalue_address_probe.pl" "$LIB" "$ADDRESS_ROWS" > "$ADDRESS_OBSERVATIONS"
+ADDRESS_LEDGER_ARGS=(--ownership-ledger "$ADDRESS_OWNERSHIP")
+if [[ ! -f "$ADDRESS_OWNERSHIP" ]]; then
+    # Bootstrap is an explicit one-time creation path only. Later regenerations
+    # validate and carry forward the committed ownership history.
+    ADDRESS_LEDGER_ARGS=(--bootstrap-ownership-ledger)
+fi
+python3 "$HERE/setnewvalue_address_rust_codegen.py" "$JSON" "$ADDRESS_OBSERVATIONS" \
+    --output "$(artifact_path setnewvalue-address-rules)" \
+    --report "$(artifact_path setnewvalue-address-ledger)" \
+    --write-ownership-ledger "$ADDRESS_OWNERSHIP" "${ADDRESS_LEDGER_ARGS[@]}"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

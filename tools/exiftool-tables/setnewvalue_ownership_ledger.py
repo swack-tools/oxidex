@@ -182,6 +182,14 @@ def build_ledger(document: Mapping[str, Any], prior: Mapping[str, Any] | None, *
         sources: dict[str, Any] = {}
     else:
         prior = validate_ledger(prior)
+        # A regeneration from the identical authenticated source must be a
+        # byte-for-byte no-op. Repointing predecessor to the previous ledger on
+        # every run would manufacture an endless history chain without a source
+        # upgrade, making the ownership artifact non-deterministic.
+        if prior["source_identity"] == source_identity:
+            if prior["source"] != source:
+                raise RecipeRefused("ownership ledger source identity collides with different source facts")
+            return prior
         previous_entries = {_entry_key(entry): entry for entry in prior["entries"]}
         predecessor = prior["ledger_sha256"]
         sources = {key: value for key, value in prior["sources"].items()}

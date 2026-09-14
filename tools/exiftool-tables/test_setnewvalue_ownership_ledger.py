@@ -25,6 +25,22 @@ class SetNewValueOwnershipLedgerTests(unittest.TestCase):
         self.assertEqual(owned_names(ledger), frozenset({"noallowlist"}))
         self.assertEqual(qualified_ownership(ledger)[0].removed, False)
 
+    def test_same_authenticated_capture_is_a_byte_stable_noop(self):
+        first = self.bootstrap()
+        self.assertEqual(build_ledger(source(), first, bootstrap=False), first)
+
+    def test_upgrade_preserves_authenticated_prior_chain(self):
+        first = self.bootstrap()
+        upgraded = source()
+        upgraded["exiftool_version"] = "13.60"
+        upgraded["native_capture_context"]["exiftool_version"] = "13.60"
+        second = build_ledger(upgraded, first, bootstrap=False)
+        self.assertNotEqual(second["ledger_sha256"], first["ledger_sha256"])
+        self.assertEqual(second["predecessor"], first["ledger_sha256"])
+        self.assertEqual(len(second["sources"]), 2)
+        self.assertEqual(second["source"]["exiftool_version"], "13.60")
+        self.assertEqual(build_ledger(upgraded, second, bootstrap=False), second)
+
     def test_rename_keeps_old_name_terminal_and_records_current_name(self):
         first = self.bootstrap()
         changed = source()
