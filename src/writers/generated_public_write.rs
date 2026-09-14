@@ -123,10 +123,10 @@ pub(crate) fn plan_public_write(
     removed: &[String],
 ) -> Result<PublicWritePlan> {
     let whole_exif_clear = desired.iter().all(|(key, _)| {
-        matches!(
+        !matches!(
             key.split_once(':').map(|(group, _)| group),
             Some("EXIF" | "IFD0" | "IFD1" | "ExifIFD" | "GPS" | "InteropIFD")
-        ) == false
+        )
     });
     let rules = generated_write_address::generated_rules();
     let baseline_rows: Vec<_> = baseline
