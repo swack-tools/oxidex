@@ -496,26 +496,76 @@ def _signal_pid(pid: int, signal_value: signal.Signals) -> None:
         pass
 
 
+def _text_output(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
+def _live_pids(pids: list[int]) -> bool:
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        else:
+            return True
+    return False
+
+
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
-    """Terminate descendants first so an adapter can reap them before it exits."""
+    """Give an adapter a chance to reap, then bound cleanup by its process group."""
     descendants = _descendants(child.pid)
+    seen_descendants = descendants[:]
     for pid in reversed(descendants):
         _signal_pid(pid, signal.SIGTERM)
     try:
-        return child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+        stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
-        _signal_pid(child.pid, signal.SIGTERM)
-    try:
-        return child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
+        # A child can be created after the first snapshot. Refresh before the
+        # process-group fallback, which also covers descendants that close the
+        # inherited stdout/stderr pipes and otherwise evade communicate().
+        descendants = _descendants(child.pid)
+        seen_descendants.extend(pid for pid in descendants if pid not in seen_descendants)
         for pid in reversed(descendants):
-            _signal_pid(pid, signal.SIGKILL)
-        _signal_pid(child.pid, signal.SIGKILL)
-    try:
-        return child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired as exc:
-        # Never turn timeout cleanup into an unbounded wait.
-        return (exc.output or "", exc.stderr or "")
+            _signal_pid(pid, signal.SIGTERM)
+        try:
+            stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+                except subprocess.TimeoutExpired as exc:
+                    # Never turn timeout cleanup into an unbounded wait.
+                    stdout, stderr = exc.output, exc.stderr
+    # communicate() only proves the direct adapter has exited. A late child
+    # may have closed inherited pipes, so retain the old bounded group fallback
+    # until the process tree is gone.
+    remaining = seen_descendants
+    if _live_pids(remaining):
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+        while _live_pids(remaining) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if _live_pids(remaining):
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    return _text_output(stdout), _text_output(stderr)
 
 
 def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
@@ -537,7 +587,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
                 stdout, stderr = _bounded_timeout_cleanup(child)
-                return {"argv": argv, "exit": None, "stdout": stdout or "", "stderr": (stderr or "") + str(exc), "state": "timeout", "pid": child.pid, "pgid": child.pid}
+                return {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc), "state": "timeout", "pid": child.pid, "pgid": child.pid}
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
         else:

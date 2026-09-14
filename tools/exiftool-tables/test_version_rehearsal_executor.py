@@ -187,6 +187,10 @@ class ExecutorTests(unittest.TestCase):
         persisted = json.loads((self.run_dir / "execution-status.json").read_text())
         self.assertEqual(persisted["releases"][release]["state"], "failed")
 
+    def test_timeout_cleanup_normalizes_byte_output_before_journal_rendering(self):
+        self.assertEqual(executor._text_output(b"stdout\xff"), "stdout�")
+        self.assertEqual(executor._text_output(b""), "")
+
     def test_mismatches_and_boolean_counts_refuse_pass_results(self):
         path = self.root / "result.json"
         base = {"schema": executor.SCHEMA, "kind": executor.RESULT_KIND, "stage": "read", "release": self.releases[0],
