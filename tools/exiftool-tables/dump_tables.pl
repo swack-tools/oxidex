@@ -770,6 +770,7 @@ sub native_write_helper_facts {
         write_value => 'Image::ExifTool::WriteValue',
         check_value => 'Image::ExifTool::CheckValue',
         sanitize => 'Image::ExifTool::Sanitize',
+        conv_inv => 'Image::ExifTool::ConvInv',
     );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';

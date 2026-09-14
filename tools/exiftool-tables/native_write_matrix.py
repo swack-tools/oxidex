@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""Exercise a bounded, native ExifTool scalar-write matrix.
+
+This is a ground-truth acceptance instrument for default-option scalar writes.
+It deliberately records the bytes ExifTool wrote instead of predicting its
+terminator, encoding, relocation, or alias behavior.  It is not an OxiDex
+writer, nor a parity claim.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+CASES = ("insert", "update", "growth", "shrinkage", "delete", "empty", "utf8", "embedded_nul")
+NAMES = ("EXIF:HostComputer", "IFD0:HostComputer")
+TIFF_TYPES = {1: 1, 2: 1, 3: 2, 4: 4}
+CONTRACT_EXIFTOOL_RELEASE = "13.59"
+
+# This is deliberately a pinned-native acceptance contract, not a writer
+# implementation rule.  With the explicit Perl scalars in NATIVE_WRITE,
+# ExifTool 13.59 writes these HostComputer values as TIFF ASCII (type 2) and
+# terminates the byte sequence once.  Any changed native behavior is a failed
+# baseline acceptance test that must be reviewed, not silently accommodated.
+CASE_INPUT_BYTES = {
+    "insert": b"insert-value",
+    "update": b"updated",
+    "growth": b"this-is-a-deliberately-longer-host-computer-value",
+    "shrinkage": b"x",
+    "empty": b"",
+    "utf8": bytes.fromhex("c3a9"),
+    "embedded_nul": bytes.fromhex("610062"),
+}
+CASE_UTF8_STATE = {case: False for case in CASE_INPUT_BYTES} | {"utf8": True}
+
+# The value construction happens in Perl.  That makes the scalar state part of
+# the native call: utf8 is a flagged character scalar, embedded_nul is bytes.
+NATIVE_WRITE = r'''
+BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
+use strict; use warnings; use utf8; use JSON::PP; use Encode ();
+use Image::ExifTool; require 'Image/ExifTool/Writer.pl';
+my ($in, $out, $action, $tag) = @ARGV;
+sub state { my ($v) = @_; return {defined => JSON::PP::false} unless defined $v;
+  my $utf8 = utf8::is_utf8($v) ? JSON::PP::true : JSON::PP::false;
+  my $bytes = $utf8 ? Encode::encode('UTF-8', $v) : $v;
+  return {defined => JSON::PP::true, utf8 => $utf8, hex => unpack('H*', $bytes), char_length => length $v}; }
+sub value_for { my ($name) = @_;
+  return undef if $name eq 'delete';
+  return '' if $name eq 'empty';
+  return 'insert-value' if $name eq 'insert';
+  return 'updated' if $name eq 'update';
+  return 'this-is-a-deliberately-longer-host-computer-value' if $name eq 'growth';
+  return 'x' if $name eq 'shrinkage';
+  return Encode::decode('UTF-8', pack('H*', 'c3a9')) if $name eq 'utf8';
+  return pack('H*', '610062') if $name eq 'embedded_nul';
+  die "unknown action $name";
+}
+my $et = Image::ExifTool->new;
+my @sets;
+if ($action eq 'seed_artist' || $action eq 'seed_artist_host') {
+  my $artist_return = scalar $et->SetNewValue('IFD0:Artist', 'seed-artist');
+  push @sets, {tag => 'IFD0:Artist', input => state('seed-artist'), return => $artist_return};
+  if ($action eq 'seed_artist_host') {
+    my $host_return = scalar $et->SetNewValue('IFD0:HostComputer', 'seed-host');
+    push @sets, {tag => 'IFD0:HostComputer', input => state('seed-host'), return => $host_return};
+  }
+} else {
+  my $value = value_for($action);
+  my $set_return = scalar $et->SetNewValue($tag, $value);
+  push @sets, {tag => $tag, input => state($value), return => $set_return};
+}
+my $write = $et->WriteInfo($in, $out);
+print JSON::PP->new->canonical->utf8->encode({
+  action => $action, requested_tag => ($tag || undef), set_calls => \@sets,
+  write_return => $write, error => scalar $et->GetValue('Error'),
+  native => {exiftool_version => $Image::ExifTool::VERSION, perl => $^X, perl_version => "$^V"},
+});
+'''
+
+NATIVE_IDENTITY = r'''
+BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
+use strict; use warnings; use JSON::PP; use Image::ExifTool;
+print JSON::PP->new->canonical->utf8->encode({
+  exiftool_version => $Image::ExifTool::VERSION, perl => $^X, perl_version => "$^V",
+  config_file => $Image::ExifTool::configFile,
+});
+'''
+
+
+def clean_env() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items()
+            if key not in {"PERL5LIB", "PERLLIB", "PERL5OPT"} and not key.startswith("PERL5")}
+
+
+def resolve_perl(value: Path) -> Path:
+    raw = str(value)
+    if os.sep not in raw and (not os.altsep or os.altsep not in raw):
+        found = shutil.which(raw, path=os.environ.get("PATH"))
+        if not found:
+            raise ValueError(f"selected Perl executable is not on PATH: {raw}")
+        return Path(found).resolve()
+    return value.expanduser().resolve()
+
+
+def resolve_library(value: Path) -> Path:
+    path = value.expanduser().resolve()
+    return (path / "lib").resolve() if (path / "lib").is_dir() else path
+
+
+def run_native(perl: Path, library: Path, source: Path, target: Path,
+               action: str, tag: str | None) -> dict[str, Any]:
+    command = [str(perl), "-I" + str(library), "-e", NATIVE_WRITE,
+               str(source), str(target), action, tag or ""]
+    completed = subprocess.run(command, env=clean_env(), capture_output=True, timeout=30)
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    parsed: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            pass
+    return {"command": [str(perl), "-I" + str(library), "-e", "<native-write-program>",
+                         str(source), str(target), action, tag or ""],
+            "returncode": completed.returncode, "stdout": stdout, "stderr": stderr,
+            "result": parsed}
+
+
+def native_identity(perl: Path, library: Path) -> dict[str, Any]:
+    completed = subprocess.run([str(perl), "-I" + str(library), "-e", NATIVE_IDENTITY],
+                               env=clean_env(), capture_output=True, timeout=30)
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    parsed: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            pass
+    if completed.returncode != 0 or parsed is None:
+        raise RuntimeError(f"native identity probe failed: {stderr or stdout}")
+    return {"command": [str(perl), "-I" + str(library), "-e", "<native-identity-program>"],
+            "returncode": completed.returncode, "stdout": stdout, "stderr": stderr, "result": parsed}
+
+
+def assert_contract_version(identity: dict[str, Any]) -> None:
+    actual = identity["result"]["exiftool_version"]
+    if actual != CONTRACT_EXIFTOOL_RELEASE:
+        raise RuntimeError(
+            f"selected ExifTool {actual} does not match this {CONTRACT_EXIFTOOL_RELEASE} native-write "
+            "acceptance baseline; capture a separate version-rehearsal expectation before comparing it")
+
+
+def pack(number: int, width: int, order: str) -> bytes:
+    return number.to_bytes(width, order)
+
+
+def make_tiff(path: Path, order: str) -> None:
+    """Make a small valid carrier; Artist and HostComputer are seeded natively."""
+    marker = b"II" if order == "little" else b"MM"
+    entries = [(256, 4, 1, 1), (257, 4, 1, 1), (273, 4, 1, 0), (279, 4, 1, 1)]
+    ifd_offset = 8
+    strip_offset = ifd_offset + 2 + len(entries) * 12 + 4
+    entries[2] = (273, 4, 1, strip_offset)
+    data = bytearray(marker + pack(42, 2, order) + pack(ifd_offset, 4, order))
+    data += pack(len(entries), 2, order)
+    for tag, kind, count, value in entries:
+        data += pack(tag, 2, order) + pack(kind, 2, order) + pack(count, 4, order) + pack(value, 4, order)
+    data += pack(0, 4, order) + b"\xff"
+    path.write_bytes(data)
+
+
+def parse_tiff(data: bytes, require_strip: bool = True) -> dict[str, Any]:
+    if len(data) < 10 or data[:2] not in (b"II", b"MM"):
+        raise ValueError("not a complete TIFF header")
+    order = "little" if data[:2] == b"II" else "big"
+    if int.from_bytes(data[2:4], order) != 42:
+        raise ValueError("TIFF magic is not 42")
+    offset = int.from_bytes(data[4:8], order)
+    if offset + 2 > len(data):
+        raise ValueError("IFD count is out of bounds")
+    count = int.from_bytes(data[offset:offset + 2], order)
+    end = offset + 2 + count * 12 + 4
+    if end > len(data):
+        raise ValueError("IFD entries are truncated")
+    tags: dict[str, Any] = {}
+    for position in range(offset + 2, end - 4, 12):
+        tag = int.from_bytes(data[position:position + 2], order)
+        kind = int.from_bytes(data[position + 2:position + 4], order)
+        item_count = int.from_bytes(data[position + 4:position + 8], order)
+        if kind not in TIFF_TYPES:
+            raise ValueError(f"unsupported TIFF type {kind} for tag {tag}")
+        length = item_count * TIFF_TYPES[kind]
+        slot = data[position + 8:position + 12]
+        inline = length <= 4
+        if inline:
+            value = slot[:length]
+            value_offset = None
+        else:
+            value_offset = int.from_bytes(slot, order)
+            if value_offset + length > len(data):
+                raise ValueError(f"IFD value is out of bounds for tag {tag}")
+            value = data[value_offset:value_offset + length]
+        tags[str(tag)] = {"type": kind, "count": item_count, "value_hex": value.hex(),
+                          "inline": inline, "value_offset": value_offset}
+    image_payload_hex: str | None = None
+    if "273" in tags and "279" in tags:
+        strip_offset = int.from_bytes(bytes.fromhex(tags["273"]["value_hex"]), order)
+        strip_length = int.from_bytes(bytes.fromhex(tags["279"]["value_hex"]), order)
+        if strip_offset + strip_length > len(data):
+            raise ValueError("strip payload is out of bounds")
+        image_payload_hex = data[strip_offset:strip_offset + strip_length].hex()
+    elif require_strip:
+        raise ValueError("carrier lacks StripOffsets/StripByteCounts")
+    return {"byte_order": order, "sha256": hashlib.sha256(data).hexdigest(), "tags": tags,
+            "image_payload_hex": image_payload_hex}
+
+
+def parse_jpeg(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("not a JPEG SOI")
+    position = 2
+    exif: dict[str, Any] | None = None
+    sos_tail: bytes | None = None
+    while position < len(data):
+        if data[position] != 0xff:
+            raise ValueError("JPEG marker is missing 0xff prefix")
+        marker_start = position
+        while position < len(data) and data[position] == 0xff:
+            position += 1
+        if position >= len(data):
+            raise ValueError("truncated JPEG marker")
+        marker = data[position]
+        position += 1
+        if marker == 0xda:
+            sos_tail = data[marker_start:]
+            break
+        if marker == 0xd9:
+            break
+        if marker in {0x01, *range(0xd0, 0xd8)}:
+            continue
+        if position + 2 > len(data):
+            raise ValueError("truncated JPEG segment length")
+        length = int.from_bytes(data[position:position + 2], "big")
+        if length < 2 or position + length > len(data):
+            raise ValueError("JPEG segment is out of bounds")
+        payload = data[position + 2:position + length]
+        if marker == 0xe1 and payload.startswith(b"Exif\x00\x00"):
+            exif = parse_tiff(payload[6:], require_strip=False)
+        position += length
+    if sos_tail is None:
+        raise ValueError("JPEG lacks SOS marker")
+    return {"sha256": hashlib.sha256(data).hexdigest(),
+            "sos_to_end_sha256": hashlib.sha256(sos_tail).hexdigest(),
+            "sos_to_end_length": len(sos_tail), "exif": exif}
+
+
+def inspect(path: Path, carrier: str) -> dict[str, Any]:
+    if carrier.startswith("tiff"):
+        return parse_tiff(path.read_bytes())
+    return parse_jpeg(path)
+
+
+def tags(document: dict[str, Any], carrier: str) -> dict[str, Any]:
+    if carrier.startswith("tiff"):
+        return document["tags"]
+    exif = document["exif"]
+    if exif is None:
+        raise ValueError("JPEG output has no Exif APP1")
+    return exif["tags"]
+
+
+def image_identity(document: dict[str, Any], carrier: str) -> str:
+    return document["image_payload_hex"] if carrier.startswith("tiff") else document["sos_to_end_sha256"]
+
+
+def assert_native(call: dict[str, Any], label: str) -> None:
+    if call["returncode"] != 0 or call["result"] is None:
+        raise AssertionError(f"{label}: native process failed: {call['stderr'] or call['stdout']}")
+    result = call["result"]
+    if result["write_return"] != 1 or result["error"] is not None:
+        raise AssertionError(f"{label}: native write did not succeed: {result}")
+    if not all(entry["return"] in (1, 2) for entry in result["set_calls"]):
+        raise AssertionError(f"{label}: native SetNewValue was rejected: {result}")
+
+
+def expected_host(operation: str) -> dict[str, Any] | None:
+    if operation == "delete":
+        return None
+    raw = CASE_INPUT_BYTES[operation]
+    value = raw + b"\x00"
+    return {"type": 2, "count": len(value), "value_hex": value.hex()}
+
+
+def host_storage(entry: dict[str, Any] | None) -> dict[str, Any] | None:
+    if entry is None:
+        return None
+    return {key: entry[key] for key in ("type", "count", "value_hex")}
+
+
+def assert_host_contract(actual: dict[str, Any] | None, expected: dict[str, Any] | None) -> None:
+    """Require the exact 13.59 native type/count/value-byte acceptance contract."""
+    if actual is None:
+        if expected is not None:
+            raise AssertionError(f"HostComputer missing; expected {expected}")
+        return
+    if expected is None:
+        raise AssertionError(f"HostComputer present after native delete: {host_storage(actual)}")
+    observed = host_storage(actual)
+    for dimension in ("type", "count", "value_hex"):
+        if observed[dimension] != expected[dimension]:
+            raise AssertionError(
+                f"HostComputer native {dimension} mismatch: expected {expected[dimension]!r}, "
+                f"observed {observed[dimension]!r}")
+
+
+def verify_row(row: dict[str, Any], carrier: str, operation: str) -> dict[str, Any]:
+    seeded = row["seeded_inspection"]
+    output = row["output_inspection"]
+    seeded_tags, output_tags = tags(seeded, carrier), tags(output, carrier)
+    if image_identity(row["carrier_inspection"], carrier) != image_identity(seeded, carrier):
+        raise AssertionError("seeding changed carrier image bytes")
+    if image_identity(seeded, carrier) != image_identity(output, carrier):
+        raise AssertionError("operation changed carrier image bytes")
+    # Writer layout may legitimately relocate an out-of-line value.  Metadata
+    # preservation is its actual type/count/value bytes, not its old offset.
+    artist_before = seeded_tags.get("315")
+    artist_after = output_tags.get("315")
+    if ({key: artist_before.get(key) for key in ("type", "count", "value_hex")} if artist_before else None) != \
+       ({key: artist_after.get(key) for key in ("type", "count", "value_hex")} if artist_after else None):
+        raise AssertionError("operation did not preserve seeded Artist")
+    before = seeded_tags.get("316")
+    after = output_tags.get("316")
+    expected = expected_host(operation)
+    if operation != "delete":
+        scalar = row["operation_call"]["result"]["set_calls"][0]["input"]
+        if scalar != {"defined": True, "utf8": CASE_UTF8_STATE[operation],
+                      "hex": CASE_INPUT_BYTES[operation].hex(),
+                      "char_length": 1 if operation == "utf8" else len(CASE_INPUT_BYTES[operation])}:
+            raise AssertionError(f"operation scalar state drifted from the declared case: {scalar}")
+    if operation == "insert":
+        if before is not None or after is None:
+            raise AssertionError("insert did not transition HostComputer from absent to present")
+    elif operation == "delete":
+        if before is None or after is not None:
+            raise AssertionError("delete did not remove HostComputer")
+    elif before == after:
+        raise AssertionError("native operation was a no-op masquerading as a change")
+    assert_host_contract(after, expected)
+    if after is not None and after["count"] <= 4 and not after["inline"]:
+        raise AssertionError("short HostComputer value was not stored inline")
+    return {"carrier_image_preserved": True, "artist_preserved": True,
+            "host_before": before, "host_after": after, "expected_host": expected,
+            "no_op_detected": before == after}
+
+
+def make_carrier(source: Path, carrier: str, jpeg_base: Path) -> None:
+    if carrier == "tiff_little":
+        make_tiff(source, "little")
+    elif carrier == "tiff_big":
+        make_tiff(source, "big")
+    else:
+        shutil.copyfile(jpeg_base, source)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--perl", type=Path, required=True)
+    parser.add_argument("--lib", type=Path, required=True)
+    parser.add_argument("--jpeg-base", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    perl, library = resolve_perl(args.perl), resolve_library(args.lib)
+    if not perl.is_file() or not os.access(perl, os.X_OK):
+        parser.error(f"selected Perl is not executable: {perl}")
+    if not (library / "Image/ExifTool/Writer.pl").is_file():
+        parser.error(f"Writer.pl absent from selected library: {library}")
+    if not args.jpeg_base.is_file():
+        parser.error(f"JPEG carrier is absent: {args.jpeg_base}")
+    identity = native_identity(perl, library)
+    assert_contract_version(identity)
+    root = args.output.parent / "native-write-matrix-files"
+    root.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for carrier in ("tiff_little", "tiff_big", "jpeg"):
+        suffix = ".tif" if carrier.startswith("tiff") else ".jpg"
+        for name in NAMES:
+            for operation in CASES:
+                stem = f"{carrier}-{name.replace(':', '_')}-{operation}"
+                source, seeded, output = (root / f"{stem}-{part}{suffix}" for part in ("carrier", "seeded", "output"))
+                make_carrier(source, carrier, args.jpeg_base)
+                seed_action = "seed_artist" if operation == "insert" else "seed_artist_host"
+                seed_call = run_native(perl, library, source, seeded, seed_action, None)
+                assert_native(seed_call, f"{stem} seed")
+                operation_call = run_native(perl, library, seeded, output, operation, name)
+                assert_native(operation_call, f"{stem} {operation}")
+                row = {"id": stem, "carrier": carrier, "requested_name": name, "operation": operation,
+                       "source": str(source), "seeded": str(seeded), "output": str(output),
+                       "seed_call": seed_call, "operation_call": operation_call,
+                       "carrier_inspection": inspect(source, carrier),
+                       "seeded_inspection": inspect(seeded, carrier), "output_inspection": inspect(output, carrier)}
+                row["verification"] = verify_row(row, carrier, operation)
+                rows.append(row)
+    document = {"instrument": "native_write_matrix_v1", "scope": "default-option native ExifTool scalar writes; minimal TIFF and supplied small JPEG carriers",
+                "contract_exiftool_release": CONTRACT_EXIFTOOL_RELEASE, "native_identity": identity,
+                "native": {"perl": str(perl), "library": str(library), "config_file": "", "scrubbed_environment": ["PERL5LIB", "PERLLIB", "PERL5OPT"]},
+                "declared_rows": len(CASES) * len(NAMES) * 3, "executed_rows": len(rows), "rows": rows,
+                "limitations": ["This records native behavior only; it does not claim OxiDex write parity.", "Coverage is limited to HostComputer scalar writes, default ExifTool options, minimal TIFF carriers, and the supplied small JPEG.", "A generated Rust comparison remains unfinished."]}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
