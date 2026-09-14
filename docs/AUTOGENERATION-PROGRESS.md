@@ -56,8 +56,9 @@ passed 17 focused tests and five independent altered-plan checks, and is
 integrated as `21eed548`. Official catalog capture now records four pages and 388 numeric release tags
 with immutable commit identities. The separately reviewed materializer
 `05729f1b` downloaded and verified the first persisted random pair, **11.78 to
-12.64**. Their native version checks pass; native capability checks, generated
-builds and read/write comparisons remain unfinished. Source identity is not
+12.64**. Their native version and bounded JPEG read/set/delete readiness checks pass,
+including UTF-8 Comment input and ambient configuration isolation. Generated
+builds and OxiDex/native read/write comparisons remain unfinished. Source identity is not
 upgrade conformance. The
 [version plan](reference/read-write-version-plan.md) separates these unfinished
 stages and never treats random samples as proof of all releases.
@@ -66,10 +67,12 @@ The integrated inactive compiler emits **22 string candidates in one table**
 from the recorded native dump. This is source classification, with **zero new
 production writer routes**. Independent mutation checks cover malformed source
 provenance, table identities and group defaults. The shared raw TIFF editing
-primitive passes **16 focused tests** and full Clippy after independent review;
-it contains no tag-name lookup and remains inactive. Complete JPEG/TIFF native
-proof, actual helper translation, public identity resolution and exact-value
-input are the next writer requirements.
+primitive has been extended with inactive JPEG EXIF segment edits. The actual
+raw carrier driver passes **36 native comparisons** across II/MM JPEG and
+TIFF, comparing metadata with declared transport/relocation exclusions and
+verifying payload preservation. It contains no
+tag-name lookup and remains inactive. Actual helper composition, public
+identity resolution and exact-value input remain the next writer requirements.
 
 The combined regeneration attempt completed tier-1 oracle checks and then
 failed its workspace guard because the untracked handoff was edited. Preserve
@@ -84,8 +87,27 @@ and a binding-only mutation changes compilable generated candidate Rust.
 Four required hosted checks passed on `149387d2`; generated-table verification
 was cancelled at its 20-minute job limit during the native inventory mutation
 test (679 Python cases reached). This is incomplete verification, not a pass.
-The job allowance is now 35 minutes with all checks retained; its new hosted
-run and landing remain pending. No new production writer is enabled.
+The job allowance was increased to 35 minutes with all checks retained.
+All five required checks then passed at `675a736e`; PR #761 squash-merged
+as `bd71e392` on September 14 at 01:14:17 UTC (September 13, 20:14:17 CDT).
+No new production writer is enabled.
+
+The next integration checkpoint at `a902752a` completed official regeneration
+of all 32 artifacts: only the expression ledger's source-dump hash changed.
+Native processor checks, formatting and 863 Python tests passed with zero
+skips (505.566 seconds for Python). The scalar CheckValue recipe executes
+captured source rules in the differential harness: 240 native cases match;
+a copied native operator/error change alters 23 outcomes, all matching after
+regeneration. It remains inactive in the public writer. Independent review
+confirmed the inner format selector and final-callable redirects; two extra
+regression tests now cover those separately.
+
+Portable readiness tests replace private-path dependencies with controlled
+archived sources and CLI subprocesses. The real selected 11.78 and 12.64
+releases separately pass native readiness. This advances the rehearsal
+instrument; it does not establish generated OxiDex conformance for either
+release. Shared WriteValue translation, encoding, helper composition and
+public generated routing remain unfinished.
 
 ### Previous merged definitions checkpoint
 
