@@ -165,17 +165,35 @@ next check. No broader parity or completed review gate is claimed here.
 
 ## Latest integration checkpoint
 
-All 14 carried findings have corresponding code fixes; resolution still requires
-matching runtime evidence. The latest broad validation has not passed. Tier-2
-regeneration and all-feature lint passed; the broad Rust run found the now-fixed
-Pentax display-column omission, and the Python run exposed native harness,
-regeneration mock and historical-cohort defects. The late-child timeout case
-remains under investigation. Keep all unresolved threads visible until the
-corrected combined checks and required native evidence are recorded.
+At `be0ffe0c`, canonical regeneration, all-feature Rust (6,093 passed, zero
+failed, 126 ignored), and all-feature Clippy passed for the recorded scope.
+The corrected Python gate completed 425 tests in 400.693 seconds, exit zero,
+with six skipped. Its controller verified unchanged HEAD and tracked files.
+A separate clean-checkout run at that same commit passed all 29 fresh-JPEG
+batch and Nikon generator tests.
 
-The source baseline now joins all 330 catalog entries in ItemList, UserData and
-Keys to 92 generated declarations or 238 explicit refusals. The selector counts
-399 source records, of which 307 are refused; that is a separate denominator.
-The observed-read importer binds fixture bytes, emitted native/OxiDex JSON,
-generated source identities and producer hashes. Observations remain unclaimed
-until a fresh verifier run supplies evidence for this checkpoint.
+| Carried finding | Direct completed evidence | Remaining evidence |
+| --- | --- | --- |
+| 1: batch instrument version | `test_instrument_identifier_is_single_sourced` | Combined landing gate |
+| 3: persist failed batch reports | `test_predriver_failure_persists_terminal_report`, `test_driver_timeout_persists_terminal_report` | Combined landing gate |
+| 5: Nikon extra keys | `test_dumped_extra_keys_must_be_empty`; canonical regeneration | Combined landing gate |
+| 6: artifact cardinality | `ManifestTests.test_unique_valid_partition_and_selectors` checks 63 total, 40 tier-1, 23 tier-2 | Combined landing gate |
+| 7: literal backslashes | `test_rust_string_escaping_preserves_literal_backslash_sequences`; canonical regeneration | Combined landing gate |
+| 8: regex compatibility | `test_perl_only_regexes_refuse_before_emission`; canonical regeneration | Combined landing gate |
+| 9: table namespaces | `test_graph_identity_keeps_nikon_and_nikoncustom_name_collisions_distinct`; canonical regeneration | Combined landing gate |
+| 10, 13: native timeout and release state | Native-timeout, cleanup-error and failed-execution regression tests passed | Actual version rehearsal remains separate |
+| 11: descendant reaping | Nested-child and late-child timeout tests passed on macOS | Same tests on Linux |
+| 12: v4 matrix contract | Adapter report-contract tests passed | Actual materialized version rehearsal |
+| 2, 4: mixed EXIF clearing and ExtendedEXIF | Writer corrections are in the tested Rust tree | Native carrier/mixed-transaction checks |
+| 14: current reverse identity | Current reverse lookup precedes the retired fallback in the tested Rust tree | Focused reverse-name and actual upgrade evidence |
+
+The source ledger now joins 179 QuickTime catalog reader declarations, 151
+QuickTime refusals and the full IFD schema ledger. See
+`goal-checkpoint-20260914.md` for the separate source and observation counts.
+A fresh M4 reader/write/readback run at `be0ffe0c` is collecting compatible
+receipts for the observation publisher. These results must not be credited
+to the subsequent writer cleanup before that change's own gates finish.
+
+The writer cleanup passed its 18 focused source tests at `8f49942c`; its
+combined Rust/native validation is in progress. All review threads remain
+visible until their corresponding evidence is recorded and checked.
