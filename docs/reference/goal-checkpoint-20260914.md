@@ -1,135 +1,76 @@
-# QuickTime source and reading baseline
+# Generated metadata parity checkpoint
 
-Status: resumed in the full-parity goal on 2026-09-14. This milestone preserves a
-reproducible baseline and does not add runtime reading or writing support.
+Status: active and incomplete, 2026-09-14. Work is consolidated in PR #779;
+#682 and #683 remain separate. This checkpoint distinguishes source declarations
+from behavior measured against pinned ExifTool 13.59.
 
-## Source inventory
+## What exists
 
-Pinned ExifTool 13.59, hydrated by the dump tool at `304d6339`, has 105 ItemList
-rows, 186 UserData rows (210 alternatives), and 81 Keys rows. The selector finds
-91 preliminary ItemList candidates and refuses 14. UserData and Keys remain
-blocked by their distinct protocols. These are source capability candidates,
-not generated Rust support or observed coverage. Table-level processor behavior
-must still be validated by the generic-reader implementation.
+The generated BuildTagLookup inventory contains 33,487 ordinary table entries.
+Every entry joins the hydrated source inventory. The case-insensitive entry-name
+count is 21,373; the native legacy total of 21,437 uses a different definition.
+Neither number measures extraction or writing success.
 
-The short report is `docs/reference/quicktime-source-baseline.json`. The complete
-identity/refusal ledger is `tools/exiftool-tables/quicktime_source_capabilities.json`.
-The verbatim three-table snapshot, including processor metadata, is
-`tools/exiftool-tables/fixtures/quicktime_source_13_59.json`; its capture scope
-records the parent dump/tool hashes, base commit and Perl version. This snapshot
-covers three tables, not the complete ExifTool universe.
+QuickTime ItemList has 92 generated reader declarations. The integrated Keys
+reader has 70 direct source-derived declarations and 11 explicit refusals. The
+Keys catalog join is being completed separately; the published catalog report
+must not be read as already including these new declarations. UserData remains
+blocked on its shared record/language protocol. The full hydrated QuickTime
+selector accounts for 399 variants across the three tables, including source
+rows outside the ordinary catalog denominator.
 
-## Reproduce and check staleness
+The actual canonical writer dump replays 19 public writer declarations into the
+full catalog ledger. Reader and writer implementation classifications are now
+separate. The 193 helper/address rows and historical 15-row writer test cohort
+are different denominators. No declaration count is an observed-write count.
 
-From the repository root:
+## What was validated
 
-```sh
-python3 tools/exiftool-tables/quicktime_atom_tables.py \
-  --dump tools/exiftool-tables/fixtures/quicktime_source_13_59.json \
-  --output tools/exiftool-tables/quicktime_source_capabilities.json \
-  --summary docs/reference/quicktime-source-baseline.json --check
-python3 tools/exiftool-tables/quicktime_baseline.py --check-fixtures
-python3 -m unittest discover -s tools/exiftool-tables -p 'test_quicktime*.py'
-```
+The preceding combined run passed all-feature Clippy and 4,895 Rust library
+tests, with four ignored. Its integration suite passed 602 tests, failed one,
+and ignored 42; the later Python stage did not run. The failing JPEG test passed
+a Make-only replacement map, implicitly requesting removal of Model. Its repair
+preserves the existing metadata map and asserts exact SOS-through-EOI bytes.
 
-Reconcile this branch with refactor/tag-machinery and the numeric checkpoint,
-regenerate every joined artifact from one canonical capture, then run the
-combined gate. Numeric work is based on an earlier writer snapshot: do not
-replace full source-closure ledgers with its older ledgers during integration.
-The retained numeric scalar, IFD1, mandatory-directory and 19-target matrix
-work therefore remains unverified until that combined regeneration completes.
-The historical checkpoint carries additional version profiles and adapters.
+That regeneration command also exposed a source-input defect: it omitted the
+hydrated-layout flag, silently reducing the QuickTime ledger by three records.
+The output is preserved as diagnostic evidence. The command now explicitly
+captures hydrated layouts; a fresh complete regeneration and runtime gate are
+required. Eleven shell control tests passed for the hydration change. Updated
+controls also exercise the new Keys generator.
 
-Replace `--check` with `--replace` to regenerate both reports. Existing outputs
-require explicit replacement; outputs can never alias the input snapshot. The
-selector prints the standard instrument header and refuses an unexplained dirty
-tree. Its generated content remains deterministic, keyed by input and tool hashes. To refresh the source, run `dump_tables.pl` against the repository-pinned
-library, preserving its capture command, source commit, Perl version and output.
-Then extract the selected tables with the reproducible command below, using a
-new output file. The source commit must be the commit used to make the full dump:
+Fifty-four focused Python tests pass for catalog joins, QuickTime source/spec
+compilation, Keys behavior selection, runtime-input identity and baseline
+integrity. The Keys native fixture is recognized by pinned Perl as Keys:Artist;
+its OxiDex end-to-end Rust test still needs the combined runtime gate.
 
-```sh
-python3 tools/exiftool-tables/capture_quicktime_baseline.py \
-  --dump "$FULL_DUMP" --source-commit "$DUMP_SOURCE_COMMIT" \
-  --perl-version "$DUMP_PERL_VERSION" --output "$NEW_QUICKTIME_SNAPSHOT"
-```
+## Measurements still required
 
-The extractor records the full dump hash, checks the source tool blob, preserves
-table bodies verbatim, and records the selected versus parent table counts.
-The original capture command remains evidence for which tool produced the full
-dump; a supplied source-commit argument alone cannot establish that history. Never derive reader
-layouts from the TagNames catalog. A supported synthetic source-row addition
-appears in the selector test without any handwritten tag-name list; this proves
-selector behavior only. Generated-Rust regeneration remains the next milestone.
+All catalog observed-read and observed-write fields remain unclaimed until
+fresh authenticated runtime reports are imported. The reader verifier records
+native/OxiDex JSON, fixture bytes, generated source identities and compiled-input
+hashes. It reports distinct Group1 names, fixture/tag occurrences, and print-mode
+observations separately. Documentation edits cannot make an old parser binary
+current or invalidate unchanged runtime inputs.
 
-## Native reading replay
+The original five-fixture pre-migration baseline is preserved in
+`docs/reference/quicktime-reading-baseline.json`: two matched ItemList projections
+and three unsigned-integer failures. It is historical evidence, not a current
+runtime verdict or corpus-wide percentage. Fresh evidence must be a new report.
 
-With `EXIFTOOL_TREE` pointing to the pinned checkout and `EXIFTOOL_PERL` selecting
-a capable Perl, run under the host's shared heavy-job lock:
+## Next steps and completion criteria
 
-```sh
-python3 tools/exiftool-tables/quicktime_baseline.py \
-  --exiftool-dir "$EXIFTOOL_TREE" --out "$QUICKTIME_BASELINE_OUTPUT" \
-  --check-reading-baseline docs/reference/quicktime-reading-baseline.json
-```
+1. Finish corrected canonical regeneration, Clippy, Rust and affected Python
+   gates; inspect generated changes and explicit refusals before accepting them.
+2. Complete the Keys catalog join and regenerate JSON plus the human-readable
+   report from matching catalog, hydrated source and reader/writer artifacts.
+3. Run fresh native reader and real writer/readback comparisons from immutable
+   source, import observed identities, and publish the family report through Pages.
+4. Resolve all 14 carried review findings with their required evidence before
+   squash-merging #779. Continue changes in that PR until it is ready.
+5. Use the family ledger to add shared UserData and other high-leverage protocols.
+   Full catalog-wide read/write parity remains the goal; this checkpoint does
+   not establish it.
 
-The output directory must be new and outside the worktree. The command builds
-this checkout, resolves the binary from Cargo's compiler output, checks the oracle
-version against `.exiftool-version` and checks its module capabilities. It records
-raw oracle/oxidex results, build output, source state and binary/fixture hashes.
-A dirty tree refuses unless the standard explicit dirty-tree override is set;
-the override and exact dirty paths are then reported.
-
-The fixed corpus is `tests/fixtures/quicktime/source_family_baseline`: five
-synthetic parser/format behaviors. The committed pre-migration reading baseline
-matches text and enum and fails unsigned 16-bit plus two unsigned 64-bit values:
-2/5 ItemList-only fixture projections. This is deliberately a failing baseline,
-not an assertion that all fixtures pass, and not overall corpus conformance.
-There is no before/after runtime improvement in this PR. Writing is unmeasured.
-
-## Next implementation milestone
-
-Generate Rust specs, ledger and generic ItemList execution together; verify the
-processor contract and replace handwritten atom-name mappings. Include native
-format/language/duplicate/error behavior, unknown-atom handling, no-regression
-comparisons and supported-source-row regeneration. UserData and Keys need separate
-protocol support. Broader family accounting continues in #776. The full goal
-continues until the complete pinned catalog scope is implemented and verified.
-
-Validation: focused Python tests include source/ledger staleness, fixture bytes,
-source/output alias protection and observation comparison. A fresh Cargo replay
-reproduced every original native and oxidex projection. Rust/Cargo source is
-unchanged from the base; Clippy passed on that identical source.
-
-The committed replay records the exact binary hash, instrument hash, source HEAD
-and dirty paths. The explicit dirty override covered baseline tools/docs;
-`git diff HEAD -- src Cargo.toml Cargo.lock build.rs` was empty. Cargo validated
-its cached executable against that unchanged runtime. The general timestamp
-warning remains visible in the raw log because documentation is newer than the
-executable; the build log is the validation evidence. The focused test suite passes.
-
-
-Oracle source identity is pinned beyond the version string. The committed
-`quicktime_oracle_sources_13_59.json` manifest records all 247 script/library files
-from upstream commit `2200871d9cef988051d2a99d67df3bda6cbb30a8` (tag 13.59), plus
-the downloaded archive hash. The local oracle matched all 247 file hashes.
-Replay verifies this source-file universe before and after comparison and records
-the manifest hash. Same-version local source edits are refused. The source
-fingerprint covers tracked differences and untracked file contents, detecting
-changes even when the dirty-path list stays the same. Fixture-check mode also
-prints its instrument header and enforces the standard dirty-tree policy.
-
-## Subsequent implementation
-
-The baseline above is historical. Current ItemList integration and remaining
-work are recorded in [generated ItemList progress](quicktime-generated-reader.md).
-
-The earlier writer checkpoint is preserved separately in
-[writer checkpoint](writer-checkpoint-20260914.md). Its stop instruction describes
-the historical session, not the active full-parity goal.
-
-The [upgrade rehearsal checkpoint](upgrade-checkpoint-20260914.md) likewise
-records historical evidence rather than a passing combined-tree gate.
-
-The [Nikon checkpoint](nikon-checkpoint-20260914.md) preserves that branch’s
-source generation evidence and outstanding regeneration limits.
+See `docs/reference/source-family-migration-plan.md` for the full objective and
+`docs/reference/parity-rollup-review-20260914.md` for unresolved review evidence.
