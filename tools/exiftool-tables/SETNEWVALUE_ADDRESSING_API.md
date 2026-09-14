@@ -45,10 +45,20 @@ router has a terminal ownership result instead of reopening a legacy route. It r
 
 Current-source ownership cannot identify a tag that an upstream release has
 removed or renamed: that needs a separately authenticated persisted ownership
-ledger and source-removal policy. This component deliberately has neither a
-historical tag-name allowlist nor permission to route such a disappearance to
-the old writer. Public integration must keep that case terminal until the
-ledger exists.
+ledger and source-removal policy. `setnewvalue_ownership_ledger.py` supplies
+that persisted generated ledger: it derives qualified EXIF/IFD0 names from the
+authenticated current source, validates the previous ledger's canonical digest
+and source/capture identity, then carries the deterministic union forward.
+Entries are explicitly `current` or `removed`; a removed or renamed source name
+remains terminal and is emitted in `SET_NEW_VALUE_OWNED_NAMES` plus
+`SET_NEW_VALUE_OWNED_QUALIFIED`.
+
+The first ledger requires `--bootstrap-ownership-ledger`; absence of a prior
+ledger is never treated as retirement. Later runs take `--ownership-ledger` and
+may write `--write-ownership-ledger`. The ledger records source version,
+capture closure identity, helper identity, row/query digests, type-sensitive
+source fingerprints, and per-name history. It does not use a historical
+handwritten tag list or authorize a legacy writer fallback.
 
 This does not implement public SetNewValue. Unsupported portions include
 wildcards, language suffixes, shortcuts, multiple/numbered/ID qualifiers,

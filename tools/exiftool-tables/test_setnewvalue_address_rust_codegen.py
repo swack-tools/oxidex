@@ -12,11 +12,12 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         # fixture without introducing a tag-name or raw-id fixture list.
         from setnewvalue_addressing import compile_addressing
         addressing, _ = compile_addressing(document)
-        rust, report = generate(document, observations(addressing.rows))
+        rust, report = generate(document, observations(addressing.rows), bootstrap_ownership_ledger=True)
         self.assertTrue(report["emitted"])
         self.assertIn("SET_NEW_VALUE_ADDRESS_ROWS", rust)
         self.assertIn("SET_NEW_VALUE_LOOKUP", rust)
         self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
+        self.assertIn("SET_NEW_VALUE_OWNED_QUALIFIED", rust)
         self.assertIn("noallowlist", rust)
 
     def test_missing_observation_is_explicit_omission(self):
@@ -25,7 +26,7 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         addressing, _ = compile_addressing(document)
         native = observations(addressing.rows)
         native["queries"] = {}
-        rust, report = generate(document, native)
+        rust, report = generate(document, native, bootstrap_ownership_ledger=True)
         self.assertFalse(report["emitted"])
         self.assertIn("query set", report["reason"])
         self.assertIn("SET_NEW_VALUE_OWNED_NAMES", rust)
@@ -39,6 +40,24 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertFalse(report["emitted"])
         self.assertIn("noallowlist", rust)
         self.assertIn("SET_NEW_VALUE_ADDRESSING: Option", rust)
+
+    def test_prior_ledger_keeps_renamed_name_in_generated_terminal_union(self):
+        from setnewvalue_addressing import compile_addressing
+        from setnewvalue_ownership_ledger import build_ledger
+        first = source()
+        prior = build_ledger(first, None, bootstrap=True)
+        changed = source()
+        row = changed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
+        row["properties"]["Name"]["value"] = "NewName"
+        row["effective_properties"]["Name"]["value"] = "NewName"
+        addressing, _ = compile_addressing(changed)
+        rust, report = generate(changed, observations(addressing.rows, addressing=addressing),
+                                prior_ledger=prior)
+        self.assertTrue(report["emitted"])
+        self.assertEqual(report["removed_owned_names"], 1)
+        self.assertIn('"noallowlist"', rust)
+        self.assertIn('"newname"', rust)
+        self.assertIn("removed: true", rust)
 
 
 if __name__ == "__main__":
