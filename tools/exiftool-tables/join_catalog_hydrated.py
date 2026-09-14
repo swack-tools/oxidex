@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import quicktime_atom_tables as quicktime_selector
 import quicktime_generated_specs as quicktime_specs
+import quicktime_keys_specs
 import final_scalar_stage
 import setnewvalue_public_migration_ledger as public_migration
 import quicktime_baseline as baseline
@@ -380,10 +381,37 @@ def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str
     return identities
 
 
+def quicktime_keys_implementation(ledger: dict | None, bounded_source: bytes | None, emitted_rust: str | None) -> dict:
+    if all(value is None for value in (ledger, bounded_source, emitted_rust)):
+        return {}
+    if any(value is None for value in (ledger, bounded_source, emitted_rust)):
+        raise ValueError("QuickTime Keys replay requires bounded source, ledger, and Rust artifact together")
+    document = json.loads(bounded_source)
+    expected = quicktime_keys_specs.compile_document(document)
+    if ledger != expected or not quicktime_rust_matches(quicktime_keys_specs.render_rust(expected), emitted_rust):
+        raise ValueError("QuickTime Keys artifacts differ from bounded-source replay")
+    specs = {(row["source_identity"]["raw_key"], tuple(row["source_identity"]["variant_path"])): row["name"] for row in expected["specs"]}
+    rows = {}
+    for record in expected["ledger"]:
+        identity = record["identity"]; path = tuple(identity["variant_path"])
+        source = document["modules"]["QuickTime"]["tables"]["Keys"]["tags"][identity["raw_key"]]
+        for candidate_path, candidate, _ in quicktime_selector.variants(source):
+            if candidate_path == path:
+                key = ("Keys", identity["raw_key"], quicktime_selector.digest(quicktime_selector.semantic_normal_form(candidate)), path)
+                rows[key] = {"generated": record["generated"], "name": specs.get((identity["raw_key"], path)), "reasons": record["reasons"]}
+                break
+        else:
+            raise ValueError("QuickTime Keys ledger variant is absent from bounded source")
+    if sum(row["generated"] for row in rows.values()) != expected["identity_counts"]["generated"]:
+        raise ValueError("QuickTime Keys generated denominator is inconsistent")
+    return rows
+
+
 def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
           quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
           quicktime_input_digests: dict[str, str] | None = None,
+          quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
           quicktime_read_evidence: dict | None = None,
           writer_source: bytes | None = None, writer_final_ledger: dict | None = None,
           writer_final_rust: str | None = None, writer_public_ledger: dict | None = None,
@@ -400,7 +428,10 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         pin = (quicktime_selector.ROOT / ".exiftool-version").read_text().strip()
         if catalog.get("exiftool_version") != pin or bounded.get("exiftool_version") != pin:
             raise ValueError("QuickTime bounded source, catalog, or hydrated version differs from repository pin")
-        if quicktime_input_digests is None or set(quicktime_input_digests) != {"source_sha256", "ledger_sha256", "capabilities_sha256", "rust_sha256"}:
+        required_digests = {"source_sha256", "ledger_sha256", "capabilities_sha256", "rust_sha256"}
+        if quicktime_keys_ledger is not None or quicktime_keys_rust is not None:
+            required_digests |= {"keys_ledger_sha256", "keys_rust_sha256"}
+        if quicktime_input_digests is None or set(quicktime_input_digests) != required_digests:
             raise ValueError("QuickTime input digests are incomplete")
         if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
                for value in quicktime_input_digests.values()):
@@ -409,6 +440,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     validate_provenance(catalog, hydrated)
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
+    keys = quicktime_keys_implementation(quicktime_keys_ledger, quicktime_bounded_source, quicktime_keys_rust)
     writer = writer_implementation(writer_source, writer_final_ledger, writer_final_rust, writer_public_ledger, writer_public_rust)
     if writer and (writer_input_digests is None or set(writer_input_digests) != {"source_sha256", "final_ledger_sha256", "final_rust_sha256", "public_ledger_sha256", "public_rust_sha256"}):
         raise ValueError("writer input digests are incomplete")
@@ -471,6 +503,13 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                 else:
                     implementation = reader_implementation = "blocked_generated_reader_refusal"
                     refusal = candidate.get("reasons")
+            keys_candidate = keys.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
+            if keys_candidate is not None and state == "joined":
+                if keys_candidate["generated"]:
+                    implementation = reader_implementation = "generated_reader_declaration_unobserved"
+                else:
+                    implementation = reader_implementation = "blocked_generated_reader_refusal"
+                    refusal = keys_candidate.get("reasons")
         writer_candidate = writer.get(identity)
         if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
             writer_state = "generated_writer_declaration_unobserved"
@@ -564,6 +603,8 @@ def main() -> int:
     parser.add_argument("--quicktime-itemlist-ledger", required=True, type=Path)
     parser.add_argument("--quicktime-source-capabilities", required=True, type=Path)
     parser.add_argument("--quicktime-itemlist-rust", required=True, type=Path)
+    parser.add_argument("--quicktime-keys-ledger", required=True, type=Path)
+    parser.add_argument("--quicktime-keys-rust", required=True, type=Path)
     parser.add_argument("--quicktime-read-evidence", type=Path)
     parser.add_argument("--writer-source", type=Path,
                         help="authenticated full native dump used by both writer compilers")
@@ -581,16 +622,21 @@ def main() -> int:
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
                           args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
+                          args.quicktime_keys_ledger, args.quicktime_keys_rust,
                           *(writer_paths if all(path is not None for path in writer_paths) else ()),
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []))
     quicktime_source = args.quicktime_bounded_source.read_bytes()
     quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
     quicktime_capabilities = args.quicktime_source_capabilities.read_bytes()
     quicktime_rust = args.quicktime_itemlist_rust.read_text(encoding="utf-8")
+    keys_ledger = args.quicktime_keys_ledger.read_bytes()
+    keys_rust = args.quicktime_keys_rust.read_text(encoding="utf-8")
     quicktime_digests = {"source_sha256": hashlib.sha256(quicktime_source).hexdigest(),
                          "ledger_sha256": hashlib.sha256(quicktime_ledger).hexdigest(),
                          "capabilities_sha256": hashlib.sha256(quicktime_capabilities).hexdigest(),
-                         "rust_sha256": hashlib.sha256(quicktime_rust.encode()).hexdigest()}
+                         "rust_sha256": hashlib.sha256(quicktime_rust.encode()).hexdigest(),
+                         "keys_ledger_sha256": hashlib.sha256(keys_ledger).hexdigest(),
+                         "keys_rust_sha256": hashlib.sha256(keys_rust.encode()).hexdigest()}
     writer_source = args.writer_source.read_bytes() if args.writer_source else None
     writer_final = args.writer_final_ledger.read_bytes() if args.writer_final_ledger else None
     writer_final_rust = args.writer_final_rust.read_text(encoding="utf-8") if args.writer_final_rust else None
@@ -604,8 +650,10 @@ def main() -> int:
     join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
                  json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
                  quicktime_digests, read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None,
-                 writer_source, json.loads(writer_final) if writer_final else None, writer_final_rust, json.loads(writer_public) if writer_public else None, writer_public_rust,
-                 writer_digests)
+                 quicktime_keys_ledger=json.loads(keys_ledger), quicktime_keys_rust=keys_rust,
+                 writer_source=writer_source, writer_final_ledger=json.loads(writer_final) if writer_final else None,
+                 writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
+                 writer_public_rust=writer_public_rust, writer_input_digests=writer_digests)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():
