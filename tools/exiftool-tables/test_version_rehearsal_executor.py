@@ -45,6 +45,21 @@ class ExecutorTests(unittest.TestCase):
         self.write_fixture_manifest = self.root / "write-fixtures.json"
         self.write_fixture_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.write_fixture), "sha256": __import__("hashlib").sha256(self.write_fixture.read_bytes()).hexdigest(), "bytes": self.write_fixture.stat().st_size}]}))
 
+    def test_timeout_cleanup_oserror_keeps_timeout_identity_and_diagnostic(self):
+        """A cleanup fault happens after spawn and must not erase timeout facts."""
+        with patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 0.01), \
+             patch.object(executor, "_bounded_timeout_cleanup", side_effect=OSError("cleanup bridge failed")):
+            record = executor._run_record(
+                [sys.executable, "-c", "import time; time.sleep(30)"], cwd=self.root,
+                env=dict(os.environ), run=subprocess.run,
+            )
+        self.assertEqual(record["state"], "timeout")
+        self.assertIsNone(record["exit"])
+        self.assertIsInstance(record["pid"], int)
+        self.assertEqual(record["pgid"], record["pid"])
+        self.assertEqual(record["cleanup_operation"], "timeout_cleanup")
+        self.assertIn("cleanup bridge failed", record["cleanup_error"])
+
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
         if write:

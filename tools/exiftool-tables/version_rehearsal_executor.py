@@ -572,31 +572,64 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
     host-lock descriptor is inheritable, so a supervisor dying while this child
     is live cannot let another rehearsal acquire the shared lock prematurely.
     """
-    try:
-        if run is subprocess.run:
+    if run is subprocess.run:
+        try:
             child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace",
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      start_new_session=True, close_fds=False)
+        except OSError as exc:
+            return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
+                    "state": "spawn_failed", "operation": "spawn"}
+        try:
             if started is not None:
                 started(child.pid, child.pid)
             try:
                 stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
-                stdout, stderr = _bounded_timeout_cleanup(child)
-                return {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc), "state": "timeout", "pid": child.pid, "pgid": child.pid}
+                try:
+                    stdout, stderr = _bounded_timeout_cleanup(child)
+                    cleanup_error = None
+                except OSError as cleanup:
+                    # The timeout is already an established execution fact.
+                    # Preserve its process identity and surface cleanup failure
+                    # rather than misclassifying it as a failed spawn.
+                    stdout, stderr, cleanup_error = "", "", str(cleanup)
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    try:
+                        stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                record = {"argv": argv, "exit": None, "stdout": stdout,
+                          "stderr": stderr + str(exc), "state": "timeout",
+                          "pid": child.pid, "pgid": child.pid}
+                if cleanup_error is not None:
+                    record.update(cleanup_error=cleanup_error, cleanup_operation="timeout_cleanup")
+                return record
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
-        else:
+        except OSError as exc:
+            return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
+                    "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
+    else:
+        try:
             result = run(argv, cwd=str(cwd), env=env, text=True, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS,
                          start_new_session=True, close_fds=False)
             process_identity = {}
+        except subprocess.TimeoutExpired as exc:
+            return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc), "state": "timeout"}
+        except OSError as exc:
+            return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
+                    "state": "execution_failed", "operation": "runner"}
+    try:
         stdout, stderr = result.stdout or "", result.stderr or ""
         return {"argv": argv, "exit": result.returncode, "stdout": stdout, "stderr": stderr,
                 "state": "ok" if result.returncode == 0 else "exit_failed", **process_identity}
-    except subprocess.TimeoutExpired as exc:
-        return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc), "state": "timeout"}
     except OSError as exc:
-        return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc), "state": "spawn_failed"}
+        return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
+                "state": "execution_failed", "operation": "result"}
 
 
 def _command_log(run_dir: Path, release: str, stage: str, record: dict[str, Any]) -> dict[str, Any]:

@@ -427,7 +427,7 @@ class AdapterTests(unittest.TestCase):
             "print(json.dumps(r))\n")
         finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=10)
         self.assertEqual(finished.returncode, 0, finished.stderr)
-        self.assertEqual(json.loads(finished.stdout)["state"], "timeout")
+        self.assertEqual(json.loads(finished.stdout)["state"], "timeout", finished.stdout + finished.stderr)
         self.assertTrue(pid.is_file(), "nested child did not start")
         child = int(pid.read_text())
         live = True
@@ -460,7 +460,7 @@ class AdapterTests(unittest.TestCase):
             "print(json.dumps(r))\n")
         finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=12)
         self.assertEqual(finished.returncode, 0, finished.stderr)
-        self.assertEqual(json.loads(finished.stdout)["state"], "timeout")
+        self.assertEqual(json.loads(finished.stdout)["state"], "timeout", finished.stdout + finished.stderr)
         self.assertTrue(pid.is_file(), "late child did not start")
         child = int(pid.read_text())
         for _ in range(20):
