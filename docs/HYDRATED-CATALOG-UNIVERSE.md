@@ -51,3 +51,26 @@ not attest every transitively loaded table module. It also does not emit a git
 instrument header or refuse a dirty checkout; the reconciliation CLI is the
 measurement instrument that records git state, input hashes, and the dirty-tree
 refusal.
+
+## Reproduce
+
+Set `EXIFTOOL_PERL` to the capture-compatible Perl executable and
+`OXIDEX_PINNED_EXIFTOOL` to the pinned ExifTool source tree. Set `DUMP` to the
+preserved full dump, and choose new output filenames outside the checkout.
+This does not recapture layouts or modify the pinned source tree.
+
+```bash
+EXIFTOOL_LIB="$OXIDEX_PINNED_EXIFTOOL"
+if [[ -d "$EXIFTOOL_LIB/lib" ]]; then EXIFTOOL_LIB="$EXIFTOOL_LIB/lib"; fi
+(
+  set -o noclobber
+  "$EXIFTOOL_PERL" tools/exiftool-tables/dump_hydrated_catalog.pl \
+    "$EXIFTOOL_LIB" > "$CATALOG_OUTPUT"
+)
+python3 tools/exiftool-tables/hydrated_catalog_reconcile.py \
+  --catalog "$CATALOG_OUTPUT" --dump "$DUMP" --output "$CATALOG_REPORT"
+```
+
+Run the reconciliation under the shared heavy-job lock. The native test uses
+the same two environment variables; without an explicitly configured source
+tree it skips the two native checks rather than finding an ambient ExifTool.

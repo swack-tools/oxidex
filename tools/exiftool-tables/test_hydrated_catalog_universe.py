@@ -14,16 +14,17 @@ import hydrated_catalog_reconcile as reconcile
 
 
 PRODUCER = HERE / "dump_hydrated_catalog.pl"
-LOCAL_PERL = "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2"
-LOCAL_LIBRARY = Path("/tmp/oxidex-exiftool-cache/exiftool/lib")
 
 
 def configured_perl() -> str:
-    return os.environ.get("EXIFTOOL_PERL", LOCAL_PERL)
+    return os.environ.get("EXIFTOOL_PERL", "perl")
 
 
-def configured_library() -> Path:
-    source = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", str(LOCAL_LIBRARY)))
+def configured_library() -> Path | None:
+    configured = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
+    if not configured:
+        return None
+    source = Path(configured)
     # CI exports the ExifTool source root; local development commonly names lib.
     return source / "lib" if (source / "lib").is_dir() else source
 
@@ -34,7 +35,7 @@ def executable(command: str) -> bool:
 
 CANONICAL_PERL = configured_perl()
 CANONICAL_LIB = configured_library()
-NATIVE_READY = executable(CANONICAL_PERL) and CANONICAL_LIB.is_dir()
+NATIVE_READY = executable(CANONICAL_PERL) and CANONICAL_LIB is not None and CANONICAL_LIB.is_dir()
 
 
 def table(module: str, name: str) -> dict:
