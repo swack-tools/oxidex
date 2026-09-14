@@ -23,6 +23,7 @@ import quicktime_generated_specs as quicktime_specs
 
 SCHEMA = "oxidex_catalog_hydrated_join_v2"
 CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
+QUICKTIME_READ_EVIDENCE_SCHEMA = "oxidex_quicktime_generated_read_evidence_v1"
 
 
 def canonical_hash(value: object) -> str:
@@ -226,6 +227,9 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
     if not quicktime_rust_matches(expected_rust, emitted_rust):
         raise ValueError("QuickTime Rust artifact differs from bounded-source replay")
     tables = bounded["modules"]["QuickTime"]["tables"]
+    spec_names = {(spec["source_identity"]["table"], spec["source_identity"]["raw_key"],
+                   spec["source_identity"]["source_sha256"], tuple(spec["source_identity"]["variant_path"])): spec["name"]
+                  for spec in expected_ledger["specs"]}
     rows = {}
     for record in expected_ledger["ledger"]:
         identity = record.get("identity", {})
@@ -251,7 +255,9 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
             raise ValueError("QuickTime bounded source identity is malformed") from None
         if key in rows:
             raise ValueError("QuickTime semantic identity collision")
-        rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons")}
+        rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons"),
+                     "source_identity": identity,
+                     "name": spec_names.get((identity["table"], identity["raw_key"], identity["source_sha256"], tuple(identity["variant_path"]))) }
     if sum(value["generated"] for value in rows.values()) != expected_ledger["identity_counts"]["generated"]:
         raise ValueError("QuickTime generated acceptance denominator is inconsistent")
     for family in expected_capabilities["families"]:
@@ -264,10 +270,50 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
     return rows
 
 
+def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str] | None) -> dict[tuple[str, str, str, tuple[int, ...]], str]:
+    """Accept only immutable, artifact-bound matched read identities."""
+    if evidence is None:
+        return {}
+    if input_digests is None:
+        raise ValueError("QuickTime read evidence requires complete generated artifact inputs")
+    if evidence.get("schema") != QUICKTIME_READ_EVIDENCE_SCHEMA:
+        raise ValueError("QuickTime read evidence schema is unsupported or historical")
+    producer = require_mapping(evidence.get("producer"), "QuickTime read evidence producer")
+    if producer.get("source_dirty") is not False:
+        raise ValueError("QuickTime read evidence is not from an immutable clean source")
+    for key in ("source_commit", "source_fingerprint", "runtime_artifact_sha256", "fixture_manifest_sha256"):
+        if not isinstance(producer.get(key), str) or not re.fullmatch(r"[a-f0-9]{40,64}", producer[key]):
+            raise ValueError("QuickTime read evidence producer binding is malformed")
+    if producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip():
+        raise ValueError("QuickTime read evidence pin differs from repository pin")
+    if evidence.get("inputs") != dict(sorted(input_digests.items())):
+        raise ValueError("QuickTime read evidence generated artifact binding differs")
+    observations = evidence.get("observed_identities")
+    if not isinstance(observations, list):
+        raise ValueError("QuickTime read evidence identities are missing or malformed")
+    identities = {}
+    for observation in observations:
+        if not isinstance(observation, dict) or observation.get("matched") is not True:
+            raise ValueError("QuickTime read evidence contains an unmatched identity")
+        identity = require_mapping(observation.get("source_identity"), "QuickTime observed source identity")
+        path = identity.get("variant_path")
+        key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"),
+               tuple(path) if isinstance(path, list) and all(type(item) is int and item >= 0 for item in path) else None)
+        if (not all(isinstance(item, str) and item for item in key[:3]) or key[3] is None
+                or observation.get("group1") != "ItemList" or not isinstance(observation.get("tag_name"), str)
+                or not observation["tag_name"]):
+            raise ValueError("QuickTime observed read identity is malformed")
+        if key in identities:
+            raise ValueError("QuickTime observed read identity is duplicated")
+        identities[key] = observation["tag_name"]
+    return identities
+
+
 def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
           quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
-          quicktime_input_digests: dict[str, str] | None = None) -> dict:
+          quicktime_input_digests: dict[str, str] | None = None,
+          quicktime_read_evidence: dict | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -289,10 +335,11 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     validate_provenance(catalog, hydrated)
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
+    observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, quicktime_input_digests)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):
         raise ValueError("hydrated total_tag_entries differs from catalog denominator")
-    records, status_counts, implementation_counts, family_counts = [], Counter(), Counter(), defaultdict(Counter)
+    records, status_counts, implementation_counts, observed_counts, family_counts = [], Counter(), Counter(), Counter(), defaultdict(Counter)
     for identity in sorted(catalog_by_id):
         entry, source = catalog_by_id[identity], hydrated_by_id.get(identity)
         if source is None:
@@ -309,6 +356,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         implementation = "source_row_not_yet_consumed"
         refusal = None
         selector_hash = None
+        observed_read = "not_observed_yet"
         if source is not None and identity[0].startswith("Image::ExifTool::QuickTime::"):
             variant_path = (identity[2],) if "_variants" in hydrated["hydrated_layouts"]["tables"][identity[0]]["tags"][identity[1]] else ()
             table_document = hydrated["hydrated_layouts"]["tables"][identity[0]]
@@ -324,16 +372,22 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             if candidate is not None and state == "joined":
                 if candidate["generated"]:
                     implementation = "generated_reader_declaration_unobserved"
+                    source_identity = candidate["source_identity"]
+                    evidence_identity = (source_identity["table"], source_identity["raw_key"],
+                                         source_identity["source_sha256"], tuple(source_identity["variant_path"]))
+                    if observed_quicktime.get(evidence_identity) == candidate["name"]:
+                        observed_read = "observed_matched_read"
                 else:
                     implementation = "blocked_generated_reader_refusal"
                     refusal = candidate.get("reasons")
         implementation_counts[implementation] += 1
+        observed_counts[observed_read] += 1
         records.append({"identity": {"table": identity[0], "raw_key": identity[1], "variant_index": identity[2]},
                         "catalog": {"name": entry["name"], "normalized_name": entry["normalized_name"], "groups": entry["groups"]},
                         "source": {"state": state, "name": source_name, "row_sha256": row_hash, "selector_row_sha256": selector_hash, "table_sha256": table_hash},
                         "source_layout_status": status, "source_derived_implementation": implementation,
                         "implementation_refusal_reasons": refusal,
-                        "observed_read": "not_observed_yet", "observed_write": "not_observed_yet"})
+                        "observed_read": observed_read, "observed_write": "not_observed_yet"})
     if len(records) != len(catalog_by_id) or sum(status_counts.values()) != len(records):
         raise ValueError("join conservation failed")
     if sum(sum(counts.values()) for counts in family_counts.values()) != len(records):
@@ -344,7 +398,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         inputs["quicktime"] = dict(sorted(quicktime_input_digests.items()))
     return {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
             "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
-            "implementation": dict(sorted(implementation_counts.items()))},
+            "implementation": dict(sorted(implementation_counts.items())), "observed_read": dict(sorted(observed_counts.items()))},
             "families": {key: dict(sorted(value.items())) for key, value in sorted(family_counts.items())}, "entries": records}
 
 
@@ -358,7 +412,9 @@ def report(join: dict) -> str:
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["status"].items())
     lines += ["", "## Source-derived implementation", "", "| Classification | Count |", "| --- | ---: |"]
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["implementation"].items())
-    lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Each matched row records canonical row and table hashes for later implementation evidence.", "",
+    lines += ["", "## Observed reads", "", "| Classification | Count |", "| --- | ---: |"]
+    lines.extend(f"| `{key}` | {value} |" for key, value in counts["observed_read"].items())
+    lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observed reads additionally require a clean, artifact-bound verifier report and exact source identity; writes remain unobserved.", "",
               "## Families", "", "| Family | Status counts |", "| --- | --- |"]
     lines.extend(f"| {key} | " + ", ".join(f"{name}: {count}" for name, count in value.items()) + " |" for key, value in join["families"].items())
     return "\n".join(lines) + "\n"
@@ -403,13 +459,15 @@ def main() -> int:
     parser.add_argument("--quicktime-itemlist-ledger", required=True, type=Path)
     parser.add_argument("--quicktime-source-capabilities", required=True, type=Path)
     parser.add_argument("--quicktime-itemlist-rust", required=True, type=Path)
+    parser.add_argument("--quicktime-read-evidence", type=Path)
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--replace", action="store_true")
     action.add_argument("--check", action="store_true")
     args = parser.parse_args()
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
                           args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
-                          args.quicktime_source_capabilities, args.quicktime_itemlist_rust)
+                          args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
+                          *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []))
     quicktime_source = args.quicktime_bounded_source.read_bytes()
     quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
     quicktime_capabilities = args.quicktime_source_capabilities.read_bytes()
@@ -420,7 +478,7 @@ def main() -> int:
                          "rust_sha256": hashlib.sha256(quicktime_rust.encode()).hexdigest()}
     join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
                  json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
-                 quicktime_digests)
+                 quicktime_digests, read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():
