@@ -1,22 +1,19 @@
 {
   "instrument": "quicktime_baseline.py; pinned -j -a -G1 -s vs fresh oxidex -j; ItemList projection",
   "provenance_status": "replay_verified",
-  "instrument_sha256": "43a335c13fe9cab5f5d5bd5bab04c1efd5803a65f9530808c124938a42e83c92",
+  "instrument_sha256": "3c43af08de7365a1b9906d31cd504b942cd298f5c8ec4055f3f1511e078244a1",
+  "source_fingerprint": "225baa38c46b5ca3d94f1983552cf3400790bfa7ccd2410a7a4b0f48abfec2a9",
+  "oracle_source_commit": "2200871d9cef988051d2a99d67df3bda6cbb30a8",
+  "oracle_source_manifest_sha256": "cd64114e10d5a94dadf5797059b1b2595556d19e950d933a236818f18ea21be1",
   "pin": "13.59",
-  "source_commit": "5334777d15bd09bb5d45dc86b241cb51d257b2b1",
+  "source_commit": "57e90d6acd06eccb1add22cd034f366186e61dde",
   "source_dirty": true,
   "source_dirty_files": [
     "docs/reference/goal-checkpoint-20260914.md",
-    "docs/reference/quicktime-source-baseline.json",
-    "docs/reference/source-family-migration-plan.md",
-    "tools/exiftool-tables/quicktime_atom_tables.py",
-    "tools/exiftool-tables/test_quicktime_atom_tables.py",
-    "HANDOFF.md",
-    "tools/exiftool-tables/capture_quicktime_baseline.py",
-    "tools/exiftool-tables/fixtures/quicktime_source_13_59.json",
     "tools/exiftool-tables/quicktime_baseline.py",
-    "tools/exiftool-tables/quicktime_source_capabilities.json",
-    "tools/exiftool-tables/test_quicktime_baseline.py"
+    "tools/exiftool-tables/test_quicktime_baseline.py",
+    "HANDOFF.md",
+    "tools/exiftool-tables/fixtures/quicktime_oracle_sources_13_59.json"
   ],
   "binary_sha256": "b36fc15955bc1cd2aecc3f68528b07df3c42ed5421b4ef91db2a2b83ffbf6a65",
   "fixtures": [

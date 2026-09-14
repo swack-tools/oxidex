@@ -98,4 +98,15 @@ and dirty paths. The explicit dirty override covered baseline tools/docs;
 `git diff HEAD -- src Cargo.toml Cargo.lock build.rs` was empty. Cargo validated
 its cached executable against that unchanged runtime. The general timestamp
 warning remains visible in the raw log because documentation is newer than the
-executable; the build log is the validation evidence. Fourteen focused tests pass.
+executable; the build log is the validation evidence. The focused test suite passes.
+
+
+Oracle source identity is pinned beyond the version string. The committed
+`quicktime_oracle_sources_13_59.json` manifest records all 247 script/library files
+from upstream commit `2200871d9cef988051d2a99d67df3bda6cbb30a8` (tag 13.59), plus
+the downloaded archive hash. The local oracle matched all 247 file hashes.
+Replay verifies this source-file universe before and after comparison and records
+the manifest hash. Same-version local source edits are refused. The source
+fingerprint covers tracked differences and untracked file contents, detecting
+changes even when the dirty-path list stays the same. Fixture-check mode also
+prints its instrument header and enforces the standard dirty-tree policy.

@@ -2,6 +2,8 @@ import hashlib
 import json
 from pathlib import Path
 import unittest
+import subprocess
+import tempfile
 
 import quicktime_atom_tables as selector
 import quicktime_baseline as baseline
@@ -11,6 +13,44 @@ HERE = Path(__file__).resolve().parent
 
 
 class BaselineTests(unittest.TestCase):
+    def test_source_fingerprint_detects_already_dirty_tracked_and_untracked_edits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            tracked = root / "source.py"
+            tracked.write_text("committed")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Fixture",
+                            "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base"], check=True)
+            tracked.write_text("first edit")
+            first = baseline.source_fingerprint(root)
+            tracked.write_text("second edit")
+            self.assertNotEqual(first, baseline.source_fingerprint(root))
+            other = root / "new.py"
+            other.write_text("one")
+            first = baseline.source_fingerprint(root)
+            other.write_text("two")
+            self.assertNotEqual(first, baseline.source_fingerprint(root))
+
+    def test_same_version_oracle_source_edits_are_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "lib/Image/ExifTool/QuickTime.pm"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"original processor")
+            (root / "exiftool").write_bytes(b"version 13.59")
+            manifest = {"schema": "oxidex_pinned_oracle_sources_v1", "version": "13.59",
+                        "files": {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                                  for name in ("exiftool", "lib/Image/ExifTool/QuickTime.pm")}}
+            baseline.verify_oracle_sources(root, manifest)
+            source.write_bytes(b"modified processor")
+            with self.assertRaisesRegex(ValueError, "differs from pinned release"):
+                baseline.verify_oracle_sources(root, manifest)
+            source.write_bytes(b"original processor")
+            (source.parent / "Injected.pm").write_bytes(b"unexpected source")
+            with self.assertRaisesRegex(ValueError, "file universe"):
+                baseline.verify_oracle_sources(root, manifest)
+
     def test_committed_fixture_bytes_and_observation_hashes(self):
         baseline.verify_fixtures()
         report = json.loads((baseline.ROOT / "docs/reference/quicktime-reading-baseline.json").read_text())
