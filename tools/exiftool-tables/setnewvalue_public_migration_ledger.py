@@ -127,6 +127,8 @@ def _current_from_authenticated(addressing: Addressing, recipes: list[FinalScala
     for recipe in recipes:
         if recipe.write_proc_source_sha256 != capture["write_exif_source_sha256"]:
             raise RecipeRefused("final recipe WriteExif source does not join address capture")
+        if recipe.writer_source_sha256 != capture["writer_source_sha256"]:
+            raise RecipeRefused("final recipe Writer source does not join address capture")
         if recipe.registry_source_sha256 != capture["exif_source_sha256"]:
             raise RecipeRefused("final recipe TIFF registry source does not join address capture")
         candidates = by_identity.get((recipe.module, recipe.table, recipe.full_name,

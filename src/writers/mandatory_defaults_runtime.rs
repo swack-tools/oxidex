@@ -46,7 +46,10 @@ pub(crate) struct MandatoryRecipe {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TiffByteOrder { Little, Big }
+pub(crate) enum TiffByteOrder {
+    Little,
+    Big,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EncodedMandatoryDefault {
@@ -72,19 +75,36 @@ pub(crate) fn minimal_ifd0_tiff(
     let defaults = defaults_for_new_directory(recipe, "IFD0", no_mandatory, num_entries, jfif)?;
     let mut entries = encode_ifd0_defaults(recipe, &defaults, byte_order)?;
     entries.sort_by_key(|entry| entry.tag_id);
-    if entries.windows(2).any(|pair| pair[0].tag_id == pair[1].tag_id) {
-        return Err(refusal("generated mandatory defaults contain duplicate IFD0 ids"));
+    if entries
+        .windows(2)
+        .any(|pair| pair[0].tag_id == pair[1].tag_id)
+    {
+        return Err(refusal(
+            "generated mandatory defaults contain duplicate IFD0 ids",
+        ));
     }
-    let count = u16::try_from(entries.len()).map_err(|_| refusal("IFD0 entry count exceeds TIFF limit"))?;
-    let ifd_size = 2usize.checked_add(entries.len().checked_mul(12).ok_or_else(|| refusal("IFD0 size overflow"))?)
-        .and_then(|size| size.checked_add(4)).ok_or_else(|| refusal("IFD0 size overflow"))?;
-    let mut result = Vec::with_capacity(8 + ifd_size + entries.iter().map(|entry| entry.bytes.len()).sum::<usize>());
+    let count =
+        u16::try_from(entries.len()).map_err(|_| refusal("IFD0 entry count exceeds TIFF limit"))?;
+    let ifd_size = 2usize
+        .checked_add(
+            entries
+                .len()
+                .checked_mul(12)
+                .ok_or_else(|| refusal("IFD0 size overflow"))?,
+        )
+        .and_then(|size| size.checked_add(4))
+        .ok_or_else(|| refusal("IFD0 size overflow"))?;
+    let mut result = Vec::with_capacity(
+        8 + ifd_size + entries.iter().map(|entry| entry.bytes.len()).sum::<usize>(),
+    );
     match byte_order {
         TiffByteOrder::Little => result.extend_from_slice(b"II\x2a\0\x08\0\0\0"),
         TiffByteOrder::Big => result.extend_from_slice(b"MM\0\x2a\0\0\0\x08"),
     }
     push_u16(&mut result, count, byte_order);
-    let data_start = 8usize.checked_add(ifd_size).ok_or_else(|| refusal("TIFF offset overflow"))?;
+    let data_start = 8usize
+        .checked_add(ifd_size)
+        .ok_or_else(|| refusal("TIFF offset overflow"))?;
     let mut external = Vec::new();
     for entry in entries {
         push_u16(&mut result, entry.tag_id, byte_order);
@@ -94,10 +114,18 @@ pub(crate) fn minimal_ifd0_tiff(
             result.extend_from_slice(&entry.bytes);
             result.resize(result.len() + (4 - entry.bytes.len()), 0);
         } else {
-            let offset = data_start.checked_add(external.len()).ok_or_else(|| refusal("TIFF offset overflow"))?;
-            push_u32(&mut result, u32::try_from(offset).map_err(|_| refusal("TIFF offset exceeds u32"))?, byte_order);
+            let offset = data_start
+                .checked_add(external.len())
+                .ok_or_else(|| refusal("TIFF offset overflow"))?;
+            push_u32(
+                &mut result,
+                u32::try_from(offset).map_err(|_| refusal("TIFF offset exceeds u32"))?,
+                byte_order,
+            );
             external.extend_from_slice(&entry.bytes);
-            if external.len() & 1 != 0 { external.push(0); }
+            if external.len() & 1 != 0 {
+                external.push(0);
+            }
         }
     }
     push_u32(&mut result, 0, byte_order); // no next IFD
@@ -106,10 +134,16 @@ pub(crate) fn minimal_ifd0_tiff(
 }
 
 fn push_u16(out: &mut Vec<u8>, value: u16, order: TiffByteOrder) {
-    match order { TiffByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()), TiffByteOrder::Big => out.extend_from_slice(&value.to_be_bytes()) }
+    match order {
+        TiffByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()),
+        TiffByteOrder::Big => out.extend_from_slice(&value.to_be_bytes()),
+    }
 }
 fn push_u32(out: &mut Vec<u8>, value: u32, order: TiffByteOrder) {
-    match order { TiffByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()), TiffByteOrder::Big => out.extend_from_slice(&value.to_be_bytes()) }
+    match order {
+        TiffByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()),
+        TiffByteOrder::Big => out.extend_from_slice(&value.to_be_bytes()),
+    }
 }
 
 /// Execute the admitted direct `WriteValue` packing path for generated IFD0
@@ -121,27 +155,54 @@ pub(crate) fn encode_ifd0_defaults(
 ) -> Result<Vec<EncodedMandatoryDefault>, String> {
     let mut encoded = Vec::with_capacity(defaults.len());
     for default in defaults {
-        let format = recipe.encodings.iter().find(|item| item.tag_id == default.tag_id)
+        let format = recipe
+            .encodings
+            .iter()
+            .find(|item| item.tag_id == default.tag_id)
             .ok_or_else(|| refusal("mandatory default has no generated WriteValue operand"))?;
         let value = match default.value {
             MandatoryValue::Integer(value) => value,
-            MandatoryValue::Text(_) => return Err(refusal("text mandatory default is outside numeric encoder scope")),
+            MandatoryValue::Text(_) => {
+                return Err(refusal(
+                    "text mandatory default is outside numeric encoder scope",
+                ));
+            }
         };
         let (tiff_type, count, bytes) = match format.format_name {
             "int16u" => {
-                let value = u16::try_from(value).map_err(|_| refusal("int16u mandatory operand is outside native range"))?;
-                let bytes = match byte_order { TiffByteOrder::Little => value.to_le_bytes(), TiffByteOrder::Big => value.to_be_bytes() };
+                let value = u16::try_from(value)
+                    .map_err(|_| refusal("int16u mandatory operand is outside native range"))?;
+                let bytes = match byte_order {
+                    TiffByteOrder::Little => value.to_le_bytes(),
+                    TiffByteOrder::Big => value.to_be_bytes(),
+                };
                 (3, 1, bytes.to_vec())
             }
             "rational64u" => {
-                let value = u32::try_from(value).map_err(|_| refusal("rational64u mandatory operand is outside native range"))?;
+                let value = u32::try_from(value).map_err(|_| {
+                    refusal("rational64u mandatory operand is outside native range")
+                })?;
                 let mut bytes = Vec::with_capacity(8);
-                match byte_order { TiffByteOrder::Little => { bytes.extend(value.to_le_bytes()); bytes.extend(1u32.to_le_bytes()); }, TiffByteOrder::Big => { bytes.extend(value.to_be_bytes()); bytes.extend(1u32.to_be_bytes()); } }
+                match byte_order {
+                    TiffByteOrder::Little => {
+                        bytes.extend(value.to_le_bytes());
+                        bytes.extend(1u32.to_le_bytes());
+                    }
+                    TiffByteOrder::Big => {
+                        bytes.extend(value.to_be_bytes());
+                        bytes.extend(1u32.to_be_bytes());
+                    }
+                }
                 (5, 1, bytes)
             }
             _ => return Err(refusal("mandatory WriteValue format is unsupported")),
         };
-        encoded.push(EncodedMandatoryDefault { tag_id: default.tag_id, tiff_type, count, bytes });
+        encoded.push(EncodedMandatoryDefault {
+            tag_id: default.tag_id,
+            tiff_type,
+            count,
+            bytes,
+        });
     }
     Ok(encoded)
 }
@@ -187,11 +248,17 @@ pub(crate) fn defaults_for_new_directory(
                 // then consumes all three fields.  A partial payload with Y
                 // defined would reach native WriteValue with undefined
                 // operands; it is outside this numeric carrier and refuses.
-                if jfif.y.is_none() { break; }
+                if jfif.y.is_none() {
+                    break;
+                }
                 let raw = match assignment.property {
-                    "JFIFXResolution" => jfif.x.ok_or_else(|| refusal("JFIF X resolution is undefined"))?,
+                    "JFIFXResolution" => jfif
+                        .x
+                        .ok_or_else(|| refusal("JFIF X resolution is undefined"))?,
                     "JFIFYResolution" => jfif.y.expect("checked above"),
-                    "JFIFResolutionUnit" => jfif.resolution_unit.ok_or_else(|| refusal("JFIF resolution unit is undefined"))?,
+                    "JFIFResolutionUnit" => jfif
+                        .resolution_unit
+                        .ok_or_else(|| refusal("JFIF resolution unit is undefined"))?,
                     _ => return Err(refusal("JFIF substitution property is unsupported")),
                 };
                 let value = raw

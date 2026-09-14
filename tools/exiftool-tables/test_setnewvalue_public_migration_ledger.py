@@ -46,7 +46,7 @@ def row(name: str, raw_id: str, *, write_group: str = "IFD0") -> AddressRow:
 def recipe(name: str, raw_id: int, *, write_group: str = "IFD0", control: str = h("3")) -> FinalScalarRecipe:
     return FinalScalarRecipe("Exif", "Main", "Image::ExifTool::Exif::Main", raw_id,
                              name, "EXIF", write_group, "int16u", "int16u", "CeilDivision",
-                             control, h("4"), h("b"), h("d"))
+                             control, h("4"), h("b"), h("d"), h("c"))
 
 
 class PublicMigrationLedgerTest(unittest.TestCase):
@@ -102,6 +102,11 @@ class PublicMigrationLedgerTest(unittest.TestCase):
             self.current([row("Artist", "315"), row("Artist", "0x013b")], [recipe("Artist", 315)])
         with self.assertRaisesRegex(RecipeRefused, "WriteExif"):
             self.current([row("Artist", "315")], [replace(recipe("Artist", 315), write_proc_source_sha256=h("9"))])
+
+    def test_final_writer_source_must_join_address_capture(self):
+        with self.assertRaisesRegex(RecipeRefused, "Writer source"):
+            self.current([row("Artist", "315")],
+                         [replace(recipe("Artist", 315), writer_source_sha256=h("9"))])
 
     def test_prior_tamper_and_missing_bootstrap_refuse(self):
         source, current = self.current([row("Artist", "315")], [recipe("Artist", 315)])

@@ -68,11 +68,23 @@ including generated address operands, their report/history and source-derived
 mandatory defaults. A full real regeneration of all 49 is still required; the
 previous complete regeneration covered 44 artifacts.
 
+The integrated public-migration ledger passed 11 tests with selected native
+Perl/ExifTool, including a copied-source rename and a mismatched final Writer
+source refusal. Its runtime consumer and official artifact registration remain
+unfinished.
+
 Public migration must use the generated intersection of complete address and
 final-writer identities, with retained history for previously migrated entries.
 The broader 561-name source inventory is not the public migration set. Tags
 never migrated retain their existing route; migrated tags whose newer native
 rules are removed or unsupported must not silently use old manual rules.
+
+Mandatory default encoding and an internal minimal-IFD0 carrier are integrated
+but inactive. Eleven focused tests pass, including per-field JFIF presence and
+source-binding refusals. Review found that the relevant numeric WriteValue
+executable grammar still needs compilation; a source hash and nonempty body
+are not proof of automatic behavior adoption. New JPEG EXIF creation stays
+unfinished until this is repaired and tested through native file operations.
 
 PR #768 remains open at `68b30d5f`: both hosted table-check attempts ended in
 runner shutdown during the tier-2 dump, so neither gives a completed drift
