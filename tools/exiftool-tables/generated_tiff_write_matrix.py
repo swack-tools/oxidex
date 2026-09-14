@@ -437,7 +437,15 @@ def main():
     parser.add_argument("--rehearsal-pin", type=Path, help="owned checkout .exiftool-version for rehearsal")
     parser.add_argument("--route", choices=("final-key", "resolved-address", "public-api"), default="final-key",
                         help="dispatch path exercised; public-api calls public modify_tag/remove_tag")
+    parser.add_argument("--readback-evidence", type=Path, help="opt-in authenticated native Group1 write-readback sidecar")
+    parser.add_argument("--readback-source", type=Path, help="captured native source used to regenerate final/public artifacts")
+    parser.add_argument("--readback-build-proof", type=Path, help="write_readback_evidence.py build-proof.json")
     args = parser.parse_args()
+    readback_options = (args.readback_evidence, args.readback_source, args.readback_build_proof)
+    if any(readback_options) and (not all(readback_options) or args.route != "public-api" or args.rehearsal_release):
+        parser.error("readback requires all three --readback-* options, --route public-api, and the repository pin")
+    if args.readback_evidence and (args.readback_evidence.exists() or args.readback_evidence.resolve() in {args.output.resolve(), args.readback_source.resolve(), args.readback_build_proof.resolve()}):
+        parser.error("readback evidence output exists or aliases an input/output")
     if (args.rehearsal_release is None) != (args.rehearsal_pin is None):
         parser.error("--rehearsal-release and --rehearsal-pin must be supplied together")
     carriers = ("tiff_little", "tiff_big") + (("jpeg",) if args.jpeg_base else ())
@@ -458,6 +466,11 @@ def main():
     if contract is None:
         native.assert_contract_version(identity)
         contract = {"mode": "pinned-13.59-contract", "release": native.CONTRACT_EXIFTOOL_RELEASE}
+    collector = None
+    if args.readback_evidence:
+        from write_readback_evidence import Collector
+        collector = Collector(args.readback_source, args.readback_build_proof, binary.path,
+                              args.ledger, args.rules, perl, library, identity)
     print_header(tool="generated_scalar_write_matrix_v4", git=state, binary=binary,
                  dirty_overridden=overridden,
                  extra=[f"native: {identity}", f"contract: {contract['mode']} {contract['release']}",
@@ -509,11 +522,16 @@ def main():
                     rows.append({"carrier": carrier, "id": stem, "target": asdict(target), "case_family": target.case_family, "requested_name": name, "target_directory": list(path), "coverage_family": ("extended_" if operation in extended_numeric_inputs(target) else "") + ("selected_directory_" if path else "baseline_") + target.case_family, "public_scalar": scalar, "requested_operation": operation, "operation": operation, "requested_input_hex": None if input_bytes is None else input_bytes.hex(), "effective_operation": effective_operation, "effective_state": "pending_native_comparison", "effective_source": "pinned native SetNewValue against the seeded physical target", "seed_target_present": seeded_target, "seeded": str(seeded), "native_output": str(expected), "output": str(output), "native_call": operation_call})
     request_path, result_path = root / "requests.json", root / "results.json"
     request_path.write_text(json.dumps(requests, indent=2) + "\n")
+    if collector is not None:
+        collector.capture_inputs(rows)
     env = os.environ.copy()
     env.update(OXIDEX_SCALAR_WRITE_REQUESTS=str(request_path), OXIDEX_SCALAR_WRITE_RESULTS=str(result_path))
     result = subprocess.run([str(binary.path), DRIVER, "--exact", "--ignored", "--nocapture"], env=env, capture_output=True, text=True, timeout=120)
     (root / "driver.log").write_text(result.stdout + result.stderr)
     result.check_returncode()
+    if collector is not None:
+        from write_readback_evidence import completed_transcript
+        collector.driver_call = completed_transcript([str(binary.path), DRIVER, "--exact", "--ignored", "--nocapture"], result)
     results = json.loads(result_path.read_text())
     report = {"instrument": "generated_scalar_write_matrix_v4", "route": args.route, "native_identity": identity,
               "contract": contract,
@@ -566,6 +584,10 @@ def main():
         except (AssertionError, ValueError, OSError) as error:
             row.update(state="failed", error=str(error))
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if collector is not None:
+        evidence = collector.finish(report, args.output)
+        args.readback_evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+        print("Authenticated public write readback:", evidence["counts"])
     print(
         f"Scalar write operations matched via {args.route}: {report['passed']}/{declared} "
         f"(mutating {report['passed_by_effective_state']['mutated']}, "

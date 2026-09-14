@@ -55,6 +55,51 @@ def observation_rows(fixture_name, fixture_bytes, expected, actual):
 
 
 class CatalogHydratedJoinTests(unittest.TestCase):
+    def test_write_observations_have_separate_operation_and_group1_counts(self):
+        import write_readback_evidence
+        table = "Image::ExifTool::Exif::Main"
+        identity = (table, "315", 0)
+        coordinate = {"table": table, "raw_key": "315", "variant_index": 0}
+        item = {**entry("Artist", "315"), **coordinate,
+                "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}}
+        cat = catalog([item])
+        capture = {"exiftool_version": "13.59"}
+        sources = {}
+        loaded = {}
+        for field, path in write_readback_evidence.SOURCE_FILES.items():
+            capture[field] = "a" * 64
+            sources[path] = {"library_relative_path": path, "sha256": "a" * 64}
+            loaded[path] = "a" * 64
+        cat["producer"]["sources"] = sources
+        hyd = {"exiftool_version": "13.59", "hydrated_layouts": {
+            "catalog_counts": {"total_tag_entries": 1}, "source_provenance": {"sources": sources},
+            "tables": {table: {"full_name": table, "tags": {"315": {"Name": "Artist"}}}}}}
+        source = json.dumps({"native_write_capture_context": {"loaded_modules": loaded}}).encode()
+        writer = {identity: {"name": "Artist", "write_group": "IFD0"}}
+        digests = {key: "b" * 64 for key in ("source_sha256", "final_ledger_sha256", "final_rust_sha256", "public_ledger_sha256", "public_rust_sha256")}
+        observations = [{"source_identity": coordinate, "group1_name": "IFD1:Artist", "case_id": name}
+                        for name in ("little-update", "big-update")]
+        sidecar = {"producer": {"fixture": True}}
+        with patch.object(join, "writer_implementation", return_value=writer), \
+             patch.object(write_readback_evidence, "validate_evidence", return_value=observations) as verify:
+            args = dict(writer_source=source, writer_final_ledger={}, writer_final_rust="final",
+                        writer_public_ledger={"source": {"capture": capture}}, writer_public_rust="public",
+                        writer_input_digests=digests)
+            before = join.build(cat, hyd, "catalog", "hydrated", **args)
+            self.assertEqual(before["entries"][0]["observed_write"], "not_observed_yet")
+            self.assertNotIn("write_readback", before["counts"])
+            after = join.build(cat, hyd, "catalog", "hydrated", writer_read_evidence=sidecar, **args)
+            verify.assert_called_once_with(sidecar, writer, digests, capture)
+        self.assertEqual(after["entries"][0]["observed_write"], "observed_matched_write")
+        self.assertEqual(after["entries"][0]["observed_write_group1_names"], ["IFD1:Artist"])
+        self.assertEqual(after["counts"]["write_readback"]["successful_write_operations"], 2)
+        self.assertEqual(after["counts"]["write_readback"]["distinct_group1_names"], 1)
+        self.assertEqual(after["entries"][0]["observed_read"], "not_observed_yet")
+
+    def test_write_evidence_without_authenticated_writer_inputs_refuses(self):
+        with self.assertRaisesRegex(ValueError, "complete authenticated writer"):
+            join.build(catalog([entry()]), hydrated({"titl": {"Name": "Title"}}), "a", "b", writer_read_evidence={})
+
     def test_writer_replay_requires_exact_source_bound_artifacts_and_conserves_rows(self):
         source = json.dumps({"exiftool_version": "13.59"}).encode()
         row = {"module": "Exif", "table": "Main", "full_name": "Image::ExifTool::Exif::Main",
@@ -64,14 +109,14 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         current = {join.public_migration._entry_key(row): SimpleNamespace(
             full_name=row["full_name"], name=row["name"], source_control_sha256=row["source_control_sha256"],
             semantics_sha256=row["semantics_sha256"])}
-        final = {"recipes": [{"full_name": row["full_name"], "raw_tag_id": 315, "name": "Artist", "physical_write_group": "IFD0"}], "registry": {"formats": ("TIFF", "JPEG")}}
+        final = {"recipes": [{"full_name": row["full_name"], "raw_tag_id": 315, "name": "Artist", "physical_write_group": "IFD0", "wire_format": "string"}], "registry": {"formats": ("TIFF", "JPEG")}}
         public = {"source": {"capture": "bound"}, "entries": [row]}
         with patch.object(join.final_scalar_stage, "generate", return_value=("final-rust", final)), \
              patch.object(join.public_migration, "compile_current", return_value=({"capture": "bound"}, current)), \
              patch.object(join.public_migration, "validate_ledger"), \
              patch.object(join.public_migration, "render_rust", return_value="public-rust"):
             rows = join.writer_implementation(source, json.loads(json.dumps(final)), "final-rust", public, "public-rust")
-            self.assertEqual(rows, {(row["full_name"], "315", 0): {"name": "Artist", "write_group": "IFD0", "semantics_sha256": "b" * 64}})
+            self.assertEqual(rows, {(row["full_name"], "315", 0): {"name": "Artist", "write_group": "IFD0", "group0": "EXIF", "wire_format": "string", "semantics_sha256": "b" * 64}})
             with self.assertRaisesRegex(ValueError, "final artifacts"):
                 join.writer_implementation(source, json.loads(json.dumps(final)), "tampered", public, "public-rust")
             bad = copy.deepcopy(public); bad["entries"][0]["name"] = "Alias"

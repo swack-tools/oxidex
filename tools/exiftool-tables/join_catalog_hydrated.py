@@ -62,7 +62,7 @@ def writer_implementation(source: bytes | None, final_ledger: dict | None, final
         raise ValueError("writer public ledger source closure differs from authenticated replay")
     if not quicktime_rust_matches(public_migration.render_rust(public_ledger), public_rust):
         raise ValueError("writer public Rust artifact differs from authenticated ledger")
-    recipes = {(row["full_name"], row["raw_tag_id"], row["name"], row["physical_write_group"])
+    recipes = {(row["full_name"], row["raw_tag_id"], row["name"], row["physical_write_group"]): row
                for row in expected_final.get("recipes", [])}
     rows = {}
     for entry in public_ledger["entries"]:
@@ -83,6 +83,7 @@ def writer_implementation(source: bytes | None, final_ledger: dict | None, final
         if identity in rows:
             raise ValueError("writer public ledger has duplicate catalog identity")
         rows[identity] = {"name": entry["name"], "write_group": entry["write_group"],
+                          "group0": entry["group0"], "wire_format": recipes[recipe_key]["wire_format"],
                           "semantics_sha256": entry["semantics_sha256"]}
     if len(rows) != len(recipes):
         raise ValueError("writer public/final recipe conservation failed")
@@ -415,7 +416,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           writer_source: bytes | None = None, writer_final_ledger: dict | None = None,
           writer_final_rust: str | None = None, writer_public_ledger: dict | None = None,
           writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None,
-          quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None) -> dict:
+          quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
+          writer_read_evidence: dict | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -458,6 +460,17 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                 raise ValueError("writer source closure differs from catalog/hydrated provenance")
     itemlist_digests = ({key: quicktime_input_digests[key] for key in ("source_sha256", "ledger_sha256", "capabilities_sha256", "rust_sha256")}
                         if quicktime_input_digests else None)
+    observed_writes = []
+    if writer_read_evidence is not None:
+        if not writer or writer_input_digests is None:
+            raise ValueError("write observations require complete authenticated writer inputs")
+        from write_readback_evidence import validate_evidence
+        observed_writes = validate_evidence(writer_read_evidence, writer, writer_input_digests,
+                                            writer_public_ledger["source"]["capture"])
+    write_names = defaultdict(set)
+    for observation in observed_writes:
+        key = observation["source_identity"]
+        write_names[(key["table"], key["raw_key"], key["variant_index"])].add(observation["group1_name"])
     observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, itemlist_digests,
                                                  itemlist_ledger["specs"] if itemlist_ledger else None)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
@@ -528,7 +541,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                         "source_layout_status": status, "source_derived_implementation": implementation,
                         "reader_implementation": reader_implementation, "writer_implementation": writer_state,
                         "implementation_refusal_reasons": refusal,
-                        "observed_read": observed_read, "observed_write": "not_observed_yet"})
+                        "observed_read": observed_read, "observed_write": "observed_matched_write" if identity in write_names else "not_observed_yet"})
+        if writer_read_evidence is not None:
+            records[-1]["observed_write_group1_names"] = sorted(write_names.get(identity, ()))
     if len(records) != len(catalog_by_id) or sum(status_counts.values()) != len(records):
         raise ValueError("join conservation failed")
     if sum(sum(counts.values()) for counts in family_counts.values()) != len(records):
@@ -542,11 +557,19 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     if quicktime_read_evidence is not None:
         inputs["quicktime_read_evidence"] = {"sha256": canonical_hash(quicktime_read_evidence),
                                              "producer": quicktime_read_evidence["producer"]}
-    return {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
+    if writer_read_evidence is not None:
+        inputs["writer_read_evidence"] = {"sha256": canonical_hash(writer_read_evidence),
+                                         "producer": writer_read_evidence["producer"]}
+    result = {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
             "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
             "implementation": dict(sorted(implementation_counts.items())), "reader_implementation": dict(sorted(reader_counts.items())),
             "writer_implementation": dict(sorted(writer_counts.items())), "observed_read": dict(sorted(observed_counts.items()))},
             "families": {key: dict(sorted(value.items())) for key, value in sorted(family_counts.items())}, "entries": records}
+    if writer_read_evidence is not None:
+        from write_readback_evidence import summarize
+        result["counts"]["observed_write"] = dict(sorted(Counter(row["observed_write"] for row in records).items()))
+        result["counts"]["write_readback"] = summarize(observed_writes)
+    return result
 
 
 def report(join: dict) -> str:
@@ -561,6 +584,11 @@ def report(join: dict) -> str:
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["implementation"].items())
     lines += ["", "## Observed reads", "", "| Classification | Count |", "| --- | ---: |"]
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["observed_read"].items())
+    if "write_readback" in counts:
+        writes = counts["write_readback"]
+        lines += ["", "## Observed public writes", "",
+                  f"Successful mutating write/readback operations: {writes['successful_write_operations']}",
+                  f"Distinct observed Group1 names: {writes['distinct_group1_names']}"]
     lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observed reads additionally require a clean, artifact-bound verifier report and exact source identity; writes remain unobserved.", "",
               "## Families", "", "| Family | Status counts |", "| --- | --- |"]
     lines.extend(f"| {key} | " + ", ".join(f"{name}: {count}" for name, count in value.items()) + " |" for key, value in join["families"].items())
@@ -609,6 +637,7 @@ def main() -> int:
     parser.add_argument("--quicktime-keys-ledger", required=True, type=Path)
     parser.add_argument("--quicktime-keys-rust", required=True, type=Path)
     parser.add_argument("--quicktime-read-evidence", type=Path)
+    parser.add_argument("--writer-read-evidence", type=Path)
     parser.add_argument("--writer-source", type=Path,
                         help="authenticated full native dump used by both writer compilers")
     parser.add_argument("--writer-final-ledger", type=Path)
@@ -627,7 +656,8 @@ def main() -> int:
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
                           args.quicktime_keys_ledger, args.quicktime_keys_rust,
                           *(writer_paths if all(path is not None for path in writer_paths) else ()),
-                          *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []))
+                          *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []),
+                          *([args.writer_read_evidence] if args.writer_read_evidence else []))
     quicktime_source = args.quicktime_bounded_source.read_bytes()
     quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
     quicktime_capabilities = args.quicktime_source_capabilities.read_bytes()
@@ -656,7 +686,8 @@ def main() -> int:
                  quicktime_keys_ledger=json.loads(keys_ledger), quicktime_keys_rust=keys_rust,
                  writer_source=writer_source, writer_final_ledger=json.loads(writer_final) if writer_final else None,
                  writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
-                 writer_public_rust=writer_public_rust, writer_input_digests=writer_digests)
+                 writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,
+                 writer_read_evidence=read_json(args.writer_read_evidence) if args.writer_read_evidence else None)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():
