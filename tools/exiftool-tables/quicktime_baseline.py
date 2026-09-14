@@ -20,9 +20,9 @@ import instrument
 
 def runtime_input_manifest(root: Path) -> str:
     """Hash compiled parser/build inputs, deliberately excluding reports and docs."""
-    paths = [root / name for name in ("Cargo.toml", "Cargo.lock", "build.rs") if (root / name).is_file()]
+    paths = [root / name for name in ("Cargo.toml", "Cargo.lock", "build.rs", ".exiftool-version") if (root / name).is_file()]
     paths += [path for path in (root / "src").rglob("*") if path.is_file()]
-    paths += [path for crate in root.glob("oxidex-tags-*") for path in crate.rglob("*")
+    paths += [path for crate in [root / "oxidex-tags", *root.glob("oxidex-tags-*")] if crate.is_dir() for path in crate.rglob("*")
               if path.is_file() and path.suffix in {".rs", ".toml", ".yaml"}]
     digest = hashlib.sha256()
     for path in sorted(paths):

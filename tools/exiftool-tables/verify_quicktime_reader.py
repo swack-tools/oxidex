@@ -216,6 +216,8 @@ def compare(tree: Path, output: Path, artifacts: tuple[Path, Path, Path, Path]):
         raise ValueError("source changed during the comparison")
     baseline.verify_oracle_sources(tree, manifest)
     occurrences, identities, fixture_digest = observation_evidence(rows, ledger["specs"])
+    file_tag_occurrences = {(row["fixture"], json.dumps(row["source_identity"], sort_keys=True))
+                            for row in occurrences}
     report = {
         "schema": EVIDENCE_SCHEMA,
         "instrument": "verify_quicktime_reader.py; native and fresh oxidex -j -a -G1; ItemList projection",
@@ -231,6 +233,8 @@ def compare(tree: Path, output: Path, artifacts: tuple[Path, Path, Path, Path]):
                      "runtime_artifact_sha256": hashlib.sha256(Path(binary.path).read_bytes()).hexdigest(),
                      "fixture_manifest_sha256": fixture_digest, "pin": oracle.version},
         "matched_occurrences": occurrences, "observed_identities": identities,
+        "metric_c": {"distinct_group1_tag_identities": len(identities),
+                     "fixture_tag_occurrences_deduped_across_print_modes": len(file_tag_occurrences)},
         "matched_observations": sum(row["matched"] for row in rows),
         "writing_observed": None,
         "scope": "default-locale ItemList behavior fixtures; not corpus coverage or every source row",
