@@ -23,11 +23,12 @@ LIB = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
 @unittest.skipUnless(PERL and LIB and Path(PERL).is_file() and Path(LIB).is_dir(),
                      "requires explicit canonical EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL")
 class NativeSetNewValueAddressingTests(unittest.TestCase):
-    def probe_capture(self, lib: Path) -> dict:
+    def probe_capture(self, lib: Path, *, preload: tuple[str, ...] = ()) -> dict:
         """Small native capture for probe binding tests; no table dump/regen."""
         source = r'''
 use strict; use warnings; use B (); use B::Deparse; use Cwd qw(abs_path); use Digest::SHA qw(sha256_hex); use File::Spec; use JSON::PP;
 my $lib = abs_path(shift); unshift @INC, $lib; require Image::ExifTool; require 'Image/ExifTool/Writer.pl';
+for my $file (@ARGV) { require $file; }
 Image::ExifTool::GetTagTable('Image::ExifTool::Exif::Main') or die "no Exif Main\n";
 sub raw { open(my $f, '<:raw', $_[0]) or die $!; local $/; my $x=<$f>; close($f); return $x }
 sub rel { my $a=abs_path($_[0]); die "outside\n" unless index($a, "$lib/")==0; return File::Spec->abs2rel($a,$lib) }
@@ -38,7 +39,7 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "capture.pl"
             script.write_text(source, encoding="utf-8")
-            output = subprocess.run([PERL, str(script), str(lib)], check=True,
+            output = subprocess.run([PERL, str(script), str(lib), *preload], check=True,
                                     text=True, capture_output=True).stdout
         return json.loads(output)
 
@@ -138,6 +139,34 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
         with self.assertRaisesRegex(RecipeRefused, "FindTagInfo"):
             _find_tag_info_source({"native_write_helpers": {"find_tag_info": changed}})
 
+    def test_probe_replays_authenticated_xmp_closure_before_helper_deparse(self):
+        """A full settled capture must be replayed before its helper hash joins."""
+        native = self.probe_capture(Path(LIB), preload=("Image/ExifTool/XMP.pm",))
+        self.assertIn("Image/ExifTool/XMP.pm", {
+            item["inc"] for item in native["native_capture_context"]["loaded_closure"]["modules"]})
+        rows = [{"module": "Exif", "table": "Main", "full_name": "Image::ExifTool::Exif::Main",
+                 "raw_id": "316", "name": "HostComputer"}]
+        canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                               ensure_ascii=False).encode()
+        capture = {
+            "native_capture_context": native["native_capture_context"],
+            "find_tag_info": native["helpers"]["find_tag_info"],
+            "set_new_value": native["helpers"]["set_new_value"],
+            "source_rows_sha256": hashlib.sha256(canonical(rows)).hexdigest(),
+            "query_names_sha256": hashlib.sha256(canonical(["hostcomputer"])).hexdigest(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            probe_input = Path(directory) / "probe.json"
+            probe_input.write_text(json.dumps({"schema": "native_setnewvalue_address_probe_input_v2",
+                                                "capture": capture, "rows": rows,
+                                                "query_names": ["hostcomputer"]}), encoding="utf-8")
+            result = subprocess.run(
+                [PERL, str(ROOT / "tools/exiftool-tables/setnewvalue_address_probe.pl"),
+                 str(LIB), str(probe_input)], check=True, text=True, capture_output=True)
+        observed = json.loads(result.stdout)
+        self.assertEqual(observed["runtime"]["helpers"]["find_tag_info"], capture["find_tag_info"])
+        self.assertEqual(observed["runtime"]["loaded_closure"], capture["native_capture_context"]["loaded_closure"])
+
     def test_probe_refuses_preloaded_external_exiftool_before_reading_input(self):
         """The selected -I path cannot silently replace an ambient package."""
         with tempfile.TemporaryDirectory() as directory:
@@ -182,7 +211,7 @@ my $j=JSON::PP->new->canonical->utf8; print $j->encode({native_capture_context=>
                 [PERL, str(ROOT / "tools/exiftool-tables/setnewvalue_address_probe.pl"),
                  str(copied), str(probe_input)], text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("loaded module differs from dump capture: Image/ExifTool/Exif.pm", result.stderr)
+        self.assertIn("dump capture module source differs from selected library: Image/ExifTool/Exif.pm", result.stderr)
 
 
 if __name__ == "__main__":
