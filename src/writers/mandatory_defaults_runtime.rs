@@ -74,7 +74,7 @@ pub(crate) fn minimal_ifd0_tiff(
     jfif: Option<JfifValues>,
 ) -> Result<Vec<u8>, String> {
     let defaults = defaults_for_new_directory(recipe, "IFD0", no_mandatory, num_entries, jfif)?;
-    let entries = encode_ifd0_defaults(recipe, &defaults, byte_order)?;
+    let entries = encode_mandatory_defaults(recipe, &defaults, byte_order)?;
     serialize_ifd0_defaults(entries, byte_order)
 }
 
@@ -155,9 +155,10 @@ fn push_u32(out: &mut Vec<u8>, value: u32, order: TiffByteOrder) {
     }
 }
 
-/// Execute the admitted direct `WriteValue` packing path for generated IFD0
-/// mandatory operands.  It intentionally has no public writer entry point.
-pub(crate) fn encode_ifd0_defaults(
+/// Execute the admitted direct `WriteValue` packing path for generated numeric
+/// mandatory operands in the selected directory. It intentionally has no public
+/// writer entry point.
+pub(crate) fn encode_mandatory_defaults(
     recipe: &MandatoryRecipe,
     defaults: &[MandatoryDefault],
     byte_order: TiffByteOrder,
@@ -215,6 +216,15 @@ pub(crate) fn encode_ifd0_defaults(
     }
     Ok(encoded)
 }
+/// Compatibility wrapper for the admitted IFD0 fresh-carrier caller.
+pub(crate) fn encode_ifd0_defaults(
+    recipe: &MandatoryRecipe,
+    defaults: &[MandatoryDefault],
+    byte_order: TiffByteOrder,
+) -> Result<Vec<EncodedMandatoryDefault>, String> {
+    encode_mandatory_defaults(recipe, defaults, byte_order)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JfifValues {
     pub x: Option<i64>,

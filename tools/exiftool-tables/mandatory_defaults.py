@@ -189,7 +189,12 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     # The direct new-directory path chooses Format when present, otherwise
     # Writable.  This bounded encoder only implements those two native scalar
     # packing procedures, and rejects every row with another write hook.
-    ids = {item.tag_id for directory in recipe.directories if directory.directory == "IFD0" for item in directory.defaults}
+    # Every integer lexical default enters the same `$tagTablePtr->{id}` /
+    # `WriteValue(value, format, 1)` path.  Directory selection chooses the
+    # destination; it does not change the selected table row or its format.
+    # Text operands remain outside this bounded numeric packer.
+    ids = {item.tag_id for directory in recipe.directories for item in directory.defaults
+           if item.kind == "Integer"}
     ids.update(tag_id for tag_id, _property, _adjustment in recipe.jfif_override.assignments)
     encodings = []
     for tag_id in sorted(ids):

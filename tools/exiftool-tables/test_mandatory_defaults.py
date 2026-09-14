@@ -203,6 +203,12 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
         canonical_fact = capture(NATIVE[1])
         rendered, _report = generate(canonical_fact, self._document(canonical_fact), str(NATIVE[0]))
         self.assertIn('tag_id: 0x0213, format_name: "int16u"', rendered)
+        # IFD1 is selected by the same captured `$tagTablePtr->{id}` / WriteValue
+        # path. These are source-captured defaults, not a handwritten IFD1 list.
+        self.assertIn('tag_id: 0x0103, format_name: "int16u"', rendered)
+        self.assertIn('tag_id: 0x011a, format_name: "rational64u"', rendered)
+        self.assertIn('tag_id: 0x011b, format_name: "rational64u"', rendered)
+        self.assertIn('tag_id: 0x0128, format_name: "int16u"', rendered)
         # This calls the real selected Writer.pl helper.  WriteExif's proven
         # new-directory branch invokes this helper directly for these values.
         env = {key:value for key,value in os.environ.items() if key not in {'PERL5LIB','PERLLIB','PERL5OPT'}}
