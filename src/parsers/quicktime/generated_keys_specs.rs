@@ -77,3 +77,4 @@ pub(crate) static KEYS_SPECS: &[KeySpec] = &[
     KeySpec { source_key: "xiaomi.exifInfo.videoinfo", data: ItemListSpec { raw_fourcc: [0, 0, 0, 0], name: "XiaomiExifInfo", group: "Keys", group0: "QuickTime", source_format: SourceFormat::Implicit, safe_enum_operands: &[] } },
     KeySpec { source_key: "year", data: ItemListSpec { raw_fourcc: [0, 0, 0, 0], name: "Year", group: "Keys", group0: "QuickTime", source_format: SourceFormat::Implicit, safe_enum_operands: &[] } },
 ];
+pub(crate) static REFUSED_SOURCE_KEYS: &[&str] = &["creation_time", "creationdate", "detected-face", "detected-face.bounds", "live-photo-info", "location.ISO6709", "location.date", "scene-illuminance", "sdpd", "setu", "smartstyle-info"];

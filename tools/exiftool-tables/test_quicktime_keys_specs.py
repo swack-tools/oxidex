@@ -14,6 +14,9 @@ class KeysSpecsTests(unittest.TestCase):
  def test_new_literal_key_is_generated_without_alias_mapping(self):
   d=snapshot();t=d['modules']['QuickTime']['tables']['Keys'];t['tags']['future.source']={'Name':'FutureSource'};t['tag_count']+=1
   r=specs.compile_document(d); self.assertIn('future.source',{x['source_key'] for x in r['specs']});self.assertIn('name: "FutureSource"',specs.render_rust(r))
+ def test_shared_itemlist_decoder_contract_and_native_keys_group_are_bound(self):
+  d=snapshot();d['quicktime_itemlist_reader_protocol']['string_encoding']['3']='UTF8';self.assertEqual(specs.compile_document(d)['specs'],[])
+  d=snapshot();d['modules']['QuickTime']['tables']['Keys']['tags']['artist']['Groups']={'1':'FutureGroup'};r=specs.compile_document(d);self.assertEqual(next(x for x in r['specs'] if x['source_key']=='artist')['group'],'Keys')
  def test_changed_processkeys_body_refuses_all_direct_keys(self):
   d=snapshot();d['modules']['QuickTime']['tables']['Keys']['meta']['PROCESS_PROC']['__deparse']+=' changed';r=specs.compile_document(d)
   self.assertEqual(r['specs'],[]);self.assertTrue(all('missing_or_changed_processor_contract:PROCESS_PROC' in x['reasons'] for x in r['ledger']))

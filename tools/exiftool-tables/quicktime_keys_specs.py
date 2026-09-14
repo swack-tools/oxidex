@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse, hashlib, json
 from pathlib import Path
 import quicktime_atom_tables as selector
-from quicktime_generated_specs import source_format, rust_string, render_format
+from quicktime_generated_specs import source_format, rust_string, render_format, processor_reason, reader_protocol_reason
 
 ROOT = selector.ROOT
 SNAPSHOT = ROOT / "tools/exiftool-tables/fixtures/quicktime_source_13_59.json"
@@ -31,12 +31,12 @@ def compile_document(document):
     table = document["modules"]["QuickTime"]["tables"]["Keys"]
     meta = table["meta"]
     proc = meta.get("PROCESS_PROC", {})
-    blocked = None
-    if not isinstance(proc, dict) or proc.get("__name") != PROCESSOR or proc.get("__perl") != "CODE" or proc.get("__opaque") is not True:
+    blocked = processor_reason(document) or reader_protocol_reason(document)
+    if blocked is None and (not isinstance(proc, dict) or proc.get("__name") != PROCESSOR or proc.get("__perl") != "CODE" or proc.get("__opaque") is not True):
         blocked = "missing_or_changed_processor_contract:PROCESS_PROC"
-    elif hashlib.sha256(proc.get("__deparse", "").encode()).hexdigest() != PROCESSOR_SHA256:
+    elif blocked is None and hashlib.sha256(proc.get("__deparse", "").encode()).hexdigest() != PROCESSOR_SHA256:
         blocked = "missing_or_changed_processor_contract:PROCESS_PROC"
-    elif meta.get("GROUPS", {}).get("0", "QuickTime") != "QuickTime" or meta.get("GROUPS", {}).get("1") != "Keys" or meta.get("VARS", {}).get("LONG_TAGS") != "9":
+    elif blocked is None and meta.get("GROUPS", {}).get("0", "QuickTime") != "QuickTime" or meta.get("GROUPS", {}).get("1") != "Keys" or meta.get("VARS", {}).get("LONG_TAGS") != "9":
         blocked = "missing_or_changed_processor_contract:Keys_metadata"
     specs=[]; ledger=[]
     keys_family = next(f for f in base["families"] if f["table"] == "Keys")
@@ -50,7 +50,7 @@ def compile_document(document):
             row = record.get("refused_source", record.get("spec", {}))
             pc = row.get("PrintConv")
             enum = pc["map"] if isinstance(pc, dict) else {}
-            operand={"source_key":record["identity"]["raw_key"],"name":row["Name"],"group":row.get("Groups", {}).get("1", meta["GROUPS"]["1"]),"group0":row.get("Groups", {}).get("0", meta["GROUPS"].get("0", "QuickTime")),"source_format":source_format(row.get("Format")),"safe_enum_operands":[{"raw":a,"rendered":b} for a,b in sorted(enum.items())],"source_identity":record["identity"]}
+            operand={"source_key":record["identity"]["raw_key"],"name":row["Name"],"group":"Keys","group0":row.get("Groups", {}).get("0", meta["GROUPS"].get("0", "QuickTime")),"source_format":source_format(row.get("Format")),"safe_enum_operands":[{"raw":a,"rendered":b} for a,b in sorted(enum.items())],"source_identity":record["identity"]}
             specs.append(operand); entry["generated_spec_sha256"]=hashlib.sha256(json.dumps(operand,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
         ledger.append(entry)
     specs.sort(key=lambda x:x["source_key"]); ledger.sort(key=lambda x:(x["identity"]["raw_key"],x["identity"]["variant_path"]))
@@ -61,7 +61,9 @@ def render_rust(result):
     for x in result['specs']:
         es=', '.join('EnumOperand { raw: %s, rendered: %s }'%(rust_string(e['raw']),rust_string(e['rendered'])) for e in x['safe_enum_operands'])
         lines.append('    KeySpec { source_key: %s, data: ItemListSpec { raw_fourcc: [0, 0, 0, 0], name: %s, group: %s, group0: %s, source_format: %s, safe_enum_operands: &[%s] } },'%(rust_string(x['source_key']),rust_string(x['name']),rust_string(x['group']),rust_string(x['group0']),render_format(x['source_format']),es))
-    return '\n'.join(lines+['];',''])
+        refused = [x["identity"]["raw_key"] for x in result["ledger"] if not x["generated"]]
+    lines.extend(['];', 'pub(crate) static REFUSED_SOURCE_KEYS: &[&str] = &[' + ', '.join(rust_string(x) for x in refused) + '];', ''])
+    return '\n'.join(lines)
 def serialized(x): return json.dumps(x,sort_keys=True,indent=2,ensure_ascii=False)+'\n'
 def main():
  p=argparse.ArgumentParser();p.add_argument('--dump',type=Path,default=SNAPSHOT);p.add_argument('--ledger',type=Path,default=LEDGER);p.add_argument('--rust',type=Path,default=RUST);p.add_argument('--replace',action='store_true');p.add_argument('--check',action='store_true');a=p.parse_args()

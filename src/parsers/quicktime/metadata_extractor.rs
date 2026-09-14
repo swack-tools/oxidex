@@ -2559,10 +2559,62 @@ fn extract_mp4_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<(), S
             .into_iter()
             .filter(|child| child.atom_type.matches("data"))
         {
-            super::keys_reader::read_indexed(index, &resolved, child.data, metadata);
+            if !super::keys_reader::read_indexed(index, &resolved, child.data, metadata) {
+                if let Some(name) = super::keys_reader::legacy_refused(index, &resolved) {
+                    preserve_refused_keys_behavior(name, child.data, metadata);
+                }
+            }
         }
     }
     Ok(())
+}
+
+/// Preserve the existing hand reader only for source rows explicitly refused by
+/// the generated Keys ledger.  It is not a dynamic-name fallback.
+fn preserve_refused_keys_behavior(name: &str, data: &[u8], metadata: &mut MetadataMap) {
+    let Some(value) = extract_itunes_data_value(data) else {
+        return;
+    };
+    let short = name.strip_prefix("com.apple.quicktime.").unwrap_or(name);
+    match short {
+        "location.ISO6709" => {
+            metadata.insert("QuickTime:GPSCoordinates".to_string(), value.clone());
+            if let TagValue::String(gps) = value
+                && let Some((lat, lon, alt)) = parse_iso6709(&gps)
+            {
+                metadata.insert("QuickTime:GPSLatitude".to_string(), TagValue::Float(lat));
+                metadata.insert("QuickTime:GPSLongitude".to_string(), TagValue::Float(lon));
+                if let Some(alt) = alt {
+                    metadata.insert("QuickTime:GPSAltitude".to_string(), TagValue::Float(alt));
+                }
+            }
+        }
+        "creationdate" => {
+            metadata.insert("QuickTime:ContentCreateDate".to_string(), value);
+        }
+        _ => {}
+    }
+}
+fn extract_itunes_data_value(data: &[u8]) -> Option<TagValue> {
+    if data.len() < 8 {
+        return None;
+    }
+    let value = &data[8..];
+    match u32::from_be_bytes(data[..4].try_into().ok()?) {
+        1 => String::from_utf8(value.to_vec()).ok().map(TagValue::String),
+        2 => decode_utf16(value).map(TagValue::String),
+        21 => match value.len() {
+            1 => Some(TagValue::Integer(value[0] as i64)),
+            2 => Some(TagValue::Integer(
+                i16::from_be_bytes(value.try_into().ok()?) as i64,
+            )),
+            4 => Some(TagValue::Integer(
+                i32::from_be_bytes(value.try_into().ok()?) as i64,
+            )),
+            _ => None,
+        },
+        _ => Some(TagValue::Binary(value.to_vec())),
+    }
 }
 
 /// Extract string value from QuickTime user data atom
