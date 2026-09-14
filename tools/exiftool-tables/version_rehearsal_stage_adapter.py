@@ -20,6 +20,7 @@ import sys
 from typing import Any, Callable
 
 import artifacts
+from generated_tiff_write_matrix import GeneratedTarget, generated_targets
 import native_write_matrix as native
 import version_rehearsal as rehearsal
 import version_rehearsal_executor as executor
@@ -426,6 +427,21 @@ def _build_binary(previous: dict[str, Any], target: Path, field: str, label: str
     return {"path": str(binary), "sha256": _sha(binary), "bytes": binary.stat().st_size}
 
 
+def _generated_write_cohort(ledger: Path, rules: Path) -> list[dict[str, Any]]:
+    """Render the exact generated operand cohort the matrix must exercise."""
+    try:
+        targets: tuple[GeneratedTarget, ...] = generated_targets(ledger, rules)
+    except ValueError as exc:
+        raise Refused("generated write source cohort is unavailable") from exc
+    return [
+        {"raw_tag_id": target.raw_tag_id, "name": target.name,
+         "table_group0": target.table_group0,
+         "physical_write_group": target.physical_write_group,
+         "qualifiers": list(target.qualifiers)}
+        for target in targets
+    ]
+
+
 def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, native_lib: Path,
                    writer: dict[str, Any], ledger: Path, rules: Path, pin: Path) -> dict[str, Any]:
     value = _json(path)
@@ -433,10 +449,11 @@ def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, n
     matrix_native = value.get("native_identity")
     cohort = value.get("cohort")
     rows = value.get("rows")
-    if not isinstance(cohort, list) or not cohort:
-        raise Refused("generated write matrix report has no source-selected cohort")
+    source_cohort = _generated_write_cohort(ledger, rules)
+    if cohort != source_cohort:
+        raise Refused("generated write matrix cohort differs from current source operands")
     expected: set[tuple[str, tuple[int, str, str, str], str, str]] = set()
-    for target in cohort:
+    for target in source_cohort:
         if (not isinstance(target, dict) or set(target) != {"raw_tag_id", "name", "table_group0",
                                                              "physical_write_group", "qualifiers"}
                 or type(target["raw_tag_id"]) is not int or not 0 <= target["raw_tag_id"] <= 0xffff

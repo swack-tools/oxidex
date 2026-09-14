@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess, sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import artifacts
@@ -36,6 +37,10 @@ class AdapterTests(unittest.TestCase):
         self.jpeg = self.root / "write.jpg"; self.jpeg.write_bytes(b"\xff\xd8fixture")
         self.write_manifest = self.root / "write-fixtures.json"; self.write_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.jpeg), "sha256": adapter._sha(self.jpeg), "bytes": self.jpeg.stat().st_size}]}))
         self.seen = []; self.diff_output = ".exiftool-version\n"
+        self.source_targets = (adapter.GeneratedTarget(0x013c, "HostComputer", "EXIF", "IFD0"),)
+        self.generated_targets = patch.object(adapter, "generated_targets", return_value=self.source_targets)
+        self.mock_generated_targets = self.generated_targets.start()
+        self.addCleanup(self.generated_targets.stop)
 
     def args(self, stage, **extra):
         manifest = self.write_manifest if stage == "write" else self.manifest
@@ -248,6 +253,17 @@ class AdapterTests(unittest.TestCase):
             return result
         with self.assertRaisesRegex(adapter.Refused, "actual successful public-driver"):
             adapter.write(self.args("write"), run=removes_driver_evidence)
+
+    def test_write_refuses_report_that_omits_a_current_generated_target(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
+        # The report itself remains internally consistent for HostComputer, but
+        # source operands now include a second target.  The adapter must not
+        # let the report choose a smaller denominator by omitting it.
+        self.mock_generated_targets.return_value = self.source_targets + (
+            adapter.GeneratedTarget(0x013d, "Software", "EXIF", "IFD0"),
+        )
+        with self.assertRaisesRegex(adapter.Refused, "cohort differs from current source operands"):
+            adapter.write(self.args("write"), run=self.fake_run)
 
     def test_write_refuses_nonzero_matrix_command_and_forged_driver_success(self):
         adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
