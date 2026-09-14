@@ -51,7 +51,7 @@ def render(recipe: MandatoryRecipe) -> str:
     lines.extend(f"SurvivorEncoding {{ format_name: {rust_string(item.format_name)}, tiff_type: {item.tiff_type}, width: {item.width}, operation: {rust_string(item.operation)} }},\n" for item in recipe.survivor_encodings)
     lines.append("];\n")
     lines.append("pub(crate) const MANDATORY_DEFAULTS: MandatoryRecipe = MandatoryRecipe { "
-                 f"writer_source_file: {rust_string(recipe.writer_source_file)}, writer_source_sha256: {rust_string(recipe.writer_source_sha256)}, write_value_source_sha256: {rust_string(recipe.write_value_source_sha256)}, "
+                 f"writer_source_file: {rust_string(recipe.writer_source_file)}, writer_source_sha256: {rust_string(recipe.writer_source_sha256)}, core_source_sha256: {rust_string(recipe.core_source_sha256)}, exif_source_sha256: {rust_string(recipe.exif_source_sha256)}, write_value_source_sha256: {rust_string(recipe.write_value_source_sha256)}, "
                  f"perl_version: {rust_string('')}, no_mandatory_guard: {guard}, directories: DIRECTORIES, jfif_directory: {rust_string(recipe.jfif_override.directory)}, jfif_probe: {rust_string(recipe.jfif_override.probe)}, jfif_assignments: JFIF_ASSIGNMENTS, encodings: ENCODINGS, survivor_encodings: SURVIVOR_ENCODINGS, cleanup: MandatoryCleanup {{ all_mandatory: {str(recipe.cleanup.all_mandatory).lower()}, no_next_ifd: {str(recipe.cleanup.no_next_ifd).lower()}, entry_count_shrinks_or_new: {str(recipe.cleanup.entry_count_shrinks_or_new).lower()}, omit_empty_ifd1: {str(recipe.cleanup.omit_empty_ifd1).lower()} }} }};\n")
     return ''.join(lines)
 def _selected_perl(fact: Mapping[str, Any], selected_perl: str | None) -> None:

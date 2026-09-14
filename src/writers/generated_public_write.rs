@@ -387,6 +387,12 @@ fn mandatory_cleanup_capture_joins(
     if recipe.writer_source_file != "Image/ExifTool/WriteExif.pl"
         || recipe.writer_source_sha256 != address.write_exif_source_sha256
         || recipe.writer_source_sha256 != migration.write_exif_source_sha256
+        || recipe.write_value_source_sha256 != address.writer_source_sha256
+        || recipe.write_value_source_sha256 != migration.writer_source_sha256
+        || recipe.core_source_sha256 != address.main_source_sha256
+        || recipe.core_source_sha256 != migration.main_source_sha256
+        || recipe.exif_source_sha256 != address.exif_source_sha256
+        || recipe.exif_source_sha256 != migration.exif_source_sha256
     {
         return Err(refused(
             "mandatory cleanup source does not join selected writer capture",

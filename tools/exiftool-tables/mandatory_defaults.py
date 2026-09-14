@@ -74,6 +74,8 @@ class MandatoryCleanup:
 class MandatoryRecipe:
     writer_source_file: str
     writer_source_sha256: str
+    core_source_sha256: str
+    exif_source_sha256: str
     directories: tuple[DirectoryDefaults, ...]
     jfif_override: JfifOverride
     selection: MandatorySelection
@@ -197,7 +199,7 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     override, selection = _source_context(fact.get("new_directory_context_deparse"))
     _classifier_policy(fact)
     cleanup = _cleanup_policy(fact)
-    return MandatoryRecipe(str(source), digest, tuple(directories), override, selection, cleanup)
+    return MandatoryRecipe(str(source), digest, str(closure["Image/ExifTool.pm"]), str(closure["Image/ExifTool/Exif.pm"]), tuple(directories), override, selection, cleanup)
 
 def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any]) -> MandatoryRecipe:
     """Require defaults and the general captured WriteExif callback share a source identity."""

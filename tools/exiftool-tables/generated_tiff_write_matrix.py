@@ -414,9 +414,13 @@ def mandatory_cleanup_recipe():
             or recipe.get("writer_source_sha256") != capture.get("write_exif_source_sha256")
             or recipe.get("writer_source_sha256") != migration_capture.get("write_exif_source_sha256")
             or recipe.get("write_value_source_sha256") != capture.get("writer_source_sha256")
-            or recipe.get("write_value_source_sha256") != migration_capture.get("writer_source_sha256")):
+            or recipe.get("write_value_source_sha256") != migration_capture.get("writer_source_sha256")
+            or recipe.get("core_source_sha256") != capture.get("main_source_sha256")
+            or recipe.get("core_source_sha256") != migration_capture.get("main_source_sha256")
+            or recipe.get("exif_source_sha256") != capture.get("exif_source_sha256")
+            or recipe.get("exif_source_sha256") != migration_capture.get("exif_source_sha256")):
         raise ValueError("mandatory cleanup source capture does not join selected writer artifacts")
-    for digest in (recipe.get("writer_source_sha256"), recipe.get("write_value_source_sha256")):
+    for digest in (recipe.get("writer_source_sha256"), recipe.get("write_value_source_sha256"), recipe.get("core_source_sha256"), recipe.get("exif_source_sha256")):
         if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise ValueError("mandatory cleanup source digest is malformed")
     defaults = [entry for group in recipe.get("directories", [])

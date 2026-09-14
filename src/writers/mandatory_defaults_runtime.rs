@@ -50,6 +50,8 @@ pub(crate) struct SurvivorEncoding {
 pub(crate) struct MandatoryRecipe {
     pub writer_source_file: &'static str,
     pub writer_source_sha256: &'static str,
+    pub core_source_sha256: &'static str,
+    pub exif_source_sha256: &'static str,
     pub write_value_source_sha256: &'static str,
     pub perl_version: &'static str,
     pub no_mandatory_guard: bool,
