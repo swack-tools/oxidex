@@ -125,7 +125,7 @@ class MandatoryTests(unittest.TestCase):
 class MandatoryCodegenTests(unittest.TestCase):
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_fresh_three_release_facts_render_and_rust_match_python(self):
-        """Fresh canonical/11.78/12.64 captures drive actual rendered Rust."""
+        """Only the reviewed executable WriteExif body is emitted; older bodies refuse."""
         from mandatory_defaults_codegen import evaluate, generate
         runtime = ROOT / 'src/writers/mandatory_defaults_runtime.rs'
         roots = [NATIVE[1]]
@@ -134,6 +134,10 @@ class MandatoryCodegenTests(unittest.TestCase):
         for library in roots:
             with self.subTest(library=library):
                 fact = capture(library)
+                if library != NATIVE[1]:
+                    with self.assertRaisesRegex(MandatoryRefused, 'executable body review hash'):
+                        generate(fact)
+                    continue
                 rendered, report = generate(fact)
                 self.assertFalse(report['writer_tables_joined'])
                 recipe = compile_mandatory(fact)
