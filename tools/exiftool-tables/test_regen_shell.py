@@ -201,6 +201,25 @@ class RegenerationShellTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
+    def test_tier2_only_keeps_a_complete_cache_and_writes_a_distinct_reader_cache(self):
+        self.log.unlink(missing_ok=True)
+        full_cache = self.cache / f'tables-{self.pin}.json'
+        full_bytes = b'{"complete-writer-capture":"must-survive"}\n'
+        full_cache.write_bytes(full_bytes)
+        reader_cache = self.cache / f'tables-reader-{self.pin}.json'
+        reader_cache.unlink(missing_ok=True)
+        result = subprocess.run(
+            ['bash', str(self.tools / 'regen-all.sh'), '--tier2-only'],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=45,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(full_cache.read_bytes(), full_bytes)
+        self.assertEqual(json.loads(reader_cache.read_text())['marker'], 'explicit-A')
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        dump_calls = [call for call in calls if call['tool'] == 'dump_tables.pl']
+        self.assertEqual(len(dump_calls), 1)
+        self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')
+
     def test_regeneration_refuses_unknown_arguments_before_any_leaf_runs(self):
         self.log.unlink(missing_ok=True)
         result = subprocess.run(
@@ -262,7 +281,8 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertTrue(all(c['target'] == str(self.base / 'oracle-target') for c in calls))
                 for name in (n for n in self.extra_leaves() if n.startswith('verify_')):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
-                self.assertEqual(json.loads((self.cache / f'tables-{self.pin}.json').read_text())['marker'], 'explicit-A')
+                dump_cache = self.cache / (f'tables-{self.pin}.json' if full else f'tables-reader-{self.pin}.json')
+                self.assertEqual(json.loads(dump_cache.read_text())['marker'], 'explicit-A')
                 self.assertIn('regeneration write-set PASS', result.stdout)
                 self.assertEqual('unexpected PATH Perl' in result.stderr, False)
 

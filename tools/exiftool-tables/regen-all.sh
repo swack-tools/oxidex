@@ -101,13 +101,16 @@ if [[ "$LIB_VERSION" != "$PIN" ]]; then
     echo "refusing: $LIB is ExifTool '${LIB_VERSION:-<unreadable>}' but $PIN_FILE pins $PIN" >&2
     exit 1
 fi
-JSON="$CACHE/tables-$PIN.json"
 if [[ "$TIER1" == "1" ]]; then
+    JSON="$CACHE/tables-$PIN.json"
     DUMP_ARGS=("$LIB")
     echo ">> refreshing the full dump from $LIB with $PERL"
 else
     # Tier 2 consumes only the detached read projection.  Full writer facts
     # remain required and captured by regen.sh during an ordinary full run.
+    # Keep its cache separate: a tier-2-only run must never replace a complete
+    # writer-capable dump with the reduced reader schema.
+    JSON="$CACHE/tables-reader-$PIN.json"
     DUMP_ARGS=(--reader-only "$LIB")
     echo ">> refreshing the reader-only tier-2 dump from $LIB with $PERL"
 fi
