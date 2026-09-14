@@ -11,6 +11,9 @@ pub mod exif_surgical;
 #[allow(dead_code)]
 pub(crate) mod generated_scalar;
 pub(crate) mod generated_scalar_rules;
+// Table validation composition remains inactive until the public write route lands.
+pub(crate) mod generated_checkexif;
+pub(crate) mod generated_checkexif_rules;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;

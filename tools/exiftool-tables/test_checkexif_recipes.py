@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import unittest
 
 import checkexif_recipes as recipes
@@ -39,7 +40,7 @@ def fact(name: str, body: str, *, requested: str | None = None,
 
 
 def document(body: str = BODY) -> dict[str, object]:
-    return {
+    result = {
         "native_write_helpers": {
             "check_value": fact(
                 "Image::ExifTool::CheckValue",
@@ -62,6 +63,12 @@ def document(body: str = BODY) -> dict[str, object]:
             },
         },
     }
+
+    # One fixture binding is observed at both sites; conflict tests replace one
+    # observation explicitly. Real captures serialize these as separate facts.
+    result["native_write_tables"]["Exif"]["Main"]["effective_check_proc"]["effective"]["dependencies"] = {
+        "Image::ExifTool::CheckValue": result["native_write_helpers"]["check_value"]}
+    return result
 
 
 class CheckExifRecipeTests(unittest.TestCase):
@@ -87,6 +94,17 @@ class CheckExifRecipeTests(unittest.TestCase):
         self.assertEqual(recipe.check_value.requested_binding, "Image::ExifTool::CheckValue")
         self.assertEqual(recipe.check_value.actual_name, "Image::ExifTool::CheckValue")
 
+    def test_final_loaded_explicit_call_and_implicit_argument_refusal(self):
+        explicit = BODY.replace("return Image::ExifTool::CheckValue(",
+                                "return &Image::ExifTool::CheckValue(")
+        emitted, report, omissions = self.compile(explicit)
+        self.assertEqual((len(emitted), report.omitted_tables, omissions), (1, 0, []))
+        self.assertEqual(emitted[0].format_selectors, self.compile()[0][0].format_selectors)
+        implicit = explicit.replace("($valPtr, $format, $tagInfo->{'Count'})", "")
+        emitted, report, omissions = self.compile(implicit)
+        self.assertEqual((emitted, report.omitted_tables), ([], 1))
+        self.assertIn("closed grammar", omissions[0]["reason"])
+
     def test_check_value_dependency_binding_is_retained(self):
         input_doc = document()
         input_doc["native_write_helpers"]["check_value"]["dependencies"] = {
@@ -97,6 +115,25 @@ class CheckExifRecipeTests(unittest.TestCase):
             [(value.binding, value.fact.actual_name) for value in emitted[0].check_value.dependencies],
             [("Image::ExifTool::IsInt", "Image::ExifTool::IsInt")],
         )
+
+    def test_missing_and_conflicting_callee_observations_refuse(self):
+        for change in ('missing', 'body', 'source', 'nested'):
+            with self.subTest(change=change):
+                doc = document()
+                deps = doc["native_write_tables"]["Exif"]["Main"]["effective_check_proc"]["effective"]["dependencies"]
+                called = deepcopy(deps["Image::ExifTool::CheckValue"])
+                deps["Image::ExifTool::CheckValue"] = called
+                if change == 'missing':
+                    deps.clear()
+                elif change == 'body':
+                    called["__deparse"] = "($$$) { die 'changed'; }"
+                elif change == 'source':
+                    called["source_sha256"] = "b" * 64
+                else:
+                    called["dependencies"] = {"Image::ExifTool::Other": fact("Image::ExifTool::Other", "{ return 1; }")}
+                emitted, report, omissions = recipes.compile_recipes(doc)
+                self.assertEqual((emitted, report.omitted_tables), ([], 1))
+                self.assertIn("CHECK_PROC CheckValue dependency", omissions[0]["reason"])
 
     def test_reordered_selectors_and_changed_literals_regenerate_recipe(self):
         reordered = BODY.replace(
@@ -136,6 +173,14 @@ class CheckExifRecipeTests(unittest.TestCase):
             self.assertEqual(emitted, [])
             self.assertEqual((report.recipes_emitted, report.omitted_tables), (0, 1))
             self.assertIn("closed grammar", omissions[0]["reason"])
+
+    def test_format_local_cannot_alias_any_signature_argument(self):
+        for name in ("et", "tagInfo", "valPtr"):
+            with self.subTest(name=name):
+                emitted, report, omissions = self.compile(BODY.replace("my($format)", f"my(${name})"))
+                self.assertEqual(emitted, [])
+                self.assertEqual((report.recipes_emitted, report.omitted_tables), (0, 1))
+                self.assertEqual(omissions[0]["reason"], "CHECK_PROC format local aliases an argument")
 
     def test_stale_binding_refuses_and_anonymous_actual_cv_is_preserved(self):
         stale = document()

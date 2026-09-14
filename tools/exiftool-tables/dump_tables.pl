@@ -691,12 +691,15 @@ sub effective_write_code_fact {
                 'prototype_only_write_proc'),
         };
     }
-    # Capture only the bounded package-local reader dependency, as for
-    # PROCESS_PROC.  Writer admission still needs a distinct body recognizer.
+    # Validation recipes compose called helpers, so CHECK_PROC must retain
+    # their actual final bindings as well as its own body. Keep the existing
+    # depth/cycle bounds; unresolved dependencies cannot be admitted. The
+    # larger WRITE_PROC remains a shallow fact pending its body compiler.
     return {
         present => JSON::PP::true,
         declared => $declared,
-        effective => code_ref_fact($value, $fallback_name, $lib_abs, undef, undef, 0),
+        effective => code_ref_fact($value, $fallback_name, $lib_abs, undef, undef,
+            $key eq 'CHECK_PROC' ? 1 : 0),
         ($load && exists $load->{autoload_file} ? (autoload_file => $load->{autoload_file}) : ()),
     };
 }
@@ -994,6 +997,11 @@ my $write_autoload_router_status = {
     supported => write_autoload_router_supported($write_autoload_router) ? JSON::PP::true : JSON::PP::false,
 };
 my $write_autoload_status = hydrate_write_procedures(\%write_tables, $write_autoload_router_status);
+# Settle shared helper bindings before deparsing table callbacks too. B::Deparse
+# observes callee prototypes/globs: loading Writer.pl after CheckExif was captured
+# changed its call spelling despite an identical CV. All writer facts must share
+# the final loaded state. The read projection above is already detached.
+my $write_helper_status = hydrate_write_helpers();
 for my $full_name (sort keys %write_tables) {
     my $entry = $write_tables{$full_name};
     my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash});
@@ -1006,10 +1014,8 @@ for my $full_name (sort keys %write_tables) {
     $native_write_tables{$entry->{module}}{$entry->{table}} = $fact;
 }
 
-# Hydration above may load Writer.pl.  Snapshot the helper package bindings
-# only now, after all selected modules and any permitted writer autoloads have
-# settled.  This does not alter the read projection or route a native writer.
-my $write_helper_status = hydrate_write_helpers();
+# Capture helper facts in the same settled state as the table callbacks above.
+# This does not alter the read projection or route a native writer.
 my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
 
 # The child captures byte-order state without changing this table-walking

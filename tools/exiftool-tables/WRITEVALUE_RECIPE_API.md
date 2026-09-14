@@ -41,7 +41,7 @@ the latter remains a reference result checked by source/unit tests.
 
 `scalar_helper_codegen.py` compiles the captured CheckValue and WriteValue
 operands into `src/writers/generated_scalar_rules.rs`. Normal `regen.sh` owns
-that artifact and `scalar_helper_ledger.json`; the inventory now has 34 outputs.
+that artifact and `scalar_helper_ledger.json`; these two outputs are registered in the shared inventory.
 The shared `generated_scalar.rs` executor consumes those operands. Supported
 source changes replace the operands; unsupported source emits `None` and a
 named ledger gap instead of retaining an old rule. The native suite also
