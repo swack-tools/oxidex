@@ -86,6 +86,7 @@ export default defineConfig({
             { text: 'Source Catalog Baseline', link: '/reference/catalog-baseline' },
             { text: 'Hydrated Reader Source', link: '/reference/hydrated-reader-layout-baseline' },
             { text: 'Catalog to Source Ledger', link: '/reference/catalog-hydrated-join' },
+            { text: 'Verified Read and Write Observations', link: '/reference/catalog-hydrated-observed' },
             { text: 'BinaryData Engine', link: '/reference/binary-data-engine' }
           ]
         },
