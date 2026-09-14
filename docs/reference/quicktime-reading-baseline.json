@@ -1,0 +1,79 @@
+{
+  "instrument": "quicktime_baseline.py; pinned -j -a -G1 -s vs fresh oxidex -j; ItemList projection",
+  "provenance_status": "replay_verified",
+  "instrument_sha256": "3c43af08de7365a1b9906d31cd504b942cd298f5c8ec4055f3f1511e078244a1",
+  "source_fingerprint": "225baa38c46b5ca3d94f1983552cf3400790bfa7ccd2410a7a4b0f48abfec2a9",
+  "oracle_source_commit": "2200871d9cef988051d2a99d67df3bda6cbb30a8",
+  "oracle_source_manifest_sha256": "cd64114e10d5a94dadf5797059b1b2595556d19e950d933a236818f18ea21be1",
+  "pin": "13.59",
+  "source_commit": "57e90d6acd06eccb1add22cd034f366186e61dde",
+  "source_dirty": true,
+  "source_dirty_files": [
+    "docs/reference/goal-checkpoint-20260914.md",
+    "tools/exiftool-tables/quicktime_baseline.py",
+    "tools/exiftool-tables/test_quicktime_baseline.py",
+    "HANDOFF.md",
+    "tools/exiftool-tables/fixtures/quicktime_oracle_sources_13_59.json"
+  ],
+  "binary_sha256": "b36fc15955bc1cd2aecc3f68528b07df3c42ed5421b4ef91db2a2b83ffbf6a65",
+  "fixtures": [
+    {
+      "fixture": "enum.m4a",
+      "fixture_sha256": "22761e79da430d5e4791e4683ebcf49ccf7c12e5081a696156a644a8455088ce",
+      "expected": {
+        "ItemList:Compilation": "Yes"
+      },
+      "actual": {
+        "ItemList:Compilation": "Yes"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "text.m4a",
+      "fixture_sha256": "5fe40986942d6597fc135f67caa60d206977c0c25284a608e7d9fe138f3fafd3",
+      "expected": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "actual": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u16.m4a",
+      "fixture_sha256": "db2de190ffe762b9e7d3d98c63647d29ff7dfab87d70131eecb9613820bb14e3",
+      "expected": {
+        "ItemList:BeatsPerMinute": 257
+      },
+      "actual": {
+        "ItemList:BeatsPerMinute": "(Binary data 2 bytes, use -b option to extract)"
+      },
+      "matched": false
+    },
+    {
+      "fixture": "u64-max.m4a",
+      "fixture_sha256": "237ee4773bf37589a753c1b8e184c46f96b9b2ed48c131581f0c8038894e433e",
+      "expected": {
+        "ItemList:AlbumID": "18446744073709551615"
+      },
+      "actual": {
+        "ItemList:plID": "(Binary data 8 bytes, use -b option to extract)"
+      },
+      "matched": false
+    },
+    {
+      "fixture": "u64.m4a",
+      "fixture_sha256": "6cc8c8b1bed5e3746987ce7678e441b9529d27406f632a858ba0137ef1d11cc6",
+      "expected": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "actual": {
+        "ItemList:plID": "(Binary data 8 bytes, use -b option to extract)"
+      },
+      "matched": false
+    }
+  ],
+  "reading_matched_fixture_projections": 2,
+  "writing_observed": null,
+  "interpretation": "Five pre-migration behavior fixtures only; neither corpus conformance nor writing coverage."
+}
