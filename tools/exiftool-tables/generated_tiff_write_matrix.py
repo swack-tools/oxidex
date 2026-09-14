@@ -24,6 +24,7 @@ DRIVER = "writers::tiff_surgical::generated_scalar::tests::generated_scalar_fixt
 LEDGER = ROOT / "tools/exiftool-tables/tiff_scalar_final_ledger.json"
 RULES = ROOT / "src/writers/generated_tiff_scalar_final_rules.rs"
 MANDATORY_LEDGER = ROOT / "tools/exiftool-tables/mandatory_defaults_ledger.json"
+ADDRESS_LEDGER = ROOT / "tools/exiftool-tables/setnewvalue_address_ledger.json"
 PUBLIC_MIGRATION_LEDGER = ROOT / "tools/exiftool-tables/setnewvalue_public_migration_ledger.json"
 
 
@@ -389,37 +390,82 @@ def changed_tag_ids(target_tag_id: int | set[int] | frozenset[int] | None) -> se
     raise ValueError("changed target identities are malformed")
 
 
-def assert_prunable_ifd1(directory, removed_tag_ids):
-    """Allow only exact captured mandatory operands after selected deletion."""
+def mandatory_cleanup_recipe():
+    """Load the capture-bound WriteExif cleanup operands once per assertion.
+
+    The mandatory sidecar alone is insufficient: the selected address and
+    public-migration captures must name the same WriteExif and Writer.pl bytes.
+    This is the checker-side equivalent of the runtime provenance join.
+    """
     ledger = json.loads(MANDATORY_LEDGER.read_text())
+    address = json.loads(ADDRESS_LEDGER.read_text())
+    migration = json.loads(PUBLIC_MIGRATION_LEDGER.read_text())
     recipe = ledger.get("recipe", {})
-    if ledger.get("writer_tables_joined") is not True or recipe.get("cleanup") != {
+    cleanup = {
         "all_mandatory": True, "entry_count_shrinks_or_new": True,
         "no_next_ifd": True, "omit_empty_ifd1": True,
-    }:
-        raise ValueError("mandatory directory cleanup was not source-authenticated")
+    }
+    capture = address.get("source_capture_identity")
+    migration_capture = migration.get("source", {}).get("capture")
+    if (ledger.get("writer_tables_joined") is not True
+            or recipe.get("cleanup") != cleanup
+            or recipe.get("writer_source_file") != "Image/ExifTool/WriteExif.pl"
+            or not isinstance(capture, dict) or not isinstance(migration_capture, dict)
+            or recipe.get("writer_source_sha256") != capture.get("write_exif_source_sha256")
+            or recipe.get("writer_source_sha256") != migration_capture.get("write_exif_source_sha256")
+            or recipe.get("write_value_source_sha256") != capture.get("writer_source_sha256")
+            or recipe.get("write_value_source_sha256") != migration_capture.get("writer_source_sha256")):
+        raise ValueError("mandatory cleanup source capture does not join selected writer artifacts")
+    for digest in (recipe.get("writer_source_sha256"), recipe.get("write_value_source_sha256")):
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("mandatory cleanup source digest is malformed")
+    defaults = [entry for group in recipe.get("directories", [])
+                if group.get("directory") == "IFD1"
+                for entry in group.get("defaults", [])]
+    if not defaults or any(entry.get("kind") != "Integer" for entry in defaults):
+        raise ValueError("mandatory IFD1 defaults are not source-representable")
+    return defaults
+
+
+def native_survivor_value(default, entry, byte_order):
+    """Pinned WriteValue packing for the captured scalar integer operands.
+
+    The physical record selects the native form during WriteExif cleanup, so
+    type/count must come from the survivor rather than the new-directory
+    default.  The checked forms are the capture-authenticated TIFF forms used
+    by this release: int16u, int32u, and rational64u.  Every other physical
+    form is a non-match and therefore retains IFD1.
+    """
+    value = default["value"]
+    field_type, count = entry.get("type"), entry.get("count")
+    if type(value) is not int or type(field_type) is not int or type(count) is not int:
+        return None
+    if field_type in (3, 4):
+        if count != 1:
+            return None
+        width = 2 if field_type == 3 else 4
+        return (value & ((1 << (width * 8)) - 1)).to_bytes(width, byte_order).hex()
+    if field_type == 5:
+        if count != 1 or not 0 <= value <= 0xffffffff:
+            return None
+        return value.to_bytes(4, byte_order).hex() + (1).to_bytes(4, byte_order).hex()
+    return None
+
+
+def assert_prunable_ifd1(directory, removed_tag_ids):
+    """Allow only captured mandatory survivors in their native physical form."""
     if directory.get("children") or directory.get("image_payload_hex"):
         raise AssertionError("pruned IFD1 contained an unrelated subtree or image payload")
-    defaults = [entry for group in recipe["directories"] if group["directory"] == "IFD1"
-                for entry in group["defaults"]]
-    encodings = {str(entry["tag_id"]): entry for entry in recipe["encodings"]}
-    expected = {}
-    for entry in defaults:
-        key = str(entry["tag_id"])
-        if key in expected or key not in encodings or entry["kind"] != "Integer":
-            raise ValueError("unrepresentable or ambiguous mandatory cleanup operand")
-        encoding = encodings[key]
-        if encoding["format_name"] == "int16u" and encoding["tiff_type"] == 3:
-            value = int(entry["value"]).to_bytes(2, directory["byte_order"])
-        elif encoding["format_name"] == "rational64u" and encoding["tiff_type"] == 5:
-            value = int(entry["value"]).to_bytes(4, directory["byte_order"]) + (1).to_bytes(4, directory["byte_order"])
-        else:
-            raise ValueError("unsupported mandatory cleanup encoding")
-        expected[key] = {"type": encoding["tiff_type"], "count": 1, "value_hex": value.hex()}
+    expected = {str(entry["tag_id"]): entry for entry in mandatory_cleanup_recipe()}
     for key, entry in directory["tags"].items():
-        if key not in removed_tag_ids and native.entry_storage(entry) != expected.get(key):
+        if key in removed_tag_ids:
+            continue
+        default = expected.get(key)
+        value_hex = None if default is None else native_survivor_value(
+            default, entry, directory["byte_order"]
+        )
+        if value_hex is None or entry.get("value_hex") != value_hex:
             raise AssertionError(f"pruned IFD1 contained unrelated or nondefault tag {key}")
-
 
 def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[int] | None, *, target_directory=(), allow_directory_removal=False):
     changed = changed_tag_ids(target_tag_id) if not target_directory else set()
