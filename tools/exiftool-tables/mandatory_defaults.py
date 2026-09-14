@@ -154,12 +154,21 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
         raise MandatoryRefused("mandatory defaults do not join the general captured WriteExif")
     helpers = _mapping(document.get("native_write_helpers"), "native_write_helpers")
     write_value = _mapping(helpers.get("write_value"), "native_write_helpers.write_value")
-    if (write_value.get("__name") != "Image::ExifTool::WriteValue"
+    if (write_value.get("requested_binding") != "Image::ExifTool::WriteValue"
+            or write_value.get("resolved") is not True
+            or write_value.get("__perl") != "CODE"
+            or not isinstance(write_value.get("__deparse"), str)
+            or not write_value["__deparse"].strip()
+            or write_value.get("__name") != "Image::ExifTool::WriteValue"
             or write_value.get("source_file") != "Image/ExifTool/Writer.pl"
             or write_value.get("source_sha256") != mandatory_closure.get("Image/ExifTool/Writer.pl")):
         raise MandatoryRefused("mandatory defaults do not join the captured WriteValue helper")
+    generic_context = _mapping(document.get("native_write_capture_context"), "native_write_capture_context")
+    loaded = _mapping(generic_context.get("loaded_modules"), "native_write_capture_context.loaded_modules")
+    if loaded.get("Image/ExifTool/Writer.pl") != write_value["source_sha256"]:
+        raise MandatoryRefused("mandatory WriteValue helper does not join the generic loaded closure")
 
-    rows = _mapping(fact.get("effective_exif_main_rows"), "effective_exif_main_rows")
+    rows = _mapping(fact.get("raw_exif_main_row_properties"), "raw_exif_main_row_properties")
     # The direct new-directory path chooses Format when present, otherwise
     # Writable.  This bounded encoder only implements those two native scalar
     # packing procedures, and rejects every row with another write hook.
@@ -167,7 +176,7 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     ids.update(tag_id for tag_id, _property, _adjustment in recipe.jfif_override.assignments)
     encodings = []
     for tag_id in sorted(ids):
-        controls = _mapping(rows.get(str(tag_id)), f"effective_exif_main_rows[{tag_id}]")
+        controls = _mapping(rows.get(str(tag_id)), f"raw_exif_main_row_properties[{tag_id}]")
         props = controls
         def present(name: str) -> Any:
             item = _mapping(controls.get(name), f"mandatory row control {name}")

@@ -147,9 +147,9 @@ pub(crate) fn encode_ifd0_defaults(
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct JfifValues {
-    pub x: i64,
-    pub y: i64,
-    pub resolution_unit: i64,
+    pub x: Option<i64>,
+    pub y: Option<i64>,
+    pub resolution_unit: Option<i64>,
 }
 fn refusal(reason: &str) -> String {
     format!("generated mandatory defaults refused: {reason}")
@@ -183,10 +183,15 @@ pub(crate) fn defaults_for_new_directory(
                 return Err(refusal("JFIF substitution operands are unresolved"));
             }
             for assignment in recipe.jfif_assignments {
+                // Native uses defined(JFIFYResolution) as the branch gate,
+                // then consumes all three fields.  A partial payload with Y
+                // defined would reach native WriteValue with undefined
+                // operands; it is outside this numeric carrier and refuses.
+                if jfif.y.is_none() { break; }
                 let raw = match assignment.property {
-                    "JFIFXResolution" => jfif.x,
-                    "JFIFYResolution" => jfif.y,
-                    "JFIFResolutionUnit" => jfif.resolution_unit,
+                    "JFIFXResolution" => jfif.x.ok_or_else(|| refusal("JFIF X resolution is undefined"))?,
+                    "JFIFYResolution" => jfif.y.expect("checked above"),
+                    "JFIFResolutionUnit" => jfif.resolution_unit.ok_or_else(|| refusal("JFIF resolution unit is undefined"))?,
                     _ => return Err(refusal("JFIF substitution property is unsupported")),
                 };
                 let value = raw

@@ -75,7 +75,7 @@ for my $directory (sort keys %$hash) {
     $mandatory_map{$directory} = \%out;
 }
 my @row_properties = qw(Writable Format WriteGroup CanCreate DelValue Deletable PrintConvInv RawConvInv Validate ValueConvInv WriteAlso WriteCheck WriteCondition WriteHook WriteLast WritePseudo);
-my %effective_rows;
+my %raw_rows;
 for my $id (sort { $a <=> $b } grep { /^(?:0|[1-9][0-9]*)$/ && $_ <= 65535 } keys %Image::ExifTool::Exif::Main) {
     my $entry = $Image::ExifTool::Exif::Main{$id};
     next unless ref($entry) eq 'HASH';
@@ -90,7 +90,7 @@ for my $id (sort { $a <=> $b } grep { /^(?:0|[1-9][0-9]*)$/ && $_ <= 65535 } key
             $properties{$property} = { present => JSON::PP::false };
         }
     }
-    $effective_rows{"$id"} = \%properties;
+    $raw_rows{"$id"} = \%properties;
 }
 my %closure;
 for my $name (sort keys %INC) {
@@ -118,9 +118,11 @@ print JSON::PP->new->utf8->canonical->pretty->encode({
         perl_version => "$^V",
     },
     lexical => { name => '%mandatory', resolved => JSON::PP::true, entries => \%mandatory_map },
-    # Final-loaded Exif::Main fields used by WriteExif's direct WriteValue
-    # call.  The Python compiler selects only generated mandatory/JFIF IDs.
-    effective_exif_main_rows => \%effective_rows,
+    # Raw final-loaded Exif::Main entries selected by WriteExif via
+    # `$tagTablePtr->{id}`.  These are deliberately not called effective
+    # GetTagInfo projections: reference/inherited entries are captured as
+    # unsupported and the bounded compiler refuses them.
+    raw_exif_main_row_properties => \%raw_rows,
     loaded_exiftool_closure => \%closure,
     new_directory_context_deparse => $context,
 });

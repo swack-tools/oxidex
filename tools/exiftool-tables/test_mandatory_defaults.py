@@ -90,10 +90,14 @@ class MandatoryTests(unittest.TestCase):
         fact = capture(NATIVE[1])
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
-        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}, "native_write_helpers": {"write_value": {"__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
+        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}, "native_write_helpers": {"write_value": {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "native WriteValue body", "__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}, "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
         compile_mandatory_joined(fact, document)
         effective["source_sha256"] = '0' * 64
         with self.assertRaisesRegex(MandatoryRefused, 'do not join'):
+            compile_mandatory_joined(fact, document)
+        effective["source_sha256"] = fact["writer"]["source_sha256"]
+        document["native_write_helpers"]["write_value"]["requested_binding"] = "Image::ExifTool::BorrowedWriteValue"
+        with self.assertRaisesRegex(MandatoryRefused, 'WriteValue helper'):
             compile_mandatory_joined(fact, document)
 
 
@@ -123,7 +127,7 @@ class MandatoryCodegenTests(unittest.TestCase):
 }}
 use writers::mandatory_defaults_runtime::*;
 fn main() {{
- let values=defaults_for_new_directory(&writers::generated::MANDATORY_DEFAULTS,"IFD0",false,0,Some(JfifValues{{x:72,y:72,resolution_unit:1}})).unwrap();
+ let values=defaults_for_new_directory(&writers::generated::MANDATORY_DEFAULTS,"IFD0",false,0,Some(JfifValues{{x:Some(72),y:Some(72),resolution_unit:Some(1)}})).unwrap();
  for item in values {{ match item.value {{ MandatoryValue::Integer(value)=>println!("{{}}=i:{{}}",item.tag_id,value), MandatoryValue::Text(value)=>println!("{{}}=s:{{}}",item.tag_id,value) }} }}
 }}''')
                     subprocess.run(['rustc', '--edition=2021', str(driver), '-o', str(binary)], check=True, capture_output=True, text=True)
@@ -138,7 +142,7 @@ fn main() {{
         fact = capture(NATIVE[1])
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
-        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}, "native_write_helpers": {"write_value": {"__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
+        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}, "native_write_helpers": {"write_value": {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "native WriteValue body", "__name": "Image::ExifTool::WriteValue", "source_file": "Image/ExifTool/Writer.pl", "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}, "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
         source, report = generate(fact, document)
         self.assertTrue(report['writer_tables_joined'])
         self.assertIn(fact['writer']['source_sha256'], source)
@@ -179,9 +183,10 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
                      "source_sha256": fact["writer"]["source_sha256"]}
         return {"exiftool_version": fact["native_identity"]["exiftool_version"],
                 "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}},
-                "native_write_helpers": {"write_value": {"__name": "Image::ExifTool::WriteValue",
+                "native_write_helpers": {"write_value": {"requested_binding": "Image::ExifTool::WriteValue", "resolved": True, "__perl": "CODE", "__deparse": "native WriteValue body", "__name": "Image::ExifTool::WriteValue",
                     "source_file": "Image/ExifTool/Writer.pl",
-                    "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
+                    "source_sha256": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}},
+                "native_write_capture_context": {"loaded_modules": {"Image/ExifTool/Writer.pl": fact["loaded_exiftool_closure"]["Image/ExifTool/Writer.pl"]}}}
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_actual_writevalue_bytes_match_generated_ifd0_encoder_and_type_mutation_propagates(self):
@@ -206,7 +211,7 @@ class MandatoryNumericEncodingTests(unittest.TestCase):
 }}
 use writers::mandatory_defaults_runtime::*;
 fn main() {{
- let defaults=defaults_for_new_directory(&writers::generated::MANDATORY_DEFAULTS,"IFD0",false,0,Some(JfifValues{{x:72,y:72,resolution_unit:1}})).unwrap();
+ let defaults=defaults_for_new_directory(&writers::generated::MANDATORY_DEFAULTS,"IFD0",false,0,Some(JfifValues{{x:Some(72),y:Some(72),resolution_unit:Some(1)}})).unwrap();
  for order in [TiffByteOrder::Big,TiffByteOrder::Little] {{ for value in encode_ifd0_defaults(&writers::generated::MANDATORY_DEFAULTS,&defaults,order).unwrap() {{ print!("{{:04x}}:{{}}=",value.tag_id,value.tiff_type); for b in value.bytes {{ print!("{{:02x}}",b); }} println!(); }} }}
 }}''')
             subprocess.run(['rustc','--edition=2021',str(driver),'-o',str(binary)],check=True,capture_output=True,text=True)
@@ -246,7 +251,7 @@ fn main() {{ let d=defaults_for_new_directory(&writers::generated::MANDATORY_DEF
             runtime=ROOT/'src/writers/mandatory_defaults_runtime.rs'; driver=temporary/'driver.rs'; binary=temporary/'driver'
             driver.write_text(f'''mod writers {{ #[path = "{runtime}"] pub mod mandatory_defaults_runtime; #[path = "{generated}"] pub mod generated; }}
 use writers::mandatory_defaults_runtime::*;
-fn main() {{ for order in [TiffByteOrder::Big,TiffByteOrder::Little] {{ let t=minimal_ifd0_tiff(&writers::generated::MANDATORY_DEFAULTS,order,false,0,Some(JfifValues{{x:72,y:72,resolution_unit:1}})).unwrap(); for b in t {{ print!("{{:02x}}",b); }} println!(); }} }}''')
+fn main() {{ for order in [TiffByteOrder::Big,TiffByteOrder::Little] {{ let t=minimal_ifd0_tiff(&writers::generated::MANDATORY_DEFAULTS,order,false,0,Some(JfifValues{{x:Some(72),y:Some(72),resolution_unit:Some(1)}})).unwrap(); for b in t {{ print!("{{:02x}}",b); }} println!(); }} }}''')
             subprocess.run(['rustc','--edition=2021',str(driver),'-o',str(binary)],check=True,capture_output=True,text=True)
             big,little=subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout.splitlines()
         self.assertTrue(big.startswith('4d4d002a000000080004'))
@@ -256,5 +261,19 @@ fn main() {{ for order in [TiffByteOrder::Big,TiffByteOrder::Little] {{ let t=mi
         self.assertTrue(little.startswith('49492a00080000000400'))
         self.assertIn('1a010500010000003e000000', little)
         self.assertIn('28010300010000000200000013020300010000000100000000000000', little)
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_jfif_y_defined_gate_preserves_absence_and_refuses_partial_operands(self):
+        from mandatory_defaults_codegen import generate
+        assert NATIVE is not None
+        fact = capture(NATIVE[1]); rendered, _ = generate(fact, self._document(fact), str(NATIVE[0]))
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary=Path(temporary); generated=temporary/'generated.rs'; generated.write_text(rendered)
+            runtime=ROOT/'src/writers/mandatory_defaults_runtime.rs'; driver=temporary/'driver.rs'; binary=temporary/'driver'
+            driver.write_text(f'''mod writers {{ #[path = "{runtime}"] pub mod mandatory_defaults_runtime; #[path = "{generated}"] pub mod generated; }}
+use writers::mandatory_defaults_runtime::*;
+fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", defaults_for_new_directory(r,"IFD0",false,0,Some(JfifValues{{x:Some(72),y:None,resolution_unit:Some(1)}})).unwrap().len()); println!("{{}}", defaults_for_new_directory(r,"IFD0",false,0,Some(JfifValues{{x:None,y:Some(72),resolution_unit:Some(1)}})).is_err()); }}''')
+            subprocess.run(['rustc','--edition=2021',str(driver),'-o',str(binary)],check=True,capture_output=True,text=True)
+            self.assertEqual(subprocess.run([str(binary)],check=True,capture_output=True,text=True).stdout.splitlines(), ['1','true'])
 
 if __name__ == '__main__': unittest.main()
