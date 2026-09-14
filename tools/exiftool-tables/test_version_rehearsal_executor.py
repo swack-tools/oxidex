@@ -111,6 +111,9 @@ class ExecutorTests(unittest.TestCase):
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],
                         comparison={"kind": "oxidex_vs_native", "native_release": env["OXIDEX_REHEARSAL_RELEASE"],
                                     "matched": 3, "mismatched": 0})
+        if stage == "write":
+            body["write_mode"] = {"kind": "selected-release-live-native", "release": env["OXIDEX_REHEARSAL_RELEASE"],
+                                  "ledger_sha256": "a" * 64, "rules_sha256": "b" * 64}
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps(body))
         return subprocess.CompletedProcess(argv, 0, "ok", "")
@@ -300,6 +303,23 @@ class ExecutorTests(unittest.TestCase):
         failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
         self.assertEqual(failure["stage"], "write")
         self.assertIn("writer", failure["detail"])
+
+    def test_write_stage_requires_selected_release_matrix_mode_proof(self):
+        self.initialize(self.config())
+        original = self.command
+        def removes_mode(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "write":
+                report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                body = json.loads(report.read_text()); del body["write_mode"]
+                report.write_text(json.dumps(body))
+            return result
+        self.command = removes_mode
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "write")
+        self.assertIn("matrix mode", failure["detail"])
 
 
 if __name__ == "__main__":

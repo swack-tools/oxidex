@@ -436,6 +436,15 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
             _require_binary_proof(result, target, "writer_binary")
         if stage in {"read", "write"}:
             _require_fixture_proof(result)
+        if stage == "write":
+            mode = result.get("write_mode")
+            if (not isinstance(mode, dict) or mode.get("kind") != "selected-release-live-native"
+                    or mode.get("release") != release
+                    or not isinstance(mode.get("ledger_sha256"), str)
+                    or __import__("re").fullmatch(r"[0-9a-f]{64}", mode["ledger_sha256"]) is None
+                    or not isinstance(mode.get("rules_sha256"), str)
+                    or __import__("re").fullmatch(r"[0-9a-f]{64}", mode["rules_sha256"]) is None):
+                raise Refused("write result lacks selected-release matrix mode proof")
     return result
 
 
