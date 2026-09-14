@@ -44,6 +44,7 @@ if mode=='rustfmt':
     assert paths in [{str(root/a.path) for a in artifacts.select(tier,kind='rust')} for tier in (1,2)]
 elif mode=='chosen-perl':
     if name in ('dump_tables.pl','dump_filetypes.pl'):
+        reader_only=args.pop(0)=='--reader-only' if args[0]=='--reader-only' else False
         assert pathlib.Path(args[0]).resolve()==lib
         print(json.dumps({'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}))
     elif name=='dump_af_points.pl':
@@ -200,6 +201,16 @@ class RegenerationShellTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
+    def test_regeneration_refuses_unknown_arguments_before_any_leaf_runs(self):
+        self.log.unlink(missing_ok=True)
+        result = subprocess.run(
+            ['bash', str(self.tools / 'regen-all.sh'), '--not-a-mode'],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=45,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('usage:', result.stderr)
+        self.assertFalse(self.log.exists())
+
     def extra_leaves(self):
         # This is the invocation contract, not another output-path manifest.
         return ['gen_geotiff_printconv.py', 'gen_dicom_dict.py',
@@ -225,6 +236,13 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('convinv_row_codegen.py'), int(full))
                 self.assertEqual(names.count('final_scalar_stage.py'), int(full))
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
+                dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
+                if full:
+                    self.assertTrue(dump_calls)
+                    self.assertTrue(all(c['argv'][0] != '--reader-only' for c in dump_calls))
+                else:
+                    self.assertEqual(len(dump_calls), 1)
+                    self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')
                 if full:
                     self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
                     self.assertLess(names.index('scalar_helper_codegen.py'), names.index('rustfmt'))
