@@ -107,6 +107,7 @@ class NativeCheckExifRustTests(unittest.TestCase):
                         '#[path=' + rust_string(str(ROOT / 'src/error/mod.rs')) + '] mod error;',
                         'mod writers {',
                         '#[path=' + rust_string(str(ROOT / 'src/writers/generated_scalar.rs')) + '] pub(crate) mod generated_scalar;',
+                        '#[path=' + rust_string(str(ROOT / 'src/writers/generated_scalar_rules.rs')) + '] pub(crate) mod generated_scalar_rules;',
                         '#[path=' + rust_string(str(ROOT / 'src/writers/generated_checkexif.rs')) + '] pub(crate) mod generated_checkexif; }',
                         '#[path=' + rust_string(str(rules)) + '] mod rules;',
                         'use writers::generated_checkexif::*; use writers::generated_scalar::Scalar;',
