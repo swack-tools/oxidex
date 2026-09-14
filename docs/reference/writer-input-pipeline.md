@@ -130,7 +130,7 @@ separate measurements.
 
 ## Remaining final file stage
 
-The [native final-stage audit](../../tools/exiftool-tables/NATIVE_SCALAR_WRITE_FINAL_STAGE_AUDIT.md)
+The [native final-stage audit](https://github.com/swack-tools/oxidex/blob/045b739ddab2eda260b306aa67e948fbaeeb59cf/tools/exiftool-tables/NATIVE_SCALAR_WRITE_FINAL_STAGE_AUDIT.md)
 records the remaining source controls between the scalar helper and the actual
 IFD edit. Resolve conversion format and on-wire type before WriteValue, then
 apply any source-selected charset recoding and calculate the final count.
