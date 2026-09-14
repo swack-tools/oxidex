@@ -439,5 +439,38 @@ class AdapterTests(unittest.TestCase):
         import version_rehearsal_executor as executor
         with executor._HostLock(lock): pass
 
+    def test_executor_timeout_reaps_late_child_after_parent_exits(self):
+        """A child born after the snapshot cannot survive its parent's early exit."""
+        lock, pid = self.root / "late.lock", self.root / "late.pid"
+        helper = self.root / "late-helper.py"
+        child_code = f"from pathlib import Path; import os,time; Path({str(pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
+        helper.write_text(
+            "import os, subprocess, sys, time\nfrom pathlib import Path\n"
+            "time.sleep(1.2)\n"
+            f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)\n"
+            f"Path({str(pid)!r}).write_text(str(child.pid))\n"
+            "# Exit before the executor's first cleanup grace period expires.\n")
+        supervisor = self.root / "late-supervisor.py"
+        supervisor.write_text(
+            "import json, os, subprocess, sys\nfrom pathlib import Path\n"
+            f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_executor as e\n"
+            "e.COMMAND_TIMEOUT_SECONDS = 1\n"
+            f"with e._HostLock(Path({str(lock)!r})):\n"
+            f" r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
+            "print(json.dumps(r))\n")
+        finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=12)
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        self.assertEqual(json.loads(finished.stdout)["state"], "timeout")
+        self.assertTrue(pid.is_file(), "late child did not start")
+        child = int(pid.read_text())
+        for _ in range(20):
+            try: os.kill(child, 0)
+            except ProcessLookupError: break
+            time.sleep(0.05)
+        else:
+            self.fail("process-group fallback left the late child live")
+        import version_rehearsal_executor as executor
+        with executor._HostLock(lock): pass
+
 
 if __name__ == "__main__": unittest.main()
