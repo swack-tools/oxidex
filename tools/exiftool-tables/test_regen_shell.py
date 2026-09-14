@@ -84,6 +84,7 @@ else:
         output(flag('--ledger-out'),'expr-ledger')
     elif name=='codegen.py':
         dump(args[0]);output(flag('-o'),'binary');output(flag('--ifd-out'),'ifd')
+        output(flag('--ifd-identity-ledger-out'),'ifd-identity-ledger')
         output(flag('--keyed-out'),'keyed')
         output(flag('--value-conv-ledger-out'),'value-ledger')
     elif name=='serial_directory.py':

@@ -25,6 +25,7 @@ import json
 import os
 import re
 from collections import Counter
+from pathlib import Path
 
 import conds
 import directory_validation
@@ -2749,7 +2750,20 @@ def ifd_table_ident(mod_name, tbl_name):
     return "IFD_" + re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
 
 
-def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
+def _ifd_identity_source_sha256(source):
+    """Digest one captured IFD source row using JSON's canonical wire form.
+
+    The dumper has already reduced Perl values to JSON. Hashing that exact
+    value (rather than a rendered Rust literal or a tag name) binds a ledger
+    identity to the source fact that the compiler considered.
+    """
+    return hashlib.sha256(json.dumps(
+        source, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")).hexdigest()
+
+
+def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx,
+                  *, include_identity_ledger=False):
     """Emit one `IfdTable` literal for a table `is_ifd_table` selected.
 
     Every selected table is emitted, including one whose every key is refused
@@ -2761,38 +2775,75 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
     meta = tbl.get("meta") or {}
     stats = new_ifd_stats()
 
-    entries = []
+    entries, identity_ledger = [], []
     seen = set()
     for key, tag in tbl["tags"].items():
         tag_id = parse_ifd_tag_id(key)
         if tag_id is None:
             stats["ifd_tag_id_unrepresentable"] += 1
+            identity_ledger.append({"raw_key": str(key), "variant_path": [], "name": None,
+                                    "source_sha256": _ifd_identity_source_sha256(tag),
+                                    "state": "refused", "reasons": ["raw_key_unrepresentable"]})
             continue
         # Distinct dump keys parse to distinct ids (decimal, no leading
         # zeros), so a repeat here is a generator bug, not a table fact.
         assert tag_id not in seen, f"{mod_name}::{tbl_name}: duplicate tag id {tag_id} from key {key!r}"
         seen.add(tag_id)
-        entries.append((tag_id, tag))
+        entries.append((tag_id, str(key), tag))
 
     rows, variant_rows = [], []
-    for tag_id, tag in sorted(entries, key=lambda e: e[0]):
+    for tag_id, raw_key, tag in sorted(entries, key=lambda e: e[0]):
         if "_variants" in tag:
+            before_variant_reasons = {
+                key: stats[key]
+                for key in (
+                    "ifd_variant_makernotes_dispatch", "ifd_variant_unreported_skipped",
+                    "tag_variant_cond_unsupported", "tag_variant_field_unsupported",
+                )
+            }
             group_src = compile_ifd_variant_group(
                 tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name)
             )
             if group_src is IFD_VARIANT_UNREPORTED:
+                reason = next(
+                    key for key in ("ifd_variant_makernotes_dispatch", "ifd_variant_unreported_skipped")
+                    if stats[key] > before_variant_reasons[key]
+                ).removeprefix("ifd_")
+
+                for index, value in enumerate(tag["_variants"]):
+                    identity_ledger.append({"raw_key": raw_key, "variant_path": [index], "name": value.get("Name") if isinstance(value, dict) else None,
+                                            "source_sha256": _ifd_identity_source_sha256(value),
+                                            "state": "refused", "reasons": [reason]})
                 continue
             if group_src is None:
                 stats["tag_variant_skipped"] += 1
+                reason = next(
+                    key for key in ("tag_variant_cond_unsupported", "tag_variant_field_unsupported")
+                    if stats[key] > before_variant_reasons[key]
+                )
+                for index, value in enumerate(tag["_variants"]):
+                    identity_ledger.append({"raw_key": raw_key, "variant_path": [index], "name": value.get("Name") if isinstance(value, dict) else None,
+                                            "source_sha256": _ifd_identity_source_sha256(value),
+                                            "state": "refused", "reasons": [reason]})
                 continue
             variant_rows.append(f"    {group_src},")
+            for index, value in enumerate(tag["_variants"]):
+                identity_ledger.append({"raw_key": raw_key, "variant_path": [index], "name": value.get("Name") if isinstance(value, dict) else None,
+                                        "source_sha256": _ifd_identity_source_sha256(value),
+                                        "state": "emitted", "reasons": []})
             continue
         tag_src, _reason = gen_ifd_tag_literal(
             tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name)
         )
         if tag_src is None:
+            identity_ledger.append({"raw_key": raw_key, "variant_path": [], "name": tag.get("Name"),
+                                    "source_sha256": _ifd_identity_source_sha256(tag),
+                                    "state": "refused", "reasons": [_reason or "tag_refused"]})
             continue
         rows.append(f"    {tag_src},")
+        identity_ledger.append({"raw_key": raw_key, "variant_path": [], "name": tag.get("Name"),
+                                "source_sha256": _ifd_identity_source_sha256(tag),
+                                "state": "emitted", "reasons": []})
         stats["ifd_tag_emitted"] += 1
 
     # Effective groups after GetTagTable's defaulting -- see gen_table.
@@ -2842,7 +2893,7 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
     )
     tags_src = "&[]" if not rows else "&[\n" + "\n".join(rows) + "\n    ]"
     variants_src = "&[]" if not variant_rows else "&[\n" + "\n".join(variant_rows) + "\n    ]"
-    return f"""
+    source = f"""
 /// `Image::ExifTool::{mod_name}::{tbl_name}` -- {len(rows)} tags,
 /// {len(variant_rows)} `_variants` groups (IFD-style: {kind}).{set_group1_doc}
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
@@ -2859,15 +2910,16 @@ pub static {ifd_table_ident(mod_name, tbl_name)}: IfdTable = IfdTable {{
     variants: {variants_src},
 }};
 """
+    return (source, identity_ledger) if include_identity_ledger else source
 
 
 def gen_ifd_tables(doc, module_names, verified_exprs):
     """Every IFD-style table of `doc`, in `(module, table)` order (the order
     `ALL_IFD_TABLES` is declared in, which `find_ifd_table` relies on).
-    Returns `(chunks, index_rows, ifd_stats)`."""
+    Returns `(chunks, index_rows, ifd_stats, identity_ledger)`."""
     ctx = IfdGenContext.from_doc(doc)
     ifd_stats = new_ifd_stats()
-    chunks, index_rows, idents = [], [], set()
+    chunks, index_rows, idents, ledger = [], [], set(), []
     mods = doc["modules"]
     for mod_name in module_names:
         mod = mods.get(mod_name)
@@ -2877,7 +2929,12 @@ def gen_ifd_tables(doc, module_names, verified_exprs):
             tbl = mod["tables"][tbl_name]
             if not is_ifd_table(tbl.get("meta") or {}):
                 continue
-            chunks.append(gen_ifd_table(mod_name, tbl_name, tbl, ifd_stats, verified_exprs, ctx))
+            source, rows = gen_ifd_table(
+                mod_name, tbl_name, tbl, ifd_stats, verified_exprs, ctx,
+                include_identity_ledger=True,
+            )
+            chunks.append(source)
+            ledger.extend({"module": mod_name, "table": tbl_name, "full_name": f"Image::ExifTool::{mod_name}::{tbl_name}", **row} for row in rows)
             ident = ifd_table_ident(mod_name, tbl_name)
             if ident in idents:
                 raise SystemExit(
@@ -2886,7 +2943,7 @@ def gen_ifd_tables(doc, module_names, verified_exprs):
                 )
             idents.add(ident)
             index_rows.append(f"    &{ident},")
-    return chunks, index_rows, ifd_stats
+    return chunks, index_rows, ifd_stats, ledger
 
 
 IFD_PRELUDE = '''//! ExifTool IFD-style tag tables -- the `Exif::ProcessExif` tables --
@@ -4084,6 +4141,10 @@ def main():
         "either way, so the shared ExprId enum in -o does not depend on this flag",
     )
     ap.add_argument(
+        "--ifd-identity-ledger-out",
+        help="write per-source-row IFD compiler identity and refusal ledger (requires --ifd-out)",
+    )
+    ap.add_argument(
         "--keyed-out",
         help="write source facts for native keyed directories (schema/inventory only; no reader activation)",
     )
@@ -4144,7 +4205,11 @@ def main():
     # --ifd-out asks for the file: the ExprId enum written into -o below must
     # carry every conversion EITHER file references, so which variants it has
     # cannot be allowed to depend on a flag.
-    ifd_chunks, ifd_index_rows, ifd_stats = gen_ifd_tables(doc, names, verified_exprs)
+    if args.ifd_identity_ledger_out and not args.ifd_out:
+        raise SystemExit("--ifd-identity-ledger-out requires --ifd-out to bind the emitted Rust artifact")
+    ifd_chunks, ifd_index_rows, ifd_stats, ifd_identity_ledger = gen_ifd_tables(
+        doc, names, verified_exprs
+    )
     ifd_joined = "".join(ifd_chunks)
 
     # Like IFD source, keyed source must be compiled before the shared ExprId
@@ -4234,6 +4299,7 @@ def main():
         fh.write(index)
         fh.write(omissions)
 
+    ifd_output = None
     if args.ifd_out:
         ifd_index = (
             "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
@@ -4242,11 +4308,33 @@ def main():
             + "\n".join(ifd_index_rows)
             + "\n];\n"
         )
+        ifd_output = IFD_PRELUDE.replace("__VERSION__", version) + ifd_joined + ifd_index
         with open(args.ifd_out, "w", encoding="utf-8") as fh:
-            fh.write(IFD_PRELUDE.replace("__VERSION__", version))
-            fh.write(ifd_joined)
-            fh.write(ifd_index)
+            fh.write(ifd_output)
         print(f"wrote IFD tables     {args.ifd_out}")
+
+    if args.ifd_identity_ledger_out:
+        source_bytes = Path(args.tables_json).read_bytes()
+        emitted = sum(row["state"] == "emitted" for row in ifd_identity_ledger)
+        refused = len(ifd_identity_ledger) - emitted
+        ifd_identity_document = {
+            "schema": "oxidex_ifd_identity_ledger_v1",
+            "instrument": "tools/exiftool-tables/codegen.py --ifd-out --ifd-identity-ledger-out",
+            "exiftool_version": version,
+            "source": {
+                "tables_json_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                "ifd_rust_sha256": hashlib.sha256(ifd_output.encode("utf-8")).hexdigest(),
+            },
+            "counts": {"rows": len(ifd_identity_ledger), "emitted": emitted, "refused": refused},
+            "rows": sorted(
+                ifd_identity_ledger,
+                key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"])),
+            ),
+        }
+        with open(args.ifd_identity_ledger_out, "w", encoding="utf-8") as fh:
+            json.dump(ifd_identity_document, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print(f"wrote IFD identity ledger {args.ifd_identity_ledger_out}")
 
     if args.write_out:
         # This artifact is deliberately optional and inactive.  The source was

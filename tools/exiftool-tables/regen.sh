@@ -49,6 +49,7 @@ OUT="$(artifact_path binary)"
 # second output file. Written together with $OUT so the two can never come
 # from different dumps (their EXIFTOOL_VERSION stamps are tested equal).
 IFD_OUT="$(artifact_path ifd)"
+IFD_IDENTITY_LEDGER="$(artifact_path ifd-identity-ledger)"
 # Generate and verify inactive keyed definitions too; publishing their source
 # facts does not enable a runtime parser route.
 KEYED_OUT="$(artifact_path keyed)"
@@ -115,7 +116,7 @@ python3 "$HERE/verify_exprs.py" "$JSON" \
 echo
 echo ">> generating Rust"
 python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
-    --keyed-out "$KEYED_OUT" \
+    --ifd-identity-ledger-out "$IFD_IDENTITY_LEDGER" --keyed-out "$KEYED_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo

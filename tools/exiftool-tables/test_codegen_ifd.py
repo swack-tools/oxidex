@@ -13,6 +13,9 @@ stays green while a developer with the i7 dump gets the census asserted.
 import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -90,6 +93,88 @@ class TagIds(unittest.TestCase):
         self.assertEqual(run["ifd_tag_emitted"], 1)
         self.assertIn('gate_a: GateA { blocked_by: &[("ifd_tag_id_unrepresentable", 1)] }', src)
         self.assertEqual(run["ifd_gate_a_fail"], 1)
+
+
+class IdentityLedger(unittest.TestCase):
+    def _doc(self):
+        return {
+            "exiftool_version": "13.59",
+            "modules": {"Test": {"tables": {"Main": {"meta": {}, "tags": {
+                "1": {"Name": "Alpha", "Format": "int16u"},
+                "2": {"Name": "NoFormat", "Format": "unmodelled"},
+                "raw": {"Name": "NotAnIfdId"},
+                "3": {"_variants": [
+                    {"Name": "First", "Format": "int16u", "Condition": '$format eq "int16u"'},
+                    {"Name": "Second", "Format": "int16u"},
+                ]},
+            }}}}},
+        }
+
+    def test_compiler_records_exact_rows_and_refusals_without_changing_rust(self):
+        doc = self._doc()
+        ctx = codegen.IfdGenContext.from_doc(doc)
+        plain = codegen.gen_ifd_table(
+            "Test", "Main", doc["modules"]["Test"]["tables"]["Main"],
+            codegen.new_ifd_stats(), None, ctx,
+        )
+        emitted, rows = codegen.gen_ifd_table(
+            "Test", "Main", doc["modules"]["Test"]["tables"]["Main"],
+            codegen.new_ifd_stats(), None, ctx, include_identity_ledger=True,
+        )
+        self.assertEqual(emitted, plain, "ledger collection must not alter Rust")
+        by_identity = {(row["raw_key"], tuple(row["variant_path"])): row for row in rows}
+        self.assertEqual(by_identity[("1", ())]["state"], "emitted")
+        self.assertEqual(by_identity[("2", ())]["reasons"], ["ifd_format_unsupported"])
+        self.assertEqual(by_identity[("raw", ())]["reasons"], ["raw_key_unrepresentable"])
+        self.assertEqual(by_identity[("3", (0,))]["state"], "emitted")
+        self.assertEqual(by_identity[("3", (1,))]["name"], "Second")
+        self.assertRegex(by_identity[("1", ())]["source_sha256"], r"^[0-9a-f]{64}$")
+        changed = dict(doc["modules"]["Test"]["tables"]["Main"]["tags"]["1"])
+        changed["Name"] = "Renamed"
+        self.assertNotEqual(
+            by_identity[("1", ())]["source_sha256"],
+            codegen._ifd_identity_source_sha256(changed),
+        )
+        refused_doc = json.loads(json.dumps(doc))
+        refused_doc["modules"]["Test"]["tables"]["Main"]["tags"]["3"]["_variants"][0]["Condition"] = "unsupported($val)"
+        _, refused_rows = codegen.gen_ifd_table(
+            "Test", "Main", refused_doc["modules"]["Test"]["tables"]["Main"],
+            codegen.new_ifd_stats(), None, codegen.IfdGenContext.from_doc(refused_doc),
+            include_identity_ledger=True,
+        )
+        self.assertEqual(
+            {(row["raw_key"], tuple(row["variant_path"])): row for row in refused_rows}[("3", (0,))]["reasons"],
+            ["tag_variant_cond_unsupported"],
+        )
+
+    def test_cli_binds_ledger_to_input_and_emitted_ifd_rust(self):
+        doc = self._doc()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tables, binary, ifd, ledger = (root / name for name in ("tables.json", "binary.rs", "ifd.rs", "ledger.json"))
+            tables.write_text(json.dumps(doc))
+            result = subprocess.run([
+                sys.executable, str(ROOT / "tools" / "exiftool-tables" / "codegen.py"), str(tables),
+                "-o", str(binary), "--ifd-out", str(ifd), "--ifd-identity-ledger-out", str(ledger),
+            ], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(ledger.read_text())
+            self.assertEqual(report["schema"], "oxidex_ifd_identity_ledger_v1")
+            self.assertEqual(report["counts"], {"rows": 5, "emitted": 3, "refused": 2})
+            self.assertEqual(
+                report["source"]["tables_json_sha256"],
+                __import__("hashlib").sha256(tables.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                report["source"]["ifd_rust_sha256"],
+                __import__("hashlib").sha256(ifd.read_bytes()).hexdigest(),
+            )
+            missing_ifd = subprocess.run([
+                sys.executable, str(ROOT / "tools" / "exiftool-tables" / "codegen.py"), str(tables),
+                "-o", str(binary), "--ifd-identity-ledger-out", str(ledger),
+            ], text=True, capture_output=True)
+            self.assertNotEqual(missing_ifd.returncode, 0)
+            self.assertIn("requires --ifd-out", missing_ifd.stderr)
 
 
 class FlagsAndTruthiness(unittest.TestCase):
@@ -952,7 +1037,7 @@ class WholeDump(unittest.TestCase):
             cls.ledger_error = str(exc)
             cls.verified = None
         names = sorted(cls.doc["modules"])
-        cls.chunks, cls.index_rows, cls.stats = codegen.gen_ifd_tables(cls.doc, names, cls.verified)
+        cls.chunks, cls.index_rows, cls.stats, cls.identity_ledger = codegen.gen_ifd_tables(cls.doc, names, cls.verified)
 
     def _selected(self):
         return [
