@@ -49,6 +49,8 @@ ARTIFACTS = (
     Artifact("convinv-row-ledger", 1, "convinv_row_codegen", "tools/exiftool-tables/convinv_row_ledger.json"),
     Artifact("tiff-scalar-final-rules", 1, "final_scalar_stage", "src/writers/generated_tiff_scalar_final_rules.rs"),
     Artifact("tiff-scalar-final-ledger", 1, "final_scalar_stage", "tools/exiftool-tables/tiff_scalar_final_ledger.json"),
+    Artifact("mandatory-default-rules", 1, "mandatory_defaults_codegen", "src/writers/generated_mandatory_defaults.rs"),
+    Artifact("mandatory-default-ledger", 1, "mandatory_defaults_codegen", "tools/exiftool-tables/mandatory_defaults_ledger.json"),
     Artifact("filetypes", 1, "codegen_filetypes", "src/filetype/tables.rs"),
     Artifact("composite", 1, "codegen_composite", "src/composite/tables.rs"),
     Artifact("composite-compute", 1, "codegen_composite", "src/composite/generated_compute.rs"),

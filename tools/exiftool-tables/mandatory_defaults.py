@@ -131,6 +131,8 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     """Require defaults and the general captured WriteExif callback share a source identity."""
     recipe = compile_mandatory(fact)
     document = _mapping(document, "general writer document")
+    if document.get("exiftool_version") != fact["native_identity"]["exiftool_version"]:
+        raise MandatoryRefused("mandatory defaults do not join the selected native release")
     tables = _mapping(document.get("native_write_tables"), "native_write_tables")
     exif = _mapping(tables.get("Exif"), "native_write_tables.Exif")
     main = _mapping(exif.get("Main"), "native_write_tables.Exif.Main")

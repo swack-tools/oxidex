@@ -128,6 +128,15 @@ python3 "$HERE/final_scalar_stage.py" "$JSON" \
     --report "$(artifact_path tiff-scalar-final-ledger)"
 
 echo
+echo ">> capturing and generating source-derived mandatory directory defaults"
+MANDATORY_FACT="$CACHE/mandatory-defaults-$VERSION.json"
+"$PERL" "$HERE/capture_exif_mandatory_fact.pl" "$LIB" > "$MANDATORY_FACT"
+python3 "$HERE/mandatory_defaults_codegen.py" "$MANDATORY_FACT" \
+    --writer-tables "$JSON" --selected-perl "$PERL" \
+    --output "$(artifact_path mandatory-default-rules)" \
+    --report "$(artifact_path mandatory-default-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

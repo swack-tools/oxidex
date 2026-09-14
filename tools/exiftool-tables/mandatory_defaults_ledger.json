@@ -1,0 +1,117 @@
+{
+  "artifact_registration": "tier-1 mandatory sidecar captured and joined in regen.sh",
+  "native_identity": {
+    "exiftool_version": "13.59",
+    "perl_version": "v5.38.2"
+  },
+  "recipe": {
+    "directories": [
+      {
+        "defaults": [
+          {
+            "kind": "Text",
+            "tag_id": 36864,
+            "value": "0232"
+          },
+          {
+            "kind": "Text",
+            "tag_id": 37121,
+            "value": "1 2 3 0"
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 40961,
+            "value": 65535
+          }
+        ],
+        "directory": "ExifIFD"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Text",
+            "tag_id": 0,
+            "value": "2 3 0 0"
+          }
+        ],
+        "directory": "GPS"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Integer",
+            "tag_id": 531,
+            "value": 1
+          }
+        ],
+        "directory": "IFD0"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Integer",
+            "tag_id": 259,
+            "value": 6
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 282,
+            "value": 72
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 283,
+            "value": 72
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 296,
+            "value": 2
+          }
+        ],
+        "directory": "IFD1"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Text",
+            "tag_id": 2,
+            "value": "0100"
+          }
+        ],
+        "directory": "InteropIFD"
+      }
+    ],
+    "jfif_override": {
+      "assignments": [
+        [
+          282,
+          "JFIFXResolution",
+          0
+        ],
+        [
+          283,
+          "JFIFYResolution",
+          0
+        ],
+        [
+          296,
+          "JFIFResolutionUnit",
+          1
+        ]
+      ],
+      "directory": "IFD0",
+      "probe": "JFIFYResolution"
+    },
+    "recipe_sha256": "6e6c383520a07f958e0daf33c42ff9bd5c92e0c0a682b9ed46ca67bed7c6af76",
+    "selection": {
+      "directory_operand": "dirName",
+      "disabled_when": "noMandatory",
+      "new_directory_when": "numEntries == 0"
+    },
+    "writer_source_file": "Image/ExifTool/WriteExif.pl",
+    "writer_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+  },
+  "status": "inactive source-derived defaults; no public writer",
+  "writer_tables_joined": true
+}

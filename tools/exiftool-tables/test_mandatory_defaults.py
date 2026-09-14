@@ -90,7 +90,7 @@ class MandatoryTests(unittest.TestCase):
         fact = capture(NATIVE[1])
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
-        document = {"native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}}
+        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}}
         compile_mandatory_joined(fact, document)
         effective["source_sha256"] = '0' * 64
         with self.assertRaisesRegex(MandatoryRefused, 'do not join'):
@@ -139,10 +139,13 @@ fn main() {{
         fact = capture(NATIVE[1])
         effective = {"__name": fact["writer"]["actual_name"], "source_file": fact["writer"]["source_file"],
                      "source_sha256": fact["writer"]["source_sha256"]}
-        document = {"native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}}
+        document = {"exiftool_version": fact["native_identity"]["exiftool_version"], "native_write_tables": {"Exif": {"Main": {"effective_write_proc": {"effective": effective}}}}}
         source, report = generate(fact, document)
         self.assertTrue(report['writer_tables_joined'])
         self.assertIn(fact['writer']['source_sha256'], source)
+        self.assertNotIn(str(NATIVE[0]), json.dumps(report))
+        with self.assertRaisesRegex(MandatoryRefused, 'Perl differs'):
+            generate(fact, document, '/nonexistent/perl')
         effective["source_sha256"] = '0' * 64
         with self.assertRaisesRegex(MandatoryRefused, 'do not join'):
             generate(fact, document)
@@ -164,8 +167,8 @@ fn main() {{
             self.assertIn('tag_id: 0x0213, value: MandatoryValue::Integer(9)', rendered)
             self.assertNotEqual(report['recipe']['recipe_sha256'], generate(capture(NATIVE[1]))[1]['recipe']['recipe_sha256'])
 
-    def test_codegen_refuses_bad_join_and_does_not_register_artifact(self):
+    def test_codegen_refuses_bad_join_and_registration_is_declared(self):
         from mandatory_defaults_codegen import generate
         fact = {"schema": 1, "kind": "oxidex_exif_mandatory_defaults_fact"}
         with self.assertRaises(Exception): generate(fact)
-        self.assertNotIn('mandatory-default', (ROOT / 'tools/exiftool-tables/artifacts.py').read_text())
+        self.assertIn('mandatory-default-rules', (ROOT / 'tools/exiftool-tables/artifacts.py').read_text())

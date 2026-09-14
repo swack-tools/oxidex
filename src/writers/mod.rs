@@ -14,6 +14,9 @@ pub(crate) mod generated_convinv_rows;
 pub(crate) mod generated_convinv_rules;
 pub(crate) mod generated_sanitize;
 pub(crate) mod generated_sanitize_rules;
+// Source-derived new-directory defaults remain inactive until public creation routing lands.
+pub(crate) mod mandatory_defaults_runtime;
+pub(crate) mod generated_mandatory_defaults;
 #[allow(dead_code)]
 pub(crate) mod generated_scalar;
 pub(crate) mod generated_scalar_rules;
