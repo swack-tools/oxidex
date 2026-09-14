@@ -411,7 +411,7 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     # These closed physical forms are tied to the exact helpers compiled in
     # compile_numeric_write. A registry remap/width change is a new native
     # layout, never an implicit activation of a Rust conversion.
-    physical = {"int16u": (3, 2), "int32u": (4, 4), "rational64u": (5, 8)}
+    physical = {"int8u": (1, 1), "int8s": (6, 1), "int16s": (8, 2), "int16u": (3, 2), "int32s": (9, 4), "int32u": (4, 4), "rational64u": (5, 8)}
     for format_name in numeric.formats:
         expected_type, expected_width = physical[format_name]
         type_code = numbers.get(format_name)

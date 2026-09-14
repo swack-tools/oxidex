@@ -115,9 +115,33 @@ const ENCODINGS: &[DefaultEncoding] = &[
 ];
 const SURVIVOR_ENCODINGS: &[SurvivorEncoding] = &[
     SurvivorEncoding {
+        format_name: "int8u",
+        tiff_type: 1,
+        width: 1,
+        operation: "write_value_scalar",
+    },
+    SurvivorEncoding {
+        format_name: "int8s",
+        tiff_type: 6,
+        width: 1,
+        operation: "write_value_scalar",
+    },
+    SurvivorEncoding {
+        format_name: "int16s",
+        tiff_type: 8,
+        width: 2,
+        operation: "write_value_scalar",
+    },
+    SurvivorEncoding {
         format_name: "int16u",
         tiff_type: 3,
         width: 2,
+        operation: "write_value_scalar",
+    },
+    SurvivorEncoding {
+        format_name: "int32s",
+        tiff_type: 9,
+        width: 4,
         operation: "write_value_scalar",
     },
     SurvivorEncoding {

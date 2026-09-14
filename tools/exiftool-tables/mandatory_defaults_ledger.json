@@ -138,7 +138,7 @@
       "directory": "IFD0",
       "probe": "JFIFYResolution"
     },
-    "recipe_sha256": "e01a0b5c92c4474edfc7b3ac5e8b1202ce2dbf2884b016c59bf2ab360f223d6d",
+    "recipe_sha256": "505574f89e705b4792424c159b52c658f168676b2ec211eb4206b864a65f4db3",
     "selection": {
       "directory_operand": "dirName",
       "disabled_when": "noMandatory",
@@ -146,10 +146,34 @@
     },
     "survivor_encodings": [
       {
+        "format_name": "int8u",
+        "operation": "write_value_scalar",
+        "tiff_type": 1,
+        "width": 1
+      },
+      {
+        "format_name": "int8s",
+        "operation": "write_value_scalar",
+        "tiff_type": 6,
+        "width": 1
+      },
+      {
+        "format_name": "int16s",
+        "operation": "write_value_scalar",
+        "tiff_type": 8,
+        "width": 2
+      },
+      {
         "format_name": "int16u",
         "operation": "write_value_scalar",
         "tiff_type": 3,
         "width": 2
+      },
+      {
+        "format_name": "int32s",
+        "operation": "write_value_scalar",
+        "tiff_type": 9,
+        "width": 4
       },
       {
         "format_name": "int32u",
