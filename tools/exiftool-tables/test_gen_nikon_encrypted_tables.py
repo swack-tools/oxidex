@@ -129,9 +129,15 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
             return generator.pc({"PrintConv": {"kind": "expr", "expr": expression}}, {})
 
         self.assertEqual(pc('sprintf("f/%.1f",$val/100)'), "Pc::FNumberDiv100")
+        self.assertEqual(pc('sprintf("%.1fmm",$val/10)'), "Pc::MmDiv(10.0)")
+        self.assertEqual(pc('sprintf("%.1f mm",$val)'), 'Pc::FixedSuffix(1, " mm")')
         self.assertEqual(pc('sprintf("%.1f m", $val/10)'), "Pc::MetersDiv10")
         for expression in ('sprintf("f/%.1f",$val/200)',
-                           'sprintf("%.1f m", $val/20)'):
+                           'sprintf("%.1f m", $val/20)',
+                           'sprintf("f/%x1f",$val/100)',
+                           'sprintf("%x1fmm",$val/10)',
+                           'sprintf("%x1f mm",$val)',
+                           'sprintf("%x1f m", $val/10)'):
             with self.subTest(expression=expression):
                 with self.assertRaises(generator.Unsupported):
                     pc(expression)

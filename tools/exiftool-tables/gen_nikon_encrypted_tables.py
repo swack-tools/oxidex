@@ -176,7 +176,7 @@ def pc(row, maps):
  if h in SPECIAL_PC:return 'Pc::'+SPECIAL_PC[h]
  exact={'"$val fps"':'Pc::Suffix(" fps")','"$val Hz"':'Pc::Suffix(" Hz")','"$val mm"':'Pc::Suffix(" mm")','"+/-$val"':'Pc::Prefix("+/-")','Image::ExifTool::Exif::PrintExposureTime($val)':'Pc::ExposureTime','Image::ExifTool::Exif::PrintFraction($val)':'Pc::Fraction','int($val + 0.5)':'Pc::RoundHalfUp','sprintf("0x%02x", $val)':'Pc::Hex2','$val == 1? "1 Second" : sprintf("%.0f Seconds",$val)':'Pc::Seconds','$val>0.99 ? "Full" : sprintf("%.1f%%",$val*100)':'Pc::FullOrPercent','$val == 0? "No Delay" : sprintf("%.0f sec",$val)':'Pc::NoDelayOrSeconds','$val ? sprintf("%.1f sec",$val/1000) : "Off"':'Pc::SecondsDiv1000OrOff','$val > 0 ? sprintf("%.0f", $val) : ""':'Pc::PositiveOrBlank'}
  if s in exact:return exact[s]
- pats=[(r'sprintf\("f/%.1f",\$val/100\)','Pc::FNumberDiv100'),(r'sprintf\("%.1fmm",\$val/(\d+)\)','Pc::MmDiv({})'),(r'sprintf\("%.1f mm",\$val\)','Pc::FixedSuffix(1, " mm")'),(r'sprintf\("%.1f m", \$val/10\)','Pc::MetersDiv10'),(r'\$val \? sprintf\("%\+\.(\d)f", ?\$val\) : 0','Pc::SignedOrZero({})'),(r'sprintf\("%\+\.(\d)f",\$val\)','Pc::Signed({})'),(r'sprintf\("%\.(\d)f", ?\$val\)','Pc::Fixed({})')]
+ pats=[(r'sprintf\("f/%\.1f",\$val/100\)','Pc::FNumberDiv100'),(r'sprintf\("%\.1fmm",\$val/(\d+)\)','Pc::MmDiv({})'),(r'sprintf\("%\.1f mm",\$val\)','Pc::FixedSuffix(1, " mm")'),(r'sprintf\("%\.1f m", \$val/10\)','Pc::MetersDiv10'),(r'\$val \? sprintf\("%\+\.(\d)f", ?\$val\) : 0','Pc::SignedOrZero({})'),(r'sprintf\("%\+\.(\d)f",\$val\)','Pc::Signed({})'),(r'sprintf\("%\.(\d)f", ?\$val\)','Pc::Fixed({})')]
  for pat,out in pats:
   m=re.fullmatch(pat,s)
   if m:
