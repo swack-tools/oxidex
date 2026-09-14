@@ -45,13 +45,30 @@ RUNTIME_CONSUMERS = {
     "keyed": {"kind": "generic_keyed_directory", "refs": ["src/exiftool_tables/engine.rs"]},
 }
 
+def consumer_snapshot(repo: Path, commit: str) -> dict[str, Any]:
+    result = {}
+    for kind, route in RUNTIME_CONSUMERS.items():
+        blobs = []
+        for path in route["refs"]:
+            blob = git_blob_or_none(repo, commit, path)
+            if blob is None:
+                result[kind] = {"state": "missing", "path": path}; break
+            blobs.append({"path": path, "sha256": sha(blob)})
+        else:
+            result[kind] = {"state": "present_static_ref", "refs": blobs}
+    return result
+
 def parse_enabled(text: str, symbol: str) -> set[tuple[str, str]]:
     import re
     marker = re.search(rf"pub static {symbol}: &\[\(&str, &str\)\] = &\[", text)
     if marker is None: raise ValueError(f"missing {symbol}")
-    end = text.find("];", marker.end())
-    if end < 0: raise ValueError(f"unterminated {symbol}")
-    return set(re.findall(r'\("([^"\\]+)",\s*"([^"\\]+)"\)', text[marker.end():end]))
+    start, end = brace_span(text, marker.end() - 1, "[", "]")
+    body = re.sub(r"//[^\n]*|/\*.*?\*/", "", text[start + 1:end - 1], flags=re.S)
+    entries = re.findall(r'\s*\("([^"\\]+)",\s*"([^"\\]+)"\)\s*,?', body)
+    remainder = re.sub(r'\s*\("[^"\\]+",\s*"[^"\\]+"\)\s*,?', '', body)
+    if remainder.strip(): raise ValueError(f"unrecognised {symbol} entry syntax")
+    if len(entries) != len(set(entries)): raise ValueError(f"duplicate {symbol} entry")
+    return set(entries)
 
 def runtime_evidence(selection: str, artifact: dict[str, Any], enabled: set[tuple[str, str]] | None = None, identity: tuple[str, str] | None = None, consumer_verified: bool = False) -> dict[str, Any]:
     """Classify static route evidence without inventing dynamic reachability."""
@@ -61,7 +78,11 @@ def runtime_evidence(selection: str, artifact: dict[str, Any], enabled: set[tupl
         return {"state": "unknown", "reason": "absent_from_this_generated_registry", "refs": [], "observed": {"read": None, "write": None}}
     if not artifact.get("registry_listed"):
         return {"state": "not_enabled", "reason": "definition_not_listed_in_generated_registry", "refs": [], "observed": {"read": None, "write": None}}
-    if enabled is None or identity not in enabled:
+    if artifact.get("gate_a_blocked_by"):
+        return {"state": "not_enabled", "reason": "gate_a_blocked", "refs": [], "observed": {"read": None, "write": None}}
+    if enabled is None:
+        return {"state": "unknown", "reason": "enablement_policy_missing", "refs": [], "observed": {"read": None, "write": None}}
+    if identity not in enabled:
         return {"state": "not_enabled", "reason": "not_in_commit_pinned_enablement_allowlist", "refs": [], "observed": {"read": None, "write": None}}
     if not consumer_verified:
         return {"state": "unverified", "reason": "consumer_blob_missing_or_drifted", "refs": [], "observed": {"read": None, "write": None}}
@@ -303,6 +324,7 @@ def artifact_snapshot(repo: Path, commit: str) -> tuple[dict[str, Any], dict[str
             "state": "present", "path": path, "sha256": sha(blob),
             "tables": sorted(parse_enabled(blob.decode("utf-8"), symbol)),
         })
+    snapshot["consumers"] = consumer_snapshot(repo, commit)
     return snapshot, parsed, sidecars
 
 
@@ -333,7 +355,7 @@ def source_rows(out: Path, repo: Path, selector_commit: str, entries: list[tuple
     return rows, snapshot
 
 
-def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str], dict[str, Any]]], sidecars: dict[str, Counter[tuple[str, str]]], artifact_states: dict[str, str] | None = None, enablement: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def join_rows(rows: list[dict[str, Any]], parsed: dict[str, dict[tuple[str, str], dict[str, Any]]], sidecars: dict[str, Counter[tuple[str, str]]], artifact_states: dict[str, str] | None = None, enablement: dict[str, Any] | None = None, consumers: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     source_keys = {(row["module"], row["table"]) for row in rows}
     artifact_states = artifact_states or {kind: "present" for kind in ARTIFACT_PATHS}
     for kind, tables in parsed.items():
@@ -459,7 +481,7 @@ def main() -> None:
     rows, selector_snapshot = source_rows(args.out, args.repo, selector_commit, entries)
     artifact_states = {kind: value["state"] for kind, value in artifacts["artifacts"].items()}
     try:
-        joined, artifact_totals = join_rows(rows, parsed, sidecars, artifact_states, artifacts.get("enablement"))
+        joined, artifact_totals = join_rows(rows, parsed, sidecars, artifact_states, artifacts.get("enablement"), artifacts.get("consumers"))
     except ValueError as exc:
         raise SystemExit(f"invalid source/artifact accounting: {exc}") from exc
     selection_counts = Counter(row["selection"] for row in rows)

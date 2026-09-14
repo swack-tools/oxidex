@@ -36,6 +36,12 @@ def artifact(kind, *, module="Any", table="Main", gate='&[]', rows="", registry=
 
 
 class ArtifactParserTests(unittest.TestCase):
+    def test_enabled_parser_ignores_comments_and_refuses_unknown_syntax(self):
+        text = 'pub static ENABLED: &[(&str, &str)] = &[\n// ("Bad", "Row"),\n("Good", "Row"),\n];'
+        self.assertEqual(join.parse_enabled(text, "ENABLED"), {("Good", "Row")})
+        with self.assertRaisesRegex(ValueError, "unrecognised"):
+            join.parse_enabled('pub static ENABLED: &[(&str, &str)] = &[ UNKNOWN ];', "ENABLED")
+
     def test_records_gate_a_and_zero_emitted_rows_without_hiding_the_table(self):
         tables, accounting = join.parse_tables(
             artifact("binary", gate='&[("format", 2)]'), "binary"
