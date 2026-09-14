@@ -1,6 +1,7 @@
 # Replace Canon's manual AFInfo2 reader
 
-Updated September 13, 2026. Base: `8887e5d9` (merged PR #759).
+Updated September 13, 2026. Merged in PR #760 as `4a3eb26c` at 16:11:54 UTC.
+Base: `8887e5d9` (PR #759); all five required hosted checks passed on `2630ded8`.
 
 ## Goal and finish conditions
 
@@ -70,8 +71,8 @@ the complete migration and its gates.
 
 ## Current state
 
-The source checkpoint is published on
-`codex/afinfo2-production-integration-20260913`. Integration removes the manual
+The source from `codex/afinfo2-production-integration-20260913` is merged
+in PR #760. Integration removes the manual
 AFInfo2/AFInfo3 arm, eight private sequence offsets, two parent-ID constants and
 the private 20-value AFAreaMode enum. The shared reader is the sole replacement.
 An independent source review accepts the ownership and rollback design.
@@ -96,8 +97,8 @@ incorrectly emitted as executable. The generator now leaves that distinct
 edge explicitly unwalked. The processor-oracle repair is integrated at
 `62535db7`; independent whole-batch source review accepts `ff1e364c`. Exact
 exported-fixture checks, the pair after retirement and full corpus are accepted
-below. Final hosted acceptance remains required before merge.
-No Canon reader is counted as merged retirement yet; no project-wide percentage
+below. All five final hosted checks passed on `2630ded8` before squash merge.
+The AFInfo2/AFInfo3 reader retirement is merged; no project-wide percentage
 follows from this bounded work.
 
 The exact seven TIFF byte vectors used by the public-reader tests are now
@@ -174,3 +175,17 @@ passes in 150.641 seconds: 5,993 passes across unit/integration/doc summaries,
 zero failures and 124 ignored tests. The attempted local nextest invocation
 could not run because that executable is not installed; its failed attempt is
 retained. Hosted nextest and all required checks must pass on the final head.
+
+
+## Final publication and merge
+
+PR #760 squash-merged as `4a3eb26c7bb1a066bfbf22e41b0404ab63e6e351`
+at 16:11:54 UTC on September 13. The final tested head was
+`2630ded84a96c2973d3130cad2a26ce3629f01c7`. Lint & Audit, Build & Test,
+Release Build, Verify Generated Tables and clean-checkout docs all passed.
+The canonical Python stage ran 777 tests with zero failures/skips in 643.787
+seconds.
+The guarded waiter verified exact head/base and clean tracked source before
+merging. BATCH's `landing-retry-state.json`, `merge-verified.json` and
+`hosted-logs-retry/` retain the result and full job logs. Earlier failures remain
+separate evidence; old AFInfo geometry and CanonRaw scope remain open.

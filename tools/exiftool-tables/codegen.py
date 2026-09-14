@@ -4087,6 +4087,10 @@ def main():
         "--keyed-out",
         help="write source facts for native keyed directories (schema/inventory only; no reader activation)",
     )
+    ap.add_argument(
+        "--write-out",
+        help="write inactive source-derived write candidates; this does not activate a writer route",
+    )
     args = ap.parse_args()
 
     with open(args.tables_json, encoding="utf-8") as fh:
@@ -4198,6 +4202,15 @@ def main():
         + "\n];\n"
     )
 
+    # Compile the inactive write artifact before writing any requested output.
+    # A malformed write sidecar must not leave a partially refreshed binary
+    # artifact behind when --write-out was explicitly requested.
+    write_src = None
+    write_report = None
+    if args.write_out:
+        import write_descriptors
+        write_src, write_report = write_descriptors.generate(doc, names)
+
     # Stamp the release these tables came from. ExifTool renames fields and
     # inserts enum values between releases, so verifying against a different
     # one reports hundreds of differences that read as generator bugs rather
@@ -4234,6 +4247,19 @@ def main():
             fh.write(ifd_joined)
             fh.write(ifd_index)
         print(f"wrote IFD tables     {args.ifd_out}")
+
+    if args.write_out:
+        # This artifact is deliberately optional and inactive.  The source was
+        # compiled before any output write, so a refusal cannot half-refresh
+        # the ordinary binary/IFD/keyed artifacts.
+        with open(args.write_out, "w", encoding="utf-8") as fh:
+            fh.write(write_src)
+        print(f"wrote inactive write descriptors {args.write_out}")
+        print(
+            "  write candidates: "
+            f"tables={write_report.emitted_tables}, rows={write_report.emitted_rows}; "
+            f"omitted tables={write_report.omitted_tables}, rows={write_report.omitted_rows}"
+        )
 
     if args.keyed_out:
         # Normal regeneration always requests this output; focused generator

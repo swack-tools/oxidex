@@ -51,6 +51,11 @@ use crate::writers::exif_surgical::{
     validate_changed,
 };
 
+// Inactive until source-derived writer semantics and public identity routing
+// are accepted. This primitive contains carrier mechanics, not tag knowledge.
+#[allow(dead_code)]
+pub(crate) mod entry_edits;
+
 /// IFD0 tag pointing to the ExifIFD
 const EXIF_IFD_POINTER: u16 = 0x8769;
 /// IFD0 tag pointing to the GPS IFD
@@ -1019,5 +1024,263 @@ mod tests {
         );
         let err = rewrite_tiff_file(&file, &original, &desired).unwrap_err();
         assert!(err.to_string().contains("denominator"), "got: {}", err);
+    }
+
+    fn raw_entry_value(file: &[u8], group: IfdKind, id: u16) -> Option<(u16, u32, Vec<u8>)> {
+        let scan = scan_tiff(file).unwrap();
+        let entry = scan
+            .entries
+            .iter()
+            .find(|entry| entry.ifd == group && entry.tag_id == id)?;
+        let at = entry.record_offset;
+        let count = read_u32(&file[at + 4..at + 8], scan.byte_order);
+        let size = count as usize
+            * crate::parsers::common::exif_types::ExifType::from_u16(entry.field_type)
+                .unwrap()
+                .size_in_bytes();
+        let value_at = if size <= 4 {
+            at + 8
+        } else {
+            read_u32(&file[at + 8..at + 12], scan.byte_order) as usize
+        };
+        Some((
+            entry.field_type,
+            count,
+            file[value_at..value_at + size].to_vec(),
+        ))
+    }
+
+    fn raw_string_edit(group: IfdKind, id: u16, bytes: &[u8]) -> entry_edits::ScopedEntryEdit {
+        entry_edits::ScopedEntryEdit {
+            ifd: group,
+            tag_id: id,
+            mutation: entry_edits::EntryMutation::Set {
+                field_type: 2,
+                count: bytes.len() as u32,
+                bytes: bytes.to_vec(),
+            },
+        }
+    }
+
+    #[test]
+    fn raw_scoped_strings_preserve_payload_across_set_and_delete() {
+        use entry_edits::{EntryMutation, ScopedEntryEdit, apply_entry_edits};
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut file = build_tiff(bo);
+            let long = [vec![b'G'; 96], vec![0]].concat();
+            for bytes in [
+                b"Alpha\0".as_slice(),
+                long.as_slice(),
+                b"Z\0",
+                b"\0",
+                "é\0".as_bytes(),
+                b"A\0B\0",
+            ] {
+                let edit = raw_string_edit(IfdKind::Ifd0, 0x013c, bytes);
+                let out = apply_entry_edits(&file, std::slice::from_ref(&edit)).unwrap();
+                assert_eq!(&out[..4], &file[..4]);
+                assert_eq!(&out[8..file.len()], &file[8..]);
+                assert_eq!(&out[80..88], &[0xAA; 8]);
+                assert_eq!(
+                    raw_entry_value(&out, IfdKind::Ifd0, 0x013c),
+                    Some((2, bytes.len() as u32, bytes.to_vec()))
+                );
+                assert_eq!(
+                    apply_entry_edits(&out, &[edit]).unwrap(),
+                    out,
+                    "same value is byte-identical"
+                );
+                file = out;
+            }
+            let delete = ScopedEntryEdit {
+                ifd: IfdKind::Ifd0,
+                tag_id: 0x013c,
+                mutation: EntryMutation::Delete,
+            };
+            let out = apply_entry_edits(&file, std::slice::from_ref(&delete)).unwrap();
+            assert_eq!(raw_entry_value(&out, IfdKind::Ifd0, 0x013c), None);
+            assert_eq!(&out[8..file.len()], &file[8..]);
+            assert_eq!(apply_entry_edits(&out, &[delete]).unwrap(), out);
+        }
+    }
+
+    #[test]
+    fn raw_scoped_edits_create_child_ifds_and_keep_next_ifd_chain() {
+        use entry_edits::{EntryMutation, ScopedEntryEdit, apply_entry_edits};
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let mut file = build_tiff(bo);
+            let next_at = append_aligned(&mut file, &[0; 6]);
+            put_u32(&mut file[46..50], next_at as u32, bo);
+            let edits = [
+                raw_string_edit(IfdKind::Ifd0, 0x013c, b"root\0"),
+                raw_string_edit(IfdKind::ExifIfd, 0x013c, b"child\0"),
+                raw_string_edit(IfdKind::Gps, 0x001d, b"date\0"),
+                ScopedEntryEdit {
+                    ifd: IfdKind::Ifd0,
+                    tag_id: 0x0112,
+                    mutation: EntryMutation::Delete,
+                },
+            ];
+            let out = apply_entry_edits(&file, &edits).unwrap();
+            for (group, id, value) in [
+                (IfdKind::Ifd0, 0x013c, b"root\0".as_slice()),
+                (IfdKind::ExifIfd, 0x013c, b"child\0"),
+                (IfdKind::Gps, 0x001d, b"date\0"),
+            ] {
+                assert_eq!(
+                    raw_entry_value(&out, group, id),
+                    Some((2, value.len() as u32, value.to_vec()))
+                );
+            }
+            assert_eq!(raw_entry_value(&out, IfdKind::Ifd0, 0x0112), None);
+            let scan = scan_tiff(&out).unwrap();
+            let count = read_u16(&out[scan.ifd0_offset..scan.ifd0_offset + 2], bo) as usize;
+            let next = scan.ifd0_offset + 2 + 12 * count;
+            assert_eq!(read_u32(&out[next..next + 4], bo), next_at as u32);
+            assert_eq!(&out[8..file.len()], &file[8..]);
+            let deleted = apply_entry_edits(
+                &out,
+                &[ScopedEntryEdit {
+                    ifd: IfdKind::ExifIfd,
+                    tag_id: 0x013c,
+                    mutation: EntryMutation::Delete,
+                }],
+            )
+            .unwrap();
+            assert_eq!(raw_entry_value(&deleted, IfdKind::ExifIfd, 0x013c), None);
+            assert_eq!(
+                raw_entry_value(&deleted, IfdKind::Ifd0, 0x013c),
+                Some((2, 5, b"root\0".to_vec()))
+            );
+        }
+    }
+
+    #[test]
+    fn raw_scoped_edits_reject_invalid_directory_graphs_before_output() {
+        use entry_edits::apply_entry_edits;
+        for bo in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            // Two distinct, empty child directories. The requested edit is
+            // in IFD0: malformed untouched children must also be detected.
+            let mut valid = vec![0; 80];
+            valid[..2].copy_from_slice(match bo {
+                ByteOrder::LittleEndian => b"II",
+                ByteOrder::BigEndian => b"MM",
+            });
+            put_u16(&mut valid[2..4], 42, bo);
+            put_u32(&mut valid[4..8], 8, bo);
+            put_u16(&mut valid[8..10], 2, bo);
+            for (record, tag, offset) in [(10, EXIF_IFD_POINTER, 40), (22, GPS_IFD_POINTER, 56)] {
+                put_u16(&mut valid[record..record + 2], tag, bo);
+                put_u16(&mut valid[record + 2..record + 4], LONG_TYPE, bo);
+                put_u32(&mut valid[record + 4..record + 8], 1, bo);
+                put_u32(&mut valid[record + 8..record + 12], offset, bo);
+            }
+            let edit = raw_string_edit(IfdKind::Ifd0, 0x013c, b"new\0");
+            assert!(apply_entry_edits(&valid, std::slice::from_ref(&edit)).is_ok());
+            let mut cases = Vec::new();
+            for offset in 0..8 {
+                let mut file = valid.clone();
+                put_u32(&mut file[4..8], offset, bo);
+                cases.push(("root points into header", file));
+            }
+            for record in [10, 22] {
+                for (label, offset) in [
+                    ("zero child", 0),
+                    ("header child", 4),
+                    ("child aliases root", 8),
+                    ("child overlaps root next pointer", 34),
+                    ("truncated child", 78),
+                ] {
+                    let mut file = valid.clone();
+                    put_u32(&mut file[record + 8..record + 12], offset, bo);
+                    cases.push((label, file));
+                }
+                let mut wrong_type = valid.clone();
+                put_u16(&mut wrong_type[record + 2..record + 4], 3, bo);
+                cases.push(("non-LONG child pointer", wrong_type));
+                let mut wrong_count = valid.clone();
+                put_u32(&mut wrong_count[record + 4..record + 8], 2, bo);
+                cases.push(("non-scalar child pointer", wrong_count));
+            }
+            for (label, offset) in [("aliased children", 40), ("overlapping children", 44)] {
+                let mut file = valid.clone();
+                put_u32(&mut file[30..34], offset, bo);
+                cases.push((label, file));
+            }
+            let mut duplicate = valid.clone();
+            put_u16(&mut duplicate[22..24], EXIF_IFD_POINTER, bo);
+            cases.push(("duplicate directory pointer", duplicate));
+            for (label, file) in cases {
+                let original = file.clone();
+                assert!(
+                    apply_entry_edits(&file, std::slice::from_ref(&edit)).is_err(),
+                    "must reject {label} in {bo:?}"
+                );
+                assert_eq!(file, original, "failed {label} must preserve input");
+            }
+        }
+    }
+
+    #[test]
+    fn raw_scoped_edits_refuse_ambiguous_or_malformed_requests() {
+        use entry_edits::{EntryMutation, ScopedEntryEdit, apply_entry_edits};
+        let file = build_tiff(ByteOrder::LittleEndian);
+        let valid = raw_string_edit(IfdKind::Ifd0, 0x013c, b"ok\0");
+        assert!(apply_entry_edits(&file, &[valid.clone(), valid]).is_err());
+        for edit in [
+            raw_string_edit(IfdKind::Ifd1, 0x013c, b"no\0"),
+            raw_string_edit(IfdKind::Ifd0, EXIF_IFD_POINTER, b"no\0"),
+            ScopedEntryEdit {
+                ifd: IfdKind::Ifd0,
+                tag_id: 0x013c,
+                mutation: EntryMutation::Set {
+                    field_type: 3,
+                    count: 2,
+                    bytes: vec![0],
+                },
+            },
+        ] {
+            assert!(apply_entry_edits(&file, &[edit]).is_err());
+        }
+        assert!(
+            apply_entry_edits(
+                &file[..48],
+                &[raw_string_edit(IfdKind::Ifd0, 0x013c, b"ok\0")]
+            )
+            .is_err()
+        );
+        let mut duplicate = file.clone();
+        let at = grow_ifd(
+            &mut duplicate,
+            8,
+            &[NewRecord {
+                tag_id: 0x010f,
+                field_type: 2,
+                count: 2,
+                inline_or_offset: [b'X', 0, 0, 0],
+            }],
+            ByteOrder::LittleEndian,
+        )
+        .unwrap();
+        put_u32(&mut duplicate[4..8], at as u32, ByteOrder::LittleEndian);
+        assert!(
+            apply_entry_edits(
+                &duplicate,
+                &[raw_string_edit(IfdKind::Ifd0, 0x010f, b"new\0")]
+            )
+            .is_err()
+        );
+        assert_eq!(
+            apply_entry_edits(
+                &file,
+                &[ScopedEntryEdit {
+                    ifd: IfdKind::ExifIfd,
+                    tag_id: 0x013c,
+                    mutation: EntryMutation::Delete
+                }]
+            )
+            .unwrap(),
+            file
+        );
     }
 }
