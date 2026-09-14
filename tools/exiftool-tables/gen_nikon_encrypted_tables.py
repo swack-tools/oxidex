@@ -32,6 +32,7 @@ CODE = {
  # NikonCustom hydrate their table graph.  The two historical forms above do
  # not cover this B::Deparse form; it is still closed by this exact body hash.
  ('Image::ExifTool::ProcessBinaryData','283954c79e2a9893469d57fd476091c34b57589f8c8f2e8c44cd62c067738fbf'),
+ ('Image::ExifTool::ProcessBinaryData','18df2e9715b5a92b382d9533e33442d1b660f534229899f2446ad82d4d0b72e3'),
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','2eaf021035b51e5f8f0577a76420d0d217e3d52d14596fd10c8ff8a53532706b'),
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','4814b522c2940b28240fc0fbcaa6d22e43619d3e604c3d7a65de4b61513c467e'),
  ('Image::ExifTool::Nikon::Decrypt','b373a90204cb00e317f330a1a8432a75668e027641088a97a7ede89e2c91326d'),
@@ -256,21 +257,23 @@ def reader_ignored_properties(identity, key, row):
 
  ``DelValue`` drives ExifTool writes only. ``AlwaysDecrypt`` controls native
  pre-decryption directory-length discovery; this runtime decrypts the complete
- buffer before calling ``process``. ``Prinonv`` is a one-off misspelled native
- property and has no Image::ExifTool consumer. Keep each captured value, and
- reject new placements or shapes instead of treating arbitrary extra fields as
- reader-inert.
+ buffer before calling ``process``. ``Prinonv`` is an unconsumed misspelled
+ native property. Keep each captured value and reject malformed shapes rather
+ than treating arbitrary extra fields as reader-inert. ``AlwaysDecrypt`` is
+ intentionally accepted by its active native flag value, regardless of row
+ placement: the Rust adapter's whole-buffer decrypt sequence makes placement
+ irrelevant to its reader behavior.
  """
  if 'DelValue' in row:
   u(row['DelValue'])
- if 'AlwaysDecrypt' in row and row['AlwaysDecrypt'] not in (1, True):
+ if 'AlwaysDecrypt' in row and flag(row['AlwaysDecrypt'], 'AlwaysDecrypt') != 'true':
   fail(f'{identity}[{key}]: unsupported AlwaysDecrypt {row["AlwaysDecrypt"]!r}')
  if 'Prinonv' in row:
-  expected = {'0':'None','1':'Choose Image Area','2':'One Step Speed/Aperture',
-              '3':'Choose Non-CPU Lens Number','5':'Auto bracketing',
-              '6':'Dynamic AF Area','7':'Shutter speed & Aperture lock'}
-  if identity != ('NikonCustom','SettingsD700') or key != '32.1' or row['Prinonv'] != expected:
-   fail(f'{identity}[{key}]: unregistered reader-ignored Prinonv')
+  value=row['Prinonv']
+  if (not isinstance(value,dict) or not value
+      or any(not isinstance(map_key,str) or not re.fullmatch(r'-?(?:0|[1-9][0-9]*)',map_key)
+             or not isinstance(label,str) for map_key,label in value.items())):
+   fail(f'{identity}[{key}]: malformed reader-ignored Prinonv')
 def dm(s):
  if s not in DMS: fail(f'unknown data member {s!r}')
  return f'Dm::{s}'
@@ -451,8 +454,10 @@ def render(data):
     # Scalar tag lookup applies the same map regardless of the display width,
     # which the Rust metadata API does not expose.  Still validate the native
     # shape so an executable or malformed replacement cannot disappear here.
-    if 'PrintConvColumns' in row and (isinstance(row['PrintConvColumns'],bool) or not isinstance(row['PrintConvColumns'],int) or row['PrintConvColumns'] < 1):
-     fail(f'{n}[{key}]: invalid PrintConvColumns {row["PrintConvColumns"]!r}')
+    if 'PrintConvColumns' in row:
+     try: columns=u(row['PrintConvColumns'])
+     except Unsupported: fail(f'{n}[{key}]: invalid PrintConvColumns {row["PrintConvColumns"]!r}')
+     if columns < 1: fail(f'{n}[{key}]: invalid PrintConvColumns {row["PrintConvColumns"]!r}')
     reader_ignored_properties(n, key, row)
     # These declarations need runtime operations absent from binary_data.rs.
     # They are intentionally omitted by the checked-in projection; every

@@ -262,7 +262,9 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
         row["PrintConvColumns"] = 2
         rendered, _ = generator.render(data)
         self.assertEqual(rendered, baseline)
-        for invalid in (0, -1, True, "2"):
+        row["PrintConvColumns"] = "2"
+        self.assertEqual(generator.render(data)[0], baseline)
+        for invalid in (0, -1, True, "02"):
             with self.subTest(invalid=invalid):
                 changed = copy.deepcopy(data)
                 changed["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["PrintConvColumns"] = invalid
@@ -273,22 +275,19 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
         row = fixture()["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]
         identity = ("Nikon", "Test")
         generator.reader_ignored_properties(identity, "1", {"DelValue": 0})
-        generator.reader_ignored_properties(identity, "1", {"AlwaysDecrypt": 1})
+        generator.reader_ignored_properties(identity, "1", {"AlwaysDecrypt": "1"})
         for property, value in (("DelValue", -1), ("AlwaysDecrypt", 0)):
             with self.subTest(property=property), self.assertRaises(generator.Unsupported):
                 generator.reader_ignored_properties(identity, "1", {property: value})
 
-        typo = {
-            "0": "None", "1": "Choose Image Area", "2": "One Step Speed/Aperture",
-            "3": "Choose Non-CPU Lens Number", "5": "Auto bracketing",
-            "6": "Dynamic AF Area", "7": "Shutter speed & Aperture lock",
-        }
-        generator.reader_ignored_properties(("NikonCustom", "SettingsD700"), "32.1", {"Prinonv": typo})
-        typo["0"] = "changed"
+        typo = {"0": "None", "7": "Dynamic AF Area"}
+        generator.reader_ignored_properties(("NikonCustom", "AnyTable"), "32.1", {"Prinonv": typo})
+        generator.reader_ignored_properties(("Nikon", "AnyOtherTable"), "99", {"Prinonv": typo})
+        typo["not-a-number"] = "changed"
         with self.assertRaises(generator.Unsupported):
-            generator.reader_ignored_properties(("NikonCustom", "SettingsD700"), "32.1", {"Prinonv": typo})
+            generator.reader_ignored_properties(("NikonCustom", "AnyTable"), "32.1", {"Prinonv": typo})
         with self.assertRaises(generator.Unsupported):
-            generator.reader_ignored_properties(("NikonCustom", "Other"), "32.1", {"Prinonv": {}})
+            generator.reader_ignored_properties(("NikonCustom", "AnyTable"), "32.1", {"Prinonv": {}})
 
     def test_rust_string_escaping_preserves_literal_backslash_sequences(self):
         self.assertEqual(generator.rs(r"a\nb\tc\rd"), r'"a\\nb\\tc\\rd"')
