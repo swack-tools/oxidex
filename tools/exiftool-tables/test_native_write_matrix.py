@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 MATRIX = Path(__file__).with_name("native_write_matrix.py")
@@ -16,6 +17,54 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NativeWriteMatrixTests(unittest.TestCase):
+    def test_repository_upgrade_refuses_stale_baseline_even_with_old_library(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pin = Path(temporary) / ".exiftool-version"
+            pin.write_text("13.60\n")
+            with self.assertRaisesRegex(RuntimeError, "baseline is stale"):
+                module.assert_contract_version({"result": {"exiftool_version": "13.59"}}, pin)
+
+    def test_dirty_checkout_refuses_before_native_calls_or_output_creation(self):
+        state = module.git_state(ROOT)
+        state.dirty = True
+        state.dirty_files = ["native_write_matrix.py"]
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(module, "git_state", return_value=state), \
+             mock.patch.object(module, "native_identity") as native, mock.patch.dict(os.environ, {"OXIDEX_ALLOW_DIRTY_TREE": "0"}):
+            output = Path(temporary) / "result.json"
+            with self.assertRaisesRegex(SystemExit, "refusing to measure"):
+                module.main(["--perl", "perl", "--lib", temporary, "--jpeg-base", temporary, "--output", str(output)])
+            native.assert_not_called()
+            self.assertFalse(output.exists())
+            self.assertFalse((output.parent / "native-write-matrix-files").exists())
+
+    def test_partial_library_cannot_fall_back_to_ambient_main_module(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(module.subprocess, "run") as run:
+            library = Path(temporary)
+            writer = library / "Image/ExifTool/Writer.pl"
+            writer.parent.mkdir(parents=True)
+            writer.write_text("1;\n")
+            with self.assertRaisesRegex(ValueError, "Image/ExifTool.pm absent"):
+                module.native_identity(Path("perl"), library)
+            run.assert_not_called()
+
+    @unittest.skipUnless(os.environ.get("EXIFTOOL_PERL"), "requires explicit Perl")
+    def test_native_inc_guard_rejects_external_writer_despite_local_files(self):
+        # The selected tree exists, but its main module arranges a mixed %INC.
+        # This exercises the native guard, beyond the Python existence check.
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary) / "lib"
+            writer = library / "Image/ExifTool/Writer.pl"
+            writer.parent.mkdir(parents=True)
+            writer.write_text("1;\n")
+            external = Path(temporary) / "outside.pl"
+            external.write_text("1;\n")
+            # Resolve the actual outside path without interpolating it into Perl.
+            (library / "Image/ExifTool.pm").write_text(
+                "package Image::ExifTool; our $VERSION='13.59'; use File::Basename ();\n"
+                "$INC{'Image/ExifTool/Writer.pl'} = File::Basename::dirname(__FILE__) . '/../../outside.pl'; 1;\n")
+            with self.assertRaisesRegex(RuntimeError, "outside selected library"):
+                module.native_identity(module.resolve_perl(Path(os.environ["EXIFTOOL_PERL"])), library)
+
     def test_tiff_parser_rejects_truncated_ifd_and_value(self):
         with self.assertRaises(ValueError):
             module.parse_tiff(b"II\x2a\x00\x08\x00\x00\x00\x01")
@@ -61,9 +110,15 @@ class NativeWriteMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "matrix.json"
             subprocess.run(["python3", str(MATRIX), "--perl", os.environ["EXIFTOOL_PERL"], "--lib", os.environ["OXIDEX_PINNED_EXIFTOOL"],
-                            "--jpeg-base", str(ROOT / "tests/fixtures/jpeg/tag_matrix_base.jpg"), "--output", str(output)], check=True, timeout=120)
+                            "--jpeg-base", str(ROOT / "tests/fixtures/jpeg/tag_matrix_base.jpg"), "--output", str(output)],
+                           env=os.environ | {"OXIDEX_ALLOW_DIRTY_TREE": "1"}, check=True, timeout=120)
             document = json.loads(output.read_text())
         self.assertEqual(document["declared_rows"], 48)
+        self.assertEqual(document["source"]["source_commit"], module.git_state(ROOT).commit)
+        self.assertEqual(document["source"]["dirty_override"], document["source"]["dirty"])
+        self.assertEqual(document["source"]["repository_exiftool_pin"], (ROOT / ".exiftool-version").read_text().strip())
+        self.assertEqual(document["source"]["instrument_sha256"], module.hashlib.sha256(MATRIX.read_bytes()).hexdigest())
+        self.assertIn("Image/ExifTool.pm", document["native_identity"]["result"]["loaded_modules"])
         self.assertEqual(document["executed_rows"], 48)
         self.assertEqual(document["contract_exiftool_release"], "13.59")
         self.assertEqual(document["native_identity"]["result"]["exiftool_version"], "13.59")

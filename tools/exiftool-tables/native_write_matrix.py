@@ -14,8 +14,13 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from instrument import git_state, print_header, refuse_if_dirty
 
 CASES = ("insert", "update", "growth", "shrinkage", "delete", "empty", "utf8", "embedded_nul")
 NAMES = ("EXIF:HostComputer", "IFD0:HostComputer")
@@ -38,12 +43,32 @@ CASE_INPUT_BYTES = {
 }
 CASE_UTF8_STATE = {case: False for case in CASE_INPUT_BYTES} | {"utf8": True}
 
+NATIVE_LIBRARY_GUARD = r'''
+use Cwd (); use Digest::SHA ();
+my $selected_library = Cwd::abs_path(shift @ARGV) or die "selected library is absent";
+sub loaded_native_modules {
+  my %modules;
+  for my $key (sort keys %INC) {
+    next unless $key eq 'Image/ExifTool.pm' || index($key, 'Image/ExifTool/') == 0;
+    my $path = Cwd::abs_path($INC{$key});
+    die "native module outside selected library: $key" unless
+      defined($path) && index($path, $selected_library . '/') == 0;
+    $modules{$key} = $path;
+  }
+  die "selected native main module or writer was not loaded" unless
+    exists $modules{'Image/ExifTool.pm'} && exists $modules{'Image/ExifTool/Writer.pl'};
+  return \%modules;
+}
+loaded_native_modules();
+'''
+
 # The value construction happens in Perl.  That makes the scalar state part of
 # the native call: utf8 is a flagged character scalar, embedded_nul is bytes.
 NATIVE_WRITE = r'''
 BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 use strict; use warnings; use utf8; use JSON::PP; use Encode ();
 use Image::ExifTool; require 'Image/ExifTool/Writer.pl';
+''' + NATIVE_LIBRARY_GUARD + r'''
 my ($in, $out, $action, $tag) = @ARGV;
 sub state { my ($v) = @_; return {defined => JSON::PP::false} unless defined $v;
   my $utf8 = utf8::is_utf8($v) ? JSON::PP::true : JSON::PP::false;
@@ -78,16 +103,26 @@ my $write = $et->WriteInfo($in, $out);
 print JSON::PP->new->canonical->utf8->encode({
   action => $action, requested_tag => ($tag || undef), set_calls => \@sets,
   write_return => $write, error => scalar $et->GetValue('Error'),
-  native => {exiftool_version => $Image::ExifTool::VERSION, perl => $^X, perl_version => "$^V"},
+  native => {exiftool_version => $Image::ExifTool::VERSION, perl => $^X, perl_version => "$^V",
+             loaded_modules => loaded_native_modules()},
 });
 '''
 
 NATIVE_IDENTITY = r'''
 BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 use strict; use warnings; use JSON::PP; use Image::ExifTool;
+require 'Image/ExifTool/Writer.pl';
+''' + NATIVE_LIBRARY_GUARD + r'''
+my $modules = loaded_native_modules();
+my %hashes;
+for my $key ('Image/ExifTool.pm', 'Image/ExifTool/Writer.pl') {
+  open my $fh, '<:raw', $modules->{$key} or die "cannot read native source: $key";
+  $hashes{$key} = Digest::SHA->new(256)->addfile($fh)->hexdigest;
+}
 print JSON::PP->new->canonical->utf8->encode({
   exiftool_version => $Image::ExifTool::VERSION, perl => $^X, perl_version => "$^V",
   config_file => $Image::ExifTool::configFile,
+  loaded_modules => $modules, source_sha256 => \%hashes,
 });
 '''
 
@@ -112,10 +147,18 @@ def resolve_library(value: Path) -> Path:
     return (path / "lib").resolve() if (path / "lib").is_dir() else path
 
 
+def validate_library(library: Path) -> None:
+    for name in ("Image/ExifTool.pm", "Image/ExifTool/Writer.pl"):
+        path = library / name
+        if not path.is_file() or not path.resolve().is_relative_to(library.resolve()):
+            raise ValueError(f"{name} absent from or outside selected library: {library}")
+
+
 def run_native(perl: Path, library: Path, source: Path, target: Path,
                action: str, tag: str | None) -> dict[str, Any]:
+    validate_library(library)
     command = [str(perl), "-I" + str(library), "-e", NATIVE_WRITE,
-               str(source), str(target), action, tag or ""]
+               str(library), str(source), str(target), action, tag or ""]
     completed = subprocess.run(command, env=clean_env(), capture_output=True, timeout=30)
     stdout = completed.stdout.decode("utf-8", errors="replace")
     stderr = completed.stderr.decode("utf-8", errors="replace")
@@ -126,13 +169,14 @@ def run_native(perl: Path, library: Path, source: Path, target: Path,
         except json.JSONDecodeError:
             pass
     return {"command": [str(perl), "-I" + str(library), "-e", "<native-write-program>",
-                         str(source), str(target), action, tag or ""],
+                         str(library), str(source), str(target), action, tag or ""],
             "returncode": completed.returncode, "stdout": stdout, "stderr": stderr,
             "result": parsed}
 
 
 def native_identity(perl: Path, library: Path) -> dict[str, Any]:
-    completed = subprocess.run([str(perl), "-I" + str(library), "-e", NATIVE_IDENTITY],
+    validate_library(library)
+    completed = subprocess.run([str(perl), "-I" + str(library), "-e", NATIVE_IDENTITY, str(library)],
                                env=clean_env(), capture_output=True, timeout=30)
     stdout = completed.stdout.decode("utf-8", errors="replace")
     stderr = completed.stderr.decode("utf-8", errors="replace")
@@ -144,13 +188,17 @@ def native_identity(perl: Path, library: Path) -> dict[str, Any]:
             pass
     if completed.returncode != 0 or parsed is None:
         raise RuntimeError(f"native identity probe failed: {stderr or stdout}")
-    return {"command": [str(perl), "-I" + str(library), "-e", "<native-identity-program>"],
+    return {"command": [str(perl), "-I" + str(library), "-e", "<native-identity-program>", str(library)],
             "returncode": completed.returncode, "stdout": stdout, "stderr": stderr, "result": parsed}
 
 
-def assert_contract_version(identity: dict[str, Any]) -> None:
+def assert_contract_version(identity: dict[str, Any], pin_file: Path | None = None) -> None:
+    pinned = (pin_file or ROOT / ".exiftool-version").read_text().strip()
+    if pinned != CONTRACT_EXIFTOOL_RELEASE:
+        raise RuntimeError(f"repository pin {pinned} has no reviewed native-write acceptance baseline; "
+                           f"the {CONTRACT_EXIFTOOL_RELEASE} baseline is stale")
     actual = identity["result"]["exiftool_version"]
-    if actual != CONTRACT_EXIFTOOL_RELEASE:
+    if actual != pinned:
         raise RuntimeError(
             f"selected ExifTool {actual} does not match this {CONTRACT_EXIFTOOL_RELEASE} native-write "
             "acceptance baseline; capture a separate version-rehearsal expectation before comparing it")
@@ -369,22 +417,30 @@ def make_carrier(source: Path, carrier: str, jpeg_base: Path) -> None:
         shutil.copyfile(jpeg_base, source)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perl", type=Path, required=True)
     parser.add_argument("--lib", type=Path, required=True)
     parser.add_argument("--jpeg-base", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    state = git_state(ROOT)
+    overridden = refuse_if_dirty(state, "native_write_matrix")
     perl, library = resolve_perl(args.perl), resolve_library(args.lib)
     if not perl.is_file() or not os.access(perl, os.X_OK):
         parser.error(f"selected Perl is not executable: {perl}")
-    if not (library / "Image/ExifTool/Writer.pl").is_file():
-        parser.error(f"Writer.pl absent from selected library: {library}")
+    validate_library(library)
     if not args.jpeg_base.is_file():
         parser.error(f"JPEG carrier is absent: {args.jpeg_base}")
     identity = native_identity(perl, library)
     assert_contract_version(identity)
+    evidence = {"source_commit": state.commit, "dirty": state.dirty,
+                "dirty_files": state.dirty_files, "dirty_override": overridden,
+                "instrument_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "jpeg_base_sha256": hashlib.sha256(args.jpeg_base.read_bytes()).hexdigest(),
+                "repository_exiftool_pin": (ROOT / ".exiftool-version").read_text().strip()}
+    print_header(tool="native_write_matrix_v2", git=state, dirty_overridden=overridden,
+                 extra=[f"native: {identity['result']}", "48 native scalar write cases; no OxiDex binary"])
     root = args.output.parent / "native-write-matrix-files"
     root.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
@@ -407,7 +463,8 @@ def main() -> int:
                        "seeded_inspection": inspect(seeded, carrier), "output_inspection": inspect(output, carrier)}
                 row["verification"] = verify_row(row, carrier, operation)
                 rows.append(row)
-    document = {"instrument": "native_write_matrix_v1", "scope": "default-option native ExifTool scalar writes; minimal TIFF and supplied small JPEG carriers",
+    document = {"instrument": "native_write_matrix_v2", "source": evidence,
+                "scope": "default-option native ExifTool scalar writes; minimal TIFF and supplied small JPEG carriers",
                 "contract_exiftool_release": CONTRACT_EXIFTOOL_RELEASE, "native_identity": identity,
                 "native": {"perl": str(perl), "library": str(library), "config_file": "", "scrubbed_environment": ["PERL5LIB", "PERLLIB", "PERL5OPT"]},
                 "declared_rows": len(CASES) * len(NAMES) * 3, "executed_rows": len(rows), "rows": rows,
