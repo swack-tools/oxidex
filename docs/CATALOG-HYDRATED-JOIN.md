@@ -91,19 +91,21 @@ explicitly historical evidence, not a claim that a newer source/runtime has
 the same coverage. Its companion human report is
 `docs/reference/catalog-hydrated-observed.md`.
 
-Publish it only from a join that has already validated its native receipts:
+Publish it only through the catalog join while that process is validating its
+native receipts. `catalog_observed_snapshot.py` intentionally has no command
+that accepts a standalone observed join as proof.
+
+Append these options to the complete join command above:
 
 ```sh
-python3 tools/exiftool-tables/catalog_observed_snapshot.py \
-  --source-join docs/public/measurements/catalog-hydrated-join-13.59.json \
-  --observed-join "$AUTHENTICATED_OBSERVED_JOIN" \
-  --source-commit "$SOURCE_COMMIT" --runtime-commit "$RUNTIME_COMMIT" \
-  --instrument "$NATIVE_INSTRUMENT" \
-  --snapshot docs/public/measurements/catalog-hydrated-observed-13.59.json \
-  --report docs/reference/catalog-hydrated-observed.md --replace
+  --quicktime-read-evidence "$AUTHENTICATED_QUICKTIME_RECEIPT" \
+  --writer-read-evidence "$AUTHENTICATED_WRITE_RECEIPT" \
+  --observed-snapshot docs/public/measurements/catalog-hydrated-observed-13.59.json \
+  --observed-report docs/reference/catalog-hydrated-observed.md
 ```
 
-CI validates a published snapshot against its recorded source ledger without
-requiring historical native fixtures on every runner. A changed source ledger,
-coordinate, declaration axis, observation count, runtime commit, or instrument
-refuses rather than silently dropping or re-crediting observations.
+CI validates the embedded historical source ledger, source/declaration axis,
+receipt bindings, observation counts, and native provenance without requiring
+historical native fixtures on every runner. It also reports whether the current
+source ledger still matches. A current difference retains the receipt as
+historical evidence; it cannot silently drop or re-credit observations.

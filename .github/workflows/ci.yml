@@ -570,8 +570,8 @@ jobs:
           observed="docs/public/measurements/catalog-hydrated-observed-$(cat .exiftool-version).json"
           if [[ -f "$observed" ]]; then
             python3 tools/exiftool-tables/catalog_observed_snapshot.py \
-              --source-join "docs/public/measurements/catalog-hydrated-join-$(cat .exiftool-version).json" \
-              --snapshot "$observed" --verify
+              --snapshot "$observed" --verify \
+              --current-source-join "docs/public/measurements/catalog-hydrated-join-$(cat .exiftool-version).json"
           else
             echo '=== instrument: catalog observed receipt check ==='
             echo 'No published native receipt yet; source declaration ledger remains independent.'

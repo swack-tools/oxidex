@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import runtime_evidence_inputs as runtime_inputs
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -541,6 +542,9 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                 "keys_ledger_sha256": hashlib.sha256(keys_ledger_path.read_bytes()).hexdigest(), "keys_rust_sha256": hashlib.sha256(keys_rust_path.read_bytes()).hexdigest(),
             })
             self.assertEqual(subprocess.run(command + ["--check"]).returncode, 0)
+            observed_snapshot, observed_report = root / "observed.json", root / "observed.md"
+            self.assertNotEqual(subprocess.run(command + ["--observed-snapshot", str(observed_snapshot),
+                                                           "--observed-report", str(observed_report)]).returncode, 0)
             output.write_text("stale\n")
             self.assertNotEqual(subprocess.run(command + ["--check"]).returncode, 0)
             self.assertEqual(output.read_text(), "stale\n")
@@ -574,6 +578,43 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             command[-3] = str(root / "join.json")
             command[command.index("--quicktime-itemlist-rust") + 1] = str(hardlink)
             self.assertNotEqual(subprocess.run(command).returncode, 0)
+
+    def test_cli_observed_snapshot_is_only_emitted_after_join_evidence_path(self):
+        from catalog_observed_snapshot import canonical_hash, validate_snapshot
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, ledger, capabilities, rust, keys_ledger, keys_rust = [root / name for name in
+                ("source.json", "ledger.json", "capabilities.json", "specs.rs", "keys-ledger.json", "keys.rs")]
+            catalog_path, hydrated_path = root / "catalog.json", root / "hydrated.json"
+            evidence_path, output, report_path = root / "evidence.json", root / "join.json", root / "join.md"
+            snapshot_path, observed_report = root / "observed.json", root / "observed.md"
+            for path in (source, ledger, capabilities, rust, keys_ledger, keys_rust):
+                path.write_text("{}")
+            catalog_path.write_text("{}")
+            hydrated_path.write_text("{}")
+            producer = {"source_commit": "1" * 40, "runtime_input_manifest_sha256": "2" * 64}
+            evidence = {"schema": "fixture-native-receipt", "producer": producer}
+            evidence_path.write_text(json.dumps(evidence))
+            source_join = {"schema": join.SCHEMA, "inputs": {"exiftool_version": "13.59"},
+                           "counts": {"joined_records": 1, "observed_read": {"not_observed_yet": 1}},
+                           "entries": [{"identity": {"table": TABLE, "raw_key": "titl", "variant_index": 0},
+                                        "catalog": {"name": "Title"}, "source": {}, "source_layout_status": "source_row_joined",
+                                        "source_derived_implementation": "generated_reader_declaration_unobserved",
+                                        "reader_implementation": "generated_reader_declaration_unobserved",
+                                        "writer_implementation": "writer_not_declared", "implementation_refusal_reasons": None,
+                                        "observed_read": "not_observed_yet", "observed_write": "not_observed_yet"}]}
+            observed_join = copy.deepcopy(source_join)
+            observed_join["inputs"]["quicktime_read_evidence"] = {"sha256": canonical_hash(evidence), "producer": producer}
+            command = ["join_catalog_hydrated.py", "--catalog", str(catalog_path), "--hydrated", str(hydrated_path),
+                       "--quicktime-bounded-source", str(source), "--quicktime-itemlist-ledger", str(ledger),
+                       "--quicktime-source-capabilities", str(capabilities), "--quicktime-itemlist-rust", str(rust),
+                       "--quicktime-keys-ledger", str(keys_ledger), "--quicktime-keys-rust", str(keys_rust),
+                       "--quicktime-read-evidence", str(evidence_path), "--observed-snapshot", str(snapshot_path),
+                       "--observed-report", str(observed_report), "--output", str(output), "--report", str(report_path)]
+            with patch.object(sys, "argv", command), patch.object(join, "build", side_effect=[observed_join, source_join]), \
+                    patch.object(join, "report", return_value="join report\n"):
+                self.assertEqual(join.main(), 0)
+            validate_snapshot(json.loads(snapshot_path.read_text()))
 
 
 if __name__ == "__main__":

@@ -846,7 +846,7 @@ def report(join: dict) -> str:
         lines += ["", "## Observed public writes", "",
                   f"Successful mutating write/readback operations: {writes['successful_write_operations']}",
                   f"Distinct observed Group1 names: {writes['distinct_group1_names']}"]
-    lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved.", "",
+    lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved. Published historical receipts are linked at [authenticated catalog observations](catalog-hydrated-observed.md); they remain historical if this source ledger changes.", "",
               "## Source-table progress", "",
               "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations use an oracle-free replay and exclude rows with withheld semantics. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
               "| Source table | Source variants | Catalog entries | Reader declarations | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
@@ -910,6 +910,9 @@ def main() -> int:
     parser.add_argument("--quicktime-read-evidence", type=Path)
     parser.add_argument("--quicktime-keys-read-evidence", type=Path)
     parser.add_argument("--writer-read-evidence", type=Path)
+    parser.add_argument("--observed-snapshot", type=Path,
+                        help="historical receipt emitted only after native evidence validation")
+    parser.add_argument("--observed-report", type=Path)
     parser.add_argument("--ifd-source", type=Path)
     parser.add_argument("--ifd-identity-ledger", type=Path)
     parser.add_argument("--ifd-rust", type=Path)
@@ -938,6 +941,12 @@ def main() -> int:
         raise ValueError("IFD join inputs must be supplied together")
     if args.ifd_expr_ledger is not None and any(path is None for path in ifd_paths):
         raise ValueError("IFD expression ledger requires complete IFD join inputs")
+    observed_outputs = (args.observed_snapshot, args.observed_report)
+    if any(path is not None for path in observed_outputs) and any(path is None for path in observed_outputs):
+        raise ValueError("observed snapshot and report must be supplied together")
+    evidence_paths = (args.quicktime_read_evidence, args.quicktime_keys_read_evidence, args.writer_read_evidence, args.quicktime_userdata_read_evidence)
+    if all(path is not None for path in observed_outputs) and not any(path is not None for path in evidence_paths):
+        raise ValueError("observed snapshot requires authenticated native evidence")
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
                           args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
@@ -949,6 +958,15 @@ def main() -> int:
                           *([args.quicktime_keys_read_evidence] if args.quicktime_keys_read_evidence else []),
                           *([args.quicktime_userdata_read_evidence] if args.quicktime_userdata_read_evidence else []),
                           *([args.writer_read_evidence] if args.writer_read_evidence else []))
+    if all(path is not None for path in observed_outputs):
+        validate_destinations(args.catalog, args.hydrated, args.observed_snapshot, args.observed_report,
+                              args.output, args.report,
+                              args.quicktime_bounded_source, args.quicktime_itemlist_ledger,
+                              args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
+                              args.quicktime_keys_ledger, args.quicktime_keys_rust,
+                              *(writer_paths if all(path is not None for path in writer_paths) else ()),
+                              *(ifd_expr_paths if all(path is not None for path in ifd_paths) else ()),
+                              *(path for path in evidence_paths if path is not None))
     quicktime_source = args.quicktime_bounded_source.read_bytes()
     quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
     quicktime_capabilities = args.quicktime_source_capabilities.read_bytes()
@@ -986,31 +1004,58 @@ def main() -> int:
                       "final_rust_sha256": hashlib.sha256(writer_final_rust.encode()).hexdigest(),
                       "public_ledger_sha256": hashlib.sha256(writer_public).hexdigest(),
                       "public_rust_sha256": hashlib.sha256(writer_public_rust.encode()).hexdigest()} if writer_source else None
-    join = build(read_json(args.catalog), read_json(args.hydrated), sha256(args.catalog), sha256(args.hydrated),
+    catalog, hydrated = read_json(args.catalog), read_json(args.hydrated)
+    quicktime_read_evidence = read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None
+    quicktime_keys_read_evidence = read_json(args.quicktime_keys_read_evidence) if args.quicktime_keys_read_evidence else None
+    userdata_read_evidence = read_json(args.quicktime_userdata_read_evidence) if args.quicktime_userdata_read_evidence else None
+    writer_read_evidence = read_json(args.writer_read_evidence) if args.writer_read_evidence else None
+    common = dict(quicktime_keys_ledger=json.loads(keys_ledger), quicktime_keys_rust=keys_rust,
+                  userdata_ledger=userdata_ledger, userdata_rust=userdata_rust,
+                  userdata_input_digests=userdata_digests,
+                  userdata_artifact_paths=(args.quicktime_bounded_source, *userdata_paths),
+                  writer_source=writer_source, writer_final_ledger=json.loads(writer_final) if writer_final else None,
+                  writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
+                  writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,
+                  ifd_source=ifd_source, ifd_ledger=json.loads(ifd_ledger) if ifd_ledger else None,
+                  ifd_rust=ifd_rust, ifd_expr_ledger=ifd_expr, ifd_input_digests=ifd_digests)
+    join = build(catalog, hydrated, sha256(args.catalog), sha256(args.hydrated),
                  json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
-                 quicktime_digests, read_json(args.quicktime_read_evidence) if args.quicktime_read_evidence else None,
-                 quicktime_keys_ledger=json.loads(keys_ledger), quicktime_keys_rust=keys_rust,
-                 userdata_ledger=userdata_ledger, userdata_rust=userdata_rust,
-                 userdata_input_digests=userdata_digests,
-                 userdata_read_evidence=read_json(args.quicktime_userdata_read_evidence) if args.quicktime_userdata_read_evidence else None,
-                 userdata_artifact_paths=(args.quicktime_bounded_source, *userdata_paths),
-                 writer_source=writer_source, writer_final_ledger=json.loads(writer_final) if writer_final else None,
-                 writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
-                 writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,
-                 writer_read_evidence=read_json(args.writer_read_evidence) if args.writer_read_evidence else None,
-                 quicktime_keys_read_evidence=read_json(args.quicktime_keys_read_evidence) if args.quicktime_keys_read_evidence else None,
-                 ifd_source=ifd_source, ifd_ledger=json.loads(ifd_ledger) if ifd_ledger else None,
-                 ifd_rust=ifd_rust, ifd_expr_ledger=ifd_expr, ifd_input_digests=ifd_digests)
+                 quicktime_digests, quicktime_read_evidence,
+                 writer_read_evidence=writer_read_evidence,
+                 quicktime_keys_read_evidence=quicktime_keys_read_evidence,
+                 userdata_read_evidence=userdata_read_evidence, **common)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
+    observed_snapshot = observed_report = None
+    if all(path is not None for path in observed_outputs):
+        # The same process has already replayed and validated these receipts in
+        # `join`.  Build a second, evidence-free source ledger so the snapshot
+        # embeds the exact historical denominator without treating a later CI
+        # capture as a reason to erase the receipt.
+        from catalog_observed_snapshot import make_authenticated_snapshot, render_report as observed_snapshot_report
+        source_join = build(catalog, hydrated, sha256(args.catalog), sha256(args.hydrated),
+                            json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
+                            quicktime_digests, None, **common)
+        evidence = {name: value for name, value in {
+            "quicktime_read_evidence": quicktime_read_evidence,
+            "quicktime_keys_read_evidence": quicktime_keys_read_evidence,
+            "writer_read_evidence": writer_read_evidence,
+            "quicktime_userdata_read_evidence": userdata_read_evidence,
+        }.items() if value is not None}
+        snapshot = make_authenticated_snapshot(source_join, join, evidence)
+        observed_snapshot = json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
+        observed_report = observed_snapshot_report(snapshot)
+    documents = [(args.output, rendered_join), (args.report, rendered_report)]
+    if observed_snapshot is not None:
+        documents.extend([(args.observed_snapshot, observed_snapshot), (args.observed_report, observed_report)])
     if args.check:
-        if not args.output.exists() or not args.report.exists():
-            raise ValueError("--check requires existing output and report")
-        if args.output.read_text(encoding="utf-8") != rendered_join or args.report.read_text(encoding="utf-8") != rendered_report:
-            raise ValueError("joined output or report is stale; regenerate with --replace")
+        if any(not path.exists() for path, _ in documents):
+            raise ValueError("--check requires existing join and requested observation outputs")
+        if any(path.read_text(encoding="utf-8") != body for path, body in documents):
+            raise ValueError("joined output, report, or authenticated observed receipt is stale; regenerate with --replace")
         return 0
-    if not args.replace and (args.output.exists() or args.report.exists()):
+    if not args.replace and any(path.exists() for path, _ in documents):
         raise ValueError("output/report exists; pass --replace or --check")
-    write_staged([(args.output, rendered_join), (args.report, rendered_report)])
+    write_staged(documents)
     return 0
 
 

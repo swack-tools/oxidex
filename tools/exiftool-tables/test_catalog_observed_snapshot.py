@@ -1,12 +1,7 @@
 import copy
 import importlib.util
-import json
 from pathlib import Path
-import subprocess
-import sys
-import tempfile
 import unittest
-
 
 PATH = Path(__file__).with_name("catalog_observed_snapshot.py")
 spec = importlib.util.spec_from_file_location("catalog_observed_snapshot", PATH)
@@ -16,93 +11,76 @@ spec.loader.exec_module(publication)
 
 
 def entry(raw_key, observed_read="not_observed_yet", observed_write="not_observed_yet"):
-    return {
-        "identity": {"table": "Image::ExifTool::Exif::Main", "raw_key": raw_key, "variant_index": 0},
-        "catalog": {"name": "Artist", "groups": {"1": "IFD0"}},
-        "source": {"state": "joined", "row_sha256": "a" * 64},
-        "source_layout_status": "source_row_joined",
-        "source_derived_implementation": "ifd_schema_declaration_eligible_unobserved",
-        "reader_implementation": "ifd_schema_declaration_eligible_unobserved",
-        "writer_implementation": "generated_writer_declaration_unobserved",
-        "implementation_refusal_reasons": None,
-        "observed_read": observed_read,
-        "observed_write": observed_write,
-    }
+    return {"identity": {"table": "Image::ExifTool::Exif::Main", "raw_key": raw_key, "variant_index": 0},
+            "catalog": {"name": "Artist", "groups": {"1": "IFD0"}},
+            "source": {"state": "joined", "row_sha256": "a" * 64},
+            "source_layout_status": "source_row_joined",
+            "source_derived_implementation": "ifd_schema_declaration_eligible_unobserved",
+            "reader_implementation": "ifd_schema_declaration_eligible_unobserved",
+            "writer_implementation": "generated_writer_declaration_unobserved",
+            "implementation_refusal_reasons": None,
+            "observed_read": observed_read, "observed_write": observed_write}
 
 
-def join(rows):
-    return {
-        "schema": publication.JOIN_SCHEMA,
-        "inputs": {"exiftool_version": "13.59"},
-        "counts": {"joined_records": len(rows), "observed_read": {"not_observed_yet": len(rows)}},
-        "entries": rows,
-    }
+def producer():
+    return {"source_commit": "1" * 40, "runtime_input_manifest_sha256": "2" * 64}
+
+
+def receipt():
+    return {"schema": "native-receipt-v1", "producer": producer(), "observations": []}
+
+
+def join(rows, evidence=None):
+    counts = {"joined_records": len(rows), "observed_read": {"not_observed_yet": len(rows)}}
+    if evidence:
+        counts["observed_write"] = {"not_observed_yet": len(rows)}
+    inputs = {"exiftool_version": "13.59"}
+    if evidence:
+        inputs["quicktime_read_evidence"] = {"sha256": publication.canonical_hash(evidence), "producer": evidence["producer"]}
+    return {"schema": publication.JOIN_SCHEMA, "inputs": inputs, "counts": counts, "entries": rows}
 
 
 class CatalogObservedSnapshotTests(unittest.TestCase):
-    def test_snapshot_preserves_observations_and_source_binding(self):
+    def authenticated_pair(self):
+        evidence = receipt()
         source = join([entry("315")])
-        observed = copy.deepcopy(source)
-        observed["entries"][0]["observed_read"] = "observed_matched_read"
-        observed["entries"][0]["observed_write"] = "observed_matched_write"
-        observed["counts"] = {"joined_records": 1, "observed_read": {"observed_matched_read": 1},
-                              "observed_write": {"observed_matched_write": 1}}
-        source_bytes = b'{"source":"immutable"}'
-        snapshot = publication.make_snapshot(source, observed, publication.hashlib.sha256(source_bytes).hexdigest(),
-                                             "1" * 40, "2" * 40, "native verifier")
-        publication.validate_snapshot(source, source_bytes, snapshot)
-        self.assertEqual(snapshot["observed_join"]["entries"][0]["observed_write"], "observed_matched_write")
-        self.assertEqual(snapshot["source_table_observations"]["Image::ExifTool::Exif::Main"]["observed_read"],
-                         {"observed_matched_read": 1})
+        observed = join([entry("315")], evidence)
+        return source, observed, {"quicktime_read_evidence": evidence}
 
-    def test_refuses_observation_that_changes_source_or_coordinate_accounting(self):
-        source = join([entry("315")])
-        observed = copy.deepcopy(source)
+    def test_snapshot_requires_join_bound_authenticated_receipt(self):
+        source, observed, evidence = self.authenticated_pair()
+        snapshot = publication.make_authenticated_snapshot(source, observed, evidence)
+        publication.validate_snapshot(snapshot)
+        self.assertEqual(snapshot["native_evidence"]["source_commit"], "1" * 40)
+        self.assertEqual(snapshot["source_table_observations"]["Image::ExifTool::Exif::Main"]["source_entries"], 1)
+
+    def test_refuses_fabricated_or_unbound_evidence(self):
+        source, observed, evidence = self.authenticated_pair()
+        forged = copy.deepcopy(evidence)
+        forged["quicktime_read_evidence"]["producer"]["source_commit"] = "3" * 40
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            publication.make_authenticated_snapshot(source, observed, forged)
+        with self.assertRaisesRegex(ValueError, "requires authenticated"):
+            publication.make_authenticated_snapshot(source, join([entry("315")]), {})
+
+    def test_refuses_source_axis_or_summary_mutation(self):
+        source, observed, evidence = self.authenticated_pair()
         observed["entries"][0]["catalog"]["name"] = "Forged"
         with self.assertRaisesRegex(ValueError, "source/declaration"):
-            publication.validate_pair(source, observed)
-        observed = copy.deepcopy(source)
-        observed["entries"][0]["identity"]["raw_key"] = "316"
-        with self.assertRaisesRegex(ValueError, "coordinates"):
-            publication.validate_pair(source, observed)
-
-    def test_refuses_stale_or_unattributed_snapshot(self):
-        source = join([entry("315")])
-        bytes_a = b"first source join"
-        snapshot = publication.make_snapshot(source, source, publication.hashlib.sha256(bytes_a).hexdigest(),
-                                             "1" * 40, "2" * 40, "native verifier")
-        with self.assertRaisesRegex(ValueError, "different source join"):
-            publication.validate_snapshot(source, b"later source join", snapshot)
-        snapshot["runtime"]["instrument"] = ""
-        with self.assertRaisesRegex(ValueError, "runtime commit or instrument"):
-            publication.validate_snapshot(source, bytes_a, snapshot)
-
-    def test_refuses_forged_observation_summary(self):
-        source = join([entry("315")])
-        observed = copy.deepcopy(source)
+            publication.make_authenticated_snapshot(source, observed, evidence)
+        source, observed, evidence = self.authenticated_pair()
         observed["counts"]["observed_read"] = {"observed_matched_read": 1}
-        with self.assertRaisesRegex(ValueError, "read counts"):
-            publication.validate_pair(source, observed)
+        with self.assertRaisesRegex(ValueError, "observed_read counts"):
+            publication.make_authenticated_snapshot(source, observed, evidence)
 
-    def test_cli_replaces_and_then_verifies_a_bound_receipt(self):
-        source = join([entry("315")])
-        observed = copy.deepcopy(source)
-        observed["entries"][0]["observed_read"] = "observed_matched_read"
-        observed["counts"]["observed_read"] = {"observed_matched_read": 1}
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source_path, observed_path = root / "source.json", root / "observed.json"
-            snapshot_path, report_path = root / "snapshot.json", root / "report.md"
-            source_path.write_text(json.dumps(source)); observed_path.write_text(json.dumps(observed))
-            snapshot_path.write_text("old"); report_path.write_text("old")
-            command = [sys.executable, str(PATH), "--source-join", str(source_path),
-                       "--observed-join", str(observed_path), "--source-commit", "1" * 40,
-                       "--runtime-commit", "2" * 40, "--instrument", "native verifier",
-                       "--snapshot", str(snapshot_path), "--report", str(report_path), "--replace"]
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            subprocess.run([sys.executable, str(PATH), "--source-join", str(source_path),
-                            "--snapshot", str(snapshot_path), "--verify"],
-                           check=True, capture_output=True, text=True)
+    def test_current_source_drift_keeps_historical_receipt_valid(self):
+        source, observed, evidence = self.authenticated_pair()
+        snapshot = publication.make_authenticated_snapshot(source, observed, evidence)
+        changed_current = copy.deepcopy(source)
+        changed_current["entries"][0]["source"]["row_sha256"] = "b" * 64
+        publication.validate_snapshot(snapshot)
+        report = publication.render_report(snapshot, changed_current)
+        self.assertIn("differs from historical source join", report)
 
 
 if __name__ == "__main__":
