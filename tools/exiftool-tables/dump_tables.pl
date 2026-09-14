@@ -1024,6 +1024,7 @@ sub native_write_helper_facts {
         sanitize => 'Image::ExifTool::Sanitize',
         conv_inv => 'Image::ExifTool::ConvInv',
         set_new_value => 'Image::ExifTool::SetNewValue',
+        find_tag_info => 'Image::ExifTool::TagLookup::FindTagInfo',
     );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';

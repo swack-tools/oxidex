@@ -79,9 +79,11 @@ class NativeWriteFacts(unittest.TestCase):
         self.exif = package / "Exif.pm"
         self.writer = package / "WriteExif.pl"
         self.writer_helpers = package / "Writer.pl"
+        self.tag_lookup = package / "TagLookup.pm"
         self.later = package / "Later.pm"
         self.write_exif("IFD0")
         self.write_writer("return 1;")
+        self.write_tag_lookup()
         self.write_writer_helpers()
         self.write_later("return 'late';")
 
@@ -138,6 +140,7 @@ class NativeWriteFacts(unittest.TestCase):
                              set_new_value_body="return 1;"):
         self.writer_helpers.write_text(textwrap.dedent(f"""\
             package Image::ExifTool;
+            require 'Image/ExifTool/TagLookup.pm';
             sub WriterHelper($) {{ return $_[0]; }}
             sub CheckHelper($) {{ return $_[0]; }}
             sub WriteValue($$) {{ {write_body} }}
@@ -145,6 +148,13 @@ class NativeWriteFacts(unittest.TestCase):
             sub Sanitize($$) {{ {sanitize_body} }}
             sub ConvInv($$$$$$) {{ return; }}
             sub SetNewValue($;$$%) {{ {set_new_value_body} }}
+            1;
+        """), encoding="utf-8")
+
+    def write_tag_lookup(self, *, body="return;"):
+        self.tag_lookup.write_text(textwrap.dedent(f"""\
+            package Image::ExifTool::TagLookup;
+            sub FindTagInfo($) {{ {body} }}
             1;
         """), encoding="utf-8")
 
@@ -422,6 +432,14 @@ class NativeWriteFacts(unittest.TestCase):
         self.assertEqual(fact["source_file"], "Image/ExifTool/Writer.pl")
         self.assertEqual(fact["source_sha256"], hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
 
+    def test_captures_final_findtaginfo_binding(self):
+        fact = self.dump()["native_write_helpers"]["find_tag_info"]
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::TagLookup::FindTagInfo")
+        self.assertEqual(fact["__name"], "Image::ExifTool::TagLookup::FindTagInfo")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/TagLookup.pm")
+        self.assertEqual(fact["source_sha256"], hashlib.sha256(self.tag_lookup.read_bytes()).hexdigest())
+
     def test_setnewvalue_defined_false_source_mutation_is_captured_and_refused(self):
         self.write_writer_helpers(set_new_value_body=textwrap.dedent("""\
             my ($val, $e) = $self->ConvInv($val, $tagInfo, $tag, $wgrp1, $convType, $wantGroup);
@@ -572,7 +590,8 @@ class NativeWriteFacts(unittest.TestCase):
                  "check_value": "Image::ExifTool::CheckValue",
                  "sanitize": "Image::ExifTool::Sanitize",
                  "conv_inv": "Image::ExifTool::ConvInv",
-                 "set_new_value": "Image::ExifTool::SetNewValue"}[key],
+                 "set_new_value": "Image::ExifTool::SetNewValue",
+                 "find_tag_info": "Image::ExifTool::TagLookup::FindTagInfo"}[key],
             )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):
