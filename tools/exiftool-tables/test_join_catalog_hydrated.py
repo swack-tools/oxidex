@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+import verify_quicktime_reader as read_verifier
 
 PATH = Path(__file__).with_name("join_catalog_hydrated.py")
 spec = importlib.util.spec_from_file_location("join_catalog_hydrated", PATH)
@@ -154,25 +156,54 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         generated = next(row for row in ledger["ledger"]
                          if row["generated"] and row["identity"]["raw_key"] == "titl")
         digests = self.quicktime_digests(raw, ledger, capabilities, rust)
-        evidence = {"schema": join.QUICKTIME_READ_EVIDENCE_SCHEMA, "inputs": dict(sorted(digests.items())),
-                    "producer": {"source_dirty": False, "source_commit": "a" * 40,
-                                 "source_fingerprint": "b" * 64, "runtime_artifact_sha256": "c" * 64,
-                                 "fixture_manifest_sha256": "d" * 64, "pin": "13.59"},
-                    "observed_identities": [{"source_identity": generated["identity"], "group1": "ItemList",
-                                               "tag_name": "Title", "matched": True}]}
-        source = bounded["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
-        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
-                            digests, evidence)
-        self.assertEqual(result["entries"][0]["observed_read"], "observed_matched_read")
-        evidence["observed_identities"][0]["source_identity"] = dict(generated["identity"], raw_key="cpil")
-        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
-                            digests, evidence)
-        self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
-        evidence["observed_identities"][0]["source_identity"] = generated["identity"]
-        evidence["observed_identities"][0]["tag_name"] = "WrongName"
-        result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
-                            digests, evidence)
-        self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
+        fixture = read_verifier.baseline.fixture(b"titl", 1, b"Observed title")
+        observations = [{"fixture": "text.m4a", "mode": mode,
+                         "fixture_sha256": hashlib.sha256(fixture).hexdigest(),
+                         "expected": {"ItemList:Title": "Observed title"},
+                         "actual": {"ItemList:Title": "Observed title"}, "matched": True}
+                        for mode in ("print", "no-print-conv")]
+        with patch.object(read_verifier, "cases", return_value={"text.m4a": fixture}):
+            occurrences, identities, manifest = read_verifier.observation_evidence(observations, ledger["specs"])
+            evidence = {"schema": join.QUICKTIME_READ_EVIDENCE_SCHEMA, "inputs": dict(sorted(digests.items())),
+                        "producer": {"source_dirty": False, "source_commit": "a" * 40,
+                                     "source_fingerprint": "b" * 64, "runtime_artifact_sha256": "c" * 64,
+                                     "fixture_manifest_sha256": manifest, "pin": "13.59"},
+                        "observations": observations, "matched_occurrences": occurrences,
+                        "observed_identities": identities}
+            source = bounded["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
+            result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities, raw, rust,
+                                digests, evidence)
+            self.assertEqual(result["entries"][0]["observed_read"], "observed_matched_read")
+            self.assertIn("quicktime_read_evidence", result["inputs"])
+            for key, value in (("raw_key", "cpil"), ("source_sha256", "f" * 64)):
+                changed = copy.deepcopy(evidence)
+                changed["observed_identities"][0]["source_identity"][key] = value
+                with self.assertRaisesRegex(ValueError, "claims differ"):
+                    join.quicktime_observed_reads(changed, digests, ledger["specs"])
+            changed = copy.deepcopy(evidence)
+            changed["observations"][0]["actual"]["ItemList:Title"] = "Wrong"
+            with self.assertRaisesRegex(ValueError, "matched flag"):
+                join.quicktime_observed_reads(changed, digests, ledger["specs"])
+            changed = copy.deepcopy(evidence)
+            changed["observations"].pop()
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                join.quicktime_observed_reads(changed, digests, ledger["specs"])
+            changed = copy.deepcopy(evidence)
+            changed["observations"][0]["fixture_sha256"] = "f" * 64
+            with self.assertRaisesRegex(ValueError, "fixture bytes"):
+                join.quicktime_observed_reads(changed, digests, ledger["specs"])
+
+    def test_negative_fixture_cannot_supply_observed_read_identity(self):
+        _, _, ledger, _, _ = self.replayed_quicktime_facts()
+        fixture = read_verifier.baseline.fixture(b"zzzz", 1, b"unknown")
+        rows = [{"fixture": "unknown.m4a", "mode": mode,
+                 "fixture_sha256": hashlib.sha256(fixture).hexdigest(),
+                 "expected": {}, "actual": {}, "matched": True}
+                for mode in ("print", "no-print-conv")]
+        with patch.object(read_verifier, "cases", return_value={"unknown.m4a": fixture}):
+            occurrences, identities, _ = read_verifier.observation_evidence(rows, ledger["specs"])
+        self.assertEqual(occurrences, [])
+        self.assertEqual(identities, [])
 
     def test_historical_or_unbound_observed_read_evidence_is_refused(self):
         raw, _, ledger, capabilities, rust = self.replayed_quicktime_facts()

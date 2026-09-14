@@ -23,19 +23,84 @@ def authenticated_artifacts(source: Path, ledger: Path, capabilities: Path, rust
     supplied_capabilities = json.loads(capabilities.read_text())
     if (quicktime_specs.compile_document(bounded) != supplied_ledger
             or quicktime_selector.report(raw) != supplied_capabilities
-            or quicktime_specs.render_rust(supplied_ledger) != emitted):
+            or not rust_matches(quicktime_specs.render_rust(supplied_ledger), emitted)):
         raise ValueError("generated QuickTime artifacts do not replay from bounded source")
     return ({"source_sha256": hashlib.sha256(raw).hexdigest(), "ledger_sha256": hashlib.sha256(ledger.read_bytes()).hexdigest(),
              "capabilities_sha256": hashlib.sha256(capabilities.read_bytes()).hexdigest(), "rust_sha256": hashlib.sha256(emitted.encode()).hexdigest()}, supplied_ledger)
 
 
-def fixture_raw_key(name: str) -> str:
-    return {"text.m4a": "©nam", "enum.m4a": "cpil", "u16.m4a": "tmpo", "u64.m4a": "plID", "u64-max.m4a": "plID",
-            "media-enum.m4a": "stik", "unknown-ascii.m4a": "zzzz", "unknown-binary-key.m4a": "ÿþýü",
-            "utf8-alias.m4a": "©nam", "utf16.m4a": "©nam", "utf16-alias.m4a": "©nam", "shiftjis.m4a": "©nam",
-            "text-enum.m4a": "cpil", "signed.m4a": "©nam", "implicit-u64.m4a": "©nam", "float.m4a": "©nam", "double.m4a": "©nam",
-            "float-array.m4a": "©nam", "u64-short.m4a": "plID", "u64-tail.m4a": "plID", "unsigned-over-signed.m4a": "cpil",
-            "binary.m4a": "©nam", "integer-binary.m4a": "©nam", "source-string.m4a": "gshh", "malformed-u64.m4a": "plID"}[name]
+def rust_matches(expected: str, supplied: str) -> bool:
+    # Keep the same formatting-aware replay used by the catalog join.
+    from join_catalog_hydrated import quicktime_rust_matches
+    return quicktime_rust_matches(expected, supplied)
+
+
+def fixture_raw_key(contents: bytes) -> str:
+    """Read the one ItemList key from our constructed atom fixture itself."""
+    def atoms(data):
+        offset = 0
+        while offset < len(data):
+            if len(data) - offset < 8:
+                raise ValueError("truncated fixture atom")
+            size = int.from_bytes(data[offset:offset + 4], "big")
+            if size < 8 or size > len(data) - offset:
+                raise ValueError("invalid fixture atom size")
+            yield data[offset + 4:offset + 8], data[offset + 8:offset + size]
+            offset += size
+    data = contents
+    for key in (b"moov", b"udta", b"meta", b"ilst"):
+        matches = [payload for name, payload in atoms(data) if name == key]
+        if len(matches) != 1:
+            raise ValueError("fixture must contain exactly one ItemList path")
+        data = matches[0][4:] if key == b"meta" else matches[0]
+    items = list(atoms(data))
+    if len(items) != 1:
+        raise ValueError("fixture must contain exactly one ItemList item")
+    return items[0][0].decode("latin1")
+
+
+def observation_evidence(rows: list, specs: list) -> tuple[list, list, str]:
+    """Recompute observed identities from fixture bytes and equal native output."""
+    fixtures = cases()
+    expected_pairs = {(name, mode) for name in fixtures for mode in ("print", "no-print-conv")}
+    seen, occurrences = set(), []
+    by_key = {}
+    for spec in specs:
+        key = (spec["source_identity"]["raw_key"], spec["name"])
+        if key in by_key:
+            raise ValueError("generated source identity is ambiguous for fixture")
+        by_key[key] = spec["source_identity"]
+    for row in rows:
+        pair = (row.get("fixture"), row.get("mode"))
+        if pair not in expected_pairs or pair in seen:
+            raise ValueError("read evidence fixture/mode is unknown or duplicated")
+        seen.add(pair)
+        contents = fixtures[pair[0]]
+        if row.get("fixture_sha256") != hashlib.sha256(contents).hexdigest():
+            raise ValueError("read evidence fixture bytes differ")
+        expected, actual = row.get("expected"), row.get("actual")
+        if not isinstance(expected, dict) or not isinstance(actual, dict):
+            raise ValueError("read evidence lacks native and actual output")
+        matched = expected == actual
+        if row.get("matched") is not matched:
+            raise ValueError("read evidence matched flag disagrees with output")
+        if not matched:
+            continue
+        for emitted in actual:
+            if not emitted.startswith("ItemList:"):
+                raise ValueError("read evidence projection contains another group")
+            name = emitted.removeprefix("ItemList:")
+            identity = by_key.get((fixture_raw_key(contents), name))
+            if identity is None:
+                raise ValueError("matched emitted tag lacks an exact generated source identity")
+            occurrences.append({"fixture": pair[0], "mode": pair[1], "source_identity": identity,
+                                "group1": "ItemList", "tag_name": name, "matched": True})
+    if seen != expected_pairs:
+        raise ValueError("read evidence fixture/mode set is incomplete")
+    unique = {json.dumps(row["source_identity"], sort_keys=True): row for row in occurrences}
+    manifest = {name: hashlib.sha256(data).hexdigest() for name, data in fixtures.items()}
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    return occurrences, list(unique.values()), digest
 
 
 def cases():
@@ -130,21 +195,7 @@ def compare(tree: Path, output: Path, artifacts: tuple[Path, Path, Path, Path]):
     if baseline.source_fingerprint(root) != fingerprint:
         raise ValueError("source changed during the comparison")
     baseline.verify_oracle_sources(tree, manifest)
-    specs = {(spec["source_identity"]["raw_key"], spec["name"]): spec["source_identity"] for spec in ledger["specs"]}
-    occurrences = []
-    for row in rows:
-        if not row["matched"]:
-            continue
-        for emitted in row["actual"]:
-            if not emitted.startswith("ItemList:"):
-                continue
-            name = emitted.removeprefix("ItemList:")
-            identity = specs.get((fixture_raw_key(row["fixture"]), name))
-            if identity is None:
-                raise ValueError("matched emitted Group1:TagName lacks an exact generated source identity")
-            occurrences.append({"fixture": row["fixture"], "mode": row["mode"], "source_identity": identity,
-                                "group1": "ItemList", "tag_name": name, "matched": True})
-    unique = {json.dumps(row["source_identity"], sort_keys=True): row for row in occurrences}
+    occurrences, identities, fixture_digest = observation_evidence(rows, ledger["specs"])
     report = {
         "schema": EVIDENCE_SCHEMA,
         "instrument": "verify_quicktime_reader.py; native and fresh oxidex -j -a -G1; ItemList projection",
@@ -157,8 +208,8 @@ def compare(tree: Path, output: Path, artifacts: tuple[Path, Path, Path, Path]):
         "inputs": dict(sorted(input_digests.items())),
         "producer": {"source_commit": state.commit, "source_dirty": False, "source_fingerprint": fingerprint,
                      "runtime_artifact_sha256": hashlib.sha256(Path(binary.path).read_bytes()).hexdigest(),
-                     "fixture_manifest_sha256": hashlib.sha256(json.dumps({row["fixture"]: row["fixture_sha256"] for row in rows}, sort_keys=True).encode()).hexdigest(), "pin": oracle.version},
-        "matched_occurrences": occurrences, "observed_identities": list(unique.values()),
+                     "fixture_manifest_sha256": fixture_digest, "pin": oracle.version},
+        "matched_occurrences": occurrences, "observed_identities": identities,
         "matched_observations": sum(row["matched"] for row in rows),
         "writing_observed": None,
         "scope": "default-locale ItemList behavior fixtures; not corpus coverage or every source row",

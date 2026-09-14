@@ -270,7 +270,7 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
     return rows
 
 
-def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str] | None) -> dict[tuple[str, str, str, tuple[int, ...]], str]:
+def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str] | None, specs: list | None = None) -> dict[tuple[str, str, str, tuple[int, ...]], str]:
     """Accept only immutable, artifact-bound matched read identities."""
     if evidence is None:
         return {}
@@ -288,6 +288,13 @@ def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str
         raise ValueError("QuickTime read evidence pin differs from repository pin")
     if evidence.get("inputs") != dict(sorted(input_digests.items())):
         raise ValueError("QuickTime read evidence generated artifact binding differs")
+    from verify_quicktime_reader import observation_evidence
+    if specs is None or not isinstance(evidence.get("observations"), list):
+        raise ValueError("QuickTime read evidence requires generated specs and native observations")
+    occurrences, derived, fixture_digest = observation_evidence(evidence["observations"], specs)
+    if (evidence.get("matched_occurrences") != occurrences or evidence.get("observed_identities") != derived
+            or producer["fixture_manifest_sha256"] != fixture_digest):
+        raise ValueError("QuickTime read evidence claims differ from native observations")
     observations = evidence.get("observed_identities")
     if not isinstance(observations, list):
         raise ValueError("QuickTime read evidence identities are missing or malformed")
@@ -335,7 +342,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     validate_provenance(catalog, hydrated)
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
-    observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, quicktime_input_digests)
+    observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, quicktime_input_digests,
+                                                 itemlist_ledger["specs"] if itemlist_ledger else None)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):
         raise ValueError("hydrated total_tag_entries differs from catalog denominator")
@@ -396,6 +404,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
               "exiftool_version": catalog["exiftool_version"]}
     if quicktime_input_digests is not None:
         inputs["quicktime"] = dict(sorted(quicktime_input_digests.items()))
+    if quicktime_read_evidence is not None:
+        inputs["quicktime_read_evidence"] = {"sha256": canonical_hash(quicktime_read_evidence),
+                                             "producer": quicktime_read_evidence["producer"]}
     return {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
             "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
             "implementation": dict(sorted(implementation_counts.items())), "observed_read": dict(sorted(observed_counts.items()))},
