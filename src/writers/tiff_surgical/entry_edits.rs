@@ -285,7 +285,109 @@ fn rewrite_directory(
 
 #[cfg(test)]
 mod tests {
-    use super::checked_append_bounds;
+    use super::*;
+
+    /// External, independently scored real-carrier replay. The normal test
+    /// suite reports this as ignored instead of passing without fixture input.
+    #[test]
+    #[ignore = "requires OXIDEX_RAW_EDIT_REQUESTS and OXIDEX_RAW_EDIT_RESULTS"]
+    fn raw_scoped_native_fixture_driver() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request {
+            input: std::path::PathBuf,
+            output: std::path::PathBuf,
+            scope: String,
+            tag_id: u16,
+            op: Option<String>,
+            #[serde(rename = "type")]
+            field_type: Option<u16>,
+            count: Option<u32>,
+            value_hex: Option<String>,
+        }
+        fn apply(request: &Request) -> std::result::Result<(), String> {
+            let ifd = match request.scope.as_str() {
+                "IFD0" => IfdKind::Ifd0,
+                "ExifIFD" => IfdKind::ExifIfd,
+                "GPS" => IfdKind::Gps,
+                _ => return Err("unsupported scope".into()),
+            };
+            let mutation = match request.op.as_deref().unwrap_or("set") {
+                "delete" => {
+                    if request.field_type.is_some()
+                        || request.count.is_some()
+                        || request.value_hex.is_some()
+                    {
+                        return Err("delete request must not carry set fields".into());
+                    }
+                    EntryMutation::Delete
+                }
+                "set" => {
+                    let hex = request.value_hex.as_deref().ok_or("missing value_hex")?;
+                    if !hex.is_ascii() || !hex.len().is_multiple_of(2) {
+                        return Err("invalid value_hex".into());
+                    }
+                    let bytes = (0..hex.len())
+                        .step_by(2)
+                        .map(|index| u8::from_str_radix(&hex[index..index + 2], 16))
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(|err| err.to_string())?;
+                    EntryMutation::Set {
+                        field_type: request.field_type.ok_or("missing type")?,
+                        count: request.count.ok_or("missing count")?,
+                        bytes,
+                    }
+                }
+                _ => return Err("unsupported op".into()),
+            };
+            let input = std::fs::read(&request.input).map_err(|err| err.to_string())?;
+            let edits = [ScopedEntryEdit {
+                ifd,
+                tag_id: request.tag_id,
+                mutation,
+            }];
+            let output = if input.starts_with(&[0xff, 0xd8]) {
+                let reader = crate::test_support::TestReader::new(input);
+                crate::writers::jpeg_writer::apply_raw_exif_edits(&reader, &edits)
+            } else {
+                apply_entry_edits(&input, &edits)
+            }
+            .map_err(|err| err.to_string())?;
+            use std::io::Write;
+            // Evidence may never overwrite an existing fixture or result.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&request.output)
+                .map_err(|err| err.to_string())?;
+            file.write_all(&output).map_err(|err| err.to_string())
+        }
+        let requests =
+            std::fs::read_to_string(std::env::var("OXIDEX_RAW_EDIT_REQUESTS").unwrap()).unwrap();
+        let mut results = String::new();
+        let mut count = 0;
+        for line in requests.lines() {
+            let request: Request = serde_json::from_str(line).unwrap();
+            let result = apply(&request);
+            results.push_str(
+                &serde_json::json!({
+                    "input": request.input, "output": request.output,
+                    "ok": result.is_ok(), "error": result.err()
+                })
+                .to_string(),
+            );
+            results.push('\n');
+            count += 1;
+        }
+        assert!(count > 0, "empty external replay is not a passing test");
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(std::env::var("OXIDEX_RAW_EDIT_RESULTS").unwrap())
+            .unwrap();
+        file.write_all(results.as_bytes()).unwrap();
+    }
 
     #[test]
     fn raw_scoped_append_bounds_reject_overflow_without_allocating() {

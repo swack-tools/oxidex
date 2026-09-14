@@ -22,6 +22,33 @@ Those procedure facts are **not** a writer admission and are not interpreted
 as an implementation of `WriteExif` or `CheckExif`. A later writer must require
 its own closed native-mechanism contract before it can use a candidate.
 
+## Shared value-helper provenance
+
+The dump also carries a top-level `native_write_helpers` map with
+`write_value` and `check_value` facts. Each uses the established CODE fact
+shape: `resolved`, callable name, deparse, normalized source path, source and
+deparse SHA-256 values, and bounded direct dependency facts. The dumper records
+the final package bindings only after every requested table module and permitted
+writer autoload has settled. It then loads `Image/ExifTool/Writer.pl` solely to
+make these shared helper bindings observable; it never calls a native writer.
+An unreadable helper module or missing callable remains an explicit unresolved
+fact.
+
+`requested_binding` is the fully-qualified package glob the caller requested.
+It remains distinct from `__name`: a later source module may legitimately bind
+that glob to an anonymous CODE ref, whose actual callable name is
+`Image::ExifTool::__ANON__`. Consumers must bind calls through
+`requested_binding` while retaining the actual CV's body and provenance from
+the remaining fact fields.
+
+This map is provenance for a future default UTF-8 scalar mechanism, not proof
+that `WriteValue` or `CheckValue` is safe to execute. A mechanism compiler must
+still recognize the required native bodies and test their effects. Non-default
+`CharsetEXIF` encoding requires a separate option and `Encode` contract; it
+must not be inferred from these helper facts. The sidecar is ignored by the
+inactive descriptor generator, so adding or changing helper provenance cannot
+admit a writer candidate by itself.
+
 Every source table and every source row alternative not in the initial class is
 recorded in `OMITTED_WRITE_NATIVE_TABLES` or `OMITTED_WRITE_NATIVE_ROWS` with
 named reasons. Reader omission flags are never used for this accounting. The
@@ -40,3 +67,20 @@ and `full_name` before applying this source class. It rejects malformed or
 non-relative provenance paths, non-SHA-256 digests, and unrepresentable group
 maps. `--write-out` is optional: requesting this inactive artifact does not
 change the ordinary generated binary artifact.
+
+## Loaded helper hash state
+
+The top-level `native_write_helpers` facts also carry `lexical_hashes` from
+the final callable's live Perl pad. A resolved capture has a `bindings` map,
+keyed by the actual lexical name (including `%`). Each hash is either explicitly
+unresolved or has resolved `entries`. Empty hashes, empty strings, zero, undef
+and reference values remain distinct. CODE entries retain the actual callable
+body, source identity and bounded dependency facts.
+
+This matters for `WriteValue`: a newly added dispatch entry can intercept
+`string` or `undef` before the string branch without changing the helper body.
+Capture follows the loaded state, including platform-time removals, rather
+than parsing the initializer. A future compiler must authenticate its actual
+lookup, local initialization and control flow against these facts. A missing
+or unresolved pad must never be treated as an empty map. These additional facts
+do not activate a writer or translate helper behavior.

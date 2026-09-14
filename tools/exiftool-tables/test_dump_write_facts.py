@@ -14,6 +14,8 @@ import tempfile
 import textwrap
 import unittest
 
+import write_descriptors
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DUMP = REPO_ROOT / "tools/exiftool-tables/dump_tables.pl"
@@ -61,9 +63,11 @@ class NativeWriteFacts(unittest.TestCase):
         )
         self.exif = package / "Exif.pm"
         self.writer = package / "WriteExif.pl"
+        self.writer_helpers = package / "Writer.pl"
         self.later = package / "Later.pm"
         self.write_exif("IFD0")
         self.write_writer("return 1;")
+        self.write_writer_helpers()
         self.write_later("return 'late';")
 
     def write_exif(self, host_group: str, host_group_expr: str | None = None):
@@ -98,20 +102,34 @@ class NativeWriteFacts(unittest.TestCase):
             1;
         """), encoding="utf-8")
 
-    def write_writer(self, body: str):
+    def write_writer(self, body: str, *, extra: str = ""):
         self.writer.write_text(textwrap.dedent(f"""\
             package Image::ExifTool::Exif;
+            require 'Image/ExifTool/Writer.pl';
             sub WriteExif($$$) {{ {body} }}
             sub CheckExif($$$) {{ return undef; }}
+            {extra}
             1;
         """), encoding="utf-8")
 
-    def write_later(self, body: str):
+    def write_writer_helpers(self, *, write_body="return Image::ExifTool::WriterHelper($_[0]);",
+                             check_body="return Image::ExifTool::CheckHelper($_[0]);"):
+        self.writer_helpers.write_text(textwrap.dedent(f"""\
+            package Image::ExifTool;
+            sub WriterHelper($) {{ return $_[0]; }}
+            sub CheckHelper($) {{ return $_[0]; }}
+            sub WriteValue($$) {{ {write_body} }}
+            sub CheckValue($$) {{ {check_body} }}
+            1;
+        """), encoding="utf-8")
+
+    def write_later(self, body: str, *, extra: str = ""):
         # This module is loaded after Exif.  It fills the prototype stored by
         # `%Deferred`, so the final source binding must describe this file.
         self.later.write_text(textwrap.dedent(f"""\
             package Image::ExifTool::Exif;
             sub DeferredWrite($$$) {{ {body} }}
+            {extra}
             1;
         """), encoding="utf-8")
 
@@ -194,6 +212,137 @@ class NativeWriteFacts(unittest.TestCase):
         self.assertEqual(deferred["source_file"], "Image/ExifTool/Later.pm")
         self.assertEqual(deferred["source_sha256"],
                          hashlib.sha256(self.later.read_bytes()).hexdigest())
+
+    def test_captures_final_write_value_and_check_value_bindings_with_dependencies(self):
+        helpers = self.dump()["native_write_helpers"]
+        for key, callable_name, dependency in (
+            ("write_value", "Image::ExifTool::WriteValue", "Image::ExifTool::WriterHelper"),
+            ("check_value", "Image::ExifTool::CheckValue", "Image::ExifTool::CheckHelper"),
+        ):
+            with self.subTest(key=key):
+                fact = helpers[key]
+                self.assertTrue(fact["resolved"])
+                self.assertEqual(fact["requested_binding"], callable_name)
+                self.assertEqual(fact["__name"], callable_name)
+                self.assertEqual(fact["source_file"], "Image/ExifTool/Writer.pl")
+                self.assertEqual(fact["source_sha256"],
+                                 hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+                self.assertIn(dependency, fact["dependencies"])
+                self.assertTrue(fact["dependencies"][dependency]["resolved"])
+
+    def test_helper_rebinding_and_body_mutation_are_captured_after_writer_autoload(self):
+        before = self.dump()
+        self.write_writer("return 1;", extra=textwrap.dedent("""\
+            package Image::ExifTool;
+            no warnings 'redefine';
+            *Image::ExifTool::WriteValue = sub($$) { return 'later'; };
+        """))
+        rebound = self.dump()
+        fact = rebound["native_write_helpers"]["write_value"]
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::WriteValue")
+        self.assertNotEqual(fact["__name"], fact["requested_binding"])
+        self.assertEqual(fact["source_file"], "Image/ExifTool/WriteExif.pl")
+        self.assertNotEqual(before["native_write_helpers"]["write_value"]["__deparse"], fact["__deparse"])
+
+        self.write_later("return 'late';")
+        self.write_writer_helpers(write_body="return Image::ExifTool::WriterHelper('changed');")
+        changed = self.dump()
+        self.assertNotEqual(
+            before["native_write_helpers"]["write_value"]["source_sha256"],
+            changed["native_write_helpers"]["write_value"]["source_sha256"],
+        )
+        self.assertEqual(before["modules"], changed["modules"])
+        before_candidates, _ = write_descriptors.generate(before, ["Exif"])
+        changed_candidates, _ = write_descriptors.generate(changed, ["Exif"])
+        self.assertEqual(before_candidates, changed_candidates)
+
+    def test_missing_helper_is_explicit_without_discarding_the_read_projection(self):
+        self.writer_helpers.write_text(textwrap.dedent("""\
+            package Image::ExifTool;
+            sub WriteValue($$) { return $_[0]; }
+            1;
+        """), encoding="utf-8")
+        doc = self.dump()
+        self.assertTrue(doc["native_write_helpers"]["write_value"]["resolved"])
+        missing = doc["native_write_helpers"]["check_value"]
+        self.assertFalse(missing["resolved"])
+        self.assertEqual(missing["requested_binding"], "Image::ExifTool::CheckValue")
+        self.assertEqual(missing["reason"], "code_ref_unavailable")
+        self.assertFalse(missing["lexical_hashes"]["resolved"])
+        self.assertIn("Exif", doc["modules"])
+
+    def test_loaded_lexical_dispatch_changes_without_changing_helper_body(self):
+        source = textwrap.dedent("""\
+            package Image::ExifTool;
+            sub WriterHelper($) { return $_[0]; }
+            my %formats = (
+                int8u => \\&WriterHelper,
+                string => sub($) { return 'intercepted'; },
+                empty => '', zero => 0, missing => undef, range => [-2, 9],
+            );
+            # MUTATE_LOADED_MAP
+            sub WriteValue($$) {
+                my ($value, $format) = @_;
+                return $formats{$format};
+            }
+            sub CheckValue($$) { return undef; }
+            1;
+        """)
+        self.writer_helpers.write_text(source.replace(
+            "# MUTATE_LOADED_MAP", "delete $formats{string};"
+        ), encoding="utf-8")
+        before = self.dump()
+        self.writer_helpers.write_text(source, encoding="utf-8")
+        after = self.dump()
+        old = before["native_write_helpers"]["write_value"]
+        new = after["native_write_helpers"]["write_value"]
+        self.assertEqual(old["__deparse"], new["__deparse"])
+        self.assertEqual(before["modules"], after["modules"])
+        self.assertTrue(new["lexical_hashes"]["resolved"])
+        old_map = old["lexical_hashes"]["bindings"]["%formats"]
+        new_map = new["lexical_hashes"]["bindings"]["%formats"]
+        self.assertTrue(old_map["resolved"] and new_map["resolved"])
+        self.assertNotIn("string", old_map["entries"])
+        entries = new_map["entries"]
+        self.assertTrue(entries["string"]["resolved"])
+        self.assertIn("__ANON__", entries["string"]["__name"])
+        self.assertEqual(entries["string"]["source_sha256"],
+                         hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+        self.assertEqual(entries["int8u"]["__name"], "Image::ExifTool::WriterHelper")
+        self.assertEqual(entries["empty"], "")
+        self.assertEqual(str(entries["zero"]), "0")
+        self.assertIsNone(entries["missing"])
+        self.assertEqual([str(value) for value in entries["range"]], ["-2", "9"])
+
+    def test_lexical_capture_uses_final_rebound_callable_and_preserves_empty_map(self):
+        self.write_writer("return 1;", extra=textwrap.dedent("""\
+            package Image::ExifTool;
+            my %replacement;
+            no warnings 'redefine';
+            *Image::ExifTool::WriteValue = sub($$) {
+                return $replacement{$_[1]};
+            };
+        """))
+        fact = self.dump()["native_write_helpers"]["write_value"]
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::WriteValue")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/WriteExif.pl")
+        self.assertEqual(fact["lexical_hashes"], {
+            "resolved": True,
+            "bindings": {"%replacement": {"resolved": True, "entries": {}}},
+        })
+
+    def test_unloadable_helper_module_is_explicitly_unresolved(self):
+        self.writer_helpers.unlink()
+        helpers = self.dump()["native_write_helpers"]
+        for key, fact in helpers.items():
+            self.assertFalse(fact["resolved"])
+            self.assertEqual(fact["reason"], "write_helper_load_failed")
+            self.assertEqual(
+                fact["requested_binding"],
+                {"write_value": "Image::ExifTool::WriteValue",
+                 "check_value": "Image::ExifTool::CheckValue"}[key],
+            )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):
         before = self.dump()

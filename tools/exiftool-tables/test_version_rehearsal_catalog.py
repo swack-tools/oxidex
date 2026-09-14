@@ -8,6 +8,7 @@ import io
 import json
 import sys
 import tarfile
+from tempfile import TemporaryDirectory
 import unittest
 from pathlib import Path
 
@@ -42,6 +43,47 @@ def tar_gz(label):
             info = tarfile.TarInfo(f"exiftool-{label}/README")
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
+            nested = f"module {label}".encode()
+            nested_info = tarfile.TarInfo(f"exiftool-{label}/lib/ExifTool.pm")
+            nested_info.size = len(nested)
+            archive.addfile(nested_info, io.BytesIO(nested))
+    return output.getvalue()
+
+
+def unsafe_tar_gz(label):
+    output = io.BytesIO()
+    with gzip.GzipFile(fileobj=output, mode="wb") as zipped:
+        with tarfile.open(fileobj=zipped, mode="w") as archive:
+            directory = tarfile.TarInfo(f"exiftool-{label}")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+            link = tarfile.TarInfo(f"exiftool-{label}/unsafe-link")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "../../outside"
+            archive.addfile(link)
+    return output.getvalue()
+
+
+def prohibited_member_tar_gz(label, kind):
+    output = io.BytesIO()
+    with gzip.GzipFile(fileobj=output, mode="wb") as zipped:
+        with tarfile.open(fileobj=zipped, mode="w") as archive:
+            directory = tarfile.TarInfo(f"exiftool-{label}")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+            if kind == "traversal":
+                member = tarfile.TarInfo("../outside")
+                member.size = 1
+                archive.addfile(member, io.BytesIO(b"x"))
+            elif kind == "absolute":
+                member = tarfile.TarInfo("/outside")
+                member.size = 1
+                archive.addfile(member, io.BytesIO(b"x"))
+            else:
+                member = tarfile.TarInfo(f"exiftool-{label}/unsafe-{kind}")
+                member.type = {"hardlink": tarfile.LNKTYPE, "symlink": tarfile.SYMTYPE, "special": tarfile.FIFOTYPE}[kind]
+                member.linkname = "target" if kind != "special" else ""
+                archive.addfile(member)
     return output.getvalue()
 
 
@@ -203,21 +245,49 @@ class CatalogCaptureTests(unittest.TestCase):
         responses = {catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release)) for release, side in selected.items()}
         get = FixtureGet(responses)
         capture = self.capture()
-        resolved = catalog_stage.resolve_selected_archives(plan, catalog, capture, get)
-        catalog_stage.verify_source_resolution(resolved, plan, catalog, capture)
-        self.assertEqual({row["release"] for row in resolved["selected_releases"]}, set(selected))
-        self.assertEqual(set(get.calls), set(responses))
-        self.assertEqual(resolved["execution"]["native_read"], "unrun")
-        self.assertEqual(resolved["execution"]["native_write"], "unrun")
+        with TemporaryDirectory() as directory:
+            cache = Path(directory) / "cache"
+            resolved = catalog_stage.resolve_selected_archives(plan, catalog, capture, get, cache)
+            catalog_stage.verify_source_resolution(resolved, plan, catalog, capture)
+            self.assertEqual({row["release"] for row in resolved["selected_releases"]}, set(selected))
+            self.assertEqual(set(get.calls), set(responses))
+            self.assertEqual(resolved["execution"]["native_read"], "unrun")
+            self.assertEqual(resolved["execution"]["native_write"], "unrun")
+            for row in resolved["selected_releases"]:
+                self.assertEqual(
+                    (cache / row["archive"]["cache_key"]).read_bytes(),
+                    responses[row["archive"]["url"]].body,
+                )
 
     def test_corrupt_selected_archive_is_refused_without_resolving_unselected_releases(self):
         catalog = self.normalized()
         plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
         selected = next(side for pair in plan["pairs"] for side in (pair["old"], pair["new"]))
         get = FixtureGet({catalog_stage.immutable_archive_url(selected["release"], selected["peeled_commit"]): response(b"not-a-tar")})
-        with self.assertRaisesRegex(catalog_stage.Refused, "readable tar.gz"):
-            catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), get)
+        with TemporaryDirectory() as directory, self.assertRaisesRegex(catalog_stage.Refused, "readable tar.gz"):
+            catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), get, Path(directory) / "cache")
         self.assertEqual(len(get.calls), 1)
+
+    def test_resolution_refuses_a_same_digest_cache_name_with_different_bytes(self):
+        catalog = self.normalized()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        first_release = sorted(selected, key=rehearsal.release_key)[0]
+        body = tar_gz(first_release)
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(
+                body if release == first_release else tar_gz(release)
+            )
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            cache = Path(directory) / "cache"
+            key = catalog_stage._archive_cache_key(catalog_stage.sha256_bytes(body))
+            path = cache / key
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"different bytes")
+            with self.assertRaisesRegex(catalog_stage.Refused, "cache entry differs"):
+                catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet(responses), cache)
 
     def test_archive_resolution_refuses_catalog_not_derived_from_its_capture(self):
         catalog = self.normalized()
@@ -225,7 +295,156 @@ class CatalogCaptureTests(unittest.TestCase):
         catalog["catalog_sha256"] = rehearsal.sha256_json({key: value for key, value in catalog.items() if key != "catalog_sha256"})
         plan = rehearsal.make_plan(self.normalized(), 3, 0, 1, "e" * 40)
         with self.assertRaisesRegex(catalog_stage.Refused, "differs from its saved source capture"):
-            catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet({}))
+            with TemporaryDirectory() as directory:
+                catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet({}), Path(directory) / "cache")
+
+    def test_materialization_verifies_cached_bytes_and_extracts_new_named_trees(self):
+        catalog = self.normalized()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release))
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet(responses), cache)
+            materialized = catalog_stage.materialize_selected_sources(plan, catalog, self.capture(), resolution, cache, sources)
+            catalog_stage.verify_source_materialization(materialized, plan, catalog, self.capture(), resolution, cache, sources)
+            self.assertTrue(materialized["complete"])
+            self.assertEqual({row["release"] for row in materialized["selected_releases"]}, set(selected))
+            for row in materialized["selected_releases"]:
+                self.assertEqual(row["state"], "materialized")
+                self.assertTrue((sources / row["source_directory"] / "README").is_file())
+                self.assertEqual((sources / row["source_directory"] / "README").read_text(), row["release"])
+                self.assertEqual((sources / row["source_directory"] / "lib" / "ExifTool.pm").read_text(), f"module {row['release']}")
+
+    def test_materialization_refuses_rehashed_extracted_source_that_differs_from_archive(self):
+        catalog = self.normalized()
+        capture = self.capture()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release))
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, capture, FixtureGet(responses), cache)
+            materialized = catalog_stage.materialize_selected_sources(plan, catalog, capture, resolution, cache, sources)
+            row = materialized["selected_releases"][0]
+            source = sources / row["source_directory"]
+            (source / "lib" / "ExifTool.pm").write_text("rehashed source mutation", encoding="utf-8")
+            # An attacker can recompute every mutable manifest field.  The
+            # verifier must still derive the expected tree from retained bytes.
+            row["tree"] = catalog_stage._tree_identity(source)
+            materialized["materialization_sha256"] = catalog_stage.sha256_json(
+                {key: value for key, value in materialized.items() if key != "materialization_sha256"}
+            )
+            with self.assertRaisesRegex(catalog_stage.Refused, "verified archive"):
+                catalog_stage.verify_source_materialization(
+                    materialized, plan, catalog, capture, resolution, cache, sources
+                )
+
+    def test_materialize_cli_has_no_network_timeout_attribute_and_records_failures(self):
+        catalog = self.normalized()
+        capture = self.capture()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release))
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, capture, FixtureGet(responses), cache)
+            capture_path, catalog_path = root / "capture.json", root / "catalog.json"
+            plan_path, resolution_path = root / "plan.json", root / "resolution.json"
+            for path, document in (
+                (capture_path, capture), (catalog_path, catalog_stage.raw_catalog_from_capture(capture)),
+                (plan_path, plan), (resolution_path, resolution),
+            ):
+                path.write_text(json.dumps(document), encoding="utf-8")
+            happy_output = root / "happy.json"
+            arguments = [
+                "materialize-selected", "--capture", str(capture_path), "--catalog", str(catalog_path),
+                "--plan", str(plan_path), "--resolution", str(resolution_path),
+                "--archive-cache", str(cache), "--source-root", str(sources), "--output", str(happy_output),
+            ]
+            self.assertEqual(catalog_stage.main(arguments), 0)
+            self.assertTrue(json.loads(happy_output.read_text(encoding="utf-8"))["complete"])
+
+            # A separate source root avoids source reuse; a bad retained cache
+            # produces an attributable incomplete journal, never AttributeError.
+            first = resolution["selected_releases"][0]
+            (cache / first["archive"]["cache_key"]).write_bytes(b"tampered")
+            failed_output = root / "failed.json"
+            failed_arguments = [*arguments[:-1], str(failed_output)]
+            failed_arguments[failed_arguments.index("--source-root") + 1] = str(root / "failed-sources")
+            self.assertEqual(catalog_stage.main(failed_arguments), 2)
+            self.assertFalse(json.loads(failed_output.read_text(encoding="utf-8"))["complete"])
+
+    def test_materialization_preserves_tamper_and_existing_source_failures(self):
+        catalog = self.normalized()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(tar_gz(release))
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet(responses), cache)
+            first = resolution["selected_releases"][0]
+            (cache / first["archive"]["cache_key"]).write_bytes(b"tampered")
+            materialized = catalog_stage.materialize_selected_sources(plan, catalog, self.capture(), resolution, cache, sources)
+            self.assertFalse(materialized["complete"])
+            failed = next(row for row in materialized["selected_releases"] if row["release"] == first["release"])
+            self.assertEqual(failed["state"], "failed")
+            self.assertIn("differ from manifest", failed["failure"])
+            catalog_stage.verify_source_materialization(
+                materialized, plan, catalog, self.capture(), resolution, cache, sources, require_complete=False
+            )
+            with self.assertRaisesRegex(catalog_stage.Refused, "incomplete"):
+                catalog_stage.verify_source_materialization(materialized, plan, catalog, self.capture(), resolution, cache, sources)
+
+    def test_materialization_refuses_unsafe_archive_members_and_source_reuse(self):
+        catalog = self.normalized()
+        plan = rehearsal.make_plan(catalog, 3, 0, 1, "e" * 40)
+        selected = {side["release"]: side for pair in plan["pairs"] for side in (pair["old"], pair["new"])}
+        first_release = sorted(selected, key=rehearsal.release_key)[0]
+        responses = {
+            catalog_stage.immutable_archive_url(release, side["peeled_commit"]): response(
+                unsafe_tar_gz(release) if release == first_release else tar_gz(release)
+            )
+            for release, side in selected.items()
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, sources = root / "cache", root / "sources"
+            resolution = catalog_stage.resolve_selected_archives(plan, catalog, self.capture(), FixtureGet(responses), cache)
+            materialized = catalog_stage.materialize_selected_sources(plan, catalog, self.capture(), resolution, cache, sources)
+            failed = next(row for row in materialized["selected_releases"] if row["release"] == first_release)
+            self.assertEqual(failed["state"], "failed")
+            self.assertIn("member type is unsupported", failed["failure"])
+
+            safe_release = next(release for release in selected if release != first_release)
+            safe = next(row for row in materialized["selected_releases"] if row["release"] == safe_release)
+            self.assertEqual(safe["state"], "materialized")
+            retry = catalog_stage.materialize_selected_sources(plan, catalog, self.capture(), resolution, cache, sources)
+            reused = next(row for row in retry["selected_releases"] if row["release"] == safe_release)
+            self.assertEqual(reused["state"], "failed")
+            self.assertIn("already exists", reused["failure"])
+
+    def test_each_prohibited_archive_member_class_is_refused_before_extraction(self):
+        for kind in ("traversal", "absolute", "hardlink", "symlink", "special"):
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(catalog_stage.Refused, "unsafe path|type is unsupported"):
+                    catalog_stage._safe_archive_members(prohibited_member_tar_gz("13.59", kind))
 
 
 if __name__ == "__main__":

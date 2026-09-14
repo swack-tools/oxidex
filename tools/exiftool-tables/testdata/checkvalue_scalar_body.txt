@@ -1,0 +1,20 @@
+($$;$) {
+    package Image::ExifTool;
+    use strict;
+    (my($valPtr, $format, $count) = @_);
+    my(@vals, $val, $n);
+    if ((($format eq 'string') or ($format eq 'undef'))) {
+        (($count and ($count > 0)) or (return (undef)));
+        (my($len) = length($$valPtr));
+        if (($format eq 'string')) {
+            (($len >= $count) and (return 'String too long'));
+        } else {
+            (($len > $count) and (return 'Data too long'));
+        }
+        if (($len < $count)) {
+            ($$valPtr .= ("\000" x ($count - $len)));
+        }
+        (return (undef));
+    }
+    die('numeric tail must not execute');
+}

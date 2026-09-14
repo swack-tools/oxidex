@@ -697,6 +697,93 @@ sub effective_write_code_fact {
     };
 }
 
+# These helpers supply the first UTF-8 scalar writer's value validation and
+# serialization path.  Capture their *final loaded* bindings separately from
+# table WRITE_PROC/CHECK_PROC provenance: a later mechanism compiler must
+# recognize their bodies before it can execute them.  code_source_fact keeps
+# the established depth/cycle limits and makes a missing helper explicit.
+sub hydrate_write_helpers {
+    # Writer.pl defines the shared WriteValue/CheckValue helpers but is not
+    # necessarily loaded by a table's WriteExif implementation.  This is a
+    # module load only, after all requested table modules are captured; it
+    # never invokes a writer against metadata.
+    return { loaded => JSON::PP::true } if $INC{'Image/ExifTool/Writer.pl'};
+    return { loaded => JSON::PP::true } if eval { require 'Image/ExifTool/Writer.pl'; 1 };
+    return { loaded => JSON::PP::false, reason => 'write_helper_load_failed' };
+}
+
+# A helper's body may dispatch through a closed-over hash before reaching an
+# otherwise supported branch. Capture the live pad, not an initializer parsed
+# from source: Writer.pl can remove entries after platform capability checks.
+# These are facts only. A consumer must still prove the lookup/control flow and
+# refuse an unresolved pad; a missing capture is never an empty dispatch map.
+sub native_helper_lexical_hashes {
+    my ($binding, $lib_abs) = @_;
+    no strict 'refs';
+    my $cv = *{$binding}{CODE};
+    return { resolved => JSON::PP::false, reason => 'code_ref_unavailable' } unless $cv;
+    my (@names, @values);
+    my $loaded = eval {
+        my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
+        die "missing pad" unless @pad >= 2;
+        @names = $pad[0]->ARRAY;
+        @values = $pad[1]->ARRAY;
+        1;
+    };
+    return { resolved => JSON::PP::false, reason => 'lexical_pad_unavailable' } unless $loaded;
+    my %hashes;
+    for my $index (0 .. $#names) {
+        my $name = eval { $names[$index]->PV };
+        next unless defined $name && $name =~ /^%/;
+        return { resolved => JSON::PP::false, reason => 'ambiguous_lexical_hash_name' }
+            if exists $hashes{$name};
+        my $value = $values[$index];
+        my $hash = eval { $value->isa('B::HV') ? $value->object_2svref : undef };
+        if (ref($hash) ne 'HASH') {
+            $hashes{$name} = { resolved => JSON::PP::false, reason => 'lexical_hash_unavailable' };
+            next;
+        }
+        my %entries;
+        for my $key (sort keys %$hash) {
+            my $entry = $hash->{$key};
+            $entries{to_text($key)} = ref($entry) eq 'CODE'
+                ? code_ref_fact($entry, code_name($entry), $lib_abs)
+                : write_scrub($entry);
+        }
+        $hashes{$name} = { resolved => JSON::PP::true, entries => \%entries };
+    }
+    return { resolved => JSON::PP::true, bindings => \%hashes };
+}
+
+sub native_write_helper_facts {
+    my ($lib_abs, $status) = @_;
+    my %bindings = (
+        write_value => 'Image::ExifTool::WriteValue',
+        check_value => 'Image::ExifTool::CheckValue',
+    );
+    if (!$status->{loaded}) {
+        my $reason = $status->{reason} // 'write_helper_load_failed';
+        my %facts;
+        for my $key (sort keys %bindings) {
+            my $fact = unresolved_code_fact($bindings{$key}, $reason);
+            $fact->{requested_binding} = $bindings{$key};
+            $facts{$key} = $fact;
+        }
+        return \%facts;
+    }
+    my %facts;
+    for my $key (sort keys %bindings) {
+        # The requested package glob remains meaningful when a later module
+        # assigns an anonymous CODE ref: `__name` then identifies that actual
+        # CV while this field binds it to the native helper call site.
+        my $fact = code_source_fact($bindings{$key}, $lib_abs);
+        $fact->{requested_binding} = $bindings{$key};
+        $fact->{lexical_hashes} = native_helper_lexical_hashes($bindings{$key}, $lib_abs);
+        $facts{$key} = $fact;
+    }
+    return \%facts;
+}
+
 sub dump_tag_entry {
     my ($entry) = @_;
     my $r = ref $entry;
@@ -915,6 +1002,12 @@ for my $full_name (sort keys %write_tables) {
     $native_write_tables{$entry->{module}}{$entry->{table}} = $fact;
 }
 
+# Hydration above may load Writer.pl.  Snapshot the helper package bindings
+# only now, after all selected modules and any permitted writer autoloads have
+# settled.  This does not alter the read projection or route a native writer.
+my $write_helper_status = hydrate_write_helpers();
+my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+
 # The child captures byte-order state without changing this table-walking
 # process. These facts prove that the final loaded CODE refs are the same ones
 # the child observed; a later module override makes the contract unresolved.
@@ -939,6 +1032,7 @@ print $json->encode({
     # admission or changing the existing module/table/tag projection.
     native_write_autoload => $write_autoload_router_status,
     native_write_tables => \%native_write_tables,
+    native_write_helpers => $native_write_helpers,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
 });

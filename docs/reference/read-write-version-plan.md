@@ -158,5 +158,29 @@ that resolve to the same source commit during selection and verification.
 All 57 affected Python tests pass. An independent binding-only mutation changes
 the rendered candidate, and that rendered Rust compiles. The saved 11.78/12.64
 plan still verifies without reselection. No runtime Rust or canonical generated
-artifact changed after the full gate above. Ready PR #761 is awaiting hosted
-checks on the final source head.
+artifact changed after the full gate above. PR #761 subsequently passed all five required hosted checks at `675a736e`
+and squash-merged as `bd71e392` at 01:14:17 UTC on September 14
+(20:14:17 CDT on September 13).
+
+## Native readiness checkpoint, September 13
+
+The rehearsal CLI can verify a selected materialized release, its explicit
+Perl interpreter and required native capability, then read and set/delete
+metadata on private fixture copies. Reports bind commands and results to the
+verified archive/source tree, disable ambient user configuration, and publish
+without replacing an existing report,
+including a concurrent publisher. File-move/link pseudo-tags require a separate
+containment contract; they are not metadata cases in this readiness instrument.
+
+The portable command-line tests create their own archived source fixtures and
+controlled executable stand-in. They exercise read/set/delete success, wrong
+version, changed plan/source, missing fixtures, filesystem-action refusal and
+report publication races without private paths or conditional skips. These
+tests establish the instrument's behavior, not ExifTool compatibility.
+
+The persisted random pair, 11.78 and 12.64, has also passed actual native CLI
+readiness for JPEG FileType and Comment set/delete, including UTF-8 input.
+This does not establish OxiDex/native conformance. Generating and building
+OxiDex for both versions, comparing both readers and writers with their own
+native release, and accounting for unsupported behavior remain the next
+rehearsal steps. A ready native oracle must never mark those steps passed.
