@@ -139,6 +139,14 @@ else:
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
         dump(args[0]);output(flag('-o'),'composite');output(flag('--generated-out'),'composite-compute')
+    elif name=='quicktime_generated_specs.py':
+        # This producer intentionally owns fixed manifest paths rather than
+        # accepting output flags.  Its fresh dump is still part of the tier-1
+        # source-selection contract, and both artifacts must be declared.
+        assert args == ['--dump', str(pathlib.Path(args[1]).resolve()), '--replace']
+        dump(flag('--dump'))
+        for item in artifacts.select(producer='quicktime_generated_specs'):
+            output(root/item.path,name)
     elif name=='codegen_subdirs.py':
         dump(args[0]);output(flag('-o'),name)
         if 'Pentax' in args: flag('-o').write_text('const PENTAX_CONV6: &[(i64, &str)] = &[\n];\n')
@@ -298,6 +306,10 @@ class RegenerationShellTests(unittest.TestCase):
                 names = [c['tool'] for c in calls]
                 for name in self.extra_leaves():
                     self.assertEqual(names.count(name), 1, names)
+                # QuickTime owns fixed manifest paths, so it runs only with
+                # tier 1's complete writer dump and not in the reader-only
+                # tier-2 refresh.
+                self.assertEqual(names.count('quicktime_generated_specs.py'), int(full), names)
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
                 self.assertEqual(names.count('serial_directory.py'), int(full))
                 self.assertEqual(names.count('scalar_helper_codegen.py'), int(full))
@@ -337,9 +349,11 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('mandatory_defaults_codegen.py'), names.index('rustfmt'))
                     self.assertLess(names.index('capture_raw_jfif_fact.pl'), names.index('raw_jfif_codegen.py'))
                     self.assertLess(names.index('raw_jfif_codegen.py'), names.index('rustfmt'))
-                    self.assertLess(names.index('final_scalar_stage.py'), names.index('setnewvalue_addressing.py'))
+                    # Address operands are a source-only prebuild for the
+                    # expression oracle and must precede conversion stages.
                     self.assertLess(names.index('setnewvalue_addressing.py'), names.index('setnewvalue_address_probe.pl'))
                     self.assertLess(names.index('setnewvalue_address_probe.pl'), names.index('setnewvalue_address_rust_codegen.py'))
+                    self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('final_scalar_stage.py'))
                     self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('setnewvalue_public_migration_ledger.py'))
                     self.assertLess(names.index('setnewvalue_public_migration_ledger.py'), names.index('rustfmt'))
                     self.assertLess(names.index('fresh_jpeg_byte_order_native.py'), names.index('fresh_jpeg_byte_order_codegen.py'))
@@ -419,6 +433,15 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(calls[-1]['tool'], leaf)
                 self.assertIn('injected leaf failure: ' + leaf, result.stderr)
                 self.assertNotIn('>> done:', result.stdout)
+
+    def test_quicktime_fixed_path_producer_failure_survives_exit_guard(self):
+        result, calls = self.run_regeneration(
+            full=True, env={'CONTROL_FAIL': 'quicktime_generated_specs.py'}
+        )
+        self.assertEqual(result.returncode, 47, result.stdout + result.stderr)
+        self.assertEqual(calls[-1]['tool'], 'quicktime_generated_specs.py')
+        self.assertIn('injected leaf failure: quicktime_generated_specs.py', result.stderr)
+        self.assertNotIn('>> done:', result.stdout)
 
     def test_undeclared_writes_refuse_on_success_and_on_leaf_failure(self):
         for fail in (False, True):
