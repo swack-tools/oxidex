@@ -85,6 +85,35 @@ def encrypted_callback(data, decrypt_body="canonical decrypt body"):
 
 
 class NikonEncryptedGeneratorTests(unittest.TestCase):
+    def test_full_hydration_callback_contract_pins_complete_closure(self):
+        """Canonical Perl 5.38.2 B::Deparse form remains a closed contract."""
+        callback = (
+            "Image::ExifTool::Nikon::ProcessNikonEncrypted",
+            "4814b522c2940b28240fc0fbcaa6d22e43619d3e604c3d7a65de4b61513c467e",
+        )
+        self.assertIn(callback, generator.CODE)
+        contract = generator.NIKON_ENCRYPTED_CALLBACKS[callback]
+        self.assertEqual(contract["source_file"], "Image/ExifTool/Nikon.pm")
+        self.assertEqual(contract["dependencies"], {
+            "Image::ExifTool::Nikon::Decrypt": {
+                "body_sha256": "5ecb54a37173daf492800e65c341309ce78d56ed7483f6c9efed7bdc4d7e949b",
+                "source_file": "Image/ExifTool/Nikon.pm",
+            },
+            "Image::ExifTool::Nikon::InitEncryptedSubdir": {
+                "body_sha256": "56a3cc34bff49394ce5d9e531d762bba5594d6df741150a253f849d8e6415c5e",
+                "source_file": "Image/ExifTool/Nikon.pm",
+            },
+            "Image::ExifTool::Nikon::PrepareNikonOffsets": {
+                "body_sha256": "0451602b9206b6f48dfce8f69640edba38ef1b51322d6b4fe54b2c7761f79153",
+                "source_file": "Image/ExifTool/Nikon.pm",
+            },
+            "Image::ExifTool::Nikon::SetByteOrder": {
+                "name": "Image::ExifTool::SetByteOrder",
+                "body_sha256": "b09a10c46f0800e2a2d1bc8cde1269fa205300e62f0d5bf7358d6a57ac2c8d4d",
+                "source_file": "Image/ExifTool.pm",
+            },
+        })
+
     def test_map_insertion_order_does_not_change_generated_output(self):
         first = fixture()
         second = fixture()
@@ -225,6 +254,20 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
         row["_extra_keys"] = ["NewExecutableField"]
         with self.assertRaisesRegex(generator.Unsupported, "unrecognized dumped fields"):
             generator.render(data)
+
+    def test_printconv_columns_is_validated_presentation_only_metadata(self):
+        data = fixture()
+        row = data["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]
+        baseline, _ = generator.render(data)
+        row["PrintConvColumns"] = 2
+        rendered, _ = generator.render(data)
+        self.assertEqual(rendered, baseline)
+        for invalid in (0, -1, True, "2"):
+            with self.subTest(invalid=invalid):
+                changed = copy.deepcopy(data)
+                changed["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["PrintConvColumns"] = invalid
+                with self.assertRaisesRegex(generator.Unsupported, "invalid PrintConvColumns"):
+                    generator.render(changed)
 
     def test_rust_string_escaping_preserves_literal_backslash_sequences(self):
         self.assertEqual(generator.rs(r"a\nb\tc\rd"), r'"a\\nb\\tc\\rd"')
