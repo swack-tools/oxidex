@@ -68,6 +68,16 @@ not certify other releases or behaviors.
    and semantic inventory. Random tests are a discovery tool; they cannot
    certify untested versions or behaviors.
 
+Current writer checkpoint: PRs #761–#764 have merged the source-fact foundation,
+readiness tooling, inactive scalar helper compiler/runtime and CheckExif
+composition. The latest merge is #764 at `8988302c`, with all five required
+hosted checks passing at `56fba56e`. Step 3 remains incomplete: input
+normalization, inverse conversion controls, charset/count handling, physical
+operation integration and manual lookup retirement still need complete native
+file proof. See the [input pipeline](writer-input-pipeline.md) for that order.
+These helper merges do not count as a complete generated writer or as a
+successful full upgrade rehearsal.
+
 ## Reproducible random version rehearsals
 
 Snapshot the actual official release tags with immutable commit/archive

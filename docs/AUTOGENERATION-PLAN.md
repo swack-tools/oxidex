@@ -28,11 +28,14 @@ required write path; native writable tags need a separately verified one. The
 behavior or untested versions. The [read/write and version execution plan](reference/read-write-version-plan.md)
 records the expanded finish line, first writer pilot and periodic release tests.
 
-The current implementation batches primarily migrate reading. Completing those
-batches does not establish generated write support. Shared source definitions
-must account for both directions now, while reader and writer execution are
-migrated and verified separately. Write-side inventory and costing are in
-progress; the earlier reading estimate is not a full read/write estimate.
+The current batches build the generated writer pipeline after the Canon reader
+retirement. PRs #761–#764 have merged source capture, version-readiness tooling,
+scalar validation/serialization and table-checker composition. These helpers
+remain inactive in public writing. The next measurable outcome is a complete
+generated JPEG/TIFF operation that handles Unicode, byte counts and deletion,
+preserves unrelated content and replaces its manual tag lookup. Shared source
+definitions account for both directions; reading and writing are verified
+separately. The earlier reading estimate is not a full read/write estimate.
 
 We are finished when all tag-specific rules in that target come
 from that source, the required behavior works, the replaced manual rules are

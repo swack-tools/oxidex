@@ -767,6 +767,7 @@ sub native_write_helper_facts {
     my %bindings = (
         write_value => 'Image::ExifTool::WriteValue',
         check_value => 'Image::ExifTool::CheckValue',
+        sanitize => 'Image::ExifTool::Sanitize',
     );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';
@@ -786,6 +787,20 @@ sub native_write_helper_facts {
         my $fact = code_source_fact($bindings{$key}, $lib_abs);
         $fact->{requested_binding} = $bindings{$key};
         $fact->{lexical_hashes} = native_helper_lexical_hashes($bindings{$key}, $lib_abs);
+        # A callback installed by reference (for example a warning handler)
+        # is not a direct call. Keep its final binding as separate evidence;
+        # consumers must still parse the assignment and its control flow.
+        # Missing callback evidence must not masquerade as an empty call set.
+        my %references;
+        my $body = $fact->{__deparse} // '';
+        my $package = $fact->{__name} // $bindings{$key};
+        $package =~ s/::[A-Za-z_]\w*$//;
+        while ($body =~ /\\&((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)/g) {
+            my $name = $1;
+            $name = "${package}::$name" unless $name =~ /::/;
+            $references{$name} = code_source_fact($name, $lib_abs);
+        }
+        $fact->{callback_references} = \%references;
         $facts{$key} = $fact;
     }
     return \%facts;

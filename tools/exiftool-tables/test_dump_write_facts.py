@@ -15,6 +15,7 @@ import textwrap
 import unittest
 
 import write_descriptors
+from sanitize_recipes import _CANONICAL as SANITIZE_BODY, compile_sanitize
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -113,13 +114,15 @@ class NativeWriteFacts(unittest.TestCase):
         """), encoding="utf-8")
 
     def write_writer_helpers(self, *, write_body="return Image::ExifTool::WriterHelper($_[0]);",
-                             check_body="return Image::ExifTool::CheckHelper($_[0]);"):
+                             check_body="return Image::ExifTool::CheckHelper($_[0]);",
+                             sanitize_body="return Encode::encode('utf8', $_[1]);"):
         self.writer_helpers.write_text(textwrap.dedent(f"""\
             package Image::ExifTool;
             sub WriterHelper($) {{ return $_[0]; }}
             sub CheckHelper($) {{ return $_[0]; }}
             sub WriteValue($$) {{ {write_body} }}
             sub CheckValue($$) {{ {check_body} }}
+            sub Sanitize($$) {{ {sanitize_body} }}
             1;
         """), encoding="utf-8")
 
@@ -230,6 +233,85 @@ class NativeWriteFacts(unittest.TestCase):
                 self.assertIn(dependency, fact["dependencies"])
                 self.assertTrue(fact["dependencies"][dependency]["resolved"])
 
+    def test_sanitize_keeps_source_and_unresolved_external_dependency(self):
+        fact = self.dump()["native_write_helpers"]["sanitize"]
+        self.assertTrue(fact["resolved"])
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::Sanitize")
+        self.assertEqual(fact["source_file"], "Image/ExifTool/Writer.pl")
+        self.assertEqual(fact["source_sha256"],
+                         hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+        # Encode is supplied by Perl, outside the selected ExifTool library.
+        # Retain that unresolved dependency rather than inventing its source
+        # or turning a captured helper body into executable admission.
+        dependency = fact["dependencies"]["Encode::encode"]
+        self.assertFalse(dependency["resolved"])
+        self.assertIsNone(dependency["source_sha256"])
+        self.assertIn(dependency["reason"], {
+            "source_file_unreadable", "source_outside_selected_lib",
+            "deparse_unavailable",
+        })
+
+    def test_sanitize_source_change_preserves_read_projection(self):
+        before = self.dump()
+        self.write_writer_helpers(sanitize_body="return Encode::encode('UTF-16', $_[1]);")
+        after = self.dump()
+        self.assertEqual(before["modules"], after["modules"])
+        old = before["native_write_helpers"]["sanitize"]
+        new = after["native_write_helpers"]["sanitize"]
+        self.assertNotEqual(old["__deparse"], new["__deparse"])
+        self.assertNotEqual(old["source_sha256"], new["source_sha256"])
+        self.assertIn("UTF-16", new["__deparse"])
+
+    def test_sanitize_rebinding_records_actual_callable(self):
+        self.write_writer("return 1;", extra=textwrap.dedent("""\
+            package Image::ExifTool;
+            no warnings 'redefine';
+            *Image::ExifTool::Sanitize = sub($$) { return 'replacement'; };
+        """))
+        fact = self.dump()["native_write_helpers"]["sanitize"]
+        self.assertEqual(fact["requested_binding"], "Image::ExifTool::Sanitize")
+        self.assertNotEqual(fact["__name"], fact["requested_binding"])
+        self.assertEqual(fact["source_file"], "Image/ExifTool/WriteExif.pl")
+        self.assertIn("replacement", fact["__deparse"])
+
+    def test_sanitize_callback_reference_tracks_final_binding(self):
+        self.write_writer_helpers(sanitize_body=(
+            r"local $SIG{'__WARN__'} = \&Image::ExifTool::WarningHandler; return $_[1];"))
+        before = self.dump()["native_write_helpers"]["sanitize"]
+        name = "Image::ExifTool::WarningHandler"
+        self.assertFalse(before["callback_references"][name]["resolved"])
+        self.write_later("return 'late';", extra=textwrap.dedent("""\
+            package Image::ExifTool;
+            sub WarningHandler { return 'loaded callback'; }
+        """))
+        after = self.dump()["native_write_helpers"]["sanitize"]
+        reference = after["callback_references"][name]
+        self.assertTrue(reference["resolved"])
+        self.assertEqual(reference["source_file"], "Image/ExifTool/Later.pm")
+        self.assertEqual(reference["source_sha256"],
+                         hashlib.sha256(self.later.read_bytes()).hexdigest())
+        self.assertIn("loaded callback", reference["__deparse"])
+
+    def test_official_capture_compiles_source_changed_sanitize_guards(self):
+        # Real Perl loads and B::Deparse captures this synthetic helper through
+        # the production dumper. This tests the capture/compiler join, not a
+        # claim about native ExifTool or a generated runtime.
+        # Deparse inserts a do block inside eval; remove that rendering layer
+        # when using its text as fixture source, rather than weakening parsing.
+        source = SANITIZE_BODY.replace("eval {\ndo {", "eval {").replace(
+            "Encode::is_utf8($$valPt)\n}\n}", "Encode::is_utf8($$valPt)\n}")
+        for guard, expected in (("5.006", 5_006_000), ("10.006", 10_006_000)):
+            self.writer_helpers.write_text(
+                "package Image::ExifTool;\nsub Sanitize" +
+                source.replace("5.006", guard) + "\n1;\n",
+                encoding="utf-8")
+            fact = self.dump()["native_write_helpers"]["sanitize"]
+            recipe = compile_sanitize(fact)
+            self.assertEqual(recipe.downgrade_at_or_after, expected)
+            self.assertEqual(recipe.provenance.source_sha256,
+                             hashlib.sha256(self.writer_helpers.read_bytes()).hexdigest())
+            self.assertIn("Image::ExifTool::SetWarning", recipe.callback_references)
+
     def test_helper_rebinding_and_body_mutation_are_captured_after_writer_autoload(self):
         before = self.dump()
         self.write_writer("return 1;", extra=textwrap.dedent("""\
@@ -270,6 +352,10 @@ class NativeWriteFacts(unittest.TestCase):
         self.assertEqual(missing["requested_binding"], "Image::ExifTool::CheckValue")
         self.assertEqual(missing["reason"], "code_ref_unavailable")
         self.assertFalse(missing["lexical_hashes"]["resolved"])
+        missing_sanitize = doc["native_write_helpers"]["sanitize"]
+        self.assertFalse(missing_sanitize["resolved"])
+        self.assertEqual(missing_sanitize["requested_binding"], "Image::ExifTool::Sanitize")
+        self.assertEqual(missing_sanitize["reason"], "code_ref_unavailable")
         self.assertIn("Exif", doc["modules"])
 
     def test_loaded_lexical_dispatch_changes_without_changing_helper_body(self):
@@ -341,7 +427,8 @@ class NativeWriteFacts(unittest.TestCase):
             self.assertEqual(
                 fact["requested_binding"],
                 {"write_value": "Image::ExifTool::WriteValue",
-                 "check_value": "Image::ExifTool::CheckValue"}[key],
+                 "check_value": "Image::ExifTool::CheckValue",
+                 "sanitize": "Image::ExifTool::Sanitize"}[key],
             )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):

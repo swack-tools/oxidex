@@ -54,12 +54,18 @@ Evidence relative to the continuation evidence root:
 The cases, trace program, canonical and changed JSON, source copy, state record
 and failed-loader-order log are preserved there.
 
+## Validation composition is merged
+
+PR #764 merged as `8988302c` after all five required hosted checks passed at
+`56fba56e`. Its source-derived CheckExif recipe composes the actual generated
+CheckValue recipe. The direct native/generated instrument covers 19 cases
+across canonical source and three source mutations, for 76 matching outcomes.
+The same helper comparison separately passed for selected releases 11.78 and
+12.64. This is helper proof; neither full version conformance nor public file
+writing is established by it.
+
 ## Next acceptance requirements
 
-- Compile and execute CheckExif with the exact generated CheckValue rule,
-  including source-order changes, falsey properties, numeric/byte format
-  coercion and missing-format behavior. A local-variable alias that changes
-  native control flow must refuse admission.
 - Translate input normalization and prove its relationship to inverse
   conversions and validation. Preserve default UTF-8, embedded NUL, defined
   empty values and deletion. Unsupported option/dependency behavior remains
@@ -70,6 +76,21 @@ and failed-loader-order log are preserved there.
 - Change supported native name, type, placement and processing behavior in a
   copied source; regeneration must change actual output without per-tag code
   edits. Retire the replaced manual tag lookup only after this proof.
+
+Input normalization needs both direct dependencies and callback references.
+Sanitize assigns SetWarning by CODE reference; searching only for calls misses
+that binding. Its Encode functions also belong to the interpreter library,
+outside the selected ExifTool library. Preserve those observations explicitly.
+Capturing the source body or parsing its guards is not executable admission.
+
+The shared Rust UTF-8 primitive may implement standard encoding, just as shared
+operations implement pack/unpack. The ExifTool source must still choose the
+encoding literal, input flags, guards, options and call order. Before admitting
+that path, compare controlled pristine and final-loaded native bindings,
+encoding registry and resolved method, and check typed Unicode/NUL/byte
+semantics. Replaced bindings or registry entries must refuse. Raw interpreter
+and library hashes remain evidence; source-to-XS binary linkage is not claimed.
+Unsupported manual packing and XML/HTML paths remain work to complete.
 
 There is no new production writer or manual-rule retirement to count at this
 checkpoint. Helper proof, complete file behavior and release conformance remain
