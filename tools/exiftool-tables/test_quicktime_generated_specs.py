@@ -122,6 +122,16 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertEqual(result["protocol"]["reason"],
                          "missing_or_changed_reader_protocol:string_encoding")
 
+    def test_changed_loaded_shift_jis_map_refuses_all_itemlist_rows(self):
+        document = snapshot()
+        document["quicktime_itemlist_reader_protocol"]["charset_maps"]["ShiftJIS"]["map_sha256"] = "0" * 64
+
+        result = specs.compile_document(document)
+
+        self.assertEqual(result["specs"], [])
+        self.assertEqual(result["protocol"]["reason"],
+                         "missing_or_changed_reader_protocol:charset_map:ShiftJIS")
+
     def test_reader_dependency_source_hash_is_provenance_not_eligibility(self):
         document = snapshot()
         document["quicktime_itemlist_reader_protocol"]["dependencies"]["read_value"]["source_sha256"] = "0" * 64

@@ -266,8 +266,48 @@ sub validate_function_fact {
 # just ProcessMOV's body: the processor selects QuickTimeFormat and ReadValue,
 # direct text flags read this package's stringEncoding lookup, and Decode
 # delegates character-set conversion to Charset.  Capture each effective
-# binding after module hydration so a generator can refuse a changed helper
-# without treating an unrelated edit anywhere in QuickTime.pm as eligibility.
+# binding and the loaded conversion data after hydration so a generator can
+# refuse a changed helper or map without treating an unrelated edit anywhere
+# in QuickTime.pm as eligibility.
+sub quicktime_charset_map_fact {
+    my ($charset, $lib_abs) = @_;
+    no strict 'refs';
+    my $map = eval { Image::ExifTool::Charset::LoadCharset($charset) };
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'load_charset_failed' }
+        unless ref($map) eq 'HASH';
+
+    my $inc_key = 'Image/ExifTool/Charset/' . $charset . '.pm';
+    my $file = $INC{$inc_key};
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_module_not_loaded' }
+        unless defined $file && length $file;
+    my $abs = abs_path($file);
+    my $prefix = $lib_abs . '/';
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_source_outside_selected_lib' }
+        unless defined $abs && -f $abs && index($abs, $prefix) == 0;
+    open(my $fh, '<:raw', $abs) or return {
+        charset => $charset, resolved => JSON::PP::false,
+        reason => 'charset_source_unreadable',
+    };
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return { charset => $charset, resolved => JSON::PP::false,
+                            reason => 'charset_source_unreadable' };
+    my $canonical = eval { JSON::PP->new->canonical->utf8->encode($map) };
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_map_not_canonicalizable' }
+        unless defined $canonical;
+    return {
+        charset => $charset,
+        resolved => JSON::PP::true,
+        source_file => File::Spec->abs2rel($abs, $lib_abs),
+        source_sha256 => sha256_hex($bytes),
+        map_sha256 => sha256_hex($canonical),
+    };
+}
+
 sub quicktime_itemlist_reader_protocol_fact {
     my ($lib_abs) = @_;
     no strict 'refs';
@@ -279,10 +319,26 @@ sub quicktime_itemlist_reader_protocol_fact {
     # helper bodies are nevertheless part of the behavior ItemList delegates
     # to, so hydrate this narrow dependency before recording final bindings.
     my $charset_loaded = eval { require Image::ExifTool::Charset; 1 } ? JSON::PP::true : JSON::PP::false;
+    my %charset_types;
+    my %charset_maps;
+    if ($charset_loaded) {
+        my %reachable = map { $_ => 1 } values %string_encoding;
+        # Decode converts into ExifTool's UTF8-facing string representation;
+        # retain it even if a future source map no longer mentions it directly.
+        $reachable{UTF8} = 1;
+        for my $charset (sort keys %reachable) {
+            $charset_types{$charset} = $Image::ExifTool::Charset::csType{$charset};
+            if (defined($charset_types{$charset}) && ($charset_types{$charset} & 1)) {
+                $charset_maps{$charset} = quicktime_charset_map_fact($charset, $lib_abs);
+            }
+        }
+    }
     return {
-        kind => 'quicktime_itemlist_reader_protocol_v1',
+        kind => 'quicktime_itemlist_reader_protocol_v2',
         string_encoding => \%string_encoding,
         charset_loaded => $charset_loaded,
+        charset_types => \%charset_types,
+        charset_maps => \%charset_maps,
         dependencies => {
             quicktime_format => code_source_fact(
                 'Image::ExifTool::QuickTime::QuickTimeFormat', $lib_abs, undef, undef, 0),
@@ -292,6 +348,8 @@ sub quicktime_itemlist_reader_protocol_fact {
                 'Image::ExifTool::Decode', $lib_abs, undef, undef, 0),
             charset_decompose => code_source_fact(
                 'Image::ExifTool::Charset::Decompose', $lib_abs, undef, undef, 0),
+            charset_load => code_source_fact(
+                'Image::ExifTool::Charset::LoadCharset', $lib_abs, undef, undef, 0),
             charset_recompose => code_source_fact(
                 'Image::ExifTool::Charset::Recompose', $lib_abs, undef, undef, 0),
         },

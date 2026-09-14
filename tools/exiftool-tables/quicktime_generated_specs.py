@@ -27,13 +27,26 @@ EXPECTED_PROCESSOR_DEPARSE_SHA256 = "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be
 EXPECTED_TABLE_CONTRACT = {"FORMAT": "string", "GROUPS.0": "QuickTime", "GROUPS.1": "ItemList",
                            "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo"}
 EXPECTED_READER_PROTOCOL = {
-    "kind": "quicktime_itemlist_reader_protocol_v1",
+    "kind": "quicktime_itemlist_reader_protocol_v2",
     "string_encoding": {"1": "UTF8", "2": "UTF16", "3": "ShiftJIS", "4": "UTF8", "5": "UTF16"},
+    "charset_types": {"ShiftJIS": 0x883, "UTF16": 0x200, "UTF8": 0x100},
+    # This binds the effective, loaded ShiftJIS table, not merely its loader
+    # name or Charset.pm's function bodies.  A mapping-only upstream change
+    # must refuse generation until the reader contract is reviewed.
+    "charset_maps": {
+        "ShiftJIS": {
+            "charset": "ShiftJIS",
+            "source_file": "Image/ExifTool/Charset/ShiftJIS.pm",
+            "source_sha256": "757bc7e41b0b9f8db6ac31c4e9cb99964dda73a84ec9e10c9f63ac5990502001",
+            "map_sha256": "819f6b328c761d1369cc79d458a2c68ebdc0cf04064f3238446216e03f5934dc",
+        },
+    },
     "dependencies": {
         "quicktime_format": ("Image::ExifTool::QuickTime::QuickTimeFormat", "c29829e95ea7df45de2cde0527d51d953583c9c73b26c52931f4bb91b2223883"),
         "read_value": ("Image::ExifTool::ReadValue", "91213f64302774d00eb5fadd4835ca3fbcad3607c70eec98afd89d3423f0ad29"),
         "decode": ("Image::ExifTool::Decode", "8ce89a36fea0f6ce930188e0b11d1846c9fbdb4538ec1f64e51bb24c649bd0e5"),
         "charset_decompose": ("Image::ExifTool::Charset::Decompose", "f07e59a85a207c3895a3e39ec7aa06a1f682199f303e7dbe62217998d66b77e2"),
+        "charset_load": ("Image::ExifTool::Charset::LoadCharset", "68b4cb0042008c2e41a92077adcf5da02b0f95cf2ea717b09fa8dcef88c18e98"),
         "charset_recompose": ("Image::ExifTool::Charset::Recompose", "ea4fbd153500dbe5735c2de7350e79f6779b85918fa9d8b27251ba2043551cef"),
     },
 }
@@ -79,6 +92,17 @@ def reader_protocol_reason(document):
         return "missing_or_changed_reader_protocol:string_encoding"
     if protocol.get("charset_loaded") is not True:
         return "missing_or_changed_reader_protocol:charset_load"
+    if protocol.get("charset_types") != EXPECTED_READER_PROTOCOL["charset_types"]:
+        return "missing_or_changed_reader_protocol:charset_types"
+    maps = protocol.get("charset_maps")
+    if not isinstance(maps, dict):
+        return "missing_or_changed_reader_protocol:charset_maps"
+    for charset, expected in EXPECTED_READER_PROTOCOL["charset_maps"].items():
+        actual = maps.get(charset)
+        if not isinstance(actual, dict) or actual.get("resolved") is not True:
+            return f"missing_or_changed_reader_protocol:charset_map:{charset}"
+        if any(actual.get(key) != value for key, value in expected.items()):
+            return f"missing_or_changed_reader_protocol:charset_map:{charset}"
     dependencies = protocol.get("dependencies")
     if not isinstance(dependencies, dict):
         return "missing_or_changed_reader_protocol:dependencies"

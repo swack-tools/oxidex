@@ -76,11 +76,11 @@
       "source_commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
       "source_fact_refresh": {
         "captured_dump_tool_sha256": "976d227873ed625baa3bafec03c486694246cae6eb4009ac32041559b82ff533",
-        "dump_tool_sha256": "f2bde9733e2ea2079a838fca22a883070a5ab60309612cc96b80181b0f054df6",
+        "dump_tool_sha256": "2f51424cb05d0d5f4e97d71b01f9529fbe11bcb4cbd97e0ab70b0dabc033cae2",
         "exiftool_version": "13.59",
         "kind": "quicktime_itemlist_reader_protocol_from_canonical_perl",
         "perl_version": "5.34.1",
-        "protocol_sha256": "036b8764671f9b2e3144463777c7451a5298d7943799c891e34d4d63e512557e"
+        "protocol_sha256": "c9081e38cf9ea34309bf34b58f6a0cbe1478b165f42cd1fb68199bca809f22c1"
       },
       "source_module_table_count": 87,
       "tables": [
@@ -89,7 +89,7 @@
         "QuickTime::Keys"
       ]
     },
-    "dump_sha256": "3f9efc3dbe4b7d26a51533c2f70c16b1507fd7898babcc505fe0b43803a2d085",
+    "dump_sha256": "647bd906aeae340db6a0a92a11878814357172d6d61a06bc9a09c433ba79c9fe",
     "selector_sha256": "ad1ceb95998306cb8668b7e344ec2b603ecf73e4774076521a7a022ff7a55f68"
   }
 }
