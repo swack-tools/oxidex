@@ -57,6 +57,9 @@ my @cleanup_contexts = $source =~ /(
         \})/sg;
 die "mandatory cleanup source fragment is absent or ambiguous\n" unless @cleanup_contexts == 1;
 my $cleanup_context = $cleanup_contexts[0];
+my @classifier_contexts = $source =~ /(while \(defined \$allMandatory\) \{.*?^        if \(%validateInfo\) \{)/smg;
+die "mandatory classifier source fragment is absent or ambiguous\n" unless @classifier_contexts == 1;
+my $classifier_context = $classifier_contexts[0];
 my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
 die "WriteExif pad is unavailable\n" unless @pad >= 2;
 my @names = $pad[0]->ARRAY;
@@ -115,6 +118,8 @@ die "WriteExif source is absent from selected module closure\n"
 print JSON::PP->new->utf8->canonical->pretty->encode({
     schema => 1,
     kind => 'oxidex_exif_mandatory_defaults_fact',
+    writer_deparse => $deparse,
+    writer_deparse_sha256 => sha256_hex($deparse),
     writer => {
         requested_binding => 'Image::ExifTool::Exif::WriteExif',
         actual_name => $actual_name,
@@ -137,4 +142,6 @@ print JSON::PP->new->utf8->canonical->pretty->encode({
     new_directory_context_deparse => $context,
     mandatory_cleanup_source => $cleanup_context,
     mandatory_cleanup_source_sha256 => sha256_hex($cleanup_context),
+    mandatory_classifier_source => $classifier_context,
+    mandatory_classifier_source_sha256 => sha256_hex($classifier_context),
 });

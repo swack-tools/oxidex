@@ -2,9 +2,10 @@
 //!
 //! Run with: `cargo bench --features magika --bench detection_comparison`
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use oxidex::core::operations::read_metadata_with_detector;
 use oxidex::parsers::DetectorMode;
+use std::hint::black_box;
 use std::path::Path;
 
 /// Benchmark file format detection on a JPEG file

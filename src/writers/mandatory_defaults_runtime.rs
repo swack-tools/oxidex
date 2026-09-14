@@ -40,9 +40,18 @@ pub(crate) struct DefaultEncoding {
     pub tiff_type: u16,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SurvivorEncoding {
+    pub format_name: &'static str,
+    pub tiff_type: u16,
+    pub width: u8,
+    pub operation: &'static str,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MandatoryRecipe {
     pub writer_source_file: &'static str,
     pub writer_source_sha256: &'static str,
+    pub core_source_sha256: &'static str,
+    pub exif_source_sha256: &'static str,
     pub write_value_source_sha256: &'static str,
     pub perl_version: &'static str,
     pub no_mandatory_guard: bool,
@@ -51,6 +60,7 @@ pub(crate) struct MandatoryRecipe {
     pub jfif_probe: &'static str,
     pub jfif_assignments: &'static [JfifAssignment],
     pub encodings: &'static [DefaultEncoding],
+    pub survivor_encodings: &'static [SurvivorEncoding],
     pub cleanup: MandatoryCleanup,
 }
 
@@ -83,6 +93,137 @@ pub(crate) struct EncodedMandatoryDefault {
     pub tiff_type: u16,
     pub count: u32,
     pub bytes: Vec<u8>,
+}
+
+/// Reproduce WriteExif's mandatory comparison for a surviving physical entry.
+/// WriteExif uses that entry's selected format and count, so this deliberately
+/// does not reuse the fixed new-directory encoding. A native packing failure
+/// means "not mandatory", so the caller retains IFD1 and still completes the
+/// selected deletion.
+pub(crate) fn matches_existing_mandatory_value(
+    recipe: &MandatoryRecipe,
+    default: MandatoryDefault,
+    field_type: u16,
+    count: u32,
+    bytes: &[u8],
+    byte_order: TiffByteOrder,
+) -> Result<bool, String> {
+    let scalar = match default.value {
+        MandatoryValue::Integer(value) => value.to_string(),
+        MandatoryValue::Text(value) => value.to_owned(),
+    };
+    let integer = match default.value {
+        MandatoryValue::Integer(value) => Some(value),
+        MandatoryValue::Text(_) => None,
+    };
+    let endian = |value: u32| match byte_order {
+        TiffByteOrder::Little => value.to_le_bytes().to_vec(),
+        TiffByteOrder::Big => value.to_be_bytes().to_vec(),
+    };
+    let signed = |value: i32| match byte_order {
+        TiffByteOrder::Little => value.to_le_bytes().to_vec(),
+        TiffByteOrder::Big => value.to_be_bytes().to_vec(),
+    };
+    if matches!(field_type, 1 | 3 | 4 | 6 | 8 | 9 | 11 | 12 | 5 | 10) && count != 1 {
+        return Ok(false);
+    }
+    let supported = recipe.survivor_encodings.iter().any(|encoding| {
+        encoding.tiff_type == field_type && encoding.operation == "write_value_scalar"
+    });
+    if !supported {
+        return Ok(false);
+    }
+    let expected = match field_type {
+        // DoPackStd/Set*s mirror Perl pack and retain the low bits rather
+        // than rejecting an out-of-range integral scalar.
+        1 => match integer {
+            Some(value) => vec![value as u8],
+            None => return Ok(false),
+        },
+        3 => match integer {
+            Some(value) => match byte_order {
+                TiffByteOrder::Little => (value as u16).to_le_bytes().to_vec(),
+                TiffByteOrder::Big => (value as u16).to_be_bytes().to_vec(),
+            },
+            None => return Ok(false),
+        },
+        4 => match integer {
+            Some(value) => endian(value as u32),
+            None => return Ok(false),
+        },
+        6 => match integer {
+            Some(value) => vec![(value as i8) as u8],
+            None => return Ok(false),
+        },
+        8 => match integer {
+            Some(value) => match byte_order {
+                TiffByteOrder::Little => (value as i16).to_le_bytes().to_vec(),
+                TiffByteOrder::Big => (value as i16).to_be_bytes().to_vec(),
+            },
+            None => return Ok(false),
+        },
+        9 => match integer {
+            Some(value) => signed(value as i32),
+            None => return Ok(false),
+        },
+        11 => match integer {
+            Some(value) => match byte_order {
+                TiffByteOrder::Little => (value as f32).to_le_bytes().to_vec(),
+                TiffByteOrder::Big => (value as f32).to_be_bytes().to_vec(),
+            },
+            None => return Ok(false),
+        },
+        12 => match integer {
+            Some(value) => match byte_order {
+                TiffByteOrder::Little => (value as f64).to_le_bytes().to_vec(),
+                TiffByteOrder::Big => (value as f64).to_be_bytes().to_vec(),
+            },
+            None => return Ok(false),
+        },
+        5 => {
+            let Some(value) = integer.and_then(|value| u32::try_from(value).ok()) else {
+                return Ok(false);
+            };
+            match byte_order {
+                TiffByteOrder::Little => [value.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+                TiffByteOrder::Big => [value.to_be_bytes(), 1u32.to_be_bytes()].concat(),
+            }
+        }
+        10 => {
+            let Some(value) = integer.and_then(|value| i32::try_from(value).ok()) else {
+                return Ok(false);
+            };
+            match byte_order {
+                TiffByteOrder::Little => [value.to_le_bytes(), 1i32.to_le_bytes()].concat(),
+                TiffByteOrder::Big => [value.to_be_bytes(), 1i32.to_be_bytes()].concat(),
+            }
+        }
+        // Writer.pl:5415-5437. A zero count means infer the payload length;
+        // string truncation always reserves its final NUL byte.
+        2 => {
+            let mut out = scalar.into_bytes();
+            out.push(0);
+            if count > 0 {
+                if out.len() > count as usize {
+                    out.truncate(count as usize - 1);
+                    out.push(0);
+                } else {
+                    out.resize(count as usize, 0);
+                }
+            }
+            out
+        }
+        7 => {
+            let mut out = scalar.into_bytes();
+            if count > 0 {
+                out.resize(count as usize, 0);
+                out.truncate(count as usize);
+            }
+            out
+        }
+        _ => return Ok(false),
+    };
+    Ok(bytes == expected)
 }
 
 /// Construct the TIFF payload for a newly-created, IFD0-only EXIF block.
@@ -257,6 +398,142 @@ pub(crate) struct JfifValues {
 }
 fn refusal(reason: &str) -> String {
     format!("generated mandatory defaults refused: {reason}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const SURVIVORS: &[SurvivorEncoding] = &[
+        SurvivorEncoding {
+            format_name: "int16u",
+            tiff_type: 3,
+            width: 2,
+            operation: "write_value_scalar",
+        },
+        SurvivorEncoding {
+            format_name: "int32u",
+            tiff_type: 4,
+            width: 4,
+            operation: "write_value_scalar",
+        },
+        SurvivorEncoding {
+            format_name: "rational64u",
+            tiff_type: 5,
+            width: 8,
+            operation: "write_value_scalar",
+        },
+    ];
+    fn test_recipe() -> MandatoryRecipe {
+        MandatoryRecipe {
+            writer_source_file: "",
+            writer_source_sha256: "",
+            core_source_sha256: "",
+            exif_source_sha256: "",
+            write_value_source_sha256: "",
+            perl_version: "",
+            no_mandatory_guard: false,
+            directories: &[],
+            jfif_directory: "",
+            jfif_probe: "",
+            jfif_assignments: &[],
+            encodings: &[],
+            survivor_encodings: SURVIVORS,
+            cleanup: MandatoryCleanup {
+                all_mandatory: true,
+                no_next_ifd: true,
+                entry_count_shrinks_or_new: true,
+                omit_empty_ifd1: true,
+            },
+        }
+    }
+
+    #[test]
+    fn surviving_mandatory_integer_uses_the_physical_long_format() {
+        let default = MandatoryDefault {
+            tag_id: 77,
+            value: MandatoryValue::Integer(6),
+        };
+        assert!(matches_existing_mandatory_value(
+            &test_recipe(),
+            default,
+            4,
+            1,
+            &6u32.to_le_bytes(),
+            TiffByteOrder::Little,
+        )
+        .unwrap());
+        assert!(matches_existing_mandatory_value(
+            &test_recipe(),
+            default,
+            4,
+            1,
+            &6u32.to_be_bytes(),
+            TiffByteOrder::Big,
+        )
+        .unwrap());
+        assert!(!matches_existing_mandatory_value(
+            &test_recipe(),
+            default,
+            4,
+            1,
+            &7u32.to_be_bytes(),
+            TiffByteOrder::Big,
+        )
+        .unwrap());
+        // WriteValue splits the scalar input and cannot pack it twice, so it
+        // is not mandatory and the containing IFD remains.
+        assert!(matches_existing_mandatory_value(
+            &test_recipe(),
+            default,
+            4,
+            2,
+            &[0; 8],
+            TiffByteOrder::Little,
+        )
+        .is_ok_and(|matches| !matches));
+        // Pinned WriteValue helper capability artifact permits only the
+        // capture-validated int16u/int32u/rational64u physical forms.
+        for (field_type, bytes) in [
+            (3, 6u16.to_le_bytes().to_vec()),
+            (4, 6u32.to_le_bytes().to_vec()),
+            (5, [6u32.to_le_bytes(), 1u32.to_le_bytes()].concat()),
+        ] {
+            assert!(
+                matches_existing_mandatory_value(
+                    &test_recipe(),
+                    default,
+                    field_type,
+                    1,
+                    &bytes,
+                    TiffByteOrder::Little,
+                )
+                .unwrap(),
+                "type {field_type} count one"
+            );
+        }
+        // Positive multi-value numeric input is native undef, so it is a
+        // non-match and cannot turn a successful deletion into an error.
+        assert!(!matches_existing_mandatory_value(
+            &test_recipe(),
+            default,
+            4,
+            2,
+            &[0; 8],
+            TiffByteOrder::Little,
+        )
+        .unwrap());
+        // An unlisted physical form is not silently interpreted by an old
+        // conversion implementation.
+        assert!(!matches_existing_mandatory_value(
+            &test_recipe(),
+            default,
+            11,
+            1,
+            &6f32.to_le_bytes(),
+            TiffByteOrder::Little,
+        )
+        .unwrap());
+    }
 }
 /// Apply the captured new-directory branch. A caller must provide the already
 /// observed JFIF fields; this runtime does not discover tags or defaults.

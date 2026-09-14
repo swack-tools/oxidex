@@ -6,8 +6,8 @@
 use super::generated_scalar::Scalar;
 use super::generated_setnewvalue_address_rules::StaticSetNewValueAddress;
 use super::generated_setnewvalue_public_migration_rules::{
-    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
-    StaticPublicSetNewValueMigration as Migration,
+    StaticPublicSetNewValueMigration as Migration, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
+    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE,
 };
 use super::generated_write_address::{self, AddressRules, Resolution};
 use super::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest;
@@ -329,39 +329,76 @@ fn should_cleanup_mandatory_ifd1(
 /// Apply only the generated WriteExif mandatory-only predicate after a scalar
 /// deletion has shrunk IFD1. Tag IDs and encodings come from the capture.
 fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
-    use crate::writers::exif_surgical::{IfdKind, scan_exif_entries};
-    use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
     use crate::writers::{
         generated_mandatory_defaults::MANDATORY_DEFAULTS, mandatory_defaults_runtime as mandatory,
     };
+    mandatory_cleanup_capture_joins(&MANDATORY_DEFAULTS)?;
     mandatory::require_ifd1_mandatory_cleanup(&MANDATORY_DEFAULTS)
         .map_err(ExifToolError::unsupported_format)?;
-    let scan = scan_exif_entries(bytes)?;
-    let order = match scan.byte_order {
-        crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => mandatory::TiffByteOrder::Little,
-        crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
-    };
     let defaults = MANDATORY_DEFAULTS
         .directories
         .iter()
         .find(|d| d.directory == "IFD1")
         .ok_or_else(|| refused("captured mandatory IFD1 defaults missing"))?;
-    let encoded =
-        mandatory::encode_mandatory_defaults(&MANDATORY_DEFAULTS, defaults.defaults, order)
-            .map_err(ExifToolError::unsupported_format)?;
-    let edits: Vec<_> = encoded
-        .into_iter()
-        .map(|e| ScopedEntryEdit {
-            ifd: IfdKind::Ifd1,
-            tag_id: e.tag_id,
-            mutation: EntryMutation::Set {
-                field_type: e.tiff_type,
-                count: e.count,
-                bytes: e.bytes,
-            },
-        })
-        .collect();
-    super::tiff_surgical::entry_edits::remove_ifd1_if_only_mandatory(bytes, &edits, true)
+    let tag_ids = defaults
+        .defaults
+        .iter()
+        .map(|default| default.tag_id)
+        .collect::<Vec<_>>();
+    super::tiff_surgical::entry_edits::remove_ifd1_if_matching(
+        bytes,
+        &tag_ids,
+        true,
+        |tag_id, field_type, count, value, actual_order| {
+            let default = defaults
+                .defaults
+                .iter()
+                .find(|default| default.tag_id == tag_id)
+                .ok_or_else(|| {
+                    ExifToolError::unsupported_format("mandatory IFD1 tag is unbound")
+                })?;
+            let order = match actual_order {
+                crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => {
+                    mandatory::TiffByteOrder::Little
+                }
+                crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => {
+                    mandatory::TiffByteOrder::Big
+                }
+            };
+            mandatory::matches_existing_mandatory_value(
+                &MANDATORY_DEFAULTS,
+                *default,
+                field_type,
+                count,
+                value,
+                order,
+            )
+            .map_err(ExifToolError::unsupported_format)
+        },
+    )
+}
+
+fn mandatory_cleanup_capture_joins(
+    recipe: &crate::writers::mandatory_defaults_runtime::MandatoryRecipe,
+) -> Result<()> {
+    let address = super::generated_setnewvalue_address_rules::SET_NEW_VALUE_ADDRESS_CAPTURE
+        .ok_or_else(|| refused("selected address capture is absent"))?;
+    let migration = &PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE;
+    if recipe.writer_source_file != "Image/ExifTool/WriteExif.pl"
+        || recipe.writer_source_sha256 != address.write_exif_source_sha256
+        || recipe.writer_source_sha256 != migration.write_exif_source_sha256
+        || recipe.write_value_source_sha256 != address.writer_source_sha256
+        || recipe.write_value_source_sha256 != migration.writer_source_sha256
+        || recipe.core_source_sha256 != address.main_source_sha256
+        || recipe.core_source_sha256 != migration.main_source_sha256
+        || recipe.exif_source_sha256 != address.exif_source_sha256
+        || recipe.exif_source_sha256 != migration.exif_source_sha256
+    {
+        return Err(refused(
+            "mandatory cleanup source does not join selected writer capture",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -654,5 +691,18 @@ mod tests {
                     .any(|default| default.tag_id == entry.tag_id)
             }));
         }
+    }
+
+    #[test]
+    fn mandatory_ifd1_cleanup_refuses_a_nonjoining_writeexif_capture() {
+        use crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+
+        assert!(mandatory_cleanup_capture_joins(&MANDATORY_DEFAULTS).is_ok());
+        let stale = crate::writers::mandatory_defaults_runtime::MandatoryRecipe {
+            writer_source_sha256:
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ..MANDATORY_DEFAULTS
+        };
+        assert!(mandatory_cleanup_capture_joins(&stale).is_err());
     }
 }
