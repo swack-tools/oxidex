@@ -81,7 +81,11 @@ diff checks also passed. The ignored tests are unexercised. This foundation
 is in ready PR #761. Two independent review fixes preserve dependency binding
 names and reject same-source upgrade pairs; all 57 affected Python tests pass,
 and a binding-only mutation changes compilable generated candidate Rust.
-Hosted checks and landing remain pending; no new production writer is enabled.
+Four required hosted checks passed on `149387d2`; generated-table verification
+was cancelled at its 20-minute job limit during the native inventory mutation
+test (679 Python cases reached). This is incomplete verification, not a pass.
+The job allowance is now 35 minutes with all checks retained; its new hosted
+run and landing remain pending. No new production writer is enabled.
 
 ### Previous merged definitions checkpoint
 
