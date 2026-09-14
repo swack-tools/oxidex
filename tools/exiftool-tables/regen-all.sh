@@ -217,8 +217,8 @@ echo "=========================================================="
 # Rust DSL hand-matched against ExifTool's Condition/RawConv/ValueConv/
 # PrintConv text, closer in spirit to gen_canon_custom_functions2.pl's
 # hard-coded expression dictionary than to codegen_subdirs.py's general
-# ProcessBinaryData walk. Four now have producers; sony/enciphered_tables.rs
-# and nikon/encrypted_tables.rs remain unreconstructed.
+# ProcessBinaryData walk. Five now have producers; sony/enciphered_tables.rs
+# remains unreconstructed.
 # Nikon settings preserves the current table exactly and independently checks
 # its ordered variants against live Perl, including the named state projection.
 python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
@@ -227,6 +227,8 @@ python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
     -o "$(artifact_path minolta-a100)"
 python3 "$HERE/gen_nikon_settings_tables.py" "$JSON" \
     -o "$(artifact_path nikon-settings)"
+python3 "$HERE/gen_nikon_encrypted_tables.py" "$JSON" \
+    -o "$(artifact_path nikon-encrypted)"
 python3 "$HERE/gen_sony_plain_tables.py" "$JSON" \
     -o "$(artifact_path sony-plain)"
 

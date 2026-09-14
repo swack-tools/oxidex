@@ -122,3 +122,6 @@ the historical session, not the active full-parity goal.
 
 The [upgrade rehearsal checkpoint](upgrade-checkpoint-20260914.md) likewise
 records historical evidence rather than a passing combined-tree gate.
+
+The [Nikon checkpoint](nikon-checkpoint-20260914.md) preserves that branch’s
+source generation evidence and outstanding regeneration limits.

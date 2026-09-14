@@ -295,6 +295,13 @@ sub code_ref_fact {
         }
     }
     $fact{dependencies} = \%dependencies if %dependencies;
+    # Nikon's Decrypt indexes a lexical two-row byte table.  Its deparsed body
+    # names only @xlat, so a body and source digest alone cannot establish the
+    # bytes the loaded callback will consume.  Capture the final pad value,
+    # not a source initializer: this is the same closure data Perl executes.
+    if ($resolved_name eq 'Image::ExifTool::Nikon::Decrypt') {
+        $fact{lexical_arrays} = native_nikon_decrypt_xlat($cv);
+    }
     return \%fact;
 }
 
@@ -1193,6 +1200,51 @@ sub native_helper_lexical_hashes {
     return { resolved => JSON::PP::true, bindings => \%hashes };
 }
 
+# Decrypt closes over `my @xlat = ([...], [...])` in Nikon.pm.  The generator
+# joins these exact live bytes to encrypted.rs, so reject any pad shape that
+# does not prove the two 256-byte lookup rows.  This deliberately remains
+# narrow: arbitrary lexical arrays are not a supported input language.
+sub native_nikon_decrypt_xlat {
+    my ($cv) = @_;
+    my (@names, @values);
+    my $loaded = eval {
+        my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
+        die "missing pad" unless @pad >= 2;
+        @names = $pad[0]->ARRAY;
+        @values = $pad[1]->ARRAY;
+        1;
+    };
+    return { resolved => JSON::PP::false, reason => 'lexical_pad_unavailable' } unless $loaded;
+    my @matches = grep {
+        my $name = eval { $names[$_]->PV };
+        defined($name) && $name eq '@xlat';
+    } 0 .. $#names;
+    return { resolved => JSON::PP::false, reason => 'missing_xlat_pad' } unless @matches == 1;
+    my $xlat = eval {
+        $values[$matches[0]]->isa('B::AV') ? $values[$matches[0]]->object_2svref : undef;
+    };
+    return { resolved => JSON::PP::false, reason => 'xlat_pad_unavailable' } unless ref($xlat) eq 'ARRAY' && @$xlat == 2;
+    my @rows;
+    for my $row (@$xlat) {
+        return { resolved => JSON::PP::false, reason => 'xlat_row_unavailable' }
+            unless ref($row) eq 'ARRAY' && @$row == 256;
+        my @bytes;
+        for my $value (@$row) {
+            return { resolved => JSON::PP::false, reason => 'xlat_byte_invalid' }
+                unless defined($value) && !ref($value) && $value =~ /\A(?:0|[1-9][0-9]*)\z/
+                    && $value <= 255;
+            push @bytes, 0 + $value;
+        }
+        push @rows, \@bytes;
+    }
+    my $bytes = pack('C*', map { @$_ } @rows);
+    return {
+        resolved => JSON::PP::true,
+        rows => \@rows,
+        sha256 => Digest::SHA::sha256_hex($bytes),
+    };
+}
+
 sub native_write_helper_facts {
     my ($lib_abs, $status) = @_;
     my %bindings = (
@@ -1381,7 +1433,7 @@ sub warm_find_tag_info_closure {
 }
 
 sub dump_tag_entry {
-    my ($entry) = @_;
+    my ($entry, $subdirectory_processors) = @_;
     my $r = ref $entry;
 
     # Bare string: shorthand for { Name => '...' }
@@ -1391,7 +1443,7 @@ sub dump_tag_entry {
     # models model-dependent layouts (Canon CameraInfo's 33 alternatives).
     if ($r eq 'ARRAY') {
         return {
-            _variants => [ map { dump_tag_entry($_) } @$entry ],
+            _variants => [ map { dump_tag_entry($_, $subdirectory_processors) } @$entry ],
         };
     }
     return { _unhandled => $r } unless $r eq 'HASH';
@@ -1406,6 +1458,19 @@ sub dump_tag_entry {
             my $sd = scrub($v);
             # TagTable is the edge in the table graph -- what makes whole-table
             # extraction possible instead of tag-at-a-time guessing.
+            # `ProcessNikonEncrypted` is the sole SubDirectory callback whose
+            # helper closure is implemented by the Nikon encrypted runtime.
+            # Preserve its stored CV now and replace this shallow scrub with a
+            # final, provenance-bearing fact after every module has loaded.
+            # Resolving the package name later would authenticate a rebind, not
+            # the callback the table actually holds.
+            if (ref($v->{ProcessProc}) eq 'CODE'
+                    && (code_name($v->{ProcessProc}) // '') eq 'Image::ExifTool::Nikon::ProcessNikonEncrypted') {
+                push @$subdirectory_processors, {
+                    cv => $v->{ProcessProc}, output => $sd,
+                    fallback_name => 'Image::ExifTool::Nikon::ProcessNikonEncrypted',
+                };
+            }
             $out{SubDirectory} = $sd;
         } else {
             $out{$k} = scrub($v);
@@ -1420,7 +1485,7 @@ sub dump_tag_entry {
 }
 
 sub dump_module {
-    my ($module, $validate_function_names, $processor_tables, $write_tables) = @_;
+    my ($module, $validate_function_names, $processor_tables, $subdirectory_processors, $write_tables) = @_;
     my $pkg = "Image::ExifTool::$module";
     eval "require $pkg; 1" or do {
         return { module => $module, error => "$@" };
@@ -1452,7 +1517,7 @@ sub dump_module {
         for my $k (@tagkeys) {
             collect_subdirectory_validate_function_names(
                 $hash->{$k}, $validate_function_names, {}, 0);
-            $tags{$k} = dump_tag_entry($hash->{$k});
+            $tags{$k} = dump_tag_entry($hash->{$k}, $subdirectory_processors);
         }
         my %meta;
         for my $k (grep { $TABLE_META{$_} } @keys) {
@@ -1507,7 +1572,7 @@ sub dump_module {
 
         collect_subdirectory_validate_function_names(
             $aref, $validate_function_names, {}, 0);
-        my @rows = map { dump_tag_entry($_) } @$aref;
+        my @rows = map { dump_tag_entry($_, $subdirectory_processors) } @$aref;
         $arrays{$sym} = {
             full_name => "${pkg}::${sym}",
             rows      => \@rows,
@@ -1806,11 +1871,12 @@ my %out;
 my %subdirectory_validate_function_names;
 my %subdirectory_validate_functions;
 my %processor_tables;
+my @subdirectory_processors;
 my %write_tables;
 my %native_write_tables;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables,
+    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables, \@subdirectory_processors,
         $READER_ONLY ? undef : \%write_tables);
     if ($r->{error}) {
         $failed++;
@@ -1838,6 +1904,17 @@ for my $full_name (sort keys %processor_tables) {
     my $entry = $processor_tables{$full_name};
     my $fact = code_ref_fact($entry->{cv}, "${full_name}::PROCESS_PROC", $EXIFTOOL_LIB_ABS, undef, undef, 0);
     $out{$entry->{module}}{tables}{$entry->{table}}{meta}{PROCESS_PROC} = $fact;
+}
+
+# A SubDirectory callback is normally a shallow, serializable table operand.
+# This one callback's direct helper closure drives Rust's decryption route, so
+# hydrate its stored CV with the same post-load source/provenance contract used
+# by table-level PROCESS_PROC facts.  Any unresolved helper remains explicit
+# and lets the Nikon generator refuse rather than retaining stale semantics.
+for my $entry (@subdirectory_processors) {
+    ${$entry->{output}}{ProcessProc} = code_ref_fact(
+        $entry->{cv}, $entry->{fallback_name}, $EXIFTOOL_LIB_ABS,
+        undef, undef, 1);
 }
 
 # The legacy read projection above is now detached: all requested modules have
