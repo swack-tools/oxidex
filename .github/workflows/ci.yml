@@ -541,7 +541,6 @@ jobs:
           # Retain exact per-row/table hashes, catalog hash and all status fields.
           for document in (actual, expected):
               document['inputs'].pop('hydrated_sha256')
-              document['inputs'].pop('quicktime', None)
           if actual != expected:
               raise SystemExit('catalog/source ledger drift: regenerate and review')
           print('=== instrument: catalog/source ledger semantic check ===')

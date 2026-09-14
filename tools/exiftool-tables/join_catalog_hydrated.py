@@ -110,21 +110,56 @@ def source_rows(hydrated: dict) -> tuple[dict[tuple[str, str, int], dict], dict[
     return rows, table_hashes
 
 
-def quicktime_selector_projection(table: str, raw_key: str, row: dict) -> dict:
-    """Invert only verified dump wrappers before using the selector's digest."""
-    if not {"TagID", "Table", "Groups", "_extra_properties"} & set(row):
-        return row
+def quicktime_groups(value: object, shared_references: dict | None, label: str) -> dict[str, str]:
+    if isinstance(value, dict) and set(value) == {"__ref", "object_id"}:
+        if value.get("__ref") != "HASH" or not isinstance(value.get("object_id"), str) or not shared_references:
+            raise ValueError(f"QuickTime {label} reference is malformed")
+        target = shared_references.get(value["object_id"])
+        if (not isinstance(target, dict) or target.get("kind") != "HASH"
+                or not isinstance(target.get("properties"), dict)):
+            raise ValueError(f"QuickTime {label} reference is missing or malformed")
+        value = target["properties"]
+    if not isinstance(value, dict) or any(not isinstance(key, str) or not isinstance(item, str)
+                                          for key, item in value.items()):
+        raise ValueError(f"QuickTime {label} is malformed")
+    return dict(value)
+
+
+def normalize_quicktime_groups(projected: dict, table_meta: dict | None,
+                               shared_references: dict | None) -> None:
+    if "Groups" not in projected:
+        return
+    if not isinstance(table_meta, dict) or "GROUPS" not in table_meta:
+        raise ValueError("QuickTime table Groups defaults are missing or malformed")
+    defaults = quicktime_groups(table_meta["GROUPS"], shared_references, "table Groups")
+    groups = quicktime_groups(projected["Groups"], shared_references, "row Groups")
+    groups = {key: value for key, value in groups.items() if defaults.get(key) != value}
+    if groups:
+        projected["Groups"] = groups
+    else:
+        projected.pop("Groups")
+
+
+def quicktime_selector_projection(table: str, raw_key: str, row: dict, *, table_meta: dict | None = None,
+                                  shared_references: dict | None = None,
+                                  variant_path: tuple[int, ...] = ()) -> dict:
+    """Invert verified wrappers and inherited defaults before selector hashing."""
+    if not isinstance(row, dict):
+        raise ValueError("QuickTime hydrated row is malformed")
     projected = dict(row)
-    tag_id = projected.pop("TagID", raw_key)
-    table_fact = projected.pop("Table", None)
-    groups = projected.pop("Groups", None)
+    if {"TagID", "Table", "_extra_properties"} & set(projected):
+        tag_id = projected.pop("TagID", raw_key)
+        table_fact = projected.pop("Table", None)
+        if tag_id != raw_key or not isinstance(table_fact, dict) or table not in table_fact.get("table_full_names", []):
+            raise ValueError("QuickTime hydrated wrapper identity is malformed")
     extras = projected.pop("_extra_properties", {})
-    if tag_id != raw_key or not isinstance(table_fact, dict) or table not in table_fact.get("table_full_names", []):
-        raise ValueError("QuickTime hydrated wrapper identity is malformed")
-    if not isinstance(groups, dict) or groups.get("__ref") != "HASH":
-        raise ValueError("QuickTime hydrated wrapper groups are malformed")
     if not isinstance(extras, dict):
         raise ValueError("QuickTime hydrated wrapper has unprojected source properties")
+    extras = dict(extras)
+    index = extras.pop("Index", None)
+    if index is not None:
+        if not variant_path or index != str(variant_path[-1]):
+            raise ValueError("QuickTime wrapper Index differs from its variant path")
     semantic = set(extras) - {"GotGroups", "Preferred"}
     if any(key in projected for key in semantic):
         raise ValueError("QuickTime wrapper conflicts with explicit source property")
@@ -133,6 +168,7 @@ def quicktime_selector_projection(table: str, raw_key: str, row: dict) -> dict:
         if not isinstance(existing, list) or not all(isinstance(key, str) for key in existing):
             raise ValueError("QuickTime source extra-key projection is malformed")
         projected["_extra_keys"] = sorted(set(existing) | semantic)
+    normalize_quicktime_groups(projected, table_meta, shared_references)
     return projected
 
 
@@ -205,7 +241,9 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
                 if candidate_path == key[3]:
                     if quicktime_selector.digest(candidate) != key[2]:
                         raise ValueError("QuickTime ledger does not match bounded source identity")
-                    key = (key[0], key[1], quicktime_selector.digest(quicktime_selector.semantic_normal_form(candidate)), key[3])
+                    projected = quicktime_selector_projection("Image::ExifTool::QuickTime::" + key[0], key[1], candidate,
+                                                              table_meta=tables[key[0]].get("meta"), variant_path=key[3])
+                    key = (key[0], key[1], quicktime_selector.digest(quicktime_selector.semantic_normal_form(projected)), key[3])
                     break
             else:
                 raise ValueError("QuickTime ledger variant is absent from bounded source")
@@ -273,7 +311,14 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         selector_hash = None
         if source is not None and identity[0].startswith("Image::ExifTool::QuickTime::"):
             variant_path = (identity[2],) if "_variants" in hydrated["hydrated_layouts"]["tables"][identity[0]]["tags"][identity[1]] else ()
-            projected = quicktime_selector_projection(identity[0], identity[1], source)
+            table_document = hydrated["hydrated_layouts"]["tables"][identity[0]]
+            shared_references = hydrated["hydrated_layouts"].get("shared_reference_objects", {})
+            if not isinstance(shared_references, dict):
+                raise ValueError("hydrated shared reference objects are missing or malformed")
+            projected = quicktime_selector_projection(identity[0], identity[1], source,
+                                                       table_meta=table_document.get("meta"),
+                                                       shared_references=shared_references,
+                                                       variant_path=variant_path)
             selector_hash = quicktime_selector.digest(quicktime_selector.semantic_normal_form(projected))
             candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
             if candidate is not None:

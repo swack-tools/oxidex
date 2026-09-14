@@ -99,6 +99,34 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             join.build(stale_catalog, stale_hydrated, "c", "h", ledger, capabilities, raw, rust,
                        self.quicktime_digests(raw, ledger, capabilities, rust))
 
+    def test_quicktime_projector_resolves_inherited_groups_and_matching_variant_index(self):
+        shared = {
+            "defaults": {"kind": "HASH", "properties": {"0": "QuickTime", "1": "ItemList", "2": "Audio"}},
+            "override": {"kind": "HASH", "properties": {"0": "QuickTime", "1": "ItemList", "2": "Author"}},
+        }
+        table = {"GROUPS": {"__ref": "HASH", "object_id": "defaults"}}
+        row = {"Name": "AlbumArtist", "TagID": "aART",
+               "Table": {"table_full_names": ["Image::ExifTool::QuickTime::ItemList"]},
+               "Groups": {"__ref": "HASH", "object_id": "override"},
+               "_extra_properties": {"GotGroups": "1", "Index": "1"}}
+        projected = join.quicktime_selector_projection("Image::ExifTool::QuickTime::ItemList", "aART", row,
+                                                       table_meta=table, shared_references=shared, variant_path=(1,))
+        self.assertEqual(projected, {"Name": "AlbumArtist", "Groups": {"2": "Author"}})
+        with self.assertRaisesRegex(ValueError, "Index"):
+            join.quicktime_selector_projection("Image::ExifTool::QuickTime::ItemList", "aART", row,
+                                               table_meta=table, shared_references=shared, variant_path=(2,))
+        with self.assertRaisesRegex(ValueError, "reference"):
+            join.quicktime_selector_projection("Image::ExifTool::QuickTime::ItemList", "aART",
+                                               {"Groups": {"__ref": "HASH", "object_id": "missing"}},
+                                               table_meta=table, shared_references=shared, variant_path=())
+
+    def test_quicktime_projector_removes_bounded_inherited_groups(self):
+        defaults = {"0": "QuickTime", "1": "ItemList", "2": "Audio"}
+        projected = join.quicktime_selector_projection(
+            "Image::ExifTool::QuickTime::ItemList", "titl",
+            {"Name": "Title", "Groups": defaults}, table_meta={"GROUPS": defaults})
+        self.assertEqual(projected, {"Name": "Title"})
+
     def test_exact_coordinate_variant_name_and_hash_join(self):
         result = join.build(catalog([entry("Title", "titl", 0), entry("Alternate", "titl", 1)]),
                             hydrated({"titl": {"_variants": [{"Name": "Title"}, {"Name": "Alternate"}]}}, total=2), "catalog", "hydrated")
