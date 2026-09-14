@@ -476,6 +476,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):
         raise ValueError("hydrated total_tag_entries differs from catalog denominator")
+    matched_write_contexts = set()
     records, status_counts, implementation_counts, reader_counts, writer_counts, observed_counts, family_counts = [], Counter(), Counter(), Counter(), Counter(), Counter(), defaultdict(Counter)
     for identity in sorted(catalog_by_id):
         entry, source = catalog_by_id[identity], hydrated_by_id.get(identity)
@@ -531,6 +532,11 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             writer_state = "generated_writer_declaration_unobserved"
             if implementation == "source_row_not_yet_consumed":
                 implementation = writer_state
+        catalog_write_name = entry["groups"]["1"] + ":" + entry["name"]
+        matching_write = (writer_state == "generated_writer_declaration_unobserved"
+                          and catalog_write_name in write_names.get(identity, ()))
+        if matching_write:
+            matched_write_contexts.add((*identity, catalog_write_name))
         implementation_counts[implementation] += 1
         reader_counts[reader_implementation] += 1
         writer_counts[writer_state] += 1
@@ -541,9 +547,11 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                         "source_layout_status": status, "source_derived_implementation": implementation,
                         "reader_implementation": reader_implementation, "writer_implementation": writer_state,
                         "implementation_refusal_reasons": refusal,
-                        "observed_read": observed_read, "observed_write": "observed_matched_write" if identity in write_names else "not_observed_yet"})
+                        "observed_read": observed_read, "observed_write": "observed_matched_write" if matching_write else "not_observed_yet"})
         if writer_read_evidence is not None:
-            records[-1]["observed_write_group1_names"] = sorted(write_names.get(identity, ()))
+            records[-1]["observed_write_group1_names"] = [catalog_write_name] if matching_write else []
+            records[-1]["alternate_context_write_group1_names"] = sorted(
+                name for name in write_names.get(identity, ()) if name != catalog_write_name)
     if len(records) != len(catalog_by_id) or sum(status_counts.values()) != len(records):
         raise ValueError("join conservation failed")
     if sum(sum(counts.values()) for counts in family_counts.values()) != len(records):
@@ -569,6 +577,13 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         from write_readback_evidence import summarize
         result["counts"]["observed_write"] = dict(sorted(Counter(row["observed_write"] for row in records).items()))
         result["counts"]["write_readback"] = summarize(observed_writes)
+        matching_operations = sum(
+            (row["source_identity"]["table"], row["source_identity"]["raw_key"],
+             row["source_identity"]["variant_index"], row["group1_name"]) in matched_write_contexts
+            for row in observed_writes)
+        result["counts"]["write_readback"].update(
+            catalog_matched_write_operations=matching_operations,
+            alternate_context_write_operations=len(observed_writes) - matching_operations)
     return result
 
 

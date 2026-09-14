@@ -90,11 +90,43 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             self.assertNotIn("write_readback", before["counts"])
             after = join.build(cat, hyd, "catalog", "hydrated", writer_read_evidence=sidecar, **args)
             verify.assert_called_once_with(sidecar, writer, digests, capture)
-        self.assertEqual(after["entries"][0]["observed_write"], "observed_matched_write")
-        self.assertEqual(after["entries"][0]["observed_write_group1_names"], ["IFD1:Artist"])
+        self.assertEqual(after["entries"][0]["observed_write"], "not_observed_yet")
+        self.assertEqual(after["entries"][0]["observed_write_group1_names"], [])
+        self.assertEqual(after["entries"][0]["alternate_context_write_group1_names"], ["IFD1:Artist"])
+        self.assertEqual(after["counts"]["write_readback"]["catalog_matched_write_operations"], 0)
+        self.assertEqual(after["counts"]["write_readback"]["alternate_context_write_operations"], 2)
         self.assertEqual(after["counts"]["write_readback"]["successful_write_operations"], 2)
         self.assertEqual(after["counts"]["write_readback"]["distinct_group1_names"], 1)
         self.assertEqual(after["entries"][0]["observed_read"], "not_observed_yet")
+
+        # Exact Group1 matches credit the catalog row. Observations in another
+        # directory keep their own operation/name counts even in a mixed run.
+        correct = {"source_identity": coordinate, "group1_name": "IFD0:Artist", "case_id": "ifd0-update"}
+        for actual, expected_counts, alternate_names in (
+            ([correct], (1, 0, 1), []),
+            ([correct, *observations], (1, 2, 2), ["IFD1:Artist"]),
+        ):
+            with patch.object(join, "writer_implementation", return_value=writer), \
+                 patch.object(write_readback_evidence, "validate_evidence", return_value=actual):
+                matched = join.build(cat, hyd, "catalog", "hydrated", writer_read_evidence=sidecar, **args)
+            record = matched["entries"][0]
+            self.assertEqual(record["observed_write"], "observed_matched_write")
+            self.assertEqual(record["observed_write_group1_names"], ["IFD0:Artist"])
+            self.assertEqual(record["alternate_context_write_group1_names"], alternate_names)
+            counts = matched["counts"]["write_readback"]
+            self.assertEqual((counts["catalog_matched_write_operations"], counts["alternate_context_write_operations"],
+                              counts["distinct_group1_names"]), expected_counts)
+
+        # The catalog may itself describe an alternate physical context. Match
+        # that actual Group1; do not substitute the writer's preferred group.
+        alternate_catalog = copy.deepcopy(cat)
+        alternate_catalog["entries"][0]["groups"]["1"] = "IFD1"
+        with patch.object(join, "writer_implementation", return_value=writer), \
+             patch.object(write_readback_evidence, "validate_evidence", return_value=observations):
+            matched = join.build(alternate_catalog, hyd, "catalog", "hydrated", writer_read_evidence=sidecar, **args)
+        self.assertEqual(matched["entries"][0]["observed_write"], "observed_matched_write")
+        self.assertEqual(matched["entries"][0]["observed_write_group1_names"], ["IFD1:Artist"])
+        self.assertEqual(matched["counts"]["write_readback"]["catalog_matched_write_operations"], 2)
 
     def test_write_evidence_without_authenticated_writer_inputs_refuses(self):
         with self.assertRaisesRegex(ValueError, "complete authenticated writer"):

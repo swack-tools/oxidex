@@ -13,8 +13,8 @@ at four; this helper does not allocate a host or acquire that lock itself.
 1. Capture a fresh Cargo-reported lib-test binary with unchanged runtime inputs:
 
 ```bash
-CARGO_TARGET_DIR=/absolute/shared-target python3 tools/exiftool-tables/write_readback_evidence.py \
-  --build-proof-dir /absolute/evidence/readback-build
+CARGO_TARGET_DIR=../shared-target python3 tools/exiftool-tables/write_readback_evidence.py \
+  --build-proof-dir ../evidence/readback-build
 ```
 
 The wrapper runs `cargo test --lib --all-features --no-run --message-format=json
@@ -24,16 +24,17 @@ The wrapper runs `cargo test --lib --all-features --no-run --message-format=json
 2. Run the existing matrix plus native readback:
 
 ```bash
+readback_binary=$(python3 -c 'import json; from pathlib import Path; print(json.loads(Path("../evidence/readback-build/build-proof.json").read_text())["binary"]["path"])')
 python3 tools/exiftool-tables/generated_tiff_write_matrix.py \
   --route public-api \
-  --test-binary /absolute/path/from-build-proof \
+  --test-binary "$readback_binary" \
   --perl /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
   --lib /tmp/oxidex-exiftool-cache/exiftool/lib \
   --jpeg-base tests/fixtures/jpeg/tag_matrix_base.jpg \
-  --output /absolute/evidence/public-write-matrix.json \
-  --readback-source /absolute/authenticated-writer-source.json \
-  --readback-build-proof /absolute/evidence/readback-build/build-proof.json \
-  --readback-evidence /absolute/evidence/public-write-readback.json
+  --output ../evidence/public-write-matrix.json \
+  --readback-source ../evidence/cache/tables-13.59.json \
+  --readback-build-proof ../evidence/readback-build/build-proof.json \
+  --readback-evidence ../evidence/public-write-readback.json
 ```
 
 The source dump must reproduce the current final/public ledgers and Rust files.
@@ -55,7 +56,7 @@ keys, value mismatches, or source drift refuse the sidecar.
 3. Add the sidecar to the existing catalog join invocation:
 
 ```text
---writer-read-evidence /absolute/evidence/public-write-readback.json
+--writer-read-evidence ../evidence/public-write-readback.json
 ```
 
 Keep all five existing writer source/final/public inputs. The importer independently
@@ -64,10 +65,14 @@ rehashes the saved build, source, fixture/output, matrix and driver files, repla
 wire comparisons, and derives counts from read transcripts. Keep these durable
 files available; the sidecar is deliberately not a self-asserted standalone claim.
 
-Catalog rows retain their source coordinates. `observed_write_group1_names`
-records actual physical readback names, so observing `IFD1:Artist` does not claim
-an `IFD0:Artist` read. The `write_readback` count block distinguishes operation
-count from distinct Group1 names. Reader and writer evidence remain separate.
+Catalog credit requires both the source coordinate and the exact catalog
+`Group1:Name`. Observing `IFD1:Artist` therefore leaves the `IFD0:Artist` catalog
+row unobserved. `observed_write_group1_names` lists only names matching that
+catalog row; `alternate_context_write_group1_names` retains other observed
+physical contexts without granting row credit. The `write_readback` count block
+preserves all successful operations and distinct Group1 names, and separately
+reports `catalog_matched_write_operations` and `alternate_context_write_operations`.
+Reader and writer evidence remain separate.
 
 Portable verification:
 

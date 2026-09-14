@@ -93,6 +93,15 @@ class ReadbackTests(unittest.TestCase):
         self.row['readbacks']['output'] = readback(self.row['output'], missing=True)
         self.assertEqual(observe(self.row), (None, 'group1_target_absent'))
 
+    def test_equal_value_in_wrong_group_does_not_credit_requested_context(self):
+        call = self.row['readbacks']['output']
+        wrong_group = [{'SourceFile': self.row['output'], 'IFD1:HostComputer': 'new'}]
+        self.row['readbacks']['output'] = evidence.completed_transcript(
+            call['command'], subprocess.CompletedProcess(call['command'], 0, json.dumps(wrong_group).encode(), b''))
+        self.assertEqual(observe(self.row), (None, 'group1_target_absent'))
+        self.row['readbacks']['output'] = call
+        self.assertEqual(observe(self.row)[0]['group1_name'], 'IFD0:HostComputer')
+
     def test_wire_output_mutation_refuses_even_with_matching_transcripts(self):
         Path(self.row['output']).write_bytes(tiff(b'bad\0'))
         with self.assertRaisesRegex(ValueError, 'bytes changed'):
