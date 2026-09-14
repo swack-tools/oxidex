@@ -219,7 +219,9 @@ class NativeWriteFacts(unittest.TestCase):
         context = doc["native_capture_context"]
         self.assertEqual(context["schema"], "native_exiftool_capture_context_v1")
         self.assertEqual(Path(context["selected_library"]), self.lib.resolve())
-        self.assertRegex(context["loaded_closure_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(context["loaded_closure"]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertTrue(context["loaded_closure"]["modules"])
+        self.assertIn("Image/ExifTool.pm", {item["inc"] for item in context["loaded_closure"]["modules"]})
         table = self.sidecar(doc)
         host = table["rows"]["316"]
         controls = host["write_controls"]

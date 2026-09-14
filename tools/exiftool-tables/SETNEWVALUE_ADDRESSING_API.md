@@ -12,8 +12,10 @@ generation. The input seals the generated-row digest, query-name digest, dump
 capture context, and exact SetNewValue/FindTagInfo source and deparse
 identities. The probe rejects any preloaded `Image::ExifTool` package and every
 loaded Image::ExifTool file outside the selected library. Its observation also
-records the canonical Perl path/release and a digest of the whole loaded
-ExifTool closure. The compiler verifies those joins before resolving or
+records the canonical Perl path/release plus the whole loaded ExifTool closure
+manifest and digest. The dump and probe both verify their manifest digest, and
+the probe requires every module it loaded to match the dump's `inc`, selected
+relative source path, and SHA-256. The compiler verifies those joins before resolving or
 emitting any operand; observations from a same-named but stale/mixed lookup
 are refused. It records every native `FindTagInfo` candidate for each source row name. A
 resolution is `resolved` only when the observed candidate set has exactly one

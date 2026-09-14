@@ -183,7 +183,7 @@ sub native_capture_context {
         perl_path => abs_path($^X) // $^X,
         perl_version => "$]",
         exiftool_version => "$Image::ExifTool::VERSION",
-        loaded_closure_sha256 => sha256_hex($closure),
+        loaded_closure => { sha256 => sha256_hex($closure), modules => \@modules },
     };
 }
 

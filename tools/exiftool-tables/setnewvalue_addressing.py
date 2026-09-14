@@ -8,6 +8,7 @@ not fall back to an older hand-written writer implementation.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -52,7 +53,7 @@ class Addressing:
     set_new_value_body_sha256: str
     source_rows_sha256: str
     query_names_sha256: str
-    capture_context: tuple[tuple[str, str], ...]
+    capture_context: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -119,20 +120,33 @@ def _find_tag_info_source(document: Mapping[str, Any]) -> tuple[str, str, str, s
     return actual, source_file, source_sha256, body_sha256
 
 
-def _capture_context(document: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+def _capture_context(document: Mapping[str, Any]) -> dict[str, Any]:
     context = _mapping(document.get("native_capture_context"), "native_capture_context")
     if context.get("schema") != "native_exiftool_capture_context_v1":
         raise RecipeRefused("native capture context is absent or stale")
-    required = ("selected_library", "perl_path", "perl_version", "exiftool_version", "loaded_closure_sha256")
-    values: list[tuple[str, str]] = []
+    required = ("selected_library", "perl_path", "perl_version", "exiftool_version")
+    values: dict[str, Any] = {"schema": "native_exiftool_capture_context_v1"}
     for key in required:
         value = context.get(key)
         if not isinstance(value, str) or not value:
             raise RecipeRefused(f"native capture context {key} is unavailable")
-        values.append((key, value))
-    if not re.fullmatch(r"[0-9a-f]{64}", dict(values)["loaded_closure_sha256"]):
+        values[key] = value
+    closure = _mapping(context.get("loaded_closure"), "native capture context loaded closure")
+    modules = closure.get("modules")
+    if not isinstance(modules, list) or not modules:
+        raise RecipeRefused("native capture context closure modules are unavailable")
+    if not isinstance(closure.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", closure["sha256"]):
         raise RecipeRefused("native capture context closure digest is malformed")
-    return tuple(values)
+    for module in modules:
+        module = _mapping(module, "native capture context closure member")
+        for key in ("inc", "source_file", "source_sha256"):
+            if not isinstance(module.get(key), str) or not module[key]:
+                raise RecipeRefused("native capture context closure member is malformed")
+    if _digest(modules) != closure["sha256"]:
+        raise RecipeRefused("native capture context closure digest does not match its modules")
+    values["loaded_closure"] = {"sha256": closure["sha256"],
+                                "modules": [dict(member) for member in modules]}
+    return values
 
 
 def _digest(value: Any) -> str:
@@ -240,7 +254,7 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
                           "body_sha256": setnew_body_sha256},
         "source_rows_sha256": result.source_rows_sha256,
         "query_names_sha256": result.query_names_sha256,
-        "native_capture_context": dict(result.capture_context),
+        "native_capture_context": result.capture_context,
     }
 
 
@@ -282,7 +296,7 @@ def _observation_capture(addressing: Addressing) -> dict[str, Any]:
     return {
         "source_rows_sha256": addressing.source_rows_sha256,
         "query_names_sha256": addressing.query_names_sha256,
-        "native_capture_context": dict(addressing.capture_context),
+        "native_capture_context": copy.deepcopy(addressing.capture_context),
         "find_tag_info": _helper_capture("Image::ExifTool::TagLookup::FindTagInfo",
                                            addressing.lookup_source_file,
                                            addressing.lookup_source_sha256,
@@ -302,7 +316,7 @@ def _validate_observations(addressing: Addressing, observations: Mapping[str, An
     if capture != _observation_capture(addressing):
         raise RecipeRefused("native lookup observations do not match the captured source rows/helpers")
     runtime = _mapping(observations.get("runtime"), "native lookup observations.runtime")
-    expected_context = dict(addressing.capture_context)
+    expected_context = addressing.capture_context
     for key in ("selected_library", "perl_path", "perl_version", "exiftool_version"):
         if runtime.get(key) != expected_context[key]:
             raise RecipeRefused(f"native lookup observations used a different {key}")
@@ -319,6 +333,12 @@ def _validate_observations(addressing: Addressing, observations: Mapping[str, An
                 raise RecipeMalformed("native lookup observations closure member is malformed")
     if _digest(modules) != closure["sha256"]:
         raise RecipeRefused("native lookup observations loaded closure digest does not match its modules")
+    captured_modules = _mapping(expected_context.get("loaded_closure"), "native capture context loaded closure").get("modules")
+    captured_by_inc = {member["inc"]: member for member in captured_modules}
+    for module in modules:
+        expected = captured_by_inc.get(module["inc"])
+        if expected is None or expected != module:
+            raise RecipeRefused("native lookup observations loaded closure does not match the dump capture")
     helpers = _mapping(runtime.get("helpers"), "native lookup observations.runtime.helpers")
     for key in ("find_tag_info", "set_new_value"):
         if _mapping(helpers.get(key), f"native lookup observations.runtime.helpers.{key}") != capture[key]:
@@ -443,7 +463,7 @@ def render(addressing: Addressing) -> str:
     return json.dumps({"runtime_status": RUNTIME_STATUS, "rows": [asdict(row) for row in addressing.rows],
                        "source_rows_sha256": addressing.source_rows_sha256,
                        "query_names_sha256": addressing.query_names_sha256,
-                       "native_capture_context": dict(addressing.capture_context)},
+                       "native_capture_context": copy.deepcopy(addressing.capture_context)},
                       sort_keys=True, indent=2) + "\n"
 
 

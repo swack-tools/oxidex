@@ -18,6 +18,13 @@ SETNEW = json.loads((ROOT / "setnewvalue_convinv_full_template.json").read_text(
 FIND = json.loads((ROOT / "findtaginfo_full_template.json").read_text())
 
 
+def closure_manifest(modules=None):
+    modules = modules or [{"inc": "Image/ExifTool.pm", "source_file": "Image/ExifTool.pm",
+                           "source_sha256": "c" * 64}]
+    encoded = json.dumps(modules, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return {"sha256": hashlib.sha256(encoded).hexdigest(), "modules": modules}
+
+
 def source():
     value = ready()
     helpers = value["native_write_helpers"]
@@ -38,7 +45,7 @@ def source():
         "perl_path": "/selected/perl",
         "perl_version": "5.038002",
         "exiftool_version": "13.59",
-        "loaded_closure_sha256": "a" * 64,
+        "loaded_closure": closure_manifest(),
     }
     return value
 
@@ -58,12 +65,9 @@ def observations(rows, *, external=False, addressing=None):
         addressing, _ = compile_addressing(source())
     capture = _observation_capture(addressing)
     context = capture["native_capture_context"]
-    modules = [{"inc": "Image/ExifTool.pm", "source_file": "Image/ExifTool.pm", "source_sha256": "c" * 64}]
-    closure_sha = hashlib.sha256(json.dumps(modules, sort_keys=True, separators=(",", ":"),
-                                            ensure_ascii=False).encode()).hexdigest()
     return {"schema": "native_setnewvalue_addressing_v2", "capture": capture,
             "runtime": {**{key: context[key] for key in ("selected_library", "perl_path", "perl_version", "exiftool_version")},
-                        "loaded_closure": {"sha256": closure_sha, "modules": modules},
+                        "loaded_closure": deepcopy(context["loaded_closure"]),
                         "helpers": {"find_tag_info": capture["find_tag_info"],
                                     "set_new_value": capture["set_new_value"]}},
             "queries": {row.name.lower(): {"query": row.name, "candidates": values}}}
@@ -195,6 +199,13 @@ class SetNewValueAddressingTests(unittest.TestCase):
         native = observations(addressing.rows)
         native["capture"]["source_rows_sha256"] = "e" * 64
         with self.assertRaisesRegex(RecipeRefused, "source rows/helpers"):
+            resolve(addressing, native, "NoAllowlist")
+
+        native = observations(addressing.rows)
+        closure = native["runtime"]["loaded_closure"]
+        closure["modules"][0]["source_sha256"] = "f" * 64
+        closure["sha256"] = closure_manifest(closure["modules"])["sha256"]
+        with self.assertRaisesRegex(RecipeRefused, "does not match the dump capture"):
             resolve(addressing, native, "NoAllowlist")
 
     def test_query_set_and_changed_source_name_are_not_reused(self):

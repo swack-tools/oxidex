@@ -118,6 +118,23 @@ for my $key (sort keys %actual_context) {
     die "selected runtime $key differs from dump capture\n"
         unless defined($context->{$key}) && $context->{$key} eq $actual_context{$key};
 }
+my $captured_closure = $context->{loaded_closure};
+die "dump capture closure is not an object\n" unless ref($captured_closure) eq 'HASH';
+die "dump capture closure modules are not an array\n" unless ref($captured_closure->{modules}) eq 'ARRAY';
+die "dump capture closure digest is invalid\n"
+    unless defined($captured_closure->{sha256}) && $captured_closure->{sha256} =~ /^[0-9a-f]{64}$/;
+die "dump capture closure digest does not match its modules\n"
+    unless sha256_hex($canonical->encode($captured_closure->{modules})) eq $captured_closure->{sha256};
+my %captured_by_inc;
+for my $module (@{$captured_closure->{modules}}) {
+    die "dump capture closure member is not an object\n" unless ref($module) eq 'HASH';
+    for my $key (qw(inc source_file source_sha256)) {
+        die "dump capture closure member is malformed\n" unless defined($module->{$key}) && !ref($module->{$key});
+    }
+    die "dump capture closure has duplicate module binding: $module->{inc}\n"
+        if exists $captured_by_inc{$module->{inc}};
+    $captured_by_inc{$module->{inc}} = $module;
+}
 
 my %selected;
 for my $row (@$rows) {
@@ -150,6 +167,12 @@ for my $lower (@query_names) {
     $queries{$lower} = { query => $name, candidates => \@candidates };
 }
 my $closure = loaded_closure();
+for my $module (@{$closure->{modules}}) {
+    my $captured = $captured_by_inc{$module->{inc}};
+    die "loaded module is missing from dump capture: $module->{inc}\n" unless $captured;
+    die "loaded module differs from dump capture: $module->{inc}\n"
+        unless $canonical->encode($module) eq $canonical->encode($captured);
+}
 print JSON::PP->new->canonical->utf8->encode({
     schema => 'native_setnewvalue_addressing_v2', capture => $capture,
     runtime => { %actual_context, loaded_closure => $closure,
