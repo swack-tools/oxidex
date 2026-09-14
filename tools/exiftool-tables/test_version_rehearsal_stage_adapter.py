@@ -27,8 +27,9 @@ class AdapterTests(unittest.TestCase):
         for item in artifacts.ARTIFACTS:
             path = self.checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(item.key)
         self.target = self.root / "target"; self.target.mkdir(); self.reports = self.root / "reports"; self.reports.mkdir()
-        self.native = self.root / "native"; (self.native / "lib/Image").mkdir(parents=True)
+        self.native = self.root / "native"; (self.native / "lib/Image/ExifTool").mkdir(parents=True)
         (self.native / "lib/Image/ExifTool.pm").write_text("$VERSION = '11.78';\n")
+        (self.native / "lib/Image/ExifTool/Writer.pl").write_text("package Image::ExifTool; 1;\n")
         self.perl = self.root / "perl"; self.perl.write_text("perl"); self.perl.chmod(0o755)
         self.fixture = self.root / "fixture.jpg"; self.fixture.write_bytes(b"fixture")
         self.manifest = self.root / "fixtures.json"; self.manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [{"path": str(self.fixture), "sha256": adapter._sha(self.fixture), "bytes": self.fixture.stat().st_size}]}))
@@ -57,12 +58,26 @@ class AdapterTests(unittest.TestCase):
             output = Path(argv[argv.index("--output") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             writer = Path(argv[argv.index("--test-binary") + 1]); ledger = Path(argv[argv.index("--ledger") + 1]); rules = Path(argv[argv.index("--rules") + 1])
             perl = argv[argv.index("--perl") + 1]; native_lib = argv[argv.index("--lib") + 1]
+            pin = Path(argv[argv.index("--rehearsal-pin") + 1])
+            cohort = [{"raw_tag_id": 0x013c, "name": "HostComputer", "table_group0": "EXIF",
+                       "physical_write_group": "IFD0", "qualifiers": ["EXIF:HostComputer", "IFD0:HostComputer"]}]
+            rows = []
+            for carrier in ("tiff_little", "tiff_big", "jpeg"):
+                for requested_name in cohort[0]["qualifiers"]:
+                    for operation in adapter.native.CASES:
+                        request_output = str(output.parent / f"{carrier}-{requested_name}-{operation}.jpg")
+                        rows.append({"state": "passed", "carrier": carrier, "target": {"raw_tag_id": 0x013c, "name": "HostComputer",
+                                                                                             "table_group0": "EXIF", "physical_write_group": "IFD0"},
+                                     "requested_name": requested_name, "operation": operation,
+                                     "output": request_output,
+                                     "driver_result": {"ok": True, "warnings": [], "output": request_output}})
             output.write_text(json.dumps({"instrument": "generated_scalar_write_matrix_v2", "route": "public-api",
-                "native_identity": {"command": [perl, "-I" + native_lib], "result": {"exiftool_version": "11.78"}},
-                "contract": {"mode": "selected-release-rehearsal", "release": "11.78", "ledger_exiftool_version": "11.78"},
-                "source_commit": COMMIT, "test_binary_sha256": adapter._sha(writer), "ledger_sha256": adapter._sha(ledger), "rules_sha256": adapter._sha(rules),
-                "declared": 3, "passed": 3,
-                "rows": [{"state": "passed", "driver_result": {"ok": True}} for _ in range(3)]}))
+                "native_identity": {"command": [perl, "-I" + native_lib], "result": {"exiftool_version": "11.78",
+                                    "source_sha256": adapter._native_writer_sources(Path(native_lib))}},
+                "contract": {"mode": "selected-release-rehearsal", "release": "11.78", "ledger_exiftool_version": "11.78",
+                             "pin": str(pin.resolve()), "pin_sha256": adapter._sha(pin)},
+                "source_commit": COMMIT, "test_binary_path": str(writer), "test_binary_sha256": adapter._sha(writer), "ledger_sha256": adapter._sha(ledger), "rules_sha256": adapter._sha(rules),
+                "cohort": cohort, "declared": len(rows), "passed": len(rows), "rows": rows}))
             return subprocess.CompletedProcess(argv, 0, "matrix", "")
         if argv[0] == sys.executable:
             output = Path(argv[argv.index("--json-out") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +206,7 @@ class AdapterTests(unittest.TestCase):
         result = adapter.write(self.args("write"), run=self.fake_run)
         self.assertEqual(result["state"], "passed")
         self.assertEqual(result["writer_binary"], built["writer_binary"])
-        self.assertEqual(result["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 3, "mismatched": 0})
+        self.assertEqual(result["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 48, "mismatched": 0})
         self.assertIn("rehearsal-write-fixtures", result["fixtures"]["entries"][0]["corpus_path"])
         matrix = next(row for row in self.seen if row[0][0] == sys.executable and row[0][1].endswith("generated_tiff_write_matrix.py"))
         self.assertIn("--rehearsal-release", matrix[0]); self.assertIn("--route", matrix[0]); self.assertEqual(matrix[0][matrix[0].index("--route") + 1], "public-api")
@@ -231,8 +246,45 @@ class AdapterTests(unittest.TestCase):
                 data["rows"] = [{"state": "passed"} for _ in range(3)]
                 output.write_text(json.dumps(data))
             return result
-        with self.assertRaisesRegex(adapter.Refused, "matrix report"):
+        with self.assertRaisesRegex(adapter.Refused, "actual successful public-driver"):
             adapter.write(self.args("write"), run=removes_driver_evidence)
+
+    def test_write_refuses_nonzero_matrix_command_and_forged_driver_success(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+        def nonzero(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
+                return subprocess.CompletedProcess(argv, 1, "matrix failed", "native mismatch")
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "matrix command failed"):
+            adapter.write(self.args("write"), run=nonzero)
+
+        # A nonempty mapping is insufficient: adapter evidence must contain
+        # the successful public driver outcome bound to the row's output.
+        self.reports = self.root / "forged-driver-reports"; self.reports.mkdir()
+        self.target = self.root / "forged-driver-target"; self.target.mkdir()
+        adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
+        def forged_driver(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
+                output = Path(argv[argv.index("--output") + 1]); data = json.loads(output.read_text())
+                data["rows"][0]["driver_result"] = {"ok": False, "error": "forged"}
+                output.write_text(json.dumps(data))
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "actual successful public-driver"):
+            adapter.write(self.args("write"), run=forged_driver)
+
+    def test_write_rechecks_writer_binary_after_matrix_execution(self):
+        adapter.generate(self.args("generate"), run=self.fake_run); built = adapter.build(self.args("build"), run=self.fake_run)
+        original = self.fake_run
+        def replaces_writer_after_matrix(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
+                Path(built["writer_binary"]["path"]).write_bytes(b"replaced-after-matrix")
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "writer driver changed after build"):
+            adapter.write(self.args("write"), run=replaces_writer_after_matrix)
 
     def test_executor_timeout_kills_adapter_nested_child_and_releases_lock(self):
         """Exercise executor -> adapter._run -> sleeping child with real PIDs."""

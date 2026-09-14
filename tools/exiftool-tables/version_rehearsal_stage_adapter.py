@@ -20,6 +20,7 @@ import sys
 from typing import Any, Callable
 
 import artifacts
+import native_write_matrix as native
 import version_rehearsal as rehearsal
 import version_rehearsal_executor as executor
 
@@ -128,6 +129,15 @@ def _native_identity(release: str, perl: Path, native_source: Path, native_lib: 
         raise Refused("selected native library does not match selected release")
     return {"release": release, "perl": {"path": str(perl), "sha256": _sha(perl)},
             "source": {"path": str(native_source)}, "lib": {"path": str(native_lib), "exiftool_pm_sha256": _sha(pm)}}
+
+
+def _native_writer_sources(native_lib: Path) -> dict[str, str]:
+    """Bind the matrix's executable native identity to selected source bytes."""
+    paths = {
+        "Image/ExifTool.pm": native_lib / "Image" / "ExifTool.pm",
+        "Image/ExifTool/Writer.pl": native_lib / "Image" / "ExifTool" / "Writer.pl",
+    }
+    return {name: _sha(_regular(path, f"selected native {name}")) for name, path in paths.items()}
 
 
 def _source_tree(checkout: Path) -> str:
@@ -417,27 +427,67 @@ def _build_binary(previous: dict[str, Any], target: Path, field: str, label: str
 
 
 def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, native_lib: Path,
-                   writer: dict[str, Any], ledger: Path, rules: Path) -> dict[str, Any]:
+                   writer: dict[str, Any], ledger: Path, rules: Path, pin: Path) -> dict[str, Any]:
     value = _json(path)
     contract = value.get("contract")
     matrix_native = value.get("native_identity")
+    cohort = value.get("cohort")
     rows = value.get("rows")
+    if not isinstance(cohort, list) or not cohort:
+        raise Refused("generated write matrix report has no source-selected cohort")
+    expected: set[tuple[str, tuple[int, str, str, str], str, str]] = set()
+    for target in cohort:
+        if (not isinstance(target, dict) or set(target) != {"raw_tag_id", "name", "table_group0",
+                                                             "physical_write_group", "qualifiers"}
+                or type(target["raw_tag_id"]) is not int or not 0 <= target["raw_tag_id"] <= 0xffff
+                or any(not isinstance(target[key], str) or not target[key]
+                       for key in ("name", "table_group0", "physical_write_group"))
+                or not isinstance(target["qualifiers"], list) or not target["qualifiers"]
+                or any(not isinstance(name, str) or not name for name in target["qualifiers"])):
+            raise Refused("generated write matrix cohort is malformed")
+        identity = (target["raw_tag_id"], target["name"], target["table_group0"],
+                    target["physical_write_group"])
+        for carrier in ("tiff_little", "tiff_big", "jpeg"):
+            for qualifier in target["qualifiers"]:
+                for operation in native.CASES:
+                    expected.add((carrier, identity, qualifier, operation))
+    actual: set[tuple[str, tuple[int, str, str, str], str, str]] = set()
+    if isinstance(rows, list):
+        for row in rows:
+            driver = row.get("driver_result") if isinstance(row, dict) else None
+            target = row.get("target") if isinstance(row, dict) else None
+            if (not isinstance(row, dict) or row.get("state") not in {"passed", "failed"}
+                    or not isinstance(target, dict) or set(target) != {"raw_tag_id", "name", "table_group0", "physical_write_group"}
+                    or type(target.get("raw_tag_id")) is not int
+                    or any(not isinstance(target.get(key), str) or not target[key]
+                           for key in ("name", "table_group0", "physical_write_group"))
+                    or not isinstance(row.get("carrier"), str) or not isinstance(row.get("requested_name"), str)
+                    or not isinstance(row.get("operation"), str) or not isinstance(row.get("output"), str)
+                    or not isinstance(driver, dict) or driver.get("ok") is not True
+                    or driver.get("output") != row["output"] or driver.get("warnings") != []
+                    or "error" in driver):
+                raise Refused("generated write matrix row lacks an actual successful public-driver result")
+            identity = (target["raw_tag_id"], target["name"], target["table_group0"],
+                        target["physical_write_group"])
+            actual.add((row["carrier"], identity, row["requested_name"], row["operation"]))
+    native_sources = _native_writer_sources(native_lib)
     if (value.get("instrument") != "generated_scalar_write_matrix_v2" or value.get("route") != "public-api"
             or not isinstance(matrix_native, dict)
             or not isinstance(matrix_native.get("result"), dict)
             or not isinstance(matrix_native.get("command"), list)
             or matrix_native.get("result", {}).get("exiftool_version") != args.release
             or matrix_native.get("command", [None, None])[:2] != [str(native_perl), "-I" + str(native_lib)]
+            or matrix_native["result"].get("source_sha256") != native_sources
             or value.get("source_commit") != args.source_commit
             or not isinstance(contract, dict) or contract.get("mode") != "selected-release-rehearsal"
             or contract.get("release") != args.release or contract.get("ledger_exiftool_version") != args.release
-            or value.get("test_binary_sha256") != writer["sha256"]
+            or contract.get("pin") != str(pin.resolve()) or contract.get("pin_sha256") != _sha(pin)
+            or value.get("test_binary_path") != writer["path"] or value.get("test_binary_sha256") != writer["sha256"]
             or value.get("ledger_sha256") != _sha(ledger) or value.get("rules_sha256") != _sha(rules)
-            or type(value.get("declared")) is not int or value["declared"] < 1
+            or type(value.get("declared")) is not int or value["declared"] != len(expected)
             or type(value.get("passed")) is not int or not 0 <= value["passed"] <= value["declared"]
             or not isinstance(rows, list) or len(rows) != value["declared"]
-            or any(not isinstance(row, dict) or row.get("state") not in {"passed", "failed"}
-                   or not isinstance(row.get("driver_result"), dict) for row in rows)
+            or actual != expected or len(actual) != len(rows)
             or value["passed"] != sum(row["state"] == "passed" for row in rows)):
         raise Refused("generated write matrix report is not bound to the selected build and native release")
     return {"path": str(path), "sha256": _sha(path), "declared": value["declared"],
@@ -455,6 +505,9 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     ledger = checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json"
     rules = checkout / "src/writers/generated_tiff_scalar_final_rules.rs"
     _regular(ledger, "generated final-stage ledger"); _regular(rules, "generated final-stage rules")
+    ledger_sha, rules_sha = _sha(ledger), _sha(rules)
+    native_sources = _native_writer_sources(native_lib)
+    pin = checkout / ".exiftool-version"
     matrix_root = report.parent / "raw" / "write-matrix"
     if matrix_root.exists() or matrix_root.is_symlink():
         raise Refused("write matrix evidence directory already exists")
@@ -470,14 +523,27 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
                    "--rehearsal-pin", str(checkout / ".exiftool-version")]
         record = _run(command, cwd=checkout, env=env, run=run)
         records.append(record)
+        if record["state"] != "ok":
+            _raw(report, "write", {"commands": records, "state": "failed"})
+            raise Refused("generated write matrix command failed")
         if not output.is_file() or output.is_symlink():
             _raw(report, "write", {"commands": records, "state": "failed"})
             raise Refused("generated write matrix did not publish a report")
         matrix_reports.append(_matrix_report(output, args=args, native_perl=perl, native_lib=native_lib, writer=writer,
-                                             ledger=ledger, rules=rules))
+                                             ledger=ledger, rules=rules, pin=pin))
     raw = _raw(report, "write", {"commands": records, "matrix_reports": matrix_reports,
                                   "state": "ok" if all(record["state"] == "ok" for record in records) else "failed"})
     _verify_staged_fixtures(fixtures)
+    _prior(report, "build", args, identity, checkout)
+    _validate_artifacts(checkout, generated)
+    _build_binary(previous, target, "writer_binary", "writer driver")
+    if _sha(ledger) != ledger_sha or _sha(rules) != rules_sha:
+        raise Refused("generated writer rules changed during matrix comparison")
+    if _native_writer_sources(native_lib) != native_sources:
+        raise Refused("selected native writer source changed during matrix comparison")
+    for matrix in matrix_reports:
+        if _sha(Path(matrix["path"])) != matrix["sha256"]:
+            raise Refused("generated write matrix evidence changed during comparison")
     declared = sum(row["declared"] for row in matrix_reports)
     passed = sum(row["passed"] for row in matrix_reports)
     mismatched = declared - passed
@@ -491,7 +557,7 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
                            "manifest_sha256": fixture_digest, "entries": fixtures},
               "matrix_reports": matrix_reports, "raw_report": raw,
               "write_mode": {"kind": "selected-release-live-native", "release": args.release,
-                             "ledger_sha256": _sha(ledger), "rules_sha256": _sha(rules)},
+                             "ledger_sha256": ledger_sha, "rules_sha256": rules_sha},
               "scope": "selected-release public-api generated scalar cohort on staged JPEG fixtures plus synthetic little- and big-endian TIFF carriers",
               "limitations": ["Only the emitted TIFF/JPEG scalar cohort is exercised.",
                               "Fresh/empty EXIF, other writer grammars, and non-JPEG formats remain outside this rehearsal stage."]}

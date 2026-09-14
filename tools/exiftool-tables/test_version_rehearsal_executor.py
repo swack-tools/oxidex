@@ -113,7 +113,8 @@ class ExecutorTests(unittest.TestCase):
                                     "matched": 3, "mismatched": 0})
         if stage == "write":
             body["write_mode"] = {"kind": "selected-release-live-native", "release": env["OXIDEX_REHEARSAL_RELEASE"],
-                                  "ledger_sha256": "a" * 64, "rules_sha256": "b" * 64}
+                                  "ledger_sha256": __import__("hashlib").sha256((checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json").read_bytes()).hexdigest(),
+                                  "rules_sha256": __import__("hashlib").sha256((checkout / "src/writers/generated_tiff_scalar_final_rules.rs").read_bytes()).hexdigest()}
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps(body))
         return subprocess.CompletedProcess(argv, 0, "ok", "")
@@ -320,6 +321,24 @@ class ExecutorTests(unittest.TestCase):
         failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
         self.assertEqual(failure["stage"], "write")
         self.assertIn("matrix mode", failure["detail"])
+
+    def test_write_stage_rejects_valid_shaped_mode_with_wrong_generated_hashes(self):
+        self.initialize(self.config())
+        original = self.command
+        def wrong_hashes(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "write":
+                report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                body = json.loads(report.read_text())
+                body["write_mode"]["rules_sha256"] = "0" * 64
+                report.write_text(json.dumps(body))
+            return result
+        self.command = wrong_hashes
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "write")
+        self.assertIn("differs from generated source operands", failure["detail"])
 
 
 if __name__ == "__main__":

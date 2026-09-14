@@ -247,6 +247,7 @@ def main():
     report = {"instrument": "generated_scalar_write_matrix_v2", "route": args.route, "native_identity": identity,
               "contract": contract,
               "source_commit": state.commit, "dirty_files": state.dirty_files,
+              "test_binary_path": str(binary.path),
               "test_binary_sha256": hashlib.sha256(binary.path.read_bytes()).hexdigest(),
               "ledger_sha256": hashlib.sha256(args.ledger.read_bytes()).hexdigest(),
               "rules_sha256": hashlib.sha256(args.rules.read_bytes()).hexdigest(),

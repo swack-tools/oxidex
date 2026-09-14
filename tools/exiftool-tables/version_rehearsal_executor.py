@@ -445,6 +445,13 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
                     or not isinstance(mode.get("rules_sha256"), str)
                     or __import__("re").fullmatch(r"[0-9a-f]{64}", mode["rules_sha256"]) is None):
                 raise Refused("write result lacks selected-release matrix mode proof")
+            ledger = _regular(checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json",
+                              "generated final-stage ledger")
+            rules = _regular(checkout / "src/writers/generated_tiff_scalar_final_rules.rs",
+                             "generated final-stage rules")
+            if (mode["ledger_sha256"] != _sha_file(ledger)
+                    or mode["rules_sha256"] != _sha_file(rules)):
+                raise Refused("write result matrix mode differs from generated source operands")
     return result
 
 
