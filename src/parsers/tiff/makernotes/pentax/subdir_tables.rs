@@ -194,43 +194,66 @@ const PENTAX_CONV16: &[(i64, &str)] = &[
     (10, "Composition Adjust + Horizon Correction"),
     (12, "Horizon Correction"),
 ];
-const PENTAX_CONV17: &[(i64, &str)] = &[(0, "Off"), (1, "Short"), (2, "Medium"), (3, "Long")];
-const PENTAX_CONV18: &[(i64, &str)] =
+const PENTAX_CONV17: &[(i64, &str)] = &[
+    (0, "None"),
+    (1, "Lower-left, Bottom"),
+    (2, "Bottom"),
+    (3, "Lower-right, Bottom"),
+    (4, "Mid-left, Center"),
+    (5, "Center (horizontal)"),
+    (6, "Mid-right, Center"),
+    (7, "Upper-left, Top"),
+    (8, "Top"),
+    (9, "Upper-right, Top"),
+    (10, "Right"),
+    (11, "Lower-left, Mid-left"),
+    (12, "Upper-left, Mid-left"),
+    (13, "Bottom, Center"),
+    (14, "Top, Center"),
+    (15, "Lower-right, Mid-right"),
+    (16, "Upper-right, Mid-right"),
+    (17, "Left"),
+    (18, "Mid-left"),
+    (19, "Center (vertical)"),
+    (20, "Mid-right"),
+];
+const PENTAX_CONV18: &[(i64, &str)] = &[(0, "Off"), (1, "Short"), (2, "Medium"), (3, "Long")];
+const PENTAX_CONV19: &[(i64, &str)] =
     &[(0, "Auto"), (1, "Release Priority"), (2, "Focus Priority")];
-const PENTAX_CONV19: &[(i64, &str)] = &[(0, "Auto"), (1, "Focus Priority"), (2, "FPS Priority")];
-const PENTAX_CONV20: &[(i64, &str)] = &[(0, "Low"), (1, "Medium"), (2, "High"), (3, "Off")];
-const PENTAX_CONV21: &[(i64, &str)] = &[(0, "Type 1"), (1, "Type 2"), (2, "Type 3")];
-const PENTAX_CONV22: &[(i64, &str)] = &[
+const PENTAX_CONV20: &[(i64, &str)] = &[(0, "Auto"), (1, "Focus Priority"), (2, "FPS Priority")];
+const PENTAX_CONV21: &[(i64, &str)] = &[(0, "Low"), (1, "Medium"), (2, "High"), (3, "Off")];
+const PENTAX_CONV22: &[(i64, &str)] = &[(0, "Type 1"), (1, "Type 2"), (2, "Type 3")];
+const PENTAX_CONV23: &[(i64, &str)] = &[
     (1, "Camera Battery"),
     (2, "Body Battery"),
     (3, "Grip Battery"),
     (4, "External Power Supply"),
 ];
-const PENTAX_CONV23: &[(i64, &str)] = &[
+const PENTAX_CONV24: &[(i64, &str)] = &[
     (1, "Body Battery"),
     (2, "Grip Battery"),
     (4, "External Power Supply"),
 ];
-const PENTAX_CONV24: &[(i64, &str)] = &[];
-const PENTAX_CONV25: &[(i64, &str)] = &[
+const PENTAX_CONV25: &[(i64, &str)] = &[];
+const PENTAX_CONV26: &[(i64, &str)] = &[
     (0, "Body Battery"),
     (1, "Grip Battery"),
     (3, "External Power Supply"),
 ];
-const PENTAX_CONV26: &[(i64, &str)] = &[
+const PENTAX_CONV27: &[(i64, &str)] = &[
     (1, "Empty or Missing"),
     (2, "Almost Empty"),
     (3, "Running Low"),
     (4, "Full"),
 ];
-const PENTAX_CONV27: &[(i64, &str)] = &[
+const PENTAX_CONV28: &[(i64, &str)] = &[
     (1, "Empty or Missing"),
     (2, "Almost Empty"),
     (3, "Running Low"),
     (4, "Close to Full"),
     (5, "Full"),
 ];
-const PENTAX_CONV28: &[(i64, &str)] = &[
+const PENTAX_CONV29: &[(i64, &str)] = &[
     (0, "Empty or Missing"),
     (1, "Almost Empty"),
     (2, "Running Low"),
@@ -238,7 +261,7 @@ const PENTAX_CONV28: &[(i64, &str)] = &[
     (4, "Close to Full"),
     (5, "Full"),
 ];
-const PENTAX_CONV29: &[(i64, &str)] = &[
+const PENTAX_CONV30: &[(i64, &str)] = &[
     (16, "Horizontal (normal)"),
     (32, "Rotate 180"),
     (48, "Rotate 90 CW"),
@@ -246,7 +269,7 @@ const PENTAX_CONV29: &[(i64, &str)] = &[
     (80, "Upwards"),
     (96, "Downwards"),
 ];
-const PENTAX_CONV30: &[(i64, &str)] = &[
+const PENTAX_CONV31: &[(i64, &str)] = &[
     (0, "Scene Mode"),
     (1, "Auto PICT"),
     (2, "Program AE"),
@@ -264,10 +287,10 @@ const PENTAX_CONV30: &[(i64, &str)] = &[
     (15, "Sensitivity Priority AE"),
     (16, "Flash X-Sync Speed AE"),
 ];
-const PENTAX_CONV31: &[(i64, &str)] = &[(0, "Normal"), (1, "Hi Speed"), (2, "Depth"), (3, "MTF")];
-const PENTAX_CONV32: &[(i64, &str)] = &[(0, "Tv or Av"), (1, "P Shift")];
-const PENTAX_CONV33: &[(i64, &str)] = &[(0, "Prohibited"), (1, "Permitted")];
-const PENTAX_CONV34: &[(i64, &str)] = &[
+const PENTAX_CONV32: &[(i64, &str)] = &[(0, "Normal"), (1, "Hi Speed"), (2, "Depth"), (3, "MTF")];
+const PENTAX_CONV33: &[(i64, &str)] = &[(0, "Tv or Av"), (1, "P Shift")];
+const PENTAX_CONV34: &[(i64, &str)] = &[(0, "Prohibited"), (1, "Permitted")];
+const PENTAX_CONV35: &[(i64, &str)] = &[
     (0, "Normal"),
     (1, "Red-eye reduction"),
     (2, "Auto"),
@@ -278,12 +301,12 @@ const PENTAX_CONV34: &[(i64, &str)] = &[
     (9, "Slow-sync, Red-eye reduction"),
     (10, "Trailing-curtain Sync"),
 ];
-const PENTAX_CONV35: &[(i64, &str)] = &[(0, "Multi-segment")];
-const PENTAX_CONV36: &[(i64, &str)] = &[(0, "Center-weighted average"), (1, "Spot")];
-const PENTAX_CONV37: &[(i64, &str)] = &[(0, "Auto")];
-const PENTAX_CONV38: &[(i64, &str)] = &[(0, "Select"), (1, "Fixed Center")];
-const PENTAX_CONV39: &[(i64, &str)] = &[(0, "Manual"), (1, "AF-S"), (2, "AF-C"), (3, "AF-A")];
-const PENTAX_CONV40: &[(i64, &str)] = &[
+const PENTAX_CONV36: &[(i64, &str)] = &[(0, "Multi-segment")];
+const PENTAX_CONV37: &[(i64, &str)] = &[(0, "Center-weighted average"), (1, "Spot")];
+const PENTAX_CONV38: &[(i64, &str)] = &[(0, "Auto")];
+const PENTAX_CONV39: &[(i64, &str)] = &[(0, "Select"), (1, "Fixed Center")];
+const PENTAX_CONV40: &[(i64, &str)] = &[(0, "Manual"), (1, "AF-S"), (2, "AF-C"), (3, "AF-A")];
+const PENTAX_CONV41: &[(i64, &str)] = &[
     (0, "Upper-left"),
     (1, "Top"),
     (2, "Upper-right"),
@@ -296,8 +319,8 @@ const PENTAX_CONV40: &[(i64, &str)] = &[
     (9, "Bottom"),
     (10, "Lower-right"),
 ];
-const PENTAX_CONV41: &[(i64, &str)] = &[(0, "Single-frame")];
-const PENTAX_CONV42: &[(i64, &str)] = &[
+const PENTAX_CONV42: &[(i64, &str)] = &[(0, "Single-frame")];
+const PENTAX_CONV43: &[(i64, &str)] = &[
     (0, "Continuous"),
     (1, "Continuous (Lo)"),
     (2, "Self-timer (12 s)"),
@@ -307,7 +330,7 @@ const PENTAX_CONV42: &[(i64, &str)] = &[
     (6, "Exposure Bracket"),
     (7, "Multiple Exposure"),
 ];
-const PENTAX_CONV43: &[(i64, &str)] = &[
+const PENTAX_CONV44: &[(i64, &str)] = &[
     (3, "0.3"),
     (4, "0.5"),
     (5, "0.7"),
@@ -317,7 +340,7 @@ const PENTAX_CONV43: &[(i64, &str)] = &[
     (13, "1.7"),
     (16, "2.0"),
 ];
-const PENTAX_CONV44: &[(i64, &str)] = &[
+const PENTAX_CONV45: &[(i64, &str)] = &[
     (0, "n/a"),
     (2, "1 of 2"),
     (3, "1 of 3"),
@@ -330,7 +353,7 @@ const PENTAX_CONV44: &[(i64, &str)] = &[
     (53, "4 of 5"),
     (69, "5 of 5"),
 ];
-const PENTAX_CONV45: &[(i64, &str)] = &[
+const PENTAX_CONV46: &[(i64, &str)] = &[
     (0, "Auto"),
     (1, "Daylight"),
     (2, "Shade"),
@@ -345,7 +368,7 @@ const PENTAX_CONV45: &[(i64, &str)] = &[
     (13, "Set Color Temperature 2"),
     (14, "Set Color Temperature 3"),
 ];
-const PENTAX_CONV46: &[(i64, &str)] = &[
+const PENTAX_CONV47: &[(i64, &str)] = &[
     (1, "JPEG (Best)"),
     (4, "RAW (PEF, Best)"),
     (5, "RAW+JPEG (PEF, Best)"),
@@ -362,14 +385,14 @@ const PENTAX_CONV46: &[(i64, &str)] = &[
     (72, "RAW (DNG, Good)"),
     (73, "RAW+JPEG (DNG, Good)"),
 ];
-const PENTAX_CONV47: &[(i64, &str)] = &[(0, "10 MP"), (1, "6 MP"), (2, "2 MP")];
-const PENTAX_CONV48: &[(i64, &str)] = &[
+const PENTAX_CONV48: &[(i64, &str)] = &[(0, "10 MP"), (1, "6 MP"), (2, "2 MP")];
+const PENTAX_CONV49: &[(i64, &str)] = &[
     (0, "Horizontal (normal)"),
     (1, "Rotate 180"),
     (2, "Rotate 90 CW"),
     (3, "Rotate 270 CW"),
 ];
-const PENTAX_CONV49: &[(i64, &str)] = &[(0, "Manual"), (1, "Auto")];
+const PENTAX_CONV50: &[(i64, &str)] = &[(0, "Manual"), (1, "Auto")];
 
 /// `Image::ExifTool::Pentax::SRInfo2` -- 1 fields, FORMAT `int8u`.
 ///
@@ -2287,7 +2310,7 @@ pub(crate) static PENTAX_LENSINFOQ: BinaryTable = BinaryTable {
     }],
 };
 
-/// `Image::ExifTool::Pentax::AFInfo` -- 11 fields, FORMAT `int8u`.
+/// `Image::ExifTool::Pentax::AFInfo` -- 12 fields, FORMAT `int8u`.
 ///
 /// Transcribed from ExifTool's in-memory tag table by
 /// `tools/exiftool-tables/codegen_subdirs.py`. Do not edit by hand.
@@ -2339,6 +2362,48 @@ pub(crate) static PENTAX_AFINFO: BinaryTable = BinaryTable {
             low_priority: false,
         },
         Field {
+            key: "11",
+            index: 11,
+            cond: Cond::Model {
+                any_of: &[],
+                none_of: &[
+                    ModelPat {
+                        text: "K-1",
+                        word_end: true,
+                    },
+                    ModelPat {
+                        text: "K-3",
+                        word_end: true,
+                    },
+                    ModelPat {
+                        text: "K-70",
+                        word_end: true,
+                    },
+                    ModelPat {
+                        text: "K-S1",
+                        word_end: true,
+                    },
+                    ModelPat {
+                        text: "K-S2",
+                        word_end: true,
+                    },
+                    ModelPat {
+                        text: "KP",
+                        word_end: true,
+                    },
+                ],
+            },
+            name: "AFPointsInFocus",
+            format: None,
+            count: 1,
+            set_member: None,
+            gate: None,
+            mask: None,
+            value_conv: ValueConv::None,
+            print_conv: PrintConv::Map(PENTAX_CONV17),
+            low_priority: false,
+        },
+        Field {
             key: "506",
             index: 506,
             cond: Cond::Model {
@@ -2369,7 +2434,7 @@ pub(crate) static PENTAX_AFINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV17),
+            print_conv: PrintConv::Map(PENTAX_CONV18),
             low_priority: false,
         },
         Field {
@@ -2389,7 +2454,7 @@ pub(crate) static PENTAX_AFINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV18),
+            print_conv: PrintConv::Map(PENTAX_CONV19),
             low_priority: false,
         },
         Field {
@@ -2409,7 +2474,7 @@ pub(crate) static PENTAX_AFINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV19),
+            print_conv: PrintConv::Map(PENTAX_CONV20),
             low_priority: false,
         },
         Field {
@@ -2429,7 +2494,7 @@ pub(crate) static PENTAX_AFINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(3),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV20),
+            print_conv: PrintConv::Map(PENTAX_CONV21),
             low_priority: false,
         },
         Field {
@@ -2449,7 +2514,7 @@ pub(crate) static PENTAX_AFINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(12),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV21),
+            print_conv: PrintConv::Map(PENTAX_CONV22),
             low_priority: false,
         },
         Field {
@@ -2521,7 +2586,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(15),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV22),
+            print_conv: PrintConv::Map(PENTAX_CONV23),
             low_priority: false,
         },
         Field {
@@ -2535,7 +2600,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(15),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV23),
+            print_conv: PrintConv::Map(PENTAX_CONV24),
             low_priority: false,
         },
         Field {
@@ -2555,7 +2620,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Bitmask(PENTAX_CONV24, PENTAX_CONV25),
+            print_conv: PrintConv::Bitmask(PENTAX_CONV25, PENTAX_CONV26),
             low_priority: false,
         },
         Field {
@@ -2613,7 +2678,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV26),
+            print_conv: PrintConv::Map(PENTAX_CONV27),
             low_priority: false,
         },
         Field {
@@ -2647,7 +2712,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV27),
+            print_conv: PrintConv::Map(PENTAX_CONV28),
             low_priority: false,
         },
         Field {
@@ -2681,7 +2746,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(15),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV26),
+            print_conv: PrintConv::Map(PENTAX_CONV27),
             low_priority: false,
         },
         Field {
@@ -2862,7 +2927,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV28),
+            print_conv: PrintConv::Map(PENTAX_CONV29),
             low_priority: false,
         },
         Field {
@@ -3215,7 +3280,7 @@ pub(crate) static PENTAX_BATTERYINFO: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV28),
+            print_conv: PrintConv::Map(PENTAX_CONV29),
             low_priority: false,
         },
         Field {
@@ -3432,7 +3497,7 @@ pub(crate) static PENTAX_SHOTINFO: BinaryTable = BinaryTable {
         gate: None,
         mask: None,
         value_conv: ValueConv::None,
-        print_conv: PrintConv::Map(PENTAX_CONV29),
+        print_conv: PrintConv::Map(PENTAX_CONV30),
         low_priority: false,
     }],
 };
@@ -3497,7 +3562,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV30),
+            print_conv: PrintConv::Map(PENTAX_CONV31),
             low_priority: true,
         },
         Field {
@@ -3511,7 +3576,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(3),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV31),
+            print_conv: PrintConv::Map(PENTAX_CONV32),
             low_priority: true,
         },
         Field {
@@ -3539,7 +3604,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(64),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV32),
+            print_conv: PrintConv::Map(PENTAX_CONV33),
             low_priority: true,
         },
         Field {
@@ -3553,7 +3618,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(128),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV33),
+            print_conv: PrintConv::Map(PENTAX_CONV34),
             low_priority: true,
         },
         Field {
@@ -3567,7 +3632,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV34),
+            print_conv: PrintConv::Map(PENTAX_CONV35),
             low_priority: true,
         },
         Field {
@@ -3581,7 +3646,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(15),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Bitmask(PENTAX_CONV35, PENTAX_CONV36),
+            print_conv: PrintConv::Bitmask(PENTAX_CONV36, PENTAX_CONV37),
             low_priority: true,
         },
         Field {
@@ -3595,7 +3660,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Bitmask(PENTAX_CONV37, PENTAX_CONV38),
+            print_conv: PrintConv::Bitmask(PENTAX_CONV38, PENTAX_CONV39),
             low_priority: true,
         },
         Field {
@@ -3609,7 +3674,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(15),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV39),
+            print_conv: PrintConv::Map(PENTAX_CONV40),
             low_priority: true,
         },
         Field {
@@ -3623,7 +3688,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Bitmask(PENTAX_CONV37, PENTAX_CONV40),
+            print_conv: PrintConv::Bitmask(PENTAX_CONV38, PENTAX_CONV41),
             low_priority: true,
         },
         Field {
@@ -3651,7 +3716,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Bitmask(PENTAX_CONV41, PENTAX_CONV42),
+            print_conv: PrintConv::Bitmask(PENTAX_CONV42, PENTAX_CONV43),
             low_priority: true,
         },
         Field {
@@ -3665,7 +3730,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV43),
+            print_conv: PrintConv::Map(PENTAX_CONV44),
             low_priority: true,
         },
         Field {
@@ -3679,7 +3744,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV44),
+            print_conv: PrintConv::Map(PENTAX_CONV45),
             low_priority: true,
         },
         Field {
@@ -3693,7 +3758,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV45),
+            print_conv: PrintConv::Map(PENTAX_CONV46),
             low_priority: true,
         },
         Field {
@@ -3733,7 +3798,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: None,
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV46),
+            print_conv: PrintConv::Map(PENTAX_CONV47),
             low_priority: true,
         },
         Field {
@@ -3759,7 +3824,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(3),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV47),
+            print_conv: PrintConv::Map(PENTAX_CONV48),
             low_priority: true,
         },
         Field {
@@ -3845,7 +3910,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(240),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV34),
+            print_conv: PrintConv::Map(PENTAX_CONV35),
             low_priority: true,
         },
         Field {
@@ -3871,7 +3936,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(15),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Bitmask(PENTAX_CONV35, PENTAX_CONV36),
+            print_conv: PrintConv::Bitmask(PENTAX_CONV36, PENTAX_CONV37),
             low_priority: true,
         },
         Field {
@@ -3923,7 +3988,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(96),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV48),
+            print_conv: PrintConv::Map(PENTAX_CONV49),
             low_priority: true,
         },
         Field {
@@ -3949,7 +4014,7 @@ pub(crate) static PENTAX_CAMERASETTINGS: BinaryTable = BinaryTable {
             gate: None,
             mask: Some(4),
             value_conv: ValueConv::None,
-            print_conv: PrintConv::Map(PENTAX_CONV49),
+            print_conv: PrintConv::Map(PENTAX_CONV50),
             low_priority: true,
         },
         Field {
