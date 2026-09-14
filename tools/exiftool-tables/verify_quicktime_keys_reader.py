@@ -27,8 +27,21 @@ def authenticated(source,ledger,rust):
  doc=json.loads(source.read_text()); expected=specs.compile_document(doc)
  if expected!=json.loads(ledger.read_text()) or specs.render_rust(expected)!=rust.read_text(): raise ValueError('Keys source artifacts do not replay')
  return {k:hashlib.sha256(p.read_bytes()).hexdigest() for k,p in {'source_sha256':source,'ledger_sha256':ledger,'rust_sha256':rust}.items()}
+def validate_report(report, ledger):
+ by_name={x['name']:x['source_identity'] for x in ledger['specs']}
+ credited=[]
+ for row in report['observations']:
+  for side in ('native_json','oxidex_json'):
+   if hashlib.sha256(row[side].encode()).hexdigest()!=row[side+'_sha256']: raise ValueError('transcript hash differs')
+  native=baseline.projection(json.loads(row['native_json'])); actual=baseline.projection(json.loads(row['oxidex_json']))
+  if native!=row['expected'] or actual!=row['actual'] or row['matched'] != (native==actual): raise ValueError('transcript projection claim differs')
+  if row['matched']:
+   for key in actual:
+    if key.startswith('Keys:') and key.removeprefix('Keys:') in by_name: credited.append({'fixture':row['fixture'],'source_identity':by_name[key.removeprefix('Keys:')],'group1':'Keys','tag_name':key.removeprefix('Keys:')})
+ return credited
+
 def compare(tree,out,source,ledger,rust):
- inp=authenticated(source,ledger,rust); root=baseline.ROOT; state=baseline.instrument.git_state(root)
+ inp=authenticated(source,ledger,rust); ledger_doc=json.loads(ledger.read_text()); root=baseline.ROOT; state=baseline.instrument.git_state(root)
  if state.dirty: raise ValueError('clean checkout required')
  oracle=baseline.exiftool_oracle.resolve_tree(tree.resolve()); binary=baseline.instrument.resolve_binary(root/'target/debug/oxidex')
  rows=[]; manifest={}
@@ -40,6 +53,7 @@ def compare(tree,out,source,ledger,rust):
   expected=baseline.projection(json.loads(native.stdout)); actual=baseline.projection(json.loads(ox.stdout))
   rows.append({'fixture':name,'fixture_sha256':manifest[name],'native_json':native.stdout,'native_json_sha256':hashlib.sha256(native.stdout.encode()).hexdigest(),'oxidex_json':ox.stdout,'oxidex_json_sha256':hashlib.sha256(ox.stdout.encode()).hexdigest(),'expected':expected,'actual':actual,'matched':expected==actual,'native_emitted':bool(expected),'oxidex_emitted':bool(actual)})
  report={'schema':SCHEMA,'inputs':inp,'source_commit':state.commit,'binary_sha256':hashlib.sha256(Path(binary.path).read_bytes()).hexdigest(),'producer':{'runtime_input_manifest_sha256':__import__('runtime_evidence_inputs').runtime_input_manifest(root),'fixture_manifest_sha256':hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest()},'observations':rows,'matches':[r for r in rows if r['matched'] and r['native_emitted'] and r['oxidex_emitted']],'absence_or_refusals':[r for r in rows if not (r['matched'] and r['native_emitted'] and r['oxidex_emitted'])],'scope':'direct Keys-table meta/keys/ilst fixtures only; unknown and unsupported source rows are recorded separately from matches'}
+ report['matched_identities']=validate_report(report,ledger_doc)
  (out/'comparison.json').write_text(json.dumps(report,indent=2)+'\n');return report
 def main():
  p=argparse.ArgumentParser();p.add_argument('--exiftool-dir',type=Path,required=True);p.add_argument('--out',type=Path,required=True);p.add_argument('--source',type=Path,required=True);p.add_argument('--ledger',type=Path,required=True);p.add_argument('--rust',type=Path,required=True);a=p.parse_args();r=compare(a.exiftool_dir,a.out,a.source,a.ledger,a.rust);print(f"Keys emitted matches: {len(r['matches'])}/{len(r['observations'])}")
