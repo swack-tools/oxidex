@@ -49,7 +49,21 @@ overrides.
 
 Validation so far: 31 focused Python tests, a fresh CLI build, Clippy with denied
 warnings, 50 native comparisons, and the full workspace test suite pass.
-Real-container conformance remains pending.
+An isolated before/after `conformance.py` run on 11 available containers and
+canaries compares base `b027ce0b` with candidate `ab522539`. Matched rows changed
+622 to 620, VALUE 2 to 1, MISSING 234 to 240, and EXTRA 114 to 86. This is not a
+clean aggregate parity pass. Inspecting the native and candidate `-j -a -G0:1:4`
+output shows the generated ItemList values retained with correct family-0/1
+identity. The older implementation emitted duplicate ItemList/QuickTime aliases;
+name/value matching could credit those aliases against equal UserData/Keys
+occurrences in the native MOV. Those other producer paths remain unresolved.
+Do not restore fabricated aliases to improve the score.
+
+Evidence run: `itemlist-isolated-conformance-1789409005`. Separate Cargo target
+directories and distinct binary hashes bind the two commits. The preceding
+`itemlist-container-conformance-1789408875` run is invalid: a shared target
+returned the same overwritten binary for both checkouts. Share sccache, but use
+separate target directories for paired measurements.
 
 ## Reproduce
 
