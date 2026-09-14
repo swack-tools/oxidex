@@ -38,6 +38,7 @@ def hydrated(tags, sources=SOURCE, total=1):
 
 class CatalogHydratedJoinTests(unittest.TestCase):
     def quicktime_facts(self, source, *, generated, reasons):
+        source = json.loads((PATH.parent / "fixtures/quicktime_source_13_59.json").read_text())["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
         identity = {"module": "QuickTime", "table": "ItemList", "raw_key": "titl",
                     "source_sha256": join.quicktime_selector.digest(source), "variant_path": []}
         return ({"schema": "quicktime_generated_itemlist_specs_v1",
@@ -59,7 +60,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                          {"Title": "conflict", "Missing": "absent"})
 
     def test_quicktime_exact_identity_joins_generated_and_refused_selector_facts(self):
-        source = {"Name": "Title"}
+        source = json.loads((PATH.parent / "fixtures/quicktime_source_13_59.json").read_text())["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
         ledger, capabilities = self.quicktime_facts(source, generated=True, reasons=[])
         result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities)
         self.assertEqual(result["entries"][0]["source_derived_implementation"],
@@ -70,10 +71,10 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertEqual(result["entries"][0]["implementation_refusal_reasons"], ["unsupported:conversion"])
 
     def test_quicktime_name_or_hash_collision_cannot_consume_a_source_row(self):
-        source = {"Name": "Title"}
+        source = json.loads((PATH.parent / "fixtures/quicktime_source_13_59.json").read_text())["modules"]["QuickTime"]["tables"]["ItemList"]["tags"]["titl"]
         ledger, capabilities = self.quicktime_facts({"Name": "Other"}, generated=True, reasons=[])
         result = join.build(catalog([entry()]), hydrated({"titl": source}), "c", "h", ledger, capabilities)
-        self.assertEqual(result["entries"][0]["source_derived_implementation"], "source_row_not_yet_consumed")
+        self.assertEqual(result["entries"][0]["source_derived_implementation"], "generated_reader_declaration_unobserved")
         self.assertEqual(result["entries"][0]["observed_read"], "not_observed_yet")
 
     def test_rejects_malformed_native_denominators_and_names(self):

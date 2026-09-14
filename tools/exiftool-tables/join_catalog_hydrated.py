@@ -153,6 +153,8 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
         return {}
     if itemlist_ledger.get("schema") != "quicktime_generated_itemlist_specs_v1":
         raise ValueError("unsupported QuickTime generated ledger schema")
+    bounded = read_json(Path(__file__).with_name("fixtures") / "quicktime_source_13_59.json")
+    tables = bounded["modules"]["QuickTime"]["tables"]
     rows = {}
     for record in itemlist_ledger.get("ledger", []):
         identity = record.get("identity", {})
@@ -162,6 +164,20 @@ def quicktime_implementation(itemlist_ledger: dict | None, capabilities: dict | 
         key = (identity.get("table"), identity.get("raw_key"), identity.get("source_sha256"), tuple(path) if isinstance(path, list) and all(type(v) is int and v >= 0 for v in path) else None)
         if not all(isinstance(value, str) and value for value in key[:3]) or key[3] is None or key in rows:
             raise ValueError("QuickTime generated ledger identity is duplicated or malformed")
+        try:
+            source = tables[key[0]]["tags"][key[1]]
+            for candidate_path, candidate, _ in quicktime_selector.variants(source):
+                if candidate_path == key[3]:
+                    if quicktime_selector.digest(candidate) != key[2]:
+                        raise ValueError("QuickTime ledger does not match bounded source identity")
+                    key = (key[0], key[1], quicktime_selector.digest(quicktime_selector.semantic_normal_form(candidate)), key[3])
+                    break
+            else:
+                raise ValueError("QuickTime ledger variant is absent from bounded source")
+        except (KeyError, TypeError):
+            raise ValueError("QuickTime bounded source identity is malformed") from None
+        if key in rows:
+            raise ValueError("QuickTime semantic identity collision")
         rows[key] = {"generated": record.get("generated") is True, "reasons": record.get("reasons")}
     for family in capabilities.get("families", []):
         for record in family.get("records", []):
@@ -204,7 +220,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         if source is not None and identity[0].startswith("Image::ExifTool::QuickTime::"):
             variant_path = (identity[2],) if "_variants" in hydrated["hydrated_layouts"]["tables"][identity[0]]["tags"][identity[1]] else ()
             projected = quicktime_selector_projection(identity[0], identity[1], source)
-            selector_hash = quicktime_selector.digest(projected)
+            selector_hash = quicktime_selector.digest(quicktime_selector.semantic_normal_form(projected))
             candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
             if candidate is not None:
                 if candidate["generated"]:
