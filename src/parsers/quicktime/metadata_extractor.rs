@@ -356,6 +356,7 @@ pub fn extract_metadata(root_atoms: &[Atom], is_cr3: bool) -> Result<MetadataMap
             // Extract iTunes-style metadata (udta→meta)
             if let Some(meta) = udta.find_child("meta") {
                 extract_itunes_metadata(&meta, &mut metadata)?;
+                extract_mp4_metadata(&meta, &mut metadata)?;
             }
         }
 
@@ -3780,7 +3781,7 @@ mod tests {
         let mut meta = vec![0; 4];
         meta.extend_from_slice(&child_atom(b"keys", &keys));
         meta.extend_from_slice(&ilst);
-        let moov = child_atom(b"moov", &child_atom(b"meta", &meta));
+        let moov = child_atom(b"moov", &child_atom(b"udta", &child_atom(b"meta", &meta)));
         let (_, roots) = super::super::atom_parser::parse_atoms(&moov).expect("atom tree");
         let metadata = extract_metadata(&roots, false).expect("metadata");
         assert_eq!(metadata.get_string("QuickTime:Artist"), Some("Ada"));

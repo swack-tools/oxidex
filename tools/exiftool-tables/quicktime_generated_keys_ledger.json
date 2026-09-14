@@ -1008,7 +1008,7 @@
     "reason": null
   },
   "schema": "quicktime_generated_keys_specs_v1",
-  "scope": "direct Keys-table matches in moov/meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted",
+  "scope": "direct Keys-table matches in QuickTime meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted",
   "source": {
     "exiftool_version": "13.59",
     "table_sha256": "b1d4bd595657b7b352f40e8e6fb695ed804c80b138311516365ce6120f653adb"
