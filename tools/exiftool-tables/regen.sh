@@ -92,6 +92,12 @@ python3 "$HERE/serial_directory.py" "$JSON" \
     --output "$CACHE/serial-$VERSION.json" --rust-output "$SERIAL_OUT"
 
 echo
+echo ">> generating source-derived scalar writer helper operands"
+python3 "$HERE/scalar_helper_codegen.py" "$JSON" \
+    --output "$(artifact_path scalar-helpers)" \
+    --report "$(artifact_path scalar-helper-ledger)"
+
+echo
 echo ">> extracting file-identification tables"
 "$PERL" "$HERE/dump_filetypes.pl" "$LIB" > "$CACHE/filetypes-$VERSION.json"
 python3 "$HERE/codegen_filetypes.py" "$CACHE/filetypes-$VERSION.json" \

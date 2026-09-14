@@ -37,6 +37,33 @@ The native test observes return bytes, defined/UTF8 state and length. Its count
 observation is the unchanged caller argument, not the helper-local final count;
 the latter remains a reference result checked by source/unit tests.
 
-Composition with CheckExif/CheckValue and generated Rust execution, encoding,
-and public tag routing remain the next steps. This helper does not activate
-production writes and is not a full release-upgrade or conformance result.
+## Generated Rust execution
+
+`scalar_helper_codegen.py` compiles the captured CheckValue and WriteValue
+operands into `src/writers/generated_scalar_rules.rs`. Normal `regen.sh` owns
+that artifact and `scalar_helper_ledger.json`; the inventory now has 34 outputs.
+The shared `generated_scalar.rs` executor consumes those operands. Supported
+source changes replace the operands; unsupported source emits `None` and a
+named ledger gap instead of retaining an old rule. The native suite also
+compares both committed artifacts with generation from CI's fresh pinned dump,
+so omitting regeneration cannot leave stale rules behind a green helper test.
+The public writer remains inactive for these definitions.
+
+The actual compiled Rust executor matches 512 authenticated native helper cases
+(240 validation and 272 serialization) for the canonical source and again for
+the copied WriteValue count-guard change. A third actual-source replay changes
+CheckValue's comparisons, including a branch that executes a negative Perl
+repetition; all 512 cases match that native source too. The native return
+records supply the expected values, defined/UTF8 state and validation errors.
+Rust's helper-local count is separately compared with the Python source
+reference; this is not a native observation of that local variable.
+
+The first Rust replay exposed an ASCII substring's UTF8 storage downgrade.
+The corrected executor preserves native behavior when non-ASCII characters
+occur outside the selected prefix as well. These are helper-level checks,
+not evidence of a public generated write route.
+
+Composition with CheckExif/CheckValue, CharsetEXIF encoding, public tag routing
+and complete file write/read-back remain the next steps. Numeric packing and
+the optional native data-target mutation are also unfinished. This checkpoint
+does not establish full release-upgrade or read/write conformance.

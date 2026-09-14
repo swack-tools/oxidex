@@ -106,8 +106,33 @@ Portable readiness tests replace private-path dependencies with controlled
 archived sources and CLI subprocesses. The real selected 11.78 and 12.64
 releases separately pass native readiness. This advances the rehearsal
 instrument; it does not establish generated OxiDex conformance for either
-release. Shared WriteValue translation, encoding, helper composition and
-public generated routing remain unfinished.
+release. Encoding, helper composition and public generated routing remain
+unfinished.
+
+The helper-capture and native-readiness integration **merged in PR #762** as
+`54206ecb`. All five required hosted checks passed on `d091f251`, including
+generated-table verification. The selected historical releases still have no
+completed generated OxiDex/native conformance run.
+
+The next work-branch checkpoint compiles captured CheckValue and WriteValue
+rules into Rust operands through normal regeneration, adding two declared
+artifacts (34 total). Unsupported helper semantics produce an explicit ledger
+gap and no admitted rule; they cannot silently reuse the older release's
+operands. CI's native suite checks both committed artifacts against fresh
+generation. The shared Rust executor matches 512 native cases on canonical
+source, 512 on a copied WriteValue count-bound change and 512 on a copied
+CheckValue comparison change. These are three helper probes, not three release
+upgrades. The tests found and corrected UTF8 substring storage and negative
+repetition behavior. Source-reference count checks are separate from native
+return checks.
+
+Native capture and oracle startup now explicitly disable ambient ExifTool
+configuration. Clean and hostile-home native captures are byte-identical in
+the focused probe. This prevents personal configuration from being mistaken
+for the selected release's rules. Full 34-artifact regeneration and the full
+Python suite for this combined checkpoint are pending. No public writer route
+is enabled, no manual tag rule has been retired in this checkpoint, and no
+project-wide generation percentage has been remeasured.
 
 ### Previous merged definitions checkpoint
 

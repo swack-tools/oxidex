@@ -138,7 +138,9 @@ class NativeScalarDifferential(unittest.TestCase):
                                      "count": count})
         perl = r'''
 use strict; use warnings; use JSON::PP; use Encode (); use B (); use B::Deparse;
-use Digest::SHA qw(sha256_hex); use Image::ExifTool;
+use Digest::SHA qw(sha256_hex);
+BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
+use Image::ExifTool;
 require 'Image/ExifTool/Writer.pl'; local $/;
 my $rows=JSON::PP->new->utf8->decode(<STDIN>); my @results; my $cv=\&Image::ExifTool::WriteValue;
 my $body=B::Deparse->new('-p','-sC')->coderef2text($cv);

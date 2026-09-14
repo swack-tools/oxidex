@@ -140,6 +140,7 @@ use OxiDex::NativeReaderContract ();
 
 my $LIB = shift @ARGV or die "usage: $0 <exiftool-lib-dir>\n";
 unshift @INC, $LIB;
+BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 require Image::ExifTool;
 binmode(STDOUT, ':encoding(UTF-8)');
 

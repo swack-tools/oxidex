@@ -250,6 +250,10 @@ unshift @INC, $EXIFTOOL_LIB;
 
 my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
 
+# Table facts are a property of the selected native tree, never of the
+# account running the dump.  ExifTool loads $EXIFTOOL_HOME/.ExifTool_config
+# during this require unless its configFile global is the empty string.
+BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 require Image::ExifTool;
 
 # Keys that describe the table itself rather than a tag within it.
