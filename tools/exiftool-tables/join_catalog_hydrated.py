@@ -406,12 +406,24 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     writer = writer_implementation(writer_source, writer_final_ledger, writer_final_rust, writer_public_ledger, writer_public_rust)
     if writer and (writer_input_digests is None or set(writer_input_digests) != {"source_sha256", "final_ledger_sha256", "final_rust_sha256", "public_ledger_sha256", "public_rust_sha256"}):
         raise ValueError("writer input digests are incomplete")
+    if writer:
+        capture = writer_public_ledger.get("source", {}).get("capture", {})
+        loaded = json.loads(writer_source).get("native_write_capture_context", {}).get("loaded_modules", {})
+        sources = catalog["producer"]["sources"]
+        expected_paths = {"main_source_sha256": "Image/ExifTool.pm", "exif_source_sha256": "Image/ExifTool/Exif.pm",
+                          "writer_source_sha256": "Image/ExifTool/Writer.pl", "write_exif_source_sha256": "Image/ExifTool/WriteExif.pl"}
+        if (not isinstance(capture, dict) or capture.get("exiftool_version") != catalog["exiftool_version"] or not isinstance(loaded, dict)):
+            raise ValueError("writer source version or native closure is malformed")
+        for field, path in expected_paths.items():
+            digest, source_fact = capture.get(field), sources.get(path)
+            if not isinstance(digest, str) or loaded.get(path) != digest or not isinstance(source_fact, dict) or source_fact.get("sha256") != digest:
+                raise ValueError("writer source closure differs from catalog/hydrated provenance")
     observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, quicktime_input_digests,
                                                  itemlist_ledger["specs"] if itemlist_ledger else None)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):
         raise ValueError("hydrated total_tag_entries differs from catalog denominator")
-    records, status_counts, implementation_counts, observed_counts, family_counts = [], Counter(), Counter(), Counter(), defaultdict(Counter)
+    records, status_counts, implementation_counts, reader_counts, writer_counts, observed_counts, family_counts = [], Counter(), Counter(), Counter(), Counter(), Counter(), defaultdict(Counter)
     for identity in sorted(catalog_by_id):
         entry, source = catalog_by_id[identity], hydrated_by_id.get(identity)
         if source is None:
@@ -425,7 +437,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             row_hash, table_hash = canonical_hash(source), table_hashes[identity[0]]
         status_counts[status] += 1
         family_counts[entry["groups"]["1"]][status] += 1
-        implementation = "source_row_not_yet_consumed"
+        implementation = reader_implementation = "source_row_not_yet_consumed"
+        writer_state = "writer_not_declared"
         refusal = None
         selector_hash = None
         observed_read = "not_observed_yet"
@@ -443,24 +456,29 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             candidate = quicktime.get((identity[0].rsplit("::", 1)[-1], identity[1], selector_hash, variant_path))
             if candidate is not None and state == "joined":
                 if candidate["generated"]:
-                    implementation = "generated_reader_declaration_unobserved"
+                    implementation = reader_implementation = "generated_reader_declaration_unobserved"
                     source_identity = candidate["source_identity"]
                     evidence_identity = (source_identity["table"], source_identity["raw_key"],
                                          source_identity["source_sha256"], tuple(source_identity["variant_path"]))
                     if observed_quicktime.get(evidence_identity) == candidate["name"]:
                         observed_read = "observed_matched_read"
                 else:
-                    implementation = "blocked_generated_reader_refusal"
+                    implementation = reader_implementation = "blocked_generated_reader_refusal"
                     refusal = candidate.get("reasons")
         writer_candidate = writer.get(identity)
         if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
-            implementation = "generated_writer_declaration_unobserved"
+            writer_state = "generated_writer_declaration_unobserved"
+            if implementation == "source_row_not_yet_consumed":
+                implementation = writer_state
         implementation_counts[implementation] += 1
+        reader_counts[reader_implementation] += 1
+        writer_counts[writer_state] += 1
         observed_counts[observed_read] += 1
         records.append({"identity": {"table": identity[0], "raw_key": identity[1], "variant_index": identity[2]},
                         "catalog": {"name": entry["name"], "normalized_name": entry["normalized_name"], "groups": entry["groups"]},
                         "source": {"state": state, "name": source_name, "row_sha256": row_hash, "selector_row_sha256": selector_hash, "table_sha256": table_hash},
                         "source_layout_status": status, "source_derived_implementation": implementation,
+                        "reader_implementation": reader_implementation, "writer_implementation": writer_state,
                         "implementation_refusal_reasons": refusal,
                         "observed_read": observed_read, "observed_write": "not_observed_yet"})
     if len(records) != len(catalog_by_id) or sum(status_counts.values()) != len(records):
@@ -478,7 +496,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                                              "producer": quicktime_read_evidence["producer"]}
     return {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
             "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
-            "implementation": dict(sorted(implementation_counts.items())), "observed_read": dict(sorted(observed_counts.items()))},
+            "implementation": dict(sorted(implementation_counts.items())), "reader_implementation": dict(sorted(reader_counts.items())),
+            "writer_implementation": dict(sorted(writer_counts.items())), "observed_read": dict(sorted(observed_counts.items()))},
             "families": {key: dict(sorted(value.items())) for key, value in sorted(family_counts.items())}, "entries": records}
 
 
