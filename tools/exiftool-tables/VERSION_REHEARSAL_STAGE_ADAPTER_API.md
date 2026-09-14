@@ -88,7 +88,12 @@ Historical write mode is opt-in: it binds the selected release to the owned
 checkout pin, the selected native identity, and the regenerated
 `tiff_scalar_final_ledger.json` version. The normal matrix still defaults to
 its independent reviewed 13.59 contract. A write report passes only with a
-positive real matrix denominator and zero mismatches. Its scope is limited to
+positive real matrix denominator and zero mismatches. The declared cohort must
+exactly match both generated ledger and Rust operands, and every carrier,
+qualified name and operation must appear exactly once. A nonzero matrix
+process cannot pass by leaving behind an all-pass JSON report. Source files,
+generated operands, native writer sources, fixture bytes and the writer
+executable are rechecked after execution. Its scope is limited to
 the emitted TIFF/JPEG scalar cohort; fresh/empty EXIF, other writer grammars,
 and non-JPEG formats remain explicitly unexercised.
 
@@ -98,7 +103,7 @@ Write fixtures use a separate manifest kind:
 {
   "schema": 1,
   "kind": "oxidex_version_rehearsal_write_fixture_manifest",
-  "fixtures": [{"path": "/absolute/input.jpg", "sha256": "...", "bytes": 123}]
+  "fixtures": [{"path": "fixtures/input.jpg", "sha256": "...", "bytes": 123}]
 }
 ```
 
