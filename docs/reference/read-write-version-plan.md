@@ -1,6 +1,6 @@
 # Generated reading, writing and ExifTool upgrades
 
-Updated September 13, 2026. This records the expanded read/write and version
+Updated September 14, 2026. This records the expanded read/write and version
 objective alongside the [main plan](../AUTOGENERATION-PLAN.md).
 
 ## Finish line
@@ -32,6 +32,22 @@ the new oracle. If the generator cannot represent a changed rule, record that
 unsupported behavior explicitly and extend the shared machinery. Do not hide it
 by retaining the old tag-specific implementation. A sampled pair passing does
 not certify other releases or behaviors.
+
+For every upgrade, produce a change ledger separating upstream parsing fixes,
+added or removed tags, changed types/layouts, changed conversions/formatting,
+and changed write rules from OxiDex mismatches. Preserve old-version fixtures
+and expectations under their old release; add new-version expectations from
+actual new-native output. An expected output change is accepted only after the
+new generated build reproduces it. Never copy old expected values into the new
+release merely to keep tests green.
+
+Report changed upstream behaviors reproduced, remaining mismatches,
+unsupported changed rules, untested changes and required manual tag-specific
+edits. The upgrade goal is zero mismatches in the declared tested scope and
+zero manual tag-specific edits, with unsupported and untested scope stated
+separately. New tags without samples may still receive generated rules, but
+must remain marked unexercised until tested. Selecting the new release updates
+the pin, generated artifacts and matching oracle together after validation.
 
 ## Work in order, with independent tasks in parallel
 
@@ -67,6 +83,16 @@ not certify other releases or behaviors.
 6. Exercise upgrades repeatedly, then close the remaining historical-version
    and semantic inventory. Random tests are a discovery tool; they cannot
    certify untested versions or behaviors.
+
+Current writer checkpoint: PRs #761–#764 have merged the source-fact foundation,
+readiness tooling, inactive scalar helper compiler/runtime and CheckExif
+composition. The latest merge is #764 at `8988302c`, with all five required
+hosted checks passing at `56fba56e`. Step 3 remains incomplete: input
+normalization, inverse conversion controls, charset/count handling, physical
+operation integration and manual lookup retirement still need complete native
+file proof. See the [input pipeline](writer-input-pipeline.md) for that order.
+These helper merges do not count as a complete generated writer or as a
+successful full upgrade rehearsal.
 
 ## Reproducible random version rehearsals
 

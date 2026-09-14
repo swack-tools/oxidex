@@ -54,12 +54,18 @@ Evidence relative to the continuation evidence root:
 The cases, trace program, canonical and changed JSON, source copy, state record
 and failed-loader-order log are preserved there.
 
+## Validation composition is merged
+
+PR #764 merged as `8988302c` after all five required hosted checks passed at
+`56fba56e`. Its source-derived CheckExif recipe composes the actual generated
+CheckValue recipe. The direct native/generated instrument covers 19 cases
+across canonical source and three source mutations, for 76 matching outcomes.
+The same helper comparison separately passed for selected releases 11.78 and
+12.64. This is helper proof; neither full version conformance nor public file
+writing is established by it.
+
 ## Next acceptance requirements
 
-- Compile and execute CheckExif with the exact generated CheckValue rule,
-  including source-order changes, falsey properties, numeric/byte format
-  coercion and missing-format behavior. A local-variable alias that changes
-  native control flow must refuse admission.
 - Translate input normalization and prove its relationship to inverse
   conversions and validation. Preserve default UTF-8, embedded NUL, defined
   empty values and deletion. Unsupported option/dependency behavior remains
@@ -70,6 +76,53 @@ and failed-loader-order log are preserved there.
 - Change supported native name, type, placement and processing behavior in a
   copied source; regeneration must change actual output without per-tag code
   edits. Retire the replaced manual tag lookup only after this proof.
+
+Input normalization needs both direct dependencies and callback references.
+Sanitize assigns SetWarning by CODE reference; searching only for calls misses
+that binding. Its Encode functions also belong to the interpreter library,
+outside the selected ExifTool library. Preserve those observations explicitly.
+Capturing the source body or parsing its guards is not executable admission.
+
+The shared Rust UTF-8 primitive may implement standard encoding, just as shared
+operations implement pack/unpack. The ExifTool source must still choose the
+encoding literal, input flags, guards, options and call order. Before admitting
+that path, compare controlled pristine and final-loaded native bindings,
+encoding registry and resolved method, and check typed Unicode/NUL/byte
+semantics. Replaced bindings or registry entries must refuse. Raw interpreter
+and library hashes remain evidence; source-to-XS binary linkage is not claimed.
+Unsupported manual packing and XML/HTML paths remain work to complete.
+
+## Generated sanitization execution checkpoint
+
+The next candidate captures a pristine interpreter and the actual final table
+producer's encoding state. It validates exact typed vectors (including undef),
+the requested and actual functions, and the registry's resolved method. It
+joins those callable fingerprints to Sanitize's captured dependencies before
+emitting Rust operands. Portable artifacts exclude machine paths and binary
+hashes; optional raw diagnostics retain them outside the source tree.
+
+`test_sanitize_rust.py` captures actual native source, generates its operands
+and compiles the real `generated_sanitize.rs` executor with standalone rustc.
+Base cases cover Unicode, NUL, bytes, undef, scalar references and inactive escape
+options. It tests a copied version-guard mutation and, when present in source,
+removes both EncodeHangs guards in another copy. Source/body identities are
+checked before comparison. Both option values are compared when the selected
+source ignores EncodeHangs or cannot reach manual packing.
+
+The current-pin permanent regression passed 260 native/Rust comparisons.
+Separate actual 11.78 and 12.64 native sources passed 208 comparisons each;
+both lack the option guards and the generated runtime follows their bodies.
+The compiler compares complete source shapes and refuses mixed guards or
+unmodeled statements, instead of keeping the previous release's behavior.
+
+Normal regeneration owns the sanitization rules and ledger (38 artifacts).
+Official full regeneration and the pre-repair full gate passed; targeted
+three-release proofs, source/codegen tests and Clippy passed after repairing
+the historical grammar. See the [progress record](../AUTOGENERATION-PROGRESS.md)
+for precise counts and evidence boundaries. Exact-head publication gates remain
+pending. No public writer is activated by direct-helper proof; inverse
+conversions, charset/count, physical writing and remaining sanitizer branches
+still need their own proof.
 
 There is no new production writer or manual-rule retirement to count at this
 checkpoint. Helper proof, complete file behavior and release conformance remain
