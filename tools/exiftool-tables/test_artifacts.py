@@ -16,8 +16,10 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(all_items)
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
-        self.assertEqual(len(all_items), 58)
-        self.assertEqual(len(artifacts.select(1)), 35)
+        self.assertEqual(len(all_items), 60)
+        self.assertEqual({item.key for item in artifacts.select(producer="quicktime_keys_specs")},
+                         {"quicktime-keys-specs", "quicktime-keys-ledger"})
+        self.assertEqual(len(artifacts.select(1)), 37)
         self.assertEqual(len(artifacts.select(2)), 23)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
