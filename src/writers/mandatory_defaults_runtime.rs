@@ -74,7 +74,15 @@ pub(crate) fn minimal_ifd0_tiff(
     jfif: Option<JfifValues>,
 ) -> Result<Vec<u8>, String> {
     let defaults = defaults_for_new_directory(recipe, "IFD0", no_mandatory, num_entries, jfif)?;
-    let mut entries = encode_ifd0_defaults(recipe, &defaults, byte_order)?;
+    let entries = encode_ifd0_defaults(recipe, &defaults, byte_order)?;
+    serialize_ifd0_defaults(entries, byte_order)
+}
+
+/// Pure TIFF framing; an empty set creates a tagless classic IFD0 carrier.
+pub(crate) fn serialize_ifd0_defaults(
+    mut entries: Vec<EncodedMandatoryDefault>,
+    byte_order: TiffByteOrder,
+) -> Result<Vec<u8>, String> {
     entries.sort_by_key(|entry| entry.tag_id);
     if entries
         .windows(2)
@@ -225,6 +233,30 @@ pub(crate) fn defaults_for_new_directory(
     num_entries: u32,
     jfif: Option<JfifValues>,
 ) -> Result<Vec<MandatoryDefault>, String> {
+    let mut properties = std::collections::BTreeMap::new();
+    if let Some(jfif) = jfif {
+        for (key, value) in [
+            ("JFIFXResolution", jfif.x),
+            ("JFIFYResolution", jfif.y),
+            ("JFIFResolutionUnit", jfif.resolution_unit),
+        ] {
+            if let Some(value) = value {
+                properties.insert(key.to_owned(), value);
+            }
+        }
+    }
+    defaults_with_properties(recipe, directory, no_mandatory, num_entries, &properties)
+}
+
+/// Execute generated property assignments against raw native self-state.
+/// Property names, the presence gate, target IDs and arithmetic are operands.
+pub(crate) fn defaults_with_properties(
+    recipe: &MandatoryRecipe,
+    directory: &str,
+    no_mandatory: bool,
+    num_entries: u32,
+    properties: &std::collections::BTreeMap<String, i64>,
+) -> Result<Vec<MandatoryDefault>, String> {
     if recipe.writer_source_file != "Image/ExifTool/WriteExif.pl"
         || recipe.writer_source_sha256.len() != 64
     {
@@ -239,43 +271,24 @@ pub(crate) fn defaults_for_new_directory(
         .find(|item| item.directory == directory)
         .ok_or_else(|| refusal("directory has no generated mandatory defaults"))?;
     let mut values = source.defaults.to_vec();
-    if directory == recipe.jfif_directory {
-        if let Some(jfif) = jfif {
-            if recipe.jfif_probe != "JFIFYResolution" || recipe.jfif_assignments.len() != 3 {
-                return Err(refusal("JFIF substitution operands are unresolved"));
-            }
-            for assignment in recipe.jfif_assignments {
-                // Native uses defined(JFIFYResolution) as the branch gate,
-                // then consumes all three fields.  A partial payload with Y
-                // defined would reach native WriteValue with undefined
-                // operands; it is outside this numeric carrier and refuses.
-                if jfif.y.is_none() {
-                    break;
-                }
-                let raw = match assignment.property {
-                    "JFIFXResolution" => jfif
-                        .x
-                        .ok_or_else(|| refusal("JFIF X resolution is undefined"))?,
-                    "JFIFYResolution" => jfif.y.expect("checked above"),
-                    "JFIFResolutionUnit" => jfif
-                        .resolution_unit
-                        .ok_or_else(|| refusal("JFIF resolution unit is undefined"))?,
-                    _ => return Err(refusal("JFIF substitution property is unsupported")),
-                };
-                let value = raw
-                    .checked_add(assignment.adjustment)
-                    .ok_or_else(|| refusal("JFIF substitution overflow"))?;
-                if let Some(target) = values
-                    .iter_mut()
-                    .find(|item| item.tag_id == assignment.tag_id)
-                {
-                    target.value = MandatoryValue::Integer(value);
-                } else {
-                    values.push(MandatoryDefault {
-                        tag_id: assignment.tag_id,
-                        value: MandatoryValue::Integer(value),
-                    });
-                }
+    if directory == recipe.jfif_directory && properties.contains_key(recipe.jfif_probe) {
+        for assignment in recipe.jfif_assignments {
+            let raw = properties
+                .get(assignment.property)
+                .ok_or_else(|| refusal("generated mandatory source property is undefined"))?;
+            let value = raw
+                .checked_add(assignment.adjustment)
+                .ok_or_else(|| refusal("generated mandatory source adjustment overflows"))?;
+            if let Some(target) = values
+                .iter_mut()
+                .find(|item| item.tag_id == assignment.tag_id)
+            {
+                target.value = MandatoryValue::Integer(value);
+            } else {
+                values.push(MandatoryDefault {
+                    tag_id: assignment.tag_id,
+                    value: MandatoryValue::Integer(value),
+                });
             }
         }
     }

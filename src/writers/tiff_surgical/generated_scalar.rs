@@ -140,7 +140,7 @@ pub(crate) fn rewrite_generated_scalars(
         .into_iter()
         .map(|request| Ok((final_rule(request.key, rules.finals)?, request.value)))
         .collect::<Result<Vec<_>>>()?;
-    rewrite_selected_scalars(file, selected, rules)
+    plan_selected_scalars(file, selected, rules)?.apply(file)
 }
 
 /// A public-name resolver must pass the complete selected identity and native
@@ -159,11 +159,45 @@ pub(crate) struct ResolvedScalarWriteRequest<'a> {
     pub value: Scalar,
 }
 
+/// Compiled mutations can be applied after source-derived mandatory defaults
+/// are inserted. No tag-name resolution or scalar conversion is repeated.
+pub(crate) struct ScalarWritePlan {
+    pub edits: Vec<ScopedEntryEdit>,
+    pub warnings: Vec<String>,
+    byte_order: ByteOrder,
+}
+
+impl ScalarWritePlan {
+    pub fn has_set(&self) -> bool {
+        self.edits
+            .iter()
+            .any(|edit| matches!(edit.mutation, EntryMutation::Set { .. }))
+    }
+
+    pub fn apply(self, file: &[u8]) -> Result<ScalarWriteOutput> {
+        if scan_tiff(file)?.byte_order != self.byte_order {
+            return Err(refused("planned bytes and destination byte order differ"));
+        }
+        Ok(ScalarWriteOutput {
+            bytes: apply_entry_edits(file, &self.edits)?,
+            warnings: self.warnings,
+        })
+    }
+}
+
 pub(crate) fn rewrite_resolved_generated_scalars(
     file: &[u8],
     requests: Vec<ResolvedScalarWriteRequest<'_>>,
     rules: &ScalarWriteRules<'_>,
 ) -> Result<ScalarWriteOutput> {
+    plan_resolved_generated_scalars(file, requests, rules)?.apply(file)
+}
+
+pub(crate) fn plan_resolved_generated_scalars(
+    file: &[u8],
+    requests: Vec<ResolvedScalarWriteRequest<'_>>,
+    rules: &ScalarWriteRules<'_>,
+) -> Result<ScalarWritePlan> {
     let mut selected = Vec::new();
     for request in requests {
         let mut matches = rules.finals.iter().filter(|rule| {
@@ -185,14 +219,14 @@ pub(crate) fn rewrite_resolved_generated_scalars(
         }
         selected.push((rule, request.value));
     }
-    rewrite_selected_scalars(file, selected, rules)
+    plan_selected_scalars(file, selected, rules)
 }
 
-fn rewrite_selected_scalars(
+fn plan_selected_scalars(
     file: &[u8],
     selected: Vec<(&TiffScalarFinalStageRecipe, Scalar)>,
     rules: &ScalarWriteRules<'_>,
-) -> Result<ScalarWriteOutput> {
+) -> Result<ScalarWritePlan> {
     let scan = scan_tiff(file)?;
     let byte_order = match scan.byte_order {
         ByteOrder::LittleEndian => TiffByteOrder::LittleEndian,
@@ -304,9 +338,10 @@ fn rewrite_selected_scalars(
             }
         }
     }
-    Ok(ScalarWriteOutput {
-        bytes: apply_entry_edits(file, &edits)?,
+    Ok(ScalarWritePlan {
+        edits,
         warnings,
+        byte_order: scan.byte_order,
     })
 }
 
@@ -340,7 +375,7 @@ mod tests {
             value: Option<String>,
         }
         fn scalar(scalar: &str, value: Option<&str>) -> std::result::Result<Scalar, String> {
-            match (scalar, value) {
+            Ok(match (scalar, value) {
                 ("undefined", None) => Scalar::Undefined,
                 ("utf8", Some(value)) => Scalar::Utf8(value.to_owned()),
                 ("bytes", Some(hex)) if hex.is_ascii() && hex.len().is_multiple_of(2) => {
@@ -353,7 +388,7 @@ mod tests {
                     )
                 }
                 _ => return Err("invalid typed scalar request".into()),
-            }
+            })
         }
         fn apply(request: &Request) -> std::result::Result<Vec<String>, String> {
             if request.route.as_deref() == Some("public-batch") {
@@ -428,9 +463,18 @@ mod tests {
                         generated_request.writer_source_sha256 = "fixture-forged-final-identity";
                         let input =
                             std::fs::read(&request.output).map_err(|error| error.to_string())?;
-                        crate::writers::generated_public_write::rewrite_tiff_transaction(
-                            &input, &baseline, plan,
-                        )
+                        match request.carrier.as_deref() {
+                            Some("jpeg") => {
+                                crate::writers::jpeg_writer::write_public_exif_transaction(
+                                    &crate::test_support::TestReader::new(input),
+                                    &baseline,
+                                    plan,
+                                )
+                            }
+                            _ => crate::writers::generated_public_write::rewrite_tiff_transaction(
+                                &input, &baseline, plan,
+                            ),
+                        }
                         .map_err(|error| error.to_string())?;
                         return Err("post-legacy forged identity unexpectedly succeeded".into());
                     }

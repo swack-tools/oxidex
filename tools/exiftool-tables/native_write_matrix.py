@@ -101,7 +101,10 @@ sub batch_value { my ($spec) = @_;
     die 'batch bytes must be even lowercase hex' unless $value =~ /\A(?:[0-9a-f]{2})*\z/;
     return pack('H*', $value);
   }
-  return $value if $scalar eq 'utf8';
+  if ($scalar eq 'utf8') {
+    utf8::upgrade($value); # JSON may leave ASCII unflagged; honor the typed request.
+    return $value;
+  }
   die "unsupported batch scalar $scalar";
 }
 my $et = Image::ExifTool->new;

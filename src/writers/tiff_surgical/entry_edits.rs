@@ -108,7 +108,7 @@ pub(crate) fn apply_entry_edits(file: &[u8], edits: &[ScopedEntryEdit]) -> Resul
 
 /// Validate every directory this primitive may rewrite, including children
 /// without edits. A present link with offset zero is malformed, not absent.
-fn validate_directory_layout(file: &[u8], scan: &TiffScan) -> Result<()> {
+pub(super) fn validate_directory_layout(file: &[u8], scan: &TiffScan) -> Result<()> {
     let bo = scan.byte_order;
     let mut spans = vec![directory_span(file, scan.ifd0_offset, bo)?];
     let (records, _) = directory_records(file, scan.ifd0_offset, bo)?;

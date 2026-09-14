@@ -47,6 +47,32 @@ not completion of automatic adoption. The upgrade ledger must retain that gap.
 
 Later sections preserve earlier checkpoints; this table is the current status.
 
+## Current integration checkpoint, September 14
+
+PR #768 is merged as `4498ae67`. Its complete native writer capture,
+reader regeneration, build/test, release, lint and docs checks passed at the
+reviewed head. The final review-thread audit found no unresolved threads.
+
+The development branch now registers 55 generated artifacts (33 tier 1 and
+22 tier 2), including raw JFIF properties captured from executable native
+writer dispatch and table definitions. This does not mean 55 tag families or
+55 percent coverage. Full real regeneration of the expanded inventory remains
+outstanding; the last full local regeneration covered 44 artifacts.
+
+Fresh JPEG integration is being validated. The implementation compiles the
+requested scalar operation before deciding whether defaults are needed, keeps
+existing empty-directory byte order, and prepares all output before one atomic
+file write. Native acceptance must still prove these changes. Independent
+review found two items being corrected before acceptance: late JFIF properties
+must not affect earlier EXIF creation, and insertion tests must reject native
+no-op results rather than accepting two equally empty outputs.
+
+The next measurable completion is passing existing public, mixed-batch and
+fresh/empty JPEG comparisons with these controls, then removing the replaced
+manual lookup entries. Broader writer rules and the persisted 11.78/12.64
+read/write upgrade rehearsal remain open. No new overall generated-output
+percentage is claimed by this work.
+
 ## Address-to-file checkpoint, September 14
 
 The generated address resolver now joins a complete captured row identity to

@@ -47,7 +47,7 @@ if mode=='rustfmt':
     paths={str(pathlib.Path(x).resolve()) for x in args if x.endswith('.rs')}
     assert paths in [{str(root/a.path) for a in artifacts.select(tier,kind='rust')} for tier in (1,2)]
 elif mode=='chosen-perl':
-    if name=='capture_exif_mandatory_fact.pl':
+    if name in ('capture_exif_mandatory_fact.pl', 'capture_raw_jfif_fact.pl'):
         assert pathlib.Path(args[0]).resolve()==lib
         print(json.dumps({'marker':'explicit-A'}))
     elif name in ('dump_tables.pl','dump_filetypes.pl'):
@@ -85,12 +85,14 @@ else:
         dump(args[0]);output(flag('--rust-output'),'serial')
         assert flag('--rust-output')==artifact('serial_directory')
         output(flag('--output'),'serial-report')
-    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'mandatory_defaults_codegen.py'):
+    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'mandatory_defaults_codegen.py', 'raw_jfif_codegen.py'):
         dump(args[0])
         selected={root/item.path for item in artifacts.select(producer=name.removesuffix('.py'))}
         assert {flag('--output'),flag('--report')}==selected
         if name=='mandatory_defaults_codegen.py':
             assert flag('--writer-tables').read_text() == json.dumps({'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'})+'\n'
+            assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        if name=='raw_jfif_codegen.py':
             assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
         output(flag('--output'),name);output(flag('--report'),name+'-ledger')
     elif name=='setnewvalue_addressing.py':
@@ -270,6 +272,8 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('final_scalar_stage.py'), int(full))
                 self.assertEqual(names.count('capture_exif_mandatory_fact.pl'), int(full))
                 self.assertEqual(names.count('mandatory_defaults_codegen.py'), int(full))
+                self.assertEqual(names.count('capture_raw_jfif_fact.pl'), int(full))
+                self.assertEqual(names.count('raw_jfif_codegen.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_addressing.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_probe.pl'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_rust_codegen.py'), int(full))
@@ -287,6 +291,8 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('final_scalar_stage.py'), names.index('capture_exif_mandatory_fact.pl'))
                     self.assertLess(names.index('capture_exif_mandatory_fact.pl'), names.index('mandatory_defaults_codegen.py'))
                     self.assertLess(names.index('mandatory_defaults_codegen.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('capture_raw_jfif_fact.pl'), names.index('raw_jfif_codegen.py'))
+                    self.assertLess(names.index('raw_jfif_codegen.py'), names.index('rustfmt'))
                     self.assertLess(names.index('final_scalar_stage.py'), names.index('setnewvalue_addressing.py'))
                     self.assertLess(names.index('setnewvalue_addressing.py'), names.index('setnewvalue_address_probe.pl'))
                     self.assertLess(names.index('setnewvalue_address_probe.pl'), names.index('setnewvalue_address_rust_codegen.py'))
@@ -356,7 +362,7 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_tier_one_producer_and_verifier_failures_survive_exit_guard(self):
-        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'setnewvalue_public_migration_ledger.py', 'verify_serial_directory.py'):
+        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'capture_raw_jfif_fact.pl', 'raw_jfif_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'setnewvalue_public_migration_ledger.py', 'verify_serial_directory.py'):
             with self.subTest(leaf=leaf):
                 result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
                 self.assertEqual(result.returncode, 47, result.stdout + result.stderr)

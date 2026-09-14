@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Contract tests for the mixed public whole-map write matrix."""
 import copy
+import os
+import tempfile
 import importlib.util
 from pathlib import Path
 import sys
@@ -58,6 +60,25 @@ class PublicWriteBatchMatrixTests(unittest.TestCase):
         changed["result"]["set_calls"][1]["input"]["hex"] = "610063"
         with self.assertRaisesRegex(AssertionError, "hex"):
             matrix.assert_native_batch(changed, "fixture", expected)
+
+    @unittest.skipUnless(os.environ.get("EXIFTOOL_PERL") and os.environ.get("OXIDEX_PINNED_EXIFTOOL"),
+                         "requires explicitly selected native Perl and library")
+    def test_native_batch_preserves_declared_scalar_flags_including_ascii(self):
+        operands = [
+            {"tag": "IFD0:Artist", "scalar": "utf8", "value": "ascii"},
+            {"tag": "IFD0:Software", "scalar": "utf8", "value": ""},
+            {"tag": "IFD0:DocumentName", "scalar": "utf8", "value": "é"},
+            {"tag": "IFD0:HostComputer", "scalar": "bytes", "value": "610062"},
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            source, target = Path(temporary) / "in.tif", Path(temporary) / "out.tif"
+            native.make_tiff(source, "little")
+            call = native.run_native_batch(
+                native.resolve_perl(Path(os.environ["EXIFTOOL_PERL"])),
+                native.resolve_library(Path(os.environ["OXIDEX_PINNED_EXIFTOOL"])),
+                source, target, operands)
+            matrix.assert_native_batch(call, "typed native scalars", operands)
+            self.assertTrue(target.is_file())
 
     def test_multi_target_comparison_preserves_every_unlisted_entry(self):
         seed = {"byte_order": "little", "image_payload_hex": "ff", "tags": {
