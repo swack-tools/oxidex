@@ -2,7 +2,7 @@
 
 `tools/exiftool-tables/join_catalog_hydrated.py` produces the first complete
 source-coordinate ledger for BuildTagLookup's ordinary entries. It requires the
-catalog, hydrated capture, and the four replay-bound QuickTime inputs:
+ catalog, hydrated capture, ItemList replay inputs, and replay-bound Keys ledger/Rust inputs:
 
 ```sh
 python3 tools/exiftool-tables/join_catalog_hydrated.py \
@@ -12,6 +12,8 @@ python3 tools/exiftool-tables/join_catalog_hydrated.py \
   --quicktime-itemlist-ledger "$QUICKTIME_ITEMLIST_LEDGER_JSON" \
   --quicktime-source-capabilities "$QUICKTIME_CAPABILITIES_JSON" \
   --quicktime-itemlist-rust "$QUICKTIME_ITEMLIST_RUST" \
+  --quicktime-keys-ledger "$QUICKTIME_KEYS_LEDGER_JSON" \
+  --quicktime-keys-rust "$QUICKTIME_KEYS_RUST" \
   --output "$JOIN_JSON" \
   --report "$JOIN_REPORT_MD"
 ```

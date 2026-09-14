@@ -382,7 +382,7 @@ def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str
 
 
 def quicktime_keys_implementation(ledger: dict | None, bounded_source: bytes | None, emitted_rust: str | None) -> dict:
-    if all(value is None for value in (ledger, bounded_source, emitted_rust)):
+    if ledger is None and emitted_rust is None:
         return {}
     if any(value is None for value in (ledger, bounded_source, emitted_rust)):
         raise ValueError("QuickTime Keys replay requires bounded source, ledger, and Rust artifact together")
@@ -411,11 +411,11 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
           quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
           quicktime_input_digests: dict[str, str] | None = None,
-          quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
           quicktime_read_evidence: dict | None = None,
           writer_source: bytes | None = None, writer_final_ledger: dict | None = None,
           writer_final_rust: str | None = None, writer_public_ledger: dict | None = None,
-          writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None) -> dict:
+          writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None,
+          quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -456,7 +456,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             digest, source_fact = capture.get(field), sources.get(path)
             if not isinstance(digest, str) or loaded.get(path) != digest or not isinstance(source_fact, dict) or source_fact.get("sha256") != digest:
                 raise ValueError("writer source closure differs from catalog/hydrated provenance")
-    observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, quicktime_input_digests,
+    itemlist_digests = ({key: quicktime_input_digests[key] for key in ("source_sha256", "ledger_sha256", "capabilities_sha256", "rust_sha256")}
+                        if quicktime_input_digests else None)
+    observed_quicktime = quicktime_observed_reads(quicktime_read_evidence, itemlist_digests,
                                                  itemlist_ledger["specs"] if itemlist_ledger else None)
     hydrated_count = require_mapping(hydrated["hydrated_layouts"].get("catalog_counts"), "hydrated catalog counts").get("total_tag_entries")
     if hydrated_count != len(catalog_by_id):

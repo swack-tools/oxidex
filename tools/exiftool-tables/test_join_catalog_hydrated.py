@@ -304,6 +304,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             catalog_path, hydrated_path = root / "catalog.json", root / "hydrated.json"
             source_path, ledger_path = root / "quicktime-source.json", root / "quicktime-ledger.json"
             capabilities_path, rust_path = root / "quicktime-capabilities.json", root / "quicktime.rs"
+            keys_ledger_path, keys_rust_path = root / "keys-ledger.json", root / "keys.rs"
             output, report = root / "join.json", root / "join.md"
             catalog_path.write_text(json.dumps(catalog([entry()])))
             hydrated_path.write_text(json.dumps(hydrated({"titl": {"Name": "Title"}})))
@@ -312,9 +313,11 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             ledger_path.write_text(json.dumps(ledger))
             capabilities_path.write_text(json.dumps(capabilities))
             rust_path.write_text(rust)
+            keys = join.quicktime_keys_specs.compile_document(json.loads(raw)); keys_ledger_path.write_text(json.dumps(keys)); keys_rust_path.write_text(join.quicktime_keys_specs.render_rust(keys))
             command = ["python3", str(PATH), "--catalog", str(catalog_path), "--hydrated", str(hydrated_path),
                        "--quicktime-bounded-source", str(source_path), "--quicktime-itemlist-ledger", str(ledger_path),
                        "--quicktime-source-capabilities", str(capabilities_path), "--quicktime-itemlist-rust", str(rust_path),
+                       "--quicktime-keys-ledger", str(keys_ledger_path), "--quicktime-keys-rust", str(keys_rust_path),
                        "--output", str(output), "--report", str(report)]
             self.assertEqual(subprocess.run(command).returncode, 0)
             self.assertEqual(json.loads(output.read_text())["inputs"]["quicktime"], {
@@ -322,6 +325,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                 "ledger_sha256": hashlib.sha256(ledger_path.read_bytes()).hexdigest(),
                 "capabilities_sha256": hashlib.sha256(capabilities_path.read_bytes()).hexdigest(),
                 "rust_sha256": hashlib.sha256(rust.encode()).hexdigest(),
+                "keys_ledger_sha256": hashlib.sha256(keys_ledger_path.read_bytes()).hexdigest(), "keys_rust_sha256": hashlib.sha256(keys_rust_path.read_bytes()).hexdigest(),
             })
             self.assertEqual(subprocess.run(command + ["--check"]).returncode, 0)
             output.write_text("stale\n")
@@ -334,6 +338,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             catalog_path, hydrated_path = root / "catalog.json", root / "hydrated.json"
             source_path, ledger_path = root / "quicktime-source.json", root / "quicktime-ledger.json"
             capabilities_path, rust_path = root / "quicktime-capabilities.json", root / "quicktime.rs"
+            keys_ledger_path, keys_rust_path = root / "keys-ledger.json", root / "keys.rs"
             catalog_path.write_text(json.dumps(catalog([entry()])))
             hydrated_path.write_text(json.dumps(hydrated({"titl": {"Name": "Title"}})))
             raw, _, ledger, capabilities, rust = self.replayed_quicktime_facts()
@@ -341,9 +346,11 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             ledger_path.write_text(json.dumps(ledger))
             capabilities_path.write_text(json.dumps(capabilities))
             rust_path.write_text(rust)
+            keys = join.quicktime_keys_specs.compile_document(json.loads(raw)); keys_ledger_path.write_text(json.dumps(keys)); keys_rust_path.write_text(join.quicktime_keys_specs.render_rust(keys))
             command = ["python3", str(PATH), "--catalog", str(catalog_path), "--hydrated", str(hydrated_path),
                        "--quicktime-bounded-source", str(source_path), "--quicktime-itemlist-ledger", str(ledger_path),
                        "--quicktime-source-capabilities", str(capabilities_path), "--quicktime-itemlist-rust", str(rust_path),
+                       "--quicktime-keys-ledger", str(keys_ledger_path), "--quicktime-keys-rust", str(keys_rust_path),
                        "--output", str(root / "same"), "--report", str(root / "same")]
             self.assertNotEqual(subprocess.run(command).returncode, 0)
             hardlink = root / "catalog-link.json"
