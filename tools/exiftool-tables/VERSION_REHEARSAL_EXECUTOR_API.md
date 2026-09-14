@@ -33,7 +33,8 @@ separate from the preserved release-selection plan commit and the executor
 checks the actual checkout `HEAD`. The runner supplies `{release}`, `{checkout}`, `{target}`,
 `{report}`, `{native_source}`, `{native_lib}`, `{native_program}`,
 `{native_perl}`, and `{native_probe}` and equivalent `OXIDEX_REHEARSAL_*`
-environment variables.
+environment variables. `{native_probe_sha256}`, `{source_commit}` and
+`OXIDEX_REHEARSAL_SOURCE_COMMIT` bind wrappers to the immutable OxiDex source.
 
 The example commands are wrappers: a raw `cargo build` does not itself write
 the required stage result. `native_cases` use the constrained case schema from
@@ -44,6 +45,9 @@ checkout's `.exiftool-version`, pass the selected native Perl and materialized
 library to generation, and record the generated binary plus fixture-source
 identity in their result. The executor supplies those bindings and checks
 release-specific native readiness; it cannot infer them from a build exit code.
+The concrete adapter is documented in `VERSION_REHEARSAL_STAGE_ADAPTER_API.md`.
+It invokes the sanctioned `regen-all.sh`, consumes Cargo JSON, and drives the
+actual selected-release `conformance.py` oracle.
 
 Every command must write its own result JSON at `{report}`. The common fields
 are `schema: 1`, `kind: "oxidex_version_rehearsal_stage_result"`, `stage`,
@@ -63,6 +67,15 @@ probe digest, and:
 `matched + mismatched` must equal `denominator`, and `mismatched` must be zero
 for a passed result. A return code of zero, a build report, or a native
 readiness report is not a read/write comparison result.
+For a wrapper result to be accepted, it also binds `source_commit` and the
+current full source-tree digest, gives hashes for every sanctioned generated
+artifact, retains a hash-verified raw command report, and (for build/read)
+gives an isolated binary identity. Read additionally gives a hash-verified
+immutable fixture manifest and every source fixture identity. The executor
+re-hashes each proof and freezes all non-generated source entries, including
+untracked files, before and after every command. Only `.exiftool-version` and
+the committed `artifacts.py` manifest are allowed to differ during generation;
+later stages may not change source entries.
 The native stage itself calls `version_rehearsal_native_oracle` with the
 release's own explicit Perl, materialized `lib`, and program before either
 comparison command can run.

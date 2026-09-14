@@ -15,6 +15,7 @@ sys.path.insert(0, str(HERE))
 import version_rehearsal_executor as executor
 import version_rehearsal_native_oracle as native
 import test_version_rehearsal_native_oracle as fixture
+import artifacts
 
 
 def ready_probe(release: str) -> dict:
@@ -37,6 +38,9 @@ class ExecutorTests(unittest.TestCase):
         self.releases = sorted({side["release"] for pair in plan["pairs"] for side in (pair["old"], pair["new"])})
         self.calls, self.checkouts, self.native_calls = [], [], []
         self.lock = self.root / "shared-host.lock"
+        self.fixture = self.root / "fixture.jpg"; self.fixture.write_bytes(b"fixture")
+        self.fixture_manifest = self.root / "fixtures.json"
+        self.fixture_manifest.write_text(json.dumps({"fixtures": [str(self.fixture)]}))
 
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
@@ -44,7 +48,7 @@ class ExecutorTests(unittest.TestCase):
             commands["write"] = {"argv": ["write"]}
         return {"schema": executor.SCHEMA, "commands": commands, "host_lock": str(self.lock),
                 "execution_source_commit": self.plan["repository_commit"],
-                "perls": {release: sys.executable for release in self.releases},
+                "perls": {release: str(Path(sys.executable).resolve()) for release in self.releases},
                 "native_cases": {release: [{"case": release}] for release in self.releases}}
 
     def initialize(self, config):
@@ -54,6 +58,10 @@ class ExecutorTests(unittest.TestCase):
     def checkout(self, repository, commit, destination, run):
         self.checkouts.append((repository, commit, destination))
         destination.mkdir(parents=True)
+        for artifact in artifacts.ARTIFACTS:
+            path = destination / artifact.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(artifact.key)
         return destination
 
     def command(self, argv, **kwargs):
@@ -65,6 +73,25 @@ class ExecutorTests(unittest.TestCase):
         report = Path(env["OXIDEX_REHEARSAL_REPORT"])
         body = {"schema": executor.SCHEMA, "kind": executor.RESULT_KIND, "stage": stage,
                 "release": env["OXIDEX_REHEARSAL_RELEASE"], "state": "passed", "denominator": 3}
+        checkout = Path(env["OXIDEX_REHEARSAL_CHECKOUT"])
+        generated = []
+        for artifact in artifacts.ARTIFACTS:
+            path = checkout / artifact.path
+            generated.append({"path": artifact.path, "sha256": __import__("hashlib").sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size})
+        raw = report.parent / "raw" / f"{stage}.json"; raw.parent.mkdir(parents=True, exist_ok=True); raw.write_text("raw")
+        body.update(source_commit=env["OXIDEX_REHEARSAL_SOURCE_COMMIT"],
+                    source_tree_sha256=executor._source_tree(checkout)["sha256"],
+                    generated_artifacts=generated,
+                    raw_report={"path": str(raw), "sha256": __import__("hashlib").sha256(raw.read_bytes()).hexdigest()})
+        native_lib = Path(env["OXIDEX_REHEARSAL_NATIVE_LIB"])
+        native_perl = Path(env["OXIDEX_REHEARSAL_NATIVE_PERL"])
+        body["native_identity"] = {"release": env["OXIDEX_REHEARSAL_RELEASE"],
+            "perl": {"path": str(native_perl.resolve()), "sha256": __import__("hashlib").sha256(native_perl.read_bytes()).hexdigest()},
+            "source": {"path": str(Path(env["OXIDEX_REHEARSAL_NATIVE_SOURCE"]).resolve())},
+            "lib": {"path": str(native_lib.resolve()), "exiftool_pm_sha256": __import__("hashlib").sha256((native_lib / "Image/ExifTool.pm").read_bytes()).hexdigest()}}
+        binary = Path(env["CARGO_TARGET_DIR"]) / "debug" / "oxidex"; binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"binary")
+        body["binary"] = {"path": str(binary), "sha256": __import__("hashlib").sha256(binary.read_bytes()).hexdigest(), "bytes": binary.stat().st_size}
+        body["fixtures"] = {"manifest": str(self.fixture_manifest), "manifest_sha256": __import__("hashlib").sha256(self.fixture_manifest.read_bytes()).hexdigest(), "entries": [{"source": str(self.fixture), "sha256": __import__("hashlib").sha256(self.fixture.read_bytes()).hexdigest(), "bytes": self.fixture.stat().st_size}]}
         if stage in {"read", "write"}:
             body.update(native_release=env["OXIDEX_REHEARSAL_RELEASE"],
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],
@@ -216,6 +243,22 @@ class ExecutorTests(unittest.TestCase):
             self.execute()
         self.assertEqual(self.checkouts, [])
         self.assertEqual(self.calls, [])
+
+    def test_generation_cannot_change_unmanifested_source(self):
+        self.initialize(self.config())
+        original = self.command
+        def mutating(argv, **kwargs):
+            if argv[0] == "generate":
+                path = Path(kwargs["env"]["OXIDEX_REHEARSAL_CHECKOUT"]) / "src/lib.rs"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("unexpected source mutation")
+            return original(argv, **kwargs)
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources, run=mutating, checkout=self.checkout)
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "generate")
+        self.assertIn("non-generated source", failure["detail"])
 
 
 if __name__ == "__main__":

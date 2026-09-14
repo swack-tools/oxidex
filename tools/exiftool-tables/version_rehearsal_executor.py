@@ -25,6 +25,7 @@ from typing import Any, Callable, Mapping
 import version_rehearsal as rehearsal
 import version_rehearsal_catalog as catalog_stage
 import version_rehearsal_native_oracle as native_oracle
+import artifacts
 
 SCHEMA = 1
 KIND = "oxidex_exiftool_version_rehearsal_execution"
@@ -34,7 +35,7 @@ REQUIRED_COMMANDS = ("generate", "build", "read")
 _SAFE_RELEASE = __import__("re").compile(r"^[0-9]+\.[0-9]+$")
 _PLACEHOLDERS = {
     "release", "checkout", "target", "report", "native_source", "native_lib",
-    "native_program", "native_perl", "native_probe",
+    "native_program", "native_perl", "native_probe", "native_probe_sha256", "source_commit",
 }
 
 
@@ -220,7 +221,120 @@ def _regular(path: Path, label: str) -> Path:
     return path.resolve()
 
 
-def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None) -> dict[str, Any]:
+def _source_tree(checkout: Path) -> dict[str, Any]:
+    """Hash the owned checkout, including untracked source entries.
+
+    Build products are outside the source proof.  `.git`, Python bytecode and
+    the isolated Cargo target are implementation metadata/cache, never source.
+    """
+    files: dict[str, list[str]] = {}
+    for directory, dirs, names in os.walk(checkout, followlinks=False):
+        root = Path(directory)
+        dirs[:] = sorted(name for name in dirs if name not in {".git", "target", "__pycache__"})
+        links = [name for name in dirs if (root / name).is_symlink()]
+        dirs[:] = [name for name in dirs if name not in links]
+        for name in sorted(name for name in names + links if name != ".git"):
+            path = root / name
+            relative = path.relative_to(checkout).as_posix()
+            if path.is_symlink():
+                files[relative] = ["symlink", os.readlink(path)]
+            elif path.is_file():
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                files[relative] = ["file", digest]
+            else:
+                raise Refused("owned checkout contains unsupported source entry")
+    return {"files": files, "sha256": _sha_json(files)}
+
+
+def _verify_source_transition(before: Mapping[str, Any], after: Mapping[str, Any], allowed: set[str]) -> None:
+    if not isinstance(before.get("files"), dict) or not isinstance(after.get("files"), dict):
+        raise Refused("source tree snapshot is malformed")
+    changed = {name for name in before["files"].keys() | after["files"].keys()
+               if before["files"].get(name) != after["files"].get(name)}
+    unexpected = sorted(changed - allowed)
+    if unexpected:
+        raise Refused("stage changed non-generated source entries: " + ", ".join(unexpected))
+
+
+def _require_source_proof(result: Mapping[str, Any], checkout: Path, source_commit: str,
+                          snapshot: Mapping[str, Any]) -> None:
+    if result.get("source_commit") != source_commit or result.get("source_tree_sha256") != snapshot.get("sha256"):
+        raise Refused("stage result is not bound to the immutable execution source tree")
+
+
+def _require_generated_artifacts(result: Mapping[str, Any], checkout: Path) -> list[dict[str, Any]]:
+    rows = result.get("generated_artifacts")
+    expected = [item.path for item in artifacts.ARTIFACTS]
+    if not isinstance(rows, list) or len(rows) != len(expected):
+        raise Refused("stage result lacks complete sanctioned generated artifact proof")
+    found: list[str] = []
+    for row in rows:
+        if (not isinstance(row, dict) or not isinstance(row.get("path"), str) or row["path"] not in expected
+                or not isinstance(row.get("sha256"), str) or __import__("re").fullmatch(r"[0-9a-f]{64}", row["sha256"]) is None
+                or type(row.get("bytes")) is not int or row["bytes"] < 0):
+            raise Refused("generated artifact proof is malformed")
+        path = _regular(checkout / row["path"], "generated artifact")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"] or path.stat().st_size != row["bytes"]:
+            raise Refused("generated artifact no longer matches stage proof")
+        found.append(row["path"])
+    if found != expected:
+        raise Refused("generated artifact proof differs from sanctioned manifest")
+    return rows
+
+
+def _require_raw_report(result: Mapping[str, Any]) -> None:
+    row = result.get("raw_report")
+    if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not isinstance(row.get("sha256"), str):
+        raise Refused("stage result lacks durable raw command report")
+    path = _regular(Path(row["path"]), "raw command report")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"]:
+        raise Refused("raw command report no longer matches stage proof")
+
+
+def _require_binary_proof(result: Mapping[str, Any], target: Path) -> dict[str, Any]:
+    row = result.get("binary")
+    if (not isinstance(row, dict) or not isinstance(row.get("path"), str) or not isinstance(row.get("sha256"), str)
+            or __import__("re").fullmatch(r"[0-9a-f]{64}", row["sha256"]) is None
+            or type(row.get("bytes")) is not int or row["bytes"] < 0):
+        raise Refused("stage result lacks binary identity proof")
+    binary = _regular(Path(row["path"]), "built OxiDex executable")
+    if not binary.is_relative_to(target.resolve()) or hashlib.sha256(binary.read_bytes()).hexdigest() != row["sha256"] or binary.stat().st_size != row["bytes"]:
+        raise Refused("built OxiDex executable no longer matches stage proof")
+    return row
+
+
+def _require_fixture_proof(result: Mapping[str, Any]) -> None:
+    row = result.get("fixtures")
+    if (not isinstance(row, dict) or not isinstance(row.get("manifest"), str) or not isinstance(row.get("manifest_sha256"), str)
+            or __import__("re").fullmatch(r"[0-9a-f]{64}", row["manifest_sha256"]) is None or not isinstance(row.get("entries"), list) or not row["entries"]):
+        raise Refused("read result lacks immutable fixture proof")
+    manifest = _regular(Path(row["manifest"]), "fixture manifest")
+    if hashlib.sha256(manifest.read_bytes()).hexdigest() != row["manifest_sha256"]:
+        raise Refused("fixture manifest changed after comparison")
+    for item in row["entries"]:
+        if (not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("sha256"), str)
+                or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
+                or type(item.get("bytes")) is not int or item["bytes"] < 0):
+            raise Refused("fixture identity proof is malformed")
+        fixture = _regular(Path(item["source"]), "fixture")
+        if hashlib.sha256(fixture.read_bytes()).hexdigest() != item["sha256"] or fixture.stat().st_size != item["bytes"]:
+            raise Refused("fixture changed after comparison")
+
+
+def _require_native_identity(result: Mapping[str, Any], release: str, native: tuple[Path, Path, Path], perl: str) -> None:
+    source, lib, _program = native
+    pm = _regular(lib / "Image" / "ExifTool.pm", "selected native ExifTool library")
+    executable = _regular(Path(perl), "selected native Perl")
+    expected = {"release": release, "perl": {"path": str(executable), "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()},
+                "source": {"path": str(source.resolve())}, "lib": {"path": str(lib.resolve()), "exiftool_pm_sha256": hashlib.sha256(pm.read_bytes()).hexdigest()}}
+    if result.get("native_identity") != expected:
+        raise Refused("stage result is not bound to the selected native identity")
+
+
+def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,
+                  checkout: Path | None = None, source_commit: str | None = None,
+                  source_tree: Mapping[str, Any] | None = None, target: Path | None = None,
+                  native: tuple[Path, Path, Path] | None = None, perl: str | None = None) -> dict[str, Any]:
     result = _read(_regular(path, f"{stage} result"))
     if (result.get("schema") != SCHEMA or result.get("kind") != RESULT_KIND or result.get("stage") != stage
             or result.get("release") != release or result.get("state") != "passed"
@@ -237,6 +351,19 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
                 or type(comparison.get("mismatched")) is not int or comparison["mismatched"] != 0
                 or comparison["matched"] + comparison["mismatched"] != result["denominator"]):
             raise Refused(f"{stage} result lacks attributable OxiDex/native outcomes")
+    if checkout is not None and source_commit is not None and source_tree is not None:
+        _require_source_proof(result, checkout, source_commit, source_tree)
+        _require_generated_artifacts(result, checkout)
+        _require_raw_report(result)
+        if native is None or perl is None:
+            raise Refused("stage result native binding was not supplied")
+        _require_native_identity(result, release, native, perl)
+        if stage in {"build", "read"}:
+            if target is None:
+                raise Refused("stage result binary target was not supplied")
+            _require_binary_proof(result, target)
+        if stage == "read":
+            _require_fixture_proof(result)
     return result
 
 
@@ -354,13 +481,22 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
     _event(journal, "stage_started", release=release, stage=stage)
     _store_journal(run_dir, journal)
     source, lib, program = native
+    before_source = _source_tree(checkout)
+    saved_source = journal["releases"][release].get("source_tree")
+    if saved_source is not None:
+        _verify_source_transition(saved_source, before_source, set())
+    _verify_checkout_head(checkout, config["execution_source_commit"], run)
     values = {"release": release, "checkout": str(checkout), "target": str(target), "report": str(output),
               "native_source": str(source), "native_lib": str(lib), "native_program": str(program),
-              "native_perl": perl, "native_probe": str(_result_path(run_dir, release, "native"))}
+              "native_perl": perl, "native_probe": str(_result_path(run_dir, release, "native")),
+              "native_probe_sha256": str(native_probe.get("probe_sha256", "")),
+              "source_commit": config["execution_source_commit"]}
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), OXIDEX_REHEARSAL_RELEASE=release,
                OXIDEX_REHEARSAL_NATIVE_SOURCE=str(source), OXIDEX_REHEARSAL_NATIVE_LIB=str(lib),
                OXIDEX_REHEARSAL_NATIVE_PROGRAM=str(program), OXIDEX_REHEARSAL_NATIVE_PERL=perl,
-               OXIDEX_REHEARSAL_NATIVE_PROBE=values["native_probe"], OXIDEX_REHEARSAL_REPORT=str(output))
+               OXIDEX_REHEARSAL_NATIVE_PROBE=values["native_probe"], OXIDEX_REHEARSAL_REPORT=str(output),
+               OXIDEX_REHEARSAL_NATIVE_PROBE_SHA256=values["native_probe_sha256"],
+               OXIDEX_REHEARSAL_CHECKOUT=str(checkout), OXIDEX_REHEARSAL_SOURCE_COMMIT=config["execution_source_commit"])
     def started(pid: int, pgid: int) -> None:
         journal["active"]["child"] = {"pid": pid, "pgid": pgid}
         _store_journal(run_dir, journal)
@@ -369,8 +505,17 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
     try:
         if record["state"] != "ok":
             raise Refused(f"{stage} command {record['state']}")
+        after_source = _source_tree(checkout)
+        allowed = {".exiftool-version", *(item.path for item in artifacts.ARTIFACTS)} if stage == "generate" else set()
+        _verify_source_transition(before_source, after_source, allowed)
+        _verify_checkout_head(checkout, config["execution_source_commit"], run)
         result = _stage_result(output, release, stage,
-                               native_probe.get("probe_sha256") if stage in {"read", "write"} else None)
+                               native_probe.get("probe_sha256") if stage in {"read", "write"} else None,
+                               checkout, config["execution_source_commit"], after_source, target, native, perl)
+        if stage == "read":
+            build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
+            if result.get("binary") != build_report.get("binary"):
+                raise Refused("read result did not use the proven build binary")
     except Refused as exc:
         journal["releases"][release]["stages"][stage] = "failed"
         journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": command_log}
@@ -380,6 +525,7 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
         return False
     journal["releases"][release]["stages"][stage] = "passed"
     journal["releases"][release]["reports"][stage] = {"path": str(output.relative_to(run_dir)), "sha256": _sha_json(result), "denominator": result["denominator"], "command": command_log}
+    journal["releases"][release]["source_tree"] = after_source
     journal["active"] = None
     _event(journal, "stage_passed", release=release, stage=stage, denominator=result["denominator"])
     _store_journal(run_dir, journal)
@@ -479,6 +625,7 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 if owned.resolve() != checkout_path.resolve() or owned.is_symlink() or not owned.is_dir():
                     raise Refused("checkout provider did not return the owned release checkout")
                 _verify_checkout_head(owned, config["execution_source_commit"], run)
+                journal["releases"][release]["source_tree"] = _source_tree(owned)
                 target.mkdir(parents=True, exist_ok=True)
                 journal["active"] = None
                 _event(journal, "checkout_completed", release=release)
