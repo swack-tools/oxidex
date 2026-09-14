@@ -141,14 +141,14 @@ else:
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
         dump(args[0]);output(flag('-o'),'composite');output(flag('--generated-out'),'composite-compute')
-    elif name=='quicktime_generated_specs.py':
+    elif name in ('quicktime_generated_specs.py', 'quicktime_keys_specs.py'):
         # This producer intentionally owns fixed manifest paths rather than
         # accepting output flags.  Its fresh dump is still part of the tier-1
         # source-selection contract, and both artifacts must be declared.
         assert args == ['--dump', str(pathlib.Path(args[1]).resolve()), '--replace']
         dump(flag('--dump'))
         assert json.loads(flag('--dump').read_text())['hydrated_layouts']['selection']=='full_hydrated_catalog'
-        for item in artifacts.select(producer='quicktime_generated_specs'):
+        for item in artifacts.select(producer=name.removesuffix('.py')):
             output(root/item.path,name)
     elif name=='codegen_subdirs.py':
         dump(args[0]);output(flag('-o'),name)
@@ -313,6 +313,7 @@ class RegenerationShellTests(unittest.TestCase):
                 # tier 1's complete writer dump and not in the reader-only
                 # tier-2 refresh.
                 self.assertEqual(names.count('quicktime_generated_specs.py'), int(full), names)
+                self.assertEqual(names.count('quicktime_keys_specs.py'), int(full), names)
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
                 self.assertEqual(names.count('serial_directory.py'), int(full))
                 self.assertEqual(names.count('scalar_helper_codegen.py'), int(full))

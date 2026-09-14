@@ -64,19 +64,19 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         current = {join.public_migration._entry_key(row): SimpleNamespace(
             full_name=row["full_name"], name=row["name"], source_control_sha256=row["source_control_sha256"],
             semantics_sha256=row["semantics_sha256"])}
-        final = {"recipes": [{"full_name": row["full_name"], "raw_tag_id": 315, "name": "Artist", "physical_write_group": "IFD0"}]}
+        final = {"recipes": [{"full_name": row["full_name"], "raw_tag_id": 315, "name": "Artist", "physical_write_group": "IFD0"}], "registry": {"formats": ("TIFF", "JPEG")}}
         public = {"source": {"capture": "bound"}, "entries": [row]}
         with patch.object(join.final_scalar_stage, "generate", return_value=("final-rust", final)), \
              patch.object(join.public_migration, "compile_current", return_value=({"capture": "bound"}, current)), \
              patch.object(join.public_migration, "validate_ledger"), \
              patch.object(join.public_migration, "render_rust", return_value="public-rust"):
-            rows = join.writer_implementation(source, final, "final-rust", public, "public-rust")
+            rows = join.writer_implementation(source, json.loads(json.dumps(final)), "final-rust", public, "public-rust")
             self.assertEqual(rows, {(row["full_name"], "315", 0): {"name": "Artist", "write_group": "IFD0", "semantics_sha256": "b" * 64}})
             with self.assertRaisesRegex(ValueError, "final artifacts"):
-                join.writer_implementation(source, final, "tampered", public, "public-rust")
+                join.writer_implementation(source, json.loads(json.dumps(final)), "tampered", public, "public-rust")
             bad = copy.deepcopy(public); bad["entries"][0]["name"] = "Alias"
             with self.assertRaisesRegex(ValueError, "identity"):
-                join.writer_implementation(source, final, "final-rust", bad, "public-rust")
+                join.writer_implementation(source, json.loads(json.dumps(final)), "final-rust", bad, "public-rust")
     def replayed_quicktime_facts(self):
         source = json.loads((PATH.parent / "fixtures/quicktime_source_13_59.json").read_text())
         # This test-only bounded input is a fresh capture fixture: preserve all

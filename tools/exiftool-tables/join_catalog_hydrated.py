@@ -48,6 +48,8 @@ def writer_implementation(source: bytes | None, final_ledger: dict | None, final
     if not isinstance(document, dict):
         raise ValueError("writer source is malformed")
     expected_final_rust, expected_final = final_scalar_stage.generate(document)
+    # Dataclass tuple operands become arrays in the committed JSON artifact.
+    expected_final = json.loads(json.dumps(expected_final))
     if final_ledger != expected_final or not quicktime_rust_matches(expected_final_rust, final_rust):
         raise ValueError("writer final artifacts differ from authenticated source replay")
     try:
@@ -57,7 +59,7 @@ def writer_implementation(source: bytes | None, final_ledger: dict | None, final
         raise ValueError("writer public ledger is malformed") from exc
     if public_ledger.get("source") != compiled_source:
         raise ValueError("writer public ledger source closure differs from authenticated replay")
-    if public_migration.render_rust(public_ledger) != public_rust:
+    if not quicktime_rust_matches(public_migration.render_rust(public_ledger), public_rust):
         raise ValueError("writer public Rust artifact differs from authenticated ledger")
     recipes = {(row["full_name"], row["raw_tag_id"], row["name"], row["physical_write_group"])
                for row in expected_final.get("recipes", [])}
