@@ -82,9 +82,23 @@ not green: the fresh mandatory-default batch instrument stopped while checking
 a native operand before comparing generated output. Its repair and rerun remain
 required before this migration is ready to merge.
 
-The next measurable completion is the repaired mandatory-default batch proof,
-then official full regeneration of all 55 registered artifacts with an explicit
-reader projection comparison. Broader writer rules and the persisted
+The repaired `mandatory-batch-gate-r3` ran all 135 native-backed rows and
+passed 45. The other 90 expose missing IFD1 output in mixed public batches:
+OxiDex reports success, but its child directories differ from native ExifTool.
+This is a real remaining gap, not an accepted baseline. Static tracing and a
+separate baseline proof must determine whether it predates the migration.
+The test now also includes 72 IFD0 JFIF-adjusted override/deletion rows, for
+207 declared rows; that expanded run is pending. Candidate selection depends
+on source defaults and native operand acceptance, never on OxiDex passing.
+
+After collision handling was strengthened, the same source build passed
+4,863 library tests (four ignored), 32 instrument tests with canonical native
+environment, and workspace all-feature Clippy. Ambiguous current physical or
+public-name identities now refuse in both generator and runtime composition.
+
+Official 55-artifact regeneration is running in an isolated checkout at
+`8f3266f4`, under the shared lock. Its result and reader projection review are
+pending. This does not certify the runtime or the broader version objective. Broader writer rules and the persisted
 11.78/12.64 read/write upgrade rehearsal remain open. No new overall
 generated-output percentage is claimed by this work.
 
