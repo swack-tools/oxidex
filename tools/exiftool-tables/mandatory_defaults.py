@@ -173,8 +173,12 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     source = writer.get("source_file"); digest = writer.get("source_sha256")
     if source != "Image/ExifTool/WriteExif.pl" or writer.get("cv_file") != source or not isinstance(digest, str) or not _SHA.fullmatch(digest):
         raise MandatoryMalformed("WriteExif source identity is unavailable")
-    if digest != _REVIEWED_WRITE_EXIF_SHA256:
-        raise MandatoryRefused("WriteExif whole-body review hash is unrecognized")
+    executable = fact.get("writer_deparse")
+    executable_digest = fact.get("writer_deparse_sha256")
+    if not isinstance(executable, str) or not isinstance(executable_digest, str) or not _SHA.fullmatch(executable_digest) or hashlib.sha256(executable.encode()).hexdigest() != executable_digest:
+        raise MandatoryMalformed("WriteExif executable body provenance is unavailable")
+    if executable_digest != "1d552eb0205bb742880c899474d215fc141af6730f4846e3485da8e392336c93":
+        raise MandatoryRefused("WriteExif executable body review hash is unrecognized")
     closure = _mapping(fact.get("loaded_exiftool_closure"), "loaded_exiftool_closure")
     if not closure or closure.get(source) != digest or any(not isinstance(k, str) or not k.startswith("Image/ExifTool") or not isinstance(v, str) or not _SHA.fullmatch(v) for k, v in closure.items()):
         raise MandatoryMalformed("selected native module closure is unavailable")
@@ -330,6 +334,15 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
         continue
     sizes = registry.get("format_size")
     names = registry.get("format_name")
+    # A captured Format/row-control override changes the native classifier's
+    # `$newInfo{Format} || $newFormName` operand. Until that exact per-row
+    # operand is emitted, cleanup is disabled rather than guessing physical
+    # equivalence for any IFD1 default.
+    if any(item.directory == "IFD1" for item in omissions):
+        return replace(recipe, encodings=tuple(encodings),
+                       unencoded_numeric_defaults=tuple(omissions),
+                       write_value_source_sha256=str(write_value["source_sha256"]),
+                       survivor_encodings=())
     survivor = []
     # These closed physical forms are tied to the exact helpers compiled in
     # compile_numeric_write. A registry remap/width change is a new native

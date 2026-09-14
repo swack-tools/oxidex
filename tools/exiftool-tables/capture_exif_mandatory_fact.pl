@@ -118,6 +118,8 @@ die "WriteExif source is absent from selected module closure\n"
 print JSON::PP->new->utf8->canonical->pretty->encode({
     schema => 1,
     kind => 'oxidex_exif_mandatory_defaults_fact',
+    writer_deparse => $deparse,
+    writer_deparse_sha256 => sha256_hex($deparse),
     writer => {
         requested_binding => 'Image::ExifTool::Exif::WriteExif',
         actual_name => $actual_name,

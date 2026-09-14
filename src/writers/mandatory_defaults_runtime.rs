@@ -427,6 +427,8 @@ mod tests {
         MandatoryRecipe {
             writer_source_file: "",
             writer_source_sha256: "",
+            core_source_sha256: "",
+            exif_source_sha256: "",
             write_value_source_sha256: "",
             perl_version: "",
             no_mandatory_guard: false,
