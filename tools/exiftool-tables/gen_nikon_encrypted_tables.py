@@ -22,7 +22,7 @@ class Unsupported(ValueError): pass
 # self member an explicit parser/runtime decision rather than guessed output.
 DMS = {x: x for x in '''AFAreaMode AfAreaInitialHeight AfAreaInitialWidth AutoCapturedFrame BracketSet CmdDialsReverseRotExposureComp DynamicAFAreaSize FirmwareVersion FlashControlBuiltin FlashControlMode FlashGroupOptionsMasterMode FocusDistanceRangeWidth FocusMode FocusShiftNumberShots FocusShiftShooting FocusStepsFromInfinity HDMIBitDepth HDMIOutputNLog HDR ImageArea IntervalFrame IntervalShooting IntervalShootingIntervals IntervalShootingShotsPerInterval LensDriveEnd LensID MovieType MultipleExposureMode NewLensData OldLensData PixelShiftActive PixelShiftShooting ShotInfoVersion ShutterMode SingleFrame ZebraPatternToneRange'''.split()}
 FORMATS = {'int8u':'U8','int8s':'I8','int16u':'U16','int16s':'I16','int32u':'U32','int32s':'I32','fixed32u':'Fixed32u','string':'Str','undef':'Undef'}
-ALLOWED = {'Name','Description','Notes','Format','Condition','RawConv','ValueConv','PrintConv','ValueConvInv','PrintConvInv','Writable','Mask','BitShift','PrintHex','Priority','DataMember','Groups','SeparateTable','_extra_keys','_shorthand','SubDirectory','Unknown','Protected','List','Avoid','Binary','Hidden','RelatedTag','WriteGroup','Require','Desire','Inhibit','Hook'}
+ALLOWED = {'Name','Description','Notes','Format','Condition','RawConv','ValueConv','PrintConv','ValueConvInv','PrintConvInv','Writable','Mask','BitShift','PrintHex','PrintConvColumns','DelValue','AlwaysDecrypt','Prinonv','Priority','DataMember','Groups','SeparateTable','_extra_keys','_shorthand','SubDirectory','Unknown','Protected','List','Avoid','Binary','Hidden','RelatedTag','WriteGroup','Require','Desire','Inhibit','Hook'}
 CODE = {
  ('Image::ExifTool::CheckBinaryData','6e141f4f7ef93338d1ccedaa4d66a330f11b5de7695b0789a31fcd87a00521d0'),
  ('Image::ExifTool::WriteBinaryData','6e141f4f7ef93338d1ccedaa4d66a330f11b5de7695b0789a31fcd87a00521d0'),
@@ -32,13 +32,19 @@ CODE = {
  # NikonCustom hydrate their table graph.  The two historical forms above do
  # not cover this B::Deparse form; it is still closed by this exact body hash.
  ('Image::ExifTool::ProcessBinaryData','283954c79e2a9893469d57fd476091c34b57589f8c8f2e8c44cd62c067738fbf'),
+ ('Image::ExifTool::ProcessBinaryData','18df2e9715b5a92b382d9533e33442d1b660f534229899f2446ad82d4d0b72e3'),
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','2eaf021035b51e5f8f0577a76420d0d217e3d52d14596fd10c8ff8a53532706b'),
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','4814b522c2940b28240fc0fbcaa6d22e43619d3e604c3d7a65de4b61513c467e'),
  ('Image::ExifTool::Nikon::Decrypt','b373a90204cb00e317f330a1a8432a75668e027641088a97a7ede89e2c91326d'),
+ ('Image::ExifTool::Nikon::Decrypt','5ecb54a37173daf492800e65c341309ce78d56ed7483f6c9efed7bdc4d7e949b'),
  ('Image::ExifTool::Nikon::InitEncryptedSubdir','ceecb4b7085857c703fecfd2fa870ac293f9a2d75b67e8572f26dc82af0df6e8'),
+ ('Image::ExifTool::Nikon::InitEncryptedSubdir','56a3cc34bff49394ce5d9e531d762bba5594d6df741150a253f849d8e6415c5e'),
  ('Image::ExifTool::Nikon::PrepareNikonOffsets','437fd2d08043ac213b639560c4a037b4fa0f3950745c07211ae3caa0a381bea5'),
+ ('Image::ExifTool::Nikon::PrepareNikonOffsets','0451602b9206b6f48dfce8f69640edba38ef1b51322d6b4fe54b2c7761f79153'),
  ('Image::ExifTool::Nikon::SetByteOrder','ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4'),
+ ('Image::ExifTool::Nikon::SetByteOrder','b09a10c46f0800e2a2d1bc8cde1269fa205300e62f0d5bf7358d6a57ac2c8d4d'),
  ('Image::ExifTool::SetByteOrder','ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4'),
+ ('Image::ExifTool::SetByteOrder','b09a10c46f0800e2a2d1bc8cde1269fa205300e62f0d5bf7358d6a57ac2c8d4d'),
 }
 # The generated root layout delegates decryption to `encrypted.rs`, so this is
 # the native callback closure whose behavior the generated runtime actually
@@ -64,6 +70,31 @@ NIKON_ENCRYPTED_CALLBACKS = {
    'Image::ExifTool::Nikon::SetByteOrder': {
     'name':'Image::ExifTool::SetByteOrder',
     'body_sha256':'ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4',
+    'source_file':'Image/ExifTool.pm',
+   },
+ },
+},
+ # The full table hydration capture uses the canonical Perl 5.38.2
+ # B::Deparse spelling.  This remains an exact body-and-closure contract,
+ # rather than normalizing deparse text or accepting source provenance alone.
+ ('Image::ExifTool::Nikon::ProcessNikonEncrypted','4814b522c2940b28240fc0fbcaa6d22e43619d3e604c3d7a65de4b61513c467e'): {
+  'source_file':'Image/ExifTool/Nikon.pm',
+  'dependencies': {
+   'Image::ExifTool::Nikon::Decrypt': {
+    'body_sha256':'5ecb54a37173daf492800e65c341309ce78d56ed7483f6c9efed7bdc4d7e949b',
+    'source_file':'Image/ExifTool/Nikon.pm',
+   },
+   'Image::ExifTool::Nikon::InitEncryptedSubdir': {
+    'body_sha256':'56a3cc34bff49394ce5d9e531d762bba5594d6df741150a253f849d8e6415c5e',
+    'source_file':'Image/ExifTool/Nikon.pm',
+   },
+   'Image::ExifTool::Nikon::PrepareNikonOffsets': {
+    'body_sha256':'0451602b9206b6f48dfce8f69640edba38ef1b51322d6b4fe54b2c7761f79153',
+    'source_file':'Image/ExifTool/Nikon.pm',
+   },
+   'Image::ExifTool::Nikon::SetByteOrder': {
+    'name':'Image::ExifTool::SetByteOrder',
+    'body_sha256':'b09a10c46f0800e2a2d1bc8cde1269fa205300e62f0d5bf7358d6a57ac2c8d4d',
     'source_file':'Image/ExifTool.pm',
    },
   },
@@ -220,6 +251,29 @@ def expr(row,k):
 def omitted(row):
  return (expr(row,'RawConv') == 'unless (defined $$self{FocusDistanceRangeWidth} and not $$self{FocusDistanceRangeWidth}) { if ($val == 0 ) {$$self{LensDriveEnd} = "No"} else { $$self{LensDriveEnd} = "CFD"} } else{ $$self{LensDriveEnd} = "Inf"}' or
          (isinstance(row.get('PrintConv'),dict) and row['PrintConv'].get('kind')=='expr' and hashlib.sha256(row['PrintConv']['expr'].encode()).hexdigest() in OMITTED_PC))
+
+def reader_ignored_properties(identity, key, row):
+ """Validate native fields with no effect on the generated read interpreter.
+
+ ``DelValue`` drives ExifTool writes only. ``AlwaysDecrypt`` controls native
+ pre-decryption directory-length discovery; this runtime decrypts the complete
+ buffer before calling ``process``. ``Prinonv`` is an unconsumed misspelled
+ native property. Keep each captured value and reject malformed shapes rather
+ than treating arbitrary extra fields as reader-inert. ``AlwaysDecrypt`` is
+ intentionally accepted by its active native flag value, regardless of row
+ placement: the Rust adapter's whole-buffer decrypt sequence makes placement
+ irrelevant to its reader behavior.
+ """
+ if 'DelValue' in row:
+  u(row['DelValue'])
+ if 'AlwaysDecrypt' in row and flag(row['AlwaysDecrypt'], 'AlwaysDecrypt') != 'true':
+  fail(f'{identity}[{key}]: unsupported AlwaysDecrypt {row["AlwaysDecrypt"]!r}')
+ if 'Prinonv' in row:
+  value=row['Prinonv']
+  if (not isinstance(value,dict) or not value
+      or any(not isinstance(map_key,str) or not re.fullmatch(r'-?(?:0|[1-9][0-9]*)',map_key)
+             or not isinstance(label,str) for map_key,label in value.items())):
+   fail(f'{identity}[{key}]: malformed reader-ignored Prinonv')
 def dm(s):
  if s not in DMS: fail(f'unknown data member {s!r}')
  return f'Dm::{s}'
@@ -396,6 +450,15 @@ def render(data):
    for row in g.get('_variants',[g]):
     if set(row)-ALLOWED:fail(f'{n}[{key}]: unsupported fields {set(row)-ALLOWED}')
     if row.get('_extra_keys',[]) != []:fail(f'{n}[{key}]: unrecognized dumped fields {row.get("_extra_keys")!r}')
+    # ExifTool uses this only to arrange its human-readable PrintConv list.
+    # Scalar tag lookup applies the same map regardless of the display width,
+    # which the Rust metadata API does not expose.  Still validate the native
+    # shape so an executable or malformed replacement cannot disappear here.
+    if 'PrintConvColumns' in row:
+     try: columns=u(row['PrintConvColumns'])
+     except Unsupported: fail(f'{n}[{key}]: invalid PrintConvColumns {row["PrintConvColumns"]!r}')
+     if columns < 1: fail(f'{n}[{key}]: invalid PrintConvColumns {row["PrintConvColumns"]!r}')
+    reader_ignored_properties(n, key, row)
     # These declarations need runtime operations absent from binary_data.rs.
     # They are intentionally omitted by the checked-in projection; every
     # other unregistered executable fact remains a hard refusal.
