@@ -809,6 +809,113 @@ sub native_write_helper_facts {
     return \%facts;
 }
 
+# Capture the final loaded TIFF/EXIF registry as a separate writer fact.  These
+# globals are populated by Exif.pm and may be extended or rebound while native
+# modules load, so reading Exif.pm source text or re-declaring a Rust list would
+# capture a different thing.  This stays outside `modules` deliberately: it is
+# input to a future final write stage, never a change to read-table projection.
+sub registry_source_fact {
+    my ($inc_key, $lib_abs) = @_;
+    my $loaded = $INC{$inc_key};
+    return (undef, 'registry_source_not_loaded') unless defined $loaded && length $loaded;
+    my $abs = abs_path($loaded);
+    return (undef, 'registry_source_unreadable') unless defined $abs && -f $abs;
+    my $prefix = $lib_abs . '/';
+    return (undef, 'registry_source_outside_selected_lib') unless index($abs, $prefix) == 0;
+    open(my $fh, '<:raw', $abs) or return (undef, 'registry_source_unreadable');
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return (undef, 'registry_source_unreadable');
+    return ({ library_relative_path => File::Spec->abs2rel($abs, $lib_abs),
+              sha256 => sha256_hex($bytes) }, undef);
+}
+
+sub format_registry_refusal {
+    my ($reason, $source) = @_;
+    return {
+        state => 'refused', reason => $reason,
+        (defined $source ? (source => $source) : ()),
+    };
+}
+
+sub final_native_write_format_registry {
+    my ($lib_abs) = @_;
+    # Snapshot only. Loading a module here could replace helpers whose final
+    # facts were already captured. Limited module dumps that did not load Exif
+    # explicitly retain that missing fact; full/Exif dumps already loaded it.
+    return format_registry_refusal('format_registry_not_loaded')
+        unless $INC{'Image/ExifTool/Exif.pm'};
+    my ($source, $source_error) = registry_source_fact('Image/ExifTool/Exif.pm', $lib_abs);
+    return format_registry_refusal($source_error) if defined $source_error;
+    no strict 'refs';
+    my $names = *{'Image::ExifTool::Exif::formatName'}{ARRAY};
+    my $sizes = *{'Image::ExifTool::Exif::formatSize'}{ARRAY};
+    my $numbers = *{'Image::ExifTool::Exif::formatNumber'}{HASH};
+    return format_registry_refusal('format_name_not_array', $source) unless ref($names) eq 'ARRAY';
+    return format_registry_refusal('format_size_not_array', $source) unless ref($sizes) eq 'ARRAY';
+    return format_registry_refusal('format_number_not_hash', $source) unless ref($numbers) eq 'HASH';
+    return format_registry_refusal('format_registry_empty', $source)
+        unless @$names && @$sizes && keys %$numbers;
+
+    my (@format_name, @format_size);
+    for my $index (0 .. $#$names) {
+        my $value = $names->[$index];
+        if (defined $value) {
+            return format_registry_refusal('format_name_not_plain_string', $source)
+                if ref($value) || !length($value);
+            $format_name[$index] = to_text($value);
+        } else {
+            $format_name[$index] = undef; # retain sparse slots exactly in JSON
+        }
+    }
+    for my $index (0 .. $#$sizes) {
+        my $value = $sizes->[$index];
+        if (defined $value) {
+            return format_registry_refusal('format_size_not_positive_integer', $source)
+                if ref($value) || "$value" !~ /\A[1-9]\d*\z/;
+            $format_size[$index] = 0 + $value;
+        } else {
+            $format_size[$index] = undef; # retain sparse slots exactly in JSON
+        }
+    }
+    my %format_number;
+    for my $name (keys %$numbers) {
+        my $number = $numbers->{$name};
+        return format_registry_refusal('format_number_key_not_plain_string', $source)
+            if ref($name) || !length($name);
+        return format_registry_refusal('format_number_not_nonnegative_integer', $source)
+            if ref($number) || !defined($number) || "$number" !~ /\A(?:0|[1-9]\d*)\z/;
+        $format_number{to_text($name)} = 0 + $number;
+    }
+    # Validate only relationships present in the loaded structures.  In
+    # particular, aliases are allowed: a number key may name a different
+    # spelling than the canonical array name (eg. binary -> undef's slot).
+    for my $index (0 .. $#format_name) {
+        next unless defined $format_name[$index];
+        return format_registry_refusal('format_name_missing_number', $source)
+            unless exists $format_number{$format_name[$index]} && $format_number{$format_name[$index]} == $index;
+        return format_registry_refusal('format_name_missing_size', $source)
+            unless defined $format_size[$index];
+    }
+    for my $index (0 .. $#format_size) {
+        next unless defined $format_size[$index];
+        return format_registry_refusal('format_size_missing_name', $source)
+            unless defined $format_name[$index];
+    }
+    for my $name (keys %format_number) {
+        my $index = $format_number{$name};
+        return format_registry_refusal('format_number_target_name_missing', $source)
+            unless defined $format_name[$index];
+        return format_registry_refusal('format_number_target_size_missing', $source)
+            unless defined $format_size[$index];
+    }
+    return {
+        state => 'resolved', source => $source,
+        format_name => \@format_name, format_size => \@format_size,
+        format_number => \%format_number,
+    };
+}
+
 sub dump_tag_entry {
     my ($entry) = @_;
     my $r = ref $entry;
@@ -1036,6 +1143,10 @@ for my $full_name (sort keys %write_tables) {
 # This does not alter the read projection or route a native writer.
 my $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
 
+# The registry is intentionally captured after the writer helpers have settled
+# and before JSON emission.  It has no effect on the detached read projection.
+my $native_write_format_registry = final_native_write_format_registry($EXIFTOOL_LIB_ABS);
+
 # The child captures byte-order state without changing this table-walking
 # process. These facts prove that the final loaded CODE refs are the same ones
 # the child observed; a later module override makes the contract unresolved.
@@ -1062,6 +1173,7 @@ print $json->encode({
     native_write_autoload => $write_autoload_router_status,
     native_write_tables => \%native_write_tables,
     native_write_helpers => $native_write_helpers,
+    native_write_format_registry => $native_write_format_registry,
     subdirectory_validate_functions => \%subdirectory_validate_functions,
     native_reader_contracts => { unsigned16 => $unsigned_reader_contract },
     native_runtime_contracts => { utf8 => {

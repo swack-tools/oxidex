@@ -428,7 +428,8 @@ class NativeWriteFacts(unittest.TestCase):
                 fact["requested_binding"],
                 {"write_value": "Image::ExifTool::WriteValue",
                  "check_value": "Image::ExifTool::CheckValue",
-                 "sanitize": "Image::ExifTool::Sanitize"}[key],
+                 "sanitize": "Image::ExifTool::Sanitize",
+                 "conv_inv": "Image::ExifTool::ConvInv"}[key],
             )
 
     def test_write_only_source_mutation_changes_sidecar_not_read_projection(self):
