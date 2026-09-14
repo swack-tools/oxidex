@@ -408,6 +408,30 @@ def quicktime_keys_implementation(ledger: dict | None, bounded_source: bytes | N
     return rows
 
 
+def quicktime_keys_observed_reads(evidence: dict | None, source: bytes | None, ledger: dict | None,
+                                  rust: str | None, input_digests: dict | None) -> set[tuple[str, tuple[int, ...], str]]:
+    """Accept only the Keys verifier's complete, artifact-bound fixture grid."""
+    if evidence is None:
+        return set()
+    if source is None or ledger is None or rust is None:
+        raise ValueError("QuickTime Keys read evidence requires complete generated inputs")
+    from verify_quicktime_keys_reader import SCHEMA, validate_report
+    if evidence.get("schema") != SCHEMA:
+        raise ValueError("QuickTime Keys read evidence schema is unsupported")
+    producer = require_mapping(evidence.get("producer"), "QuickTime Keys evidence producer")
+    if producer.get("source_dirty") is not False or producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip():
+        raise ValueError("QuickTime Keys read evidence is not clean/pinned")
+    if not isinstance(input_digests, dict):
+        raise ValueError("QuickTime Keys evidence input digests are missing")
+    expected_inputs = {"source_sha256": input_digests.get("source_sha256"),
+                       "ledger_sha256": input_digests.get("keys_ledger_sha256"),
+                       "rust_sha256": input_digests.get("keys_rust_sha256")}
+    if evidence.get("inputs") != expected_inputs:
+        raise ValueError("QuickTime Keys evidence artifact binding differs")
+    credited = validate_report(evidence, ledger)
+    return {(row["source_identity"]["raw_key"], tuple(row["source_identity"]["variant_path"]), row["tag_name"]) for row in credited}
+
+
 def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           itemlist_ledger: dict | None = None, quicktime_capabilities: dict | None = None,
           quicktime_bounded_source: bytes | None = None, quicktime_rust: str | None = None,
@@ -417,7 +441,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           writer_final_rust: str | None = None, writer_public_ledger: dict | None = None,
           writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None,
           quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
-          writer_read_evidence: dict | None = None) -> dict:
+          writer_read_evidence: dict | None = None, quicktime_keys_read_evidence: dict | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -443,6 +467,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     hydrated_by_id, table_hashes = source_rows(hydrated)
     quicktime = quicktime_implementation(*supplied_quicktime)
     keys = quicktime_keys_implementation(quicktime_keys_ledger, quicktime_bounded_source, quicktime_keys_rust)
+    observed_keys = quicktime_keys_observed_reads(quicktime_keys_read_evidence, quicktime_bounded_source,
+                                                   quicktime_keys_ledger, quicktime_keys_rust, quicktime_input_digests)
     writer = writer_implementation(writer_source, writer_final_ledger, writer_final_rust, writer_public_ledger, writer_public_rust)
     if writer and (writer_input_digests is None or set(writer_input_digests) != {"source_sha256", "final_ledger_sha256", "final_rust_sha256", "public_ledger_sha256", "public_rust_sha256"}):
         raise ValueError("writer input digests are incomplete")
@@ -527,6 +553,10 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                 else:
                     implementation = reader_implementation = "blocked_generated_reader_refusal"
                     refusal = keys_candidate.get("reasons")
+            if (identity[0].endswith("::Keys") and keys_candidate and keys_candidate["generated"]
+                    and (identity[1], variant_path, entry["name"]) in observed_keys
+                    and entry["groups"]["1"] == "Keys"):
+                observed_read = "observed_matched_read"
         writer_candidate = writer.get(identity)
         if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
             writer_state = "generated_writer_declaration_unobserved"
@@ -565,6 +595,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     if quicktime_read_evidence is not None:
         inputs["quicktime_read_evidence"] = {"sha256": canonical_hash(quicktime_read_evidence),
                                              "producer": quicktime_read_evidence["producer"]}
+    if quicktime_keys_read_evidence is not None:
+        inputs["quicktime_keys_read_evidence"] = {"sha256": canonical_hash(quicktime_keys_read_evidence),
+                                                   "producer": quicktime_keys_read_evidence["producer"]}
     if writer_read_evidence is not None:
         inputs["writer_read_evidence"] = {"sha256": canonical_hash(writer_read_evidence),
                                          "producer": writer_read_evidence["producer"]}
@@ -652,6 +685,7 @@ def main() -> int:
     parser.add_argument("--quicktime-keys-ledger", required=True, type=Path)
     parser.add_argument("--quicktime-keys-rust", required=True, type=Path)
     parser.add_argument("--quicktime-read-evidence", type=Path)
+    parser.add_argument("--quicktime-keys-read-evidence", type=Path)
     parser.add_argument("--writer-read-evidence", type=Path)
     parser.add_argument("--writer-source", type=Path,
                         help="authenticated full native dump used by both writer compilers")
@@ -672,6 +706,7 @@ def main() -> int:
                           args.quicktime_keys_ledger, args.quicktime_keys_rust,
                           *(writer_paths if all(path is not None for path in writer_paths) else ()),
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []),
+                          *([args.quicktime_keys_read_evidence] if args.quicktime_keys_read_evidence else []),
                           *([args.writer_read_evidence] if args.writer_read_evidence else []))
     quicktime_source = args.quicktime_bounded_source.read_bytes()
     quicktime_ledger = args.quicktime_itemlist_ledger.read_bytes()
@@ -702,7 +737,8 @@ def main() -> int:
                  writer_source=writer_source, writer_final_ledger=json.loads(writer_final) if writer_final else None,
                  writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
                  writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,
-                 writer_read_evidence=read_json(args.writer_read_evidence) if args.writer_read_evidence else None)
+                 writer_read_evidence=read_json(args.writer_read_evidence) if args.writer_read_evidence else None,
+                 quicktime_keys_read_evidence=read_json(args.quicktime_keys_read_evidence) if args.quicktime_keys_read_evidence else None)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     if args.check:
         if not args.output.exists() or not args.report.exists():
