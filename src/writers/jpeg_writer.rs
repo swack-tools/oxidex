@@ -221,6 +221,22 @@ pub(crate) fn rewrite_generated_exif_scalars(
     Ok(ScalarWriteOutput { bytes, warnings })
 }
 
+/// Apply an address-resolved generated batch without reducing its identity to a name.
+pub(crate) fn rewrite_resolved_generated_exif_scalars(
+    reader: &dyn FileReader,
+    requests: Vec<crate::writers::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest<'_>>,
+    rules: &crate::writers::tiff_surgical::generated_scalar::ScalarWriteRules<'_>,
+) -> Result<crate::writers::tiff_surgical::generated_scalar::ScalarWriteOutput> {
+    use crate::writers::tiff_surgical::generated_scalar::{
+        ScalarWriteOutput, rewrite_resolved_generated_scalars,
+    };
+    let (bytes, warnings) = replace_existing_exif(reader, |tiff| {
+        rewrite_resolved_generated_scalars(tiff, requests, rules)
+            .map(|output| (output.bytes, output.warnings))
+    })?;
+    Ok(ScalarWriteOutput { bytes, warnings })
+}
+
 /// Replace exactly one existing EXIF payload and preserve every other byte,
 /// including non-EXIF APP1 blocks, scan data and the trailer.
 fn replace_existing_exif<T>(

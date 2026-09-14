@@ -93,6 +93,9 @@ pub(crate) struct TiffScalarFinalStageRecipe {
     /// statement.  This is not inferred from a registry size.
     pub count_rule: NativeCountRule,
     pub source_control_sha256: &'static str,
+    pub write_proc_source_sha256: &'static str,
+    pub registry_source_sha256: &'static str,
+    pub writer_source_sha256: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,6 +281,9 @@ mod tests {
         write_value: Some(&WRITE),
         count_rule: NativeCountRule::CeilDivision,
         source_control_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        write_proc_source_sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        registry_source_sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        writer_source_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     };
 
     #[test]

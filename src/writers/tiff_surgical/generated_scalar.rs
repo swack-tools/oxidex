@@ -136,6 +136,63 @@ pub(crate) fn rewrite_generated_scalars(
     requests: Vec<ScalarWriteRequest<'_>>,
     rules: &ScalarWriteRules<'_>,
 ) -> Result<ScalarWriteOutput> {
+    let selected = requests
+        .into_iter()
+        .map(|request| Ok((final_rule(request.key, rules.finals)?, request.value)))
+        .collect::<Result<Vec<_>>>()?;
+    rewrite_selected_scalars(file, selected, rules)
+}
+
+/// A public-name resolver must pass the complete selected identity and native
+/// source hashes. An identically named field from another table or release
+/// cannot silently inherit a final serialization rule.
+pub(crate) struct ResolvedScalarWriteRequest<'a> {
+    pub module: &'a str,
+    pub table: &'a str,
+    pub full_name: &'a str,
+    pub raw_id: &'a str,
+    pub name: &'a str,
+    pub write_group: &'a str,
+    pub write_proc_source_sha256: &'a str,
+    pub registry_source_sha256: &'a str,
+    pub writer_source_sha256: &'a str,
+    pub value: Scalar,
+}
+
+pub(crate) fn rewrite_resolved_generated_scalars(
+    file: &[u8],
+    requests: Vec<ResolvedScalarWriteRequest<'_>>,
+    rules: &ScalarWriteRules<'_>,
+) -> Result<ScalarWriteOutput> {
+    let mut selected = Vec::new();
+    for request in requests {
+        let mut matches = rules.finals.iter().filter(|rule| {
+            rule.module == request.module
+                && rule.table == request.table
+                && rule.full_name == request.full_name
+                && Some(rule.raw_tag_id) == raw_id(request.raw_id)
+                && rule.tag_name == request.name
+                && rule.physical_write_group == request.write_group
+                && rule.write_proc_source_sha256 == request.write_proc_source_sha256
+                && rule.registry_source_sha256 == request.registry_source_sha256
+                && rule.writer_source_sha256 == request.writer_source_sha256
+        });
+        let rule = matches
+            .next()
+            .ok_or_else(|| refused("resolved address has no matching final source identity"))?;
+        if matches.next().is_some() {
+            return Err(refused("resolved address has ambiguous final rules"));
+        }
+        selected.push((rule, request.value));
+    }
+    rewrite_selected_scalars(file, selected, rules)
+}
+
+fn rewrite_selected_scalars(
+    file: &[u8],
+    selected: Vec<(&TiffScalarFinalStageRecipe, Scalar)>,
+    rules: &ScalarWriteRules<'_>,
+) -> Result<ScalarWriteOutput> {
     let scan = scan_tiff(file)?;
     let byte_order = match scan.byte_order {
         ByteOrder::LittleEndian => TiffByteOrder::LittleEndian,
@@ -153,8 +210,7 @@ pub(crate) fn rewrite_generated_scalars(
     let mut addressed = Vec::new();
     let mut edits = Vec::new();
     let mut warnings = Vec::new();
-    for request in requests {
-        let final_rule = final_rule(request.key, rules.finals)?;
+    for (final_rule, requested_value) in selected {
         let row = conversion_row(final_rule, rules.rows)?;
         let ifd = physical_ifd(final_rule.physical_write_group)?;
         let identity = (ifd, final_rule.raw_tag_id);
@@ -177,7 +233,7 @@ pub(crate) fn rewrite_generated_scalars(
         };
         let value = sanitize(
             sanitize_rule,
-            SanitizeInput::Direct(request.value),
+            SanitizeInput::Direct(requested_value),
             SanitizeOptions {
                 encode_hangs: false,
                 escape: EscapeOption::Disabled,
@@ -331,6 +387,83 @@ mod tests {
 
     fn host() -> TiffScalarFinalStageRecipe {
         *final_rule("IFD0:HostComputer", generated_rules().finals).unwrap()
+    }
+
+    #[test]
+    fn resolved_public_identity_joins_sources_before_editing() {
+        let rules = generated_rules();
+        let rule = host();
+        let id = rule.raw_tag_id.to_string();
+        let request = || ResolvedScalarWriteRequest {
+            module: rule.module,
+            table: rule.table,
+            full_name: rule.full_name,
+            raw_id: &id,
+            name: rule.tag_name,
+            write_group: rule.physical_write_group,
+            write_proc_source_sha256: rule.write_proc_source_sha256,
+            registry_source_sha256: rule.registry_source_sha256,
+            writer_source_sha256: rule.writer_source_sha256,
+            value: Scalar::Bytes(b"resolved".to_vec()),
+        };
+        let empty = b"II\x2a\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let resolved = rewrite_resolved_generated_scalars(empty, vec![request()], &rules).unwrap();
+        let named = rewrite_generated_scalars(
+            empty,
+            vec![ScalarWriteRequest {
+                key: rule.tag_name,
+                value: Scalar::Bytes(b"resolved".to_vec()),
+            }],
+            &rules,
+        )
+        .unwrap();
+        assert_eq!(resolved.bytes, named.bytes);
+        for changed in [
+            ResolvedScalarWriteRequest {
+                module: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                table: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                full_name: "Other::Main",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                raw_id: "0",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                name: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                write_group: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                write_proc_source_sha256: "different",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                registry_source_sha256: "different",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                writer_source_sha256: "different",
+                ..request()
+            },
+        ] {
+            // Invalid carrier deliberately proves identity refusal precedes byte editing.
+            let err = rewrite_resolved_generated_scalars(&[], vec![changed], &rules).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("no matching final source identity"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
