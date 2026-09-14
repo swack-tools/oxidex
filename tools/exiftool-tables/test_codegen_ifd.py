@@ -173,6 +173,7 @@ class IdentityLedger(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads(ledger.read_text())
             self.assertEqual(report["schema"], "oxidex_ifd_identity_ledger_v1")
+            self.assertIsNone(report["source"]["expr_ledger_sha256"])
             self.assertEqual(report["counts"], {"rows": 5, "emitted": 3, "refused": 2,
                                                 "reader_eligible": 2, "reader_omitted": 1})
             self.assertEqual(

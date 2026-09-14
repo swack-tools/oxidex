@@ -4369,6 +4369,8 @@ def main():
             "exiftool_version": version,
             "source": {
                 "tables_json_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                "expr_ledger_sha256": (hashlib.sha256(Path(args.expr_ledger).read_bytes()).hexdigest()
+                                       if args.expr_ledger is not None else None),
                 "ifd_rust_sha256": _canonical_ifd_rust_sha256(ifd_output),
                 "ifd_rust_hash_format": "rustfmt-2024",
             },

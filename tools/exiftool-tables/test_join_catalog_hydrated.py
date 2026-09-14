@@ -104,6 +104,16 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         ):
             with self.subTest(mutated=True), self.assertRaises(ValueError):
                 join.ifd_implementation(bad_source, bad_ledger, bad_rust)
+        self.assertIsNone(ledger["source"]["expr_ledger_sha256"])
+        bound = copy.deepcopy(ledger)
+        oracle = b'{"authenticated":true}'
+        bound["source"]["expr_ledger_sha256"] = hashlib.sha256(oracle).hexdigest()
+        with patch.object(join.codegen, "load_oracle_ledger", return_value=set()) as replay:
+            join.ifd_implementation(source, bound, rust, oracle)
+            replay.assert_called_once()
+        for supplied in (None, b'{"substituted":true}'):
+            with self.subTest(expr_ledger=supplied), self.assertRaises(ValueError):
+                join.ifd_implementation(source, bound, rust, supplied)
 
 
     def test_table_report_keeps_source_only_variants_and_separate_contexts(self):
