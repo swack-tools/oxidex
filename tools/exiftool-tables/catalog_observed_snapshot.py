@@ -23,7 +23,10 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
 def canonical_hash(value: object) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    # Match join_catalog_hydrated's receipt bindings, including non-ASCII
+    # FourCCs and values. UTF-8 and escaped JSON represent the same data but
+    # produce different hashes, so this encoding is part of the contract.
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
 
 
 def read(path: Path) -> dict:

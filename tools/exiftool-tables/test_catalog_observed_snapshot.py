@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+import sys
 import unittest
 
 PATH = Path(__file__).with_name("catalog_observed_snapshot.py")
@@ -41,6 +42,26 @@ def join(rows, evidence=None):
 
 
 class CatalogObservedSnapshotTests(unittest.TestCase):
+    def test_non_ascii_receipt_uses_catalog_join_hash_contract(self):
+        sys.path.insert(0, str(PATH.parent))
+        try:
+            from join_catalog_hydrated import canonical_hash as joined_hash
+        finally:
+            sys.path.pop(0)
+        evidence = receipt()
+        evidence["observations"] = [{"key": "\u00a9nam", "value": "caf\u00e9 \U0001f4f7"}]
+        source = join([entry("315")])
+        observed = join([entry("315")], evidence)
+        observed["inputs"]["quicktime_read_evidence"]["sha256"] = joined_hash(evidence)
+        snapshot = publication.make_authenticated_snapshot(
+            source, observed, {"quicktime_read_evidence": evidence})
+        publication.validate_snapshot(snapshot)
+        mutated = copy.deepcopy(evidence)
+        mutated["observations"][0]["value"] += "changed"
+        with self.assertRaisesRegex(ValueError, "not bound"):
+            publication.make_authenticated_snapshot(
+                source, observed, {"quicktime_read_evidence": mutated})
+
     def authenticated_pair(self):
         evidence = receipt()
         source = join([entry("315")])
