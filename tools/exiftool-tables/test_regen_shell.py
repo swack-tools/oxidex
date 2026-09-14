@@ -52,9 +52,11 @@ elif mode=='chosen-perl':
         print(json.dumps({'marker':'explicit-A'}))
     elif name in ('dump_tables.pl','dump_filetypes.pl'):
         reader_only=args.pop(0)=='--reader-only' if args[0]=='--reader-only' else False
+        hydrated=args.pop(0)=='--hydrated-layouts' if args[0]=='--hydrated-layouts' else False
         assert pathlib.Path(args[0]).resolve()==lib
         captured={'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}
         if reader_only: captured['reader_only']=True
+        if hydrated: captured['hydrated_layouts']={'selection':'full_hydrated_catalog'}
         print(json.dumps(captured))
     elif name=='dump_af_points.pl':
         assert pathlib.Path(args[0]).resolve()==lib/'Image/ExifTool/Nikon.pm'
@@ -93,7 +95,7 @@ else:
         selected={root/item.path for item in artifacts.select(producer=name.removesuffix('.py'))}
         assert {flag('--output'),flag('--report')}==selected
         if name=='mandatory_defaults_codegen.py':
-            assert flag('--writer-tables').read_text() == json.dumps({'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'})+'\n'
+            assert json.loads(flag('--writer-tables').read_text())['marker']=='explicit-A'
             assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
         if name=='raw_jfif_codegen.py':
             assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
@@ -145,6 +147,7 @@ else:
         # source-selection contract, and both artifacts must be declared.
         assert args == ['--dump', str(pathlib.Path(args[1]).resolve()), '--replace']
         dump(flag('--dump'))
+        assert json.loads(flag('--dump').read_text())['hydrated_layouts']['selection']=='full_hydrated_catalog'
         for item in artifacts.select(producer='quicktime_generated_specs'):
             output(root/item.path,name)
     elif name=='codegen_subdirs.py':
@@ -332,7 +335,7 @@ class RegenerationShellTests(unittest.TestCase):
                 dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
                 if full:
                     self.assertEqual(len(dump_calls), 2)
-                    self.assertNotEqual(dump_calls[0]['argv'][0], '--reader-only')
+                    self.assertEqual(dump_calls[0]['argv'][0], '--hydrated-layouts')
                     self.assertEqual(dump_calls[1]['argv'][0], '--reader-only')
                 else:
                     self.assertEqual(len(dump_calls), 1)

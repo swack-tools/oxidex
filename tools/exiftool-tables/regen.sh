@@ -67,7 +67,9 @@ fi
 [[ -d "$LIB" ]] || { echo "no ExifTool lib at $LIB" >&2; exit 1; }
 
 echo ">> extracting tag tables from Perl symbol table"
-"$PERL" "$HERE/dump_tables.pl" "$LIB" > "$JSON"
+# Capture the effective post-hydration rows as well as the legacy projection.
+# QuickTime selectors and catalog joins must not consume the earlier snapshot.
+"$PERL" "$HERE/dump_tables.pl" --hydrated-layouts "$LIB" > "$JSON"
 
 echo ">> coverage analysis"
 python3 "$HERE/analyze.py" "$JSON"
