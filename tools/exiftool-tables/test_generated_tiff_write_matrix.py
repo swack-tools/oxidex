@@ -204,6 +204,57 @@ class GeneratedTiffComparison(unittest.TestCase):
         with self.assertRaises(AssertionError):
             compare(seed, expected, seed, 282, target_directory=("NextIFD",))
 
+    def test_native_selected_directory_pruning_is_checked_without_masking_retention(self):
+        from generated_tiff_write_matrix import assert_selected_target_transition, at_directory
+        root = {"byte_order": "little", "image_payload_hex": "ff", "tags": {
+            "315": {"type": 2, "count": 2, "value_hex": "6100"}}}
+        seed = copy.deepcopy(root)
+        seed["children"] = {"NextIFD": {"byte_order": "little", "image_payload_hex": None,
+            "tags": {"315": {"type": 2, "count": 2, "value_hex": "6200"}}}}
+        native_pruned = copy.deepcopy(root)
+        for carrier in ("tiff_little", "tiff_big", "jpeg"):
+            def wrap(tiff):
+                return {"exif": tiff, "sos_to_end_sha256": "scan", "non_exif_sha256": "other"} if carrier == "jpeg" else tiff
+            with self.subTest(carrier=carrier):
+                before, after = wrap(seed), wrap(native_pruned)
+                assert_selected_target_transition(before, after, carrier, ("NextIFD",), 315, "delete")
+                compare_carrier(before, after, after, carrier, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+                with self.assertRaisesRegex(AssertionError, "directory identities"):
+                    compare_carrier(before, after, before, carrier, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+                with self.assertRaisesRegex(AssertionError, "unrelated TIFF directory"):
+                    compare_carrier(before, after, after, carrier, 315, target_directory=("NextIFD",))
+                for operation, tag in (("update", 315), ("insert", 315), ("delete", 316)):
+                    with self.assertRaisesRegex(AssertionError, "without deleting"):
+                        assert_selected_target_transition(before, after, carrier, ("NextIFD",), tag, operation)
+                with self.assertRaisesRegex(ValueError, "directory is absent"):
+                    at_directory(after, carrier, ("NextIFD",))
+        for corruption in ("extra_tag", "subtree", "nondefault_mandatory", "image_payload"):
+            bad_seed = copy.deepcopy(seed)
+            child = bad_seed["children"]["NextIFD"]
+            if corruption == "extra_tag":
+                child["tags"]["316"] = {"type": 2, "count": 2, "value_hex": "7800"}
+            elif corruption == "subtree":
+                child["children"] = {"NextIFD": copy.deepcopy(root)}
+            elif corruption == "nondefault_mandatory":
+                child["tags"]["282"] = {"type": 5, "count": 1, "value_hex": "2c01000001000000"}
+            else:
+                child["image_payload_hex"] = "feed"
+            with self.subTest(corruption=corruption), self.assertRaisesRegex(AssertionError, "pruned IFD1"):
+                compare(bad_seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+        mandatory_seed = copy.deepcopy(seed)
+        mandatory_seed["children"]["NextIFD"]["tags"]["282"] = {
+            "type": 5, "count": 1, "value_hex": "4800000001000000"}
+        compare(mandatory_seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+        # Both outputs dropping another child or changing IFD0's same-name tag
+        # must remain failures even when native removes the selected IFD.
+        seed["children"]["OtherIFD"] = copy.deepcopy(seed["children"]["NextIFD"])
+        with self.assertRaisesRegex(AssertionError, "unrelated TIFF directory"):
+            compare(seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+        native_pruned["children"] = {"OtherIFD": copy.deepcopy(seed["children"]["OtherIFD"])}
+        native_pruned["tags"]["315"]["value_hex"] = "6300"
+        with self.assertRaisesRegex(AssertionError, "unrelated tag"):
+            compare(seed, native_pruned, native_pruned, 315, target_directory=("NextIFD",), allow_directory_removal=True)
+
     def test_native_seed_mandatory_ifd1_tag_turns_requested_insert_into_update(self):
         seed = {"exif": {"tags": {}, "children": {"NextIFD": {"tags": {
             "282": {"type": 5, "count": 1, "value_hex": "4800000001000000"}

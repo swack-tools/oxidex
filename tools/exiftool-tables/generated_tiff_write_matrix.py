@@ -93,11 +93,30 @@ def directory_path(target: GeneratedTarget, name: str, directories: tuple[str, .
     return ("NextIFD",) if directories.index(selected) == 1 else ()
 
 
-def at_directory(document, carrier, path):
+def at_directory(document, carrier, path, *, allow_missing=False):
     value = document["exif"] if carrier == "jpeg" else document
     for name in path:
+        if value is None or name not in value.get("children", {}):
+            if allow_missing:
+                return None
+            raise ValueError(f"selected TIFF directory is absent: {path!r}")
         value = value["children"][name]
+    if value is None and not allow_missing:
+        raise ValueError("selected TIFF root is absent")
     return value
+
+
+def assert_selected_target_transition(seed, expected, carrier, path, raw_tag_id, operation):
+    before = at_directory(seed, carrier, path)
+    after = at_directory(expected, carrier, path, allow_missing=True)
+    if after is None:
+        # Native WriteExif can prune a child containing only mandatory defaults
+        # after deleting its last ordinary tag. Preserve this structural fact;
+        # compare_carrier must still reject an OxiDex child left behind.
+        if not path or operation != "delete" or str(raw_tag_id) not in before["tags"]:
+            raise AssertionError("native lost a directory without deleting its selected tag")
+        return
+    native.assert_target_transition(before, after, "tiff", raw_tag_id, operation)
 
 
 def observed_operation(seed_document, carrier, path, raw_tag_id, requested_operation):
@@ -370,7 +389,39 @@ def changed_tag_ids(target_tag_id: int | set[int] | frozenset[int] | None) -> se
     raise ValueError("changed target identities are malformed")
 
 
-def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[int] | None, *, target_directory=()):
+def assert_prunable_ifd1(directory, removed_tag_ids):
+    """Allow only exact captured mandatory operands after selected deletion."""
+    ledger = json.loads(MANDATORY_LEDGER.read_text())
+    recipe = ledger.get("recipe", {})
+    if ledger.get("writer_tables_joined") is not True or recipe.get("cleanup") != {
+        "all_mandatory": True, "entry_count_shrinks_or_new": True,
+        "no_next_ifd": True, "omit_empty_ifd1": True,
+    }:
+        raise ValueError("mandatory directory cleanup was not source-authenticated")
+    if directory.get("children") or directory.get("image_payload_hex"):
+        raise AssertionError("pruned IFD1 contained an unrelated subtree or image payload")
+    defaults = [entry for group in recipe["directories"] if group["directory"] == "IFD1"
+                for entry in group["defaults"]]
+    encodings = {str(entry["tag_id"]): entry for entry in recipe["encodings"]}
+    expected = {}
+    for entry in defaults:
+        key = str(entry["tag_id"])
+        if key in expected or key not in encodings or entry["kind"] != "Integer":
+            raise ValueError("unrepresentable or ambiguous mandatory cleanup operand")
+        encoding = encodings[key]
+        if encoding["format_name"] == "int16u" and encoding["tiff_type"] == 3:
+            value = int(entry["value"]).to_bytes(2, directory["byte_order"])
+        elif encoding["format_name"] == "rational64u" and encoding["tiff_type"] == 5:
+            value = int(entry["value"]).to_bytes(4, directory["byte_order"]) + (1).to_bytes(4, directory["byte_order"])
+        else:
+            raise ValueError("unsupported mandatory cleanup encoding")
+        expected[key] = {"type": encoding["tiff_type"], "count": 1, "value_hex": value.hex()}
+    for key, entry in directory["tags"].items():
+        if key not in removed_tag_ids and native.entry_storage(entry) != expected.get(key):
+            raise AssertionError(f"pruned IFD1 contained unrelated or nondefault tag {key}")
+
+
+def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[int] | None, *, target_directory=(), allow_directory_removal=False):
     changed = changed_tag_ids(target_tag_id) if not target_directory else set()
     if seed["image_payload_hex"] != actual["image_payload_hex"]:
         raise AssertionError("generated write changed image payload")
@@ -381,8 +432,15 @@ def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[in
     if set(expected["tags"]) != set(actual["tags"]):
         raise AssertionError("native/generated tag identities differ")
     expected_children, actual_children = expected.get("children", {}), actual.get("children", {})
-    if expected_children.keys() != actual_children.keys() or seed.get("children", {}).keys() != actual_children.keys():
-        raise AssertionError("native/generated or preserved TIFF directory identities differ")
+    if expected_children.keys() != actual_children.keys():
+        raise AssertionError("native/generated TIFF directory identities differ")
+    seed_children = seed.get("children", {})
+    removed = seed_children.keys() - actual_children.keys()
+    permitted_removal = {"NextIFD"} if allow_directory_removal and target_directory == ("NextIFD",) else set()
+    if actual_children.keys() - seed_children.keys() or removed - permitted_removal:
+        raise AssertionError("generated write changed unrelated TIFF directory identities")
+    for name in removed:
+        assert_prunable_ifd1(seed_children[name], changed_tag_ids(target_tag_id))
     for tag, value in expected["tags"].items():
         # Native may relocate the strip; its actual bytes are checked above.
         if tag == "273" and any(value[key] != actual["tags"][tag][key] for key in ("type", "count")):
@@ -408,12 +466,14 @@ def compare(seed, expected, actual, target_tag_id: int | set[int] | frozenset[in
     for name, child in expected_children.items():
         selected_child = bool(target_directory) and name == target_directory[0]
         compare(seed["children"][name], child, actual_children[name], target_tag_id if selected_child else None,
-                target_directory=target_directory[1:] if selected_child else ())
+                target_directory=target_directory[1:] if selected_child else (),
+                allow_directory_removal=allow_directory_removal and selected_child)
 
 
-def compare_carrier(seed, expected, actual, carrier, target_tag_id: int | set[int] | frozenset[int] | None, *, target_directory=()):
+def compare_carrier(seed, expected, actual, carrier, target_tag_id: int | set[int] | frozenset[int] | None, *, target_directory=(), allow_directory_removal=False):
     if carrier != "jpeg":
-        return compare(seed, expected, actual, target_tag_id, target_directory=target_directory)
+        return compare(seed, expected, actual, target_tag_id, target_directory=target_directory,
+                       allow_directory_removal=allow_directory_removal)
     for key in ("sos_to_end_sha256", "non_exif_sha256"):
         if actual[key] != seed[key]:
             raise AssertionError(f"generated JPEG changed {key}")
@@ -421,7 +481,8 @@ def compare_carrier(seed, expected, actual, carrier, target_tag_id: int | set[in
         raise AssertionError("native/generated JPEG image payload differs")
     if any(document["exif"] is None for document in (seed, expected, actual)):
         raise AssertionError("JPEG operation lost its EXIF block")
-    compare(seed["exif"], expected["exif"], actual["exif"], target_tag_id, target_directory=target_directory)
+    compare(seed["exif"], expected["exif"], actual["exif"], target_tag_id, target_directory=target_directory,
+            allow_directory_removal=allow_directory_removal)
 
 
 def main():
@@ -575,9 +636,10 @@ def main():
                 row["effective_state"] = "native_noop"
                 row["seed_vs_native_complete_state"] = "passed"
             else:
-                native.assert_target_transition(at_directory(seed, row["carrier"], path), at_directory(expected, row["carrier"], path), "tiff", row["target"]["raw_tag_id"], row["effective_operation"])
+                assert_selected_target_transition(seed, expected, row["carrier"], path, row["target"]["raw_tag_id"], row["effective_operation"])
                 row["effective_state"] = "mutated"
-            compare_carrier(seed, expected, actual, row["carrier"], row["target"]["raw_tag_id"], target_directory=path)
+            compare_carrier(seed, expected, actual, row["carrier"], row["target"]["raw_tag_id"], target_directory=path,
+                            allow_directory_removal=row["effective_operation"] == "delete")
             row["state"] = "passed"
             report["passed"] += 1
             report["passed_by_effective_state"][row["effective_state"]] += 1
