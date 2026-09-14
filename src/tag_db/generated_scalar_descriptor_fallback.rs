@@ -143,6 +143,22 @@ fn terminal_projection(migrations: &[StaticPublicSetNewValueMigration]) -> Compo
     }
 }
 
+fn conflicts_with_migration(
+    fact: &TerminalScalarIdentity,
+    migration: &StaticPublicSetNewValueMigration,
+) -> bool {
+    (fact.raw_tag_id == migration.raw_tag_id && fact.physical_group == migration.write_group)
+        || (fact.group0 == migration.group0 && fact.name.eq_ignore_ascii_case(migration.name))
+}
+
+fn conflicts_with_current(
+    fact: &GeneratedScalarDescriptorFact,
+    migration: &StaticPublicSetNewValueMigration,
+) -> bool {
+    (fact.raw_tag_id == migration.raw_tag_id && fact.physical_group == migration.write_group)
+        || (fact.group0 == migration.group0 && fact.name.eq_ignore_ascii_case(migration.name))
+}
+
 fn compose_with_capture(
     capture_valid: bool,
     address_rows: Option<&[StaticSetNewValueAddress]>,
@@ -163,6 +179,11 @@ fn compose_with_capture(
     let registry = registry.expect("checked above");
     let mut current: Vec<GeneratedScalarDescriptorFact> = Vec::with_capacity(migrations.len());
     let mut terminal = Vec::new();
+    // Historical terminal identities intentionally do not block a later
+    // renamed current identity at the same physical field.  This separate
+    // set records only a collision among current candidates, which must stay
+    // terminal if a third candidate repeats it after the first was removed.
+    let mut ambiguous_current = Vec::new();
     for migration in migrations {
         // Historical public ownership is terminal only for its own identity.
         // Do not republish a stale descriptor, but do not make one removed row
@@ -197,20 +218,33 @@ fn compose_with_capture(
             terminal.push(terminal_identity(migration));
             continue;
         };
-        if let Some(index) = current.iter().position(|fact| {
-            (fact.raw_tag_id == migration.raw_tag_id
-                && fact.physical_group == migration.write_group)
-                || (fact.group0 == migration.group0
-                    && fact.name.eq_ignore_ascii_case(migration.name))
-        }) {
-            let previous = current.remove(index);
-            terminal.push(TerminalScalarIdentity {
-                raw_tag_id: previous.raw_tag_id,
-                name: previous.name,
-                group0: previous.group0,
-                physical_group: previous.physical_group,
-            });
+        if ambiguous_current
+            .iter()
+            .any(|fact| conflicts_with_migration(fact, migration))
+        {
             terminal.push(terminal_identity(migration));
+            continue;
+        }
+        let mut collided = Vec::new();
+        current.retain(|fact| {
+            if conflicts_with_current(fact, migration) {
+                collided.push(TerminalScalarIdentity {
+                    raw_tag_id: fact.raw_tag_id,
+                    name: fact.name,
+                    group0: fact.group0,
+                    physical_group: fact.physical_group,
+                });
+                false
+            } else {
+                true
+            }
+        });
+        if !collided.is_empty() {
+            ambiguous_current.extend(collided.iter().copied());
+            let identity = terminal_identity(migration);
+            ambiguous_current.push(identity);
+            terminal.extend(collided);
+            terminal.push(identity);
             continue;
         }
         current.push(GeneratedScalarDescriptorFact {
@@ -324,6 +358,59 @@ mod tests {
         }
     }
 
+    fn with_name(
+        source: &StaticPublicSetNewValueMigration,
+        name: &'static str,
+    ) -> StaticPublicSetNewValueMigration {
+        StaticPublicSetNewValueMigration {
+            name,
+            ..with_state(source, false)
+        }
+    }
+
+    fn address_for(migration: &StaticPublicSetNewValueMigration) -> StaticSetNewValueAddress {
+        let source = SET_NEW_VALUE_ADDRESS_ROWS
+            .iter()
+            .find(|row| {
+                row.module == migration.module
+                    && row.table == migration.table
+                    && row.full_name == migration.full_name
+                    && raw_id(row.raw_id) == Some(migration.raw_tag_id)
+                    && row.group0 == migration.group0
+                    && row.group1 == migration.group1
+                    && row.write_group == migration.write_group
+            })
+            .expect("selected migration has one source address");
+        StaticSetNewValueAddress {
+            index: source.index,
+            module: source.module,
+            table: source.table,
+            full_name: source.full_name,
+            raw_id: source.raw_id,
+            name: migration.name,
+            group0: source.group0,
+            group1: source.group1,
+            write_group: source.write_group,
+        }
+    }
+
+    fn final_for(migration: &StaticPublicSetNewValueMigration) -> TiffScalarFinalStageRecipe {
+        let mut recipe = TIFF_SCALAR_FINAL_RECIPES
+            .iter()
+            .copied()
+            .find(|recipe| {
+                recipe.module == migration.module
+                    && recipe.table == migration.table
+                    && recipe.full_name == migration.full_name
+                    && recipe.raw_tag_id == migration.raw_tag_id
+                    && recipe.table_group0 == migration.group0
+                    && recipe.physical_write_group == migration.write_group
+            })
+            .expect("selected migration has one final recipe");
+        recipe.tag_name = migration.name;
+        recipe
+    }
+
     #[test]
     fn selected_generated_operands_publish_the_complete_current_intersection() {
         let facts = facts().expect("selected generated artifact join must be complete");
@@ -411,5 +498,34 @@ mod tests {
         }
         assert!(!terminal_descriptor_name_in(&result, "EXIF:UnownedName"));
         assert!(!terminal_reverse_in(&result, 0xffff, "IFD0"));
+    }
+
+    #[test]
+    fn third_current_collision_cannot_republish_a_terminal_identity() {
+        let first = with_state(&PUBLIC_SET_NEW_VALUE_MIGRATIONS[0], false);
+        let second = with_name(&first, "DocumentNameAliasOne");
+        let third = with_name(&first, "DocumentNameAliasTwo");
+        let migrations = [first, second, third];
+        let addresses = migrations.iter().map(address_for).collect::<Vec<_>>();
+        let recipes = migrations.iter().map(final_for).collect::<Vec<_>>();
+        let result = compose_with_capture(
+            true,
+            Some(&addresses),
+            &migrations,
+            &recipes,
+            TIFF_SCALAR_FINAL_FORMAT_REGISTRY,
+        )
+        .expect("synthetic capture is globally valid");
+
+        assert!(result.current.is_empty());
+        for migration in migrations {
+            let descriptor_name = format!("{}:{}", migration.group0, migration.name);
+            assert!(terminal_descriptor_name_in(&result, &descriptor_name));
+            assert!(terminal_reverse_in(
+                &result,
+                migration.raw_tag_id,
+                migration.write_group
+            ));
+        }
     }
 }

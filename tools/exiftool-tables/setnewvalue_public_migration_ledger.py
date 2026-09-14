@@ -124,6 +124,8 @@ def _current_from_authenticated(addressing: Addressing, recipes: list[FinalScala
         key = (row.module, row.table, row.full_name, _number(row.raw_id, "address row raw_id"), row.name)
         by_identity.setdefault(key, []).append(row)
     current: dict[tuple[str, str, str, int, str, str, str, str], PublicMigrationEntry] = {}
+    physical: dict[tuple[int, str], PublicMigrationEntry] = {}
+    public_name: dict[tuple[str, str], PublicMigrationEntry] = {}
     for recipe in recipes:
         if recipe.write_proc_source_sha256 != capture["write_exif_source_sha256"]:
             raise RecipeRefused("final recipe WriteExif source does not join address capture")
@@ -137,8 +139,16 @@ def _current_from_authenticated(addressing: Addressing, recipes: list[FinalScala
             raise RecipeRefused("final recipe lacks one exact source-address row")
         entry = _entry_from_pair(candidates[0], recipe)
         if entry.key in current:
+            raise RecipeRefused("public migration intersection has duplicate source identity")
+        physical_key = (entry.raw_tag_id, entry.write_group)
+        if physical_key in physical:
             raise RecipeRefused("public migration intersection has duplicate physical identity")
+        name_key = (entry.group0, entry.name.lower())
+        if name_key in public_name:
+            raise RecipeRefused("public migration intersection has duplicate public name identity")
         current[entry.key] = entry
+        physical[physical_key] = entry
+        public_name[name_key] = entry
     source = {
         "capture": capture,
         "address_rows_sha256": addressing.source_rows_sha256,

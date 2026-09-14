@@ -103,6 +103,18 @@ class PublicMigrationLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(RecipeRefused, "WriteExif"):
             self.current([row("Artist", "315")], [replace(recipe("Artist", 315), write_proc_source_sha256=h("9"))])
 
+    def test_current_physical_or_public_name_collision_refuses(self):
+        with self.assertRaisesRegex(RecipeRefused, "duplicate physical"):
+            self.current(
+                [row("Artist", "315"), row("ArtistAlias", "315")],
+                [recipe("Artist", 315), recipe("ArtistAlias", 315)],
+            )
+        with self.assertRaisesRegex(RecipeRefused, "duplicate public name"):
+            self.current(
+                [row("Artist", "315"), row("Artist", "316")],
+                [recipe("Artist", 315), recipe("Artist", 316)],
+            )
+
     def test_final_writer_source_must_join_address_capture(self):
         with self.assertRaisesRegex(RecipeRefused, "Writer source"):
             self.current([row("Artist", "315")],
