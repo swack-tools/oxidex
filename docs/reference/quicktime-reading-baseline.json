@@ -1,7 +1,24 @@
 {
-  "instrument": "explicit pinned ExifTool -j -a -G1 -s vs freshly built oxidex -j; ItemList-only projection",
+  "instrument": "quicktime_baseline.py; pinned -j -a -G1 -s vs fresh oxidex -j; ItemList projection",
+  "provenance_status": "replay_verified",
+  "instrument_sha256": "43a335c13fe9cab5f5d5bd5bab04c1efd5803a65f9530808c124938a42e83c92",
   "pin": "13.59",
-  "source_commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
+  "source_commit": "5334777d15bd09bb5d45dc86b241cb51d257b2b1",
+  "source_dirty": true,
+  "source_dirty_files": [
+    "docs/reference/goal-checkpoint-20260914.md",
+    "docs/reference/quicktime-source-baseline.json",
+    "docs/reference/source-family-migration-plan.md",
+    "tools/exiftool-tables/quicktime_atom_tables.py",
+    "tools/exiftool-tables/test_quicktime_atom_tables.py",
+    "HANDOFF.md",
+    "tools/exiftool-tables/capture_quicktime_baseline.py",
+    "tools/exiftool-tables/fixtures/quicktime_source_13_59.json",
+    "tools/exiftool-tables/quicktime_baseline.py",
+    "tools/exiftool-tables/quicktime_source_capabilities.json",
+    "tools/exiftool-tables/test_quicktime_baseline.py"
+  ],
+  "binary_sha256": "b36fc15955bc1cd2aecc3f68528b07df3c42ed5421b4ef91db2a2b83ffbf6a65",
   "fixtures": [
     {
       "fixture": "enum.m4a",
@@ -59,7 +76,7 @@
       "matched": false
     }
   ],
-  "interpretation": "Observed pre-migration ItemList projection on five behavior fixtures only; not corpus conformance or writing coverage.",
   "reading_matched_fixture_projections": 2,
-  "writing_observed": null
+  "writing_observed": null,
+  "interpretation": "Five pre-migration behavior fixtures only; neither corpus conformance nor writing coverage."
 }

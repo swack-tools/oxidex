@@ -1,7 +1,9 @@
 import copy
 import unittest
+import tempfile
+from pathlib import Path
 
-from quicktime_atom_tables import inventory
+from quicktime_atom_tables import inventory, validate_outputs
 
 
 def source():
@@ -54,6 +56,26 @@ class CapabilityTests(unittest.TestCase):
         data["modules"]["QuickTime"]["tables"]["ItemList"]["tag_count"] = 99
         with self.assertRaises(ValueError):
             inventory(data)
+
+    def test_regeneration_cannot_clobber_source_or_output_aliases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.json"
+            source.write_text("captured source")
+            hardlink = Path(folder) / "alias.json"
+            hardlink.hardlink_to(source)
+            for path in (source, hardlink):
+                with self.assertRaisesRegex(ValueError, "source dump"):
+                    validate_outputs(source, [path], replace=True)
+            target = Path(folder) / "result.json"
+            target.write_text("saved evidence")
+            with self.assertRaisesRegex(ValueError, "--replace"):
+                validate_outputs(source, [target])
+            validate_outputs(source, [target], replace=True)
+            validate_outputs(source, [target], check=True)
+            with self.assertRaisesRegex(ValueError, "one another"):
+                validate_outputs(source, [target, target], replace=True)
+            self.assertEqual(source.read_text(), "captured source")
+            self.assertEqual(target.read_text(), "saved evidence")
 
 
 if __name__ == "__main__":

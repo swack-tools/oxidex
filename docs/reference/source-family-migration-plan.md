@@ -1,7 +1,8 @@
 # Source-family baseline and generic readers
 
-Status: stopped by maintainer on 2026-09-14. This plan is preserved for a future
-objective; it is not an instruction to resume automatically.
+Status: active under the renewed full-parity objective on 2026-09-14.
+PR #775 is the first reproducible QuickTime baseline milestone; #776 repairs
+the broader source/artifact inventory. The earlier checkpoint pause is superseded.
 
 This goal starts at `304d6339`, using the repository pin, ExifTool 13.59.
 The earlier writer checkpoints (#771–#774) are unfinished and remain separate.
@@ -72,3 +73,27 @@ without adding Rust names or tag lists. Preserve unknown atoms as unknown.
 
 Land small complete milestones as they pass. Four to six milestones per day is
 a preferred working cadence, not a reason to skip gates or inflate coverage.
+
+## Full-goal completion criteria
+
+QuickTime is the starting protocol, not the final scope. Account for every table
+and tag family in the pinned release's BuildTagLookup catalog, including any
+catalog families missing from the default hydrated dump. Catalog membership
+establishes scope only; hydrated source facts establish decoding and writing rules.
+
+The final ledger must conserve source identities across generated and blocked
+rows. It must name the generated artifact, connected executor and caller evidence,
+exact omission reason, and separate read/write observations. Unknown coverage
+cannot be relabeled supported. A five-file or full-corpus pass cannot prove
+untested source-row parity. Completion requires the full declared scope to be
+implemented and validated, including unsupported callbacks/protocols discovered
+along the way, with all relevant PRs reviewed and merged.
+
+An upgrade comparison must account for added, removed and changed source rows and
+processor/conversion contracts, regenerate supported changes, and expose new
+unsupported behavior. It must test retained behavior as well as newly added tags.
+
+Progress measures, recorded at each milestone: source identities inventoried;
+accepted and refused rows with reasons; verified runtime connections; observed
+read matches/missing/value errors; observed write create/replace/delete results;
+and committed/merged state. Keep every denominator and fixture/corpus scope visible.
