@@ -23,6 +23,9 @@ pub(crate) mod generated_sanitize_rules;
 // Source-derived new-directory defaults remain inactive until public creation routing lands.
 pub(crate) mod generated_mandatory_defaults;
 pub(crate) mod generated_fresh_jpeg_byte_order;
+// Raw source properties are separate from displayed metadata values.
+pub(crate) mod generated_raw_jfif;
+pub(crate) mod raw_segment_properties;
 #[allow(dead_code)]
 pub(crate) mod generated_scalar;
 pub(crate) mod generated_scalar_rules;

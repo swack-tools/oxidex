@@ -1,0 +1,45 @@
+{
+  "loaded_closure": {
+    "Image/ExifTool.pm": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+    "Image/ExifTool/Canon.pm": "d22b110e7b2e1af2d6e59bb97db97a04ffc2bfd1ba7d078d380ae60fbc70bbba",
+    "Image/ExifTool/Exif.pm": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+    "Image/ExifTool/Fixup.pm": "05b45c0efa372cda6fd5f08919e54b3dec8929dec351d48d736775b4f67660a4",
+    "Image/ExifTool/MakerNotes.pm": "5c78d72ce8f07142ce4e9e400616725480495c3c85514b2861cadd18077c119c",
+    "Image/ExifTool/Minolta.pm": "e4f77a975e9465ea23c430125d12e53c54d68a4f042e10b23d6cae97758b0f4b",
+    "Image/ExifTool/PanasonicRaw.pm": "bd204b732aa68f0b099d798699f149a4579a815748e9ddde6236ac585b5747d7",
+    "Image/ExifTool/Sony.pm": "1db1f1905ec2b6abf4bbd90fa6d8bfa92d84c5a2399cc333c2b392f27d8d330f",
+    "Image/ExifTool/TagLookup.pm": "da70c92c00f9db1e72641ed04700e6e17c9cccbd323c5ebf95fc3de7b4a95a8d",
+    "Image/ExifTool/WriteExif.pl": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+    "Image/ExifTool/Writer.pl": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+  },
+  "native_identity": {
+    "exiftool_version": "13.59",
+    "perl_version": "v5.38.2"
+  },
+  "recipe": {
+    "byte_order": "MM",
+    "fields": [
+      {
+        "offset": 2,
+        "property": "JFIFResolutionUnit",
+        "width": 1
+      },
+      {
+        "offset": 3,
+        "property": "JFIFXResolution",
+        "width": 2
+      },
+      {
+        "offset": 5,
+        "property": "JFIFYResolution",
+        "width": 2
+      }
+    ],
+    "marker": 224,
+    "signature_hex": "4a46494600",
+    "skip": 5
+  },
+  "schema": 1,
+  "source_grammar_sha256": "5479cf6f9ec52ab65fc1cee6a2695d64c3c6990d9f456bcc83ae19b97178c98b",
+  "status": "compiled bounded raw DATAMEMBER decoder; public integration separate"
+}

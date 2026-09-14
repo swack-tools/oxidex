@@ -51,6 +51,8 @@ ARTIFACTS = (
     Artifact("tiff-scalar-final-ledger", 1, "final_scalar_stage", "tools/exiftool-tables/tiff_scalar_final_ledger.json"),
     Artifact("mandatory-default-rules", 1, "mandatory_defaults_codegen", "src/writers/generated_mandatory_defaults.rs"),
     Artifact("mandatory-default-ledger", 1, "mandatory_defaults_codegen", "tools/exiftool-tables/mandatory_defaults_ledger.json"),
+    Artifact("raw-jfif-rules", 1, "raw_jfif_codegen", "src/writers/generated_raw_jfif.rs"),
+    Artifact("raw-jfif-ledger", 1, "raw_jfif_codegen", "tools/exiftool-tables/raw_jfif_ledger.json"),
     Artifact("setnewvalue-address-rules", 1, "setnewvalue_address_rust_codegen", "src/writers/generated_setnewvalue_address_rules.rs"),
     Artifact("setnewvalue-address-ledger", 1, "setnewvalue_address_rust_codegen", "tools/exiftool-tables/setnewvalue_address_ledger.json"),
     Artifact("setnewvalue-ownership-ledger", 1, "setnewvalue_address_rust_codegen", "tools/exiftool-tables/setnewvalue_ownership_ledger.json"),

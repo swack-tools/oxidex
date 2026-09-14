@@ -137,6 +137,15 @@ python3 "$HERE/mandatory_defaults_codegen.py" "$MANDATORY_FACT" \
     --report "$(artifact_path mandatory-default-ledger)"
 
 echo
+echo ">> capturing and generating source-derived raw JFIF property operands"
+RAW_JFIF_FACT="$CACHE/raw-jfif-$VERSION.json"
+"$PERL" "$HERE/capture_raw_jfif_fact.pl" "$LIB" > "$RAW_JFIF_FACT"
+python3 "$HERE/raw_jfif_codegen.py" "$RAW_JFIF_FACT" \
+    --selected-perl "$PERL" \
+    --output "$(artifact_path raw-jfif-rules)" \
+    --report "$(artifact_path raw-jfif-ledger)"
+
+echo
 echo ">> generating authenticated SetNewValue address operands"
 ADDRESS_ROWS="$CACHE/setnewvalue-address-rows-$VERSION.json"
 ADDRESS_REPORT="$CACHE/setnewvalue-address-report-$VERSION.json"
