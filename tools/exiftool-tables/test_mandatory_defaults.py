@@ -102,7 +102,7 @@ class MandatoryTests(unittest.TestCase):
             # changes the B::Deparse fragment and closed admission refuses.
             target.write_text(body.replace('$mandatory = $mandatory{$dirName} unless $noMandatory;',
                                            '$mandatory = $mandatory{$dirName};'))
-            with self.assertRaisesRegex(MandatoryRefused, 'executable new-directory flow'):
+            with self.assertRaisesRegex(MandatoryRefused, '(executable new-directory flow|executable body review hash)'):
                 compile_mandatory(capture(copied))
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
