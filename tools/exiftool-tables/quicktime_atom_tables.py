@@ -149,9 +149,27 @@ def report(raw: bytes):
             raise ValueError("missing or malformed capture provenance: " + key)
     if not re.fullmatch(r"\d+\.\d+\.\d+", str(capture.get("perl_version", ""))):
         raise ValueError("missing Perl capture version")
-    tool = (ROOT / "tools/exiftool-tables/dump_tables.pl").read_bytes()
-    if hashlib.sha256(tool).hexdigest() != capture["dump_tool_sha256"]:
-        raise ValueError("capture dump tool hash is stale; recapture using the current dump tool")
+    tool_sha256 = hashlib.sha256((ROOT / "tools/exiftool-tables/dump_tables.pl").read_bytes()).hexdigest()
+    if tool_sha256 != capture["dump_tool_sha256"]:
+        # A bounded table snapshot remains verbatim evidence of its recorded
+        # hydrated full dump.  A later dump-tool improvement may add a source
+        # fact without changing those selected tables; in that case a separate
+        # bounded canonical-Perl refresh records exactly which new fact came
+        # from the current tool.  Never let an undocumented stale tool hash
+        # pass as a fresh capture.
+        refresh = capture.get("source_fact_refresh")
+        protocol = document.get("quicktime_itemlist_reader_protocol")
+        if (not isinstance(refresh, dict)
+                or refresh.get("kind") != "quicktime_itemlist_reader_protocol_from_canonical_perl"
+                or refresh.get("dump_tool_sha256") != tool_sha256
+                or refresh.get("captured_dump_tool_sha256") != capture["dump_tool_sha256"]
+                or refresh.get("exiftool_version") != pinned
+                or not re.fullmatch(r"\d+\.\d+\.\d+", str(refresh.get("perl_version", "")))
+                or not isinstance(protocol, dict)
+                or refresh.get("protocol_sha256") != hashlib.sha256(
+                    json.dumps(protocol, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+                ).hexdigest()):
+            raise ValueError("capture dump tool hash is stale; recapture using the current dump tool")
     result = inventory(document)
     result["source"] = {"dump_sha256": hashlib.sha256(raw).hexdigest(),
                         "selector_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

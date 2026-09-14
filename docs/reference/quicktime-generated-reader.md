@@ -79,3 +79,16 @@ python3 tools/exiftool-tables/quicktime_generated_specs.py --check
 
 UserData, Keys, remaining ItemList refusals, other source families and writing
 remain part of the full goal. Passing these fixtures does not remove them.
+
+## Workspace validation follow-up
+
+The full `cargo test --workspace` run passes after updating MP4 integration
+assertions to the canonical family-0 storage keys. The separate classic
+`UserData:Title` value is checked explicitly. `cargo fmt --check` and
+`cargo clippy --lib -- -D warnings` also pass. The 22 behavior fixtures and
+44 printed/raw native comparisons remain the observed reading evidence;
+workspace tests do not extend that measurement to the whole catalog.
+
+Protocol guards now include QuickTimeFormat, ReadValue, Decode, and Charset
+helper bodies. Capturing the charset mapping data they consume remains an
+explicit upgrade-sensitivity follow-up. No generated writer is enabled here.

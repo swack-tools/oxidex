@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Generate inert Rust ItemList specs from the QuickTime source ledger.
+"""Generate Rust ItemList specs consumed by the generic ItemList reader.
 
-The generated Rust file is deliberately not wired into the QuickTime parser in
-this milestone.  It records only source facts that a later generic ItemList
-executor may consume; a declaration is not observed reading support.
+This ledger records source acceptance and refusals. Runtime connection and
+observed reading remain separate evidence; declarations alone are not coverage.
 """
 from __future__ import annotations
 
@@ -27,6 +26,17 @@ EXPECTED_PROCESSOR = {
 EXPECTED_PROCESSOR_DEPARSE_SHA256 = "5ae906b19e81d6e0a1f7bbbe89522e570edb8fcf0be8bb9eaa81fb47d43c5005"
 EXPECTED_TABLE_CONTRACT = {"FORMAT": "string", "GROUPS.0": "QuickTime", "GROUPS.1": "ItemList",
                            "LANG_INFO.__name": "Image::ExifTool::QuickTime::GetLangInfo"}
+EXPECTED_READER_PROTOCOL = {
+    "kind": "quicktime_itemlist_reader_protocol_v1",
+    "string_encoding": {"1": "UTF8", "2": "UTF16", "3": "ShiftJIS", "4": "UTF8", "5": "UTF16"},
+    "dependencies": {
+        "quicktime_format": ("Image::ExifTool::QuickTime::QuickTimeFormat", "c29829e95ea7df45de2cde0527d51d953583c9c73b26c52931f4bb91b2223883"),
+        "read_value": ("Image::ExifTool::ReadValue", "91213f64302774d00eb5fadd4835ca3fbcad3607c70eec98afd89d3423f0ad29"),
+        "decode": ("Image::ExifTool::Decode", "8ce89a36fea0f6ce930188e0b11d1846c9fbdb4538ec1f64e51bb24c649bd0e5"),
+        "charset_decompose": ("Image::ExifTool::Charset::Decompose", "f07e59a85a207c3895a3e39ec7aa06a1f682199f303e7dbe62217998d66b77e2"),
+        "charset_recompose": ("Image::ExifTool::Charset::Recompose", "ea4fbd153500dbe5735c2de7350e79f6779b85918fa9d8b27251ba2043551cef"),
+    },
+}
 
 
 def source_format(value):
@@ -59,6 +69,32 @@ def processor_reason(document):
     return None
 
 
+def reader_protocol_reason(document):
+    protocol = document.get("quicktime_itemlist_reader_protocol")
+    if not isinstance(protocol, dict):
+        return "missing_or_changed_reader_protocol:protocol"
+    if protocol.get("kind") != EXPECTED_READER_PROTOCOL["kind"]:
+        return "missing_or_changed_reader_protocol:kind"
+    if protocol.get("string_encoding") != EXPECTED_READER_PROTOCOL["string_encoding"]:
+        return "missing_or_changed_reader_protocol:string_encoding"
+    if protocol.get("charset_loaded") is not True:
+        return "missing_or_changed_reader_protocol:charset_load"
+    dependencies = protocol.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return "missing_or_changed_reader_protocol:dependencies"
+    for key, (name, body_sha256) in EXPECTED_READER_PROTOCOL["dependencies"].items():
+        fact = dependencies.get(key)
+        if not isinstance(fact, dict):
+            return f"missing_or_changed_reader_protocol:{key}"
+        if (fact.get("__perl") != "CODE" or fact.get("__opaque") is not True
+                or fact.get("__name") != name or fact.get("resolved") is not True):
+            return f"missing_or_changed_reader_protocol:{key}"
+        body = fact.get("__deparse")
+        if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != body_sha256:
+            return f"missing_or_changed_reader_protocol:{key}"
+    return None
+
+
 def compile_document(document):
     pin = (ROOT / ".exiftool-version").read_text().strip()
     if document.get("exiftool_version") != pin:
@@ -68,6 +104,7 @@ def compile_document(document):
     # hydrated dump. inventory() is the shared pure source-row selection.
     base = selector.inventory(document)
     blocked_protocol = processor_reason(document)
+    blocked_reader_protocol = reader_protocol_reason(document)
     specs = []
     ledger = []
     for family in base["families"]:
@@ -75,6 +112,8 @@ def compile_document(document):
             reasons = list(record["reasons"])
             if family["table"] == "ItemList" and blocked_protocol:
                 reasons.append(blocked_protocol)
+            if family["table"] == "ItemList" and blocked_reader_protocol:
+                reasons.append(blocked_reader_protocol)
             reasons = sorted(set(reasons))
             generated = family["table"] == "ItemList" and not reasons
             entry = {"identity": record["identity"], "generated": generated, "reasons": reasons}
@@ -109,8 +148,9 @@ def compile_document(document):
                      "processor_provenance": {
                          "source_file": document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"]["PROCESS_PROC"].get("source_file"),
                          "source_sha256": document["modules"]["QuickTime"]["tables"]["ItemList"]["meta"]["PROCESS_PROC"].get("source_sha256")},
-                     "eligible": blocked_protocol is None,
-                     "reason": blocked_protocol},
+                     "reader_protocol": document.get("quicktime_itemlist_reader_protocol"),
+                     "eligible": blocked_protocol is None and blocked_reader_protocol is None,
+                     "reason": blocked_protocol or blocked_reader_protocol},
         "specs": specs,
         "ledger": ledger,
         "identity_counts": {"source_records": len(ledger), "generated": len(specs),

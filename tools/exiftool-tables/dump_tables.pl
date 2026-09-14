@@ -262,6 +262,42 @@ sub validate_function_fact {
     return code_source_fact($name, $lib_abs);
 }
 
+# ItemList `data` atom interpretation is a deliberately small protocol, not
+# just ProcessMOV's body: the processor selects QuickTimeFormat and ReadValue,
+# direct text flags read this package's stringEncoding lookup, and Decode
+# delegates character-set conversion to Charset.  Capture each effective
+# binding after module hydration so a generator can refuse a changed helper
+# without treating an unrelated edit anywhere in QuickTime.pm as eligibility.
+sub quicktime_itemlist_reader_protocol_fact {
+    my ($lib_abs) = @_;
+    no strict 'refs';
+    my %string_encoding = map {
+        to_text($_) => to_text($Image::ExifTool::QuickTime::stringEncoding{$_})
+    } sort keys %Image::ExifTool::QuickTime::stringEncoding;
+
+    # Decode loads Charset only on a character-set conversion path.  Its
+    # helper bodies are nevertheless part of the behavior ItemList delegates
+    # to, so hydrate this narrow dependency before recording final bindings.
+    my $charset_loaded = eval { require Image::ExifTool::Charset; 1 } ? JSON::PP::true : JSON::PP::false;
+    return {
+        kind => 'quicktime_itemlist_reader_protocol_v1',
+        string_encoding => \%string_encoding,
+        charset_loaded => $charset_loaded,
+        dependencies => {
+            quicktime_format => code_source_fact(
+                'Image::ExifTool::QuickTime::QuickTimeFormat', $lib_abs, undef, undef, 0),
+            read_value => code_source_fact(
+                'Image::ExifTool::ReadValue', $lib_abs, undef, undef, 0),
+            decode => code_source_fact(
+                'Image::ExifTool::Decode', $lib_abs, undef, undef, 0),
+            charset_decompose => code_source_fact(
+                'Image::ExifTool::Charset::Decompose', $lib_abs, undef, undef, 0),
+            charset_recompose => code_source_fact(
+                'Image::ExifTool::Charset::Recompose', $lib_abs, undef, undef, 0),
+        },
+    };
+}
+
 sub collect_subdirectory_validate_function_names {
     my ($value, $names, $seen, $depth) = @_;
     return if !defined $value || $depth > 24;
@@ -1663,6 +1699,13 @@ my $hydrated_layouts = $HYDRATED_LAYOUTS
     ? dump_hydrated_layout_projection()
     : undef;
 
+my $quicktime_itemlist_reader_protocol;
+if (exists $out{QuickTime}
+    && exists $out{QuickTime}{tables}{ItemList}) {
+    $quicktime_itemlist_reader_protocol = quicktime_itemlist_reader_protocol_fact(
+        $EXIFTOOL_LIB_ABS);
+}
+
 my ($write_autoload_router_status, $native_write_capture_context,
     $native_write_helpers, $native_write_format_registry);
 unless ($READER_ONLY) {
@@ -1734,6 +1777,8 @@ my %document = (
     native_runtime_contracts => { utf8 => {
         kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
     } },
+    (defined $quicktime_itemlist_reader_protocol
+        ? (quicktime_itemlist_reader_protocol => $quicktime_itemlist_reader_protocol) : ()),
 );
 $document{hydrated_layouts} = $hydrated_layouts if $HYDRATED_LAYOUTS;
 unless ($READER_ONLY) {
