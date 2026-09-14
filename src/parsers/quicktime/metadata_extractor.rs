@@ -2543,125 +2543,26 @@ fn strip_hex_word_padding(text: &str) -> String {
         .join(" ")
 }
 
-/// Extract MP4 metadata using keys/ilst atoms
+/// Extract the generated direct-Keys subset of `moov/meta/keys` + `ilst`.
 fn extract_mp4_metadata(meta: &Atom, metadata: &mut MetadataMap) -> Result<(), String> {
-    // MP4 metadata uses a keys atom to define key names
-    // and an ilst atom to store the values
-    let keys_atom = meta.find_child("keys");
-    let ilst_atom = meta.find_child("ilst");
-
-    if let (Some(keys), Some(ilst)) = (keys_atom, ilst_atom) {
-        // Parse the keys
-        let key_map = parse_mp4_keys(keys.data)?;
-
-        // Parse the ilst items
-        let items = ilst.parse_children().unwrap_or_default();
-
-        for item in items {
-            // MP4 ilst uses numeric atom types that correspond to key indices
-            // The atom type is a 4-byte integer (index into keys)
-            let atom_type_bytes = item.atom_type.as_bytes();
-
-            // Try to interpret as a big-endian integer
-            let key_index = EndianReader::big_endian(atom_type_bytes)
-                .u32_at(0)
-                .unwrap_or(0);
-
-            if let Some(data_atom) = item.find_child("data")
-                && let Some(value) = extract_itunes_data_value(data_atom.data)
-            {
-                // Look up the key name
-                if let Some(key_name) = key_map.get(&key_index) {
-                    // Map Apple-specific keys to standard tag names
-                    let tag_name = map_apple_key_to_tag(key_name);
-                    metadata.insert(tag_name, value.clone());
-
-                    // Special handling for GPS coordinates
-                    if key_name == "com.apple.quicktime.location.ISO6709"
-                        && let TagValue::String(ref gps_str) = value
-                        && let Some((lat, lon, alt)) = parse_iso6709(gps_str)
-                    {
-                        metadata.insert("QuickTime:GPSLatitude".to_string(), TagValue::Float(lat));
-                        metadata.insert("QuickTime:GPSLongitude".to_string(), TagValue::Float(lon));
-                        if let Some(altitude) = alt {
-                            metadata.insert(
-                                "QuickTime:GPSAltitude".to_string(),
-                                TagValue::Float(altitude),
-                            );
-                        }
-                    }
-                } else {
-                    // Fallback to using the atom type as the tag name
-                    let tag_name = format!("MP4:{}", item.atom_type.as_str());
-                    metadata.insert(tag_name, value);
-                }
-            }
+    let (Some(keys), Some(ilst)) = (meta.find_child("keys"), meta.find_child("ilst")) else {
+        return Ok(());
+    };
+    let resolved = super::keys_reader::resolve_keys(keys.data);
+    for item in ilst.parse_children().unwrap_or_default() {
+        let index = EndianReader::big_endian(item.atom_type.as_bytes())
+            .u32_at(0)
+            .unwrap_or(0);
+        for child in item
+            .parse_children()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|child| child.atom_type.matches("data"))
+        {
+            super::keys_reader::read_indexed(index, &resolved, child.data, metadata);
         }
     }
-
     Ok(())
-}
-
-/// Map Apple-specific mdta keys to standard QuickTime tag names
-fn map_apple_key_to_tag(key_name: &str) -> String {
-    match key_name {
-        "com.apple.quicktime.location.ISO6709" => "QuickTime:GPSCoordinates".to_string(),
-        "com.apple.quicktime.location.accuracy.horizontal" => {
-            "QuickTime:LocationAccuracyHorizontal".to_string()
-        }
-        "com.apple.quicktime.location.role" => "QuickTime:LocationRole".to_string(),
-        "com.apple.quicktime.creationLocation.name" => "QuickTime:CreationLocationName".to_string(),
-        "com.apple.quicktime.make" => "QuickTime:Make".to_string(),
-        "com.apple.quicktime.model" => "QuickTime:Model".to_string(),
-        "com.apple.quicktime.software" => "QuickTime:Software".to_string(),
-        "com.apple.quicktime.creationdate" => "QuickTime:ContentCreateDate".to_string(),
-        _ => format!("QuickTime:{}", key_name),
-    }
-}
-
-/// Parse MP4 keys atom to build a map of key indices to key names
-fn parse_mp4_keys(data: &[u8]) -> Result<HashMap<u32, String>, String> {
-    let mut keys = HashMap::new();
-
-    // Keys atom format:
-    // 4 bytes: version + flags
-    // 4 bytes: entry count
-    // For each entry:
-    //   4 bytes: key size
-    //   4 bytes: key namespace (e.g., "mdta")
-    //   N bytes: key value
-
-    if data.len() < 8 {
-        return Ok(keys);
-    }
-
-    let r = EndianReader::big_endian(data);
-    let entry_count = r.u32_at(4).unwrap_or(0);
-    let mut offset = 8;
-    let mut index = 1; // Keys are 1-indexed
-
-    for _ in 0..entry_count {
-        if offset + 8 > data.len() {
-            break;
-        }
-
-        let key_size = r.u32_at(offset).unwrap_or(0) as usize;
-
-        if key_size < 8 || offset + key_size > data.len() {
-            break;
-        }
-
-        // Skip namespace (4 bytes)
-        let key_data = &data[offset + 8..offset + key_size];
-        if let Ok(key_name) = std::str::from_utf8(key_data) {
-            keys.insert(index, key_name.to_string());
-        }
-
-        offset += key_size;
-        index += 1;
-    }
-
-    Ok(keys)
 }
 
 /// Extract string value from QuickTime user data atom
@@ -4062,27 +3963,6 @@ mod tests {
         assert!(parse_iso6709("").is_none());
         assert!(parse_iso6709("invalid").is_none());
         assert!(parse_iso6709("+37.7749").is_none()); // Missing longitude
-    }
-
-    #[test]
-    fn test_map_apple_key_to_tag() {
-        assert_eq!(
-            map_apple_key_to_tag("com.apple.quicktime.location.ISO6709"),
-            "QuickTime:GPSCoordinates"
-        );
-        assert_eq!(
-            map_apple_key_to_tag("com.apple.quicktime.make"),
-            "QuickTime:Make"
-        );
-        assert_eq!(
-            map_apple_key_to_tag("com.apple.quicktime.model"),
-            "QuickTime:Model"
-        );
-        assert_eq!(
-            map_apple_key_to_tag("com.apple.quicktime.software"),
-            "QuickTime:Software"
-        );
-        assert_eq!(map_apple_key_to_tag("unknown.key"), "QuickTime:unknown.key");
     }
 
     #[test]

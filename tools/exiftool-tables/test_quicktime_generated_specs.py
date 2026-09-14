@@ -37,7 +37,7 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
         self.assertEqual(generated["FutureCounter"]["raw_fourcc"], "7a39213f")
         self.assertEqual(generated["FutureCounter"]["source_format"], {"kind": "unsigned", "width": 64})
         self.assertIn('name: "FutureCounter"', specs.render_rust(result))
-        self.assertEqual(result["identity_counts"], {"source_records": 397, "generated": 93, "omitted": 304})
+        self.assertEqual(result["identity_counts"], {"source_records": 400, "generated": 93, "omitted": 307})
 
     def test_cli_generates_from_fresh_dump_without_baseline_capture(self):
         document = fresh_dump()
@@ -214,7 +214,7 @@ class GeneratedItemListSpecsTests(unittest.TestCase):
                          (specs.ROOT / "src/parsers/quicktime/generated_itemlist_specs.rs").read_text())
         self.assertEqual(len({json.dumps(row["identity"], sort_keys=True) for row in result["ledger"]}),
                          result["identity_counts"]["source_records"])
-        self.assertEqual(result["identity_counts"], {"source_records": 396, "generated": 92, "omitted": 304})
+        self.assertEqual(result["identity_counts"], {"source_records": 399, "generated": 92, "omitted": 307})
         self.assertEqual(sum(not row["generated"] for row in result["ledger"]
                              if row["identity"]["table"] == "ItemList"), 13)
 

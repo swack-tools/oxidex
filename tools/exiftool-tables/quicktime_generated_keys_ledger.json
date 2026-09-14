@@ -1,0 +1,2264 @@
+{
+  "identity_counts": {
+    "generated": 70,
+    "omitted": 11,
+    "source_records": 81
+  },
+  "ledger": [
+    {
+      "generated": true,
+      "generated_spec_sha256": "949a8803628490d7717251bb9769f844b36ad0008bdc35fbd0524cd978d0dc67",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "Encoded_With",
+        "source_sha256": "2d2272d8d0aa6bf5e44d6b8b0095dee51fee3fac94673fa07b2d8364e1b623f7",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "6a5c44697b26730ed3c19d09875e901b421f8fe6baead0d69e2acc3b389f5bce",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "album",
+        "source_sha256": "aeda24556896a66820f48eca822722d480e7901d12dba3deef6cffa716e23537",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "887c68a115e86a7d2fff5ca2b5a06913e762b6864a05851959ec05796bf1f1bd",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "apple.photos.variation-identifier",
+        "source_sha256": "e2181cf75f75f043cfcccf4cac8c1b7c92a258225c3bda338eeda7543da79da9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "063d5a35cff562ccdc497f078ae81f6f659743bcee19dca6c2a6954a60f00417",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "artist",
+        "source_sha256": "bd75ff6dcda49b44ba65e4184015fe37b101bfdd5405d94115cdd9b04c91cc38",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "1e7f57d491ca543bfde16e9a724708960774b8e063f01abfa46170f47035aba0",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "artwork",
+        "source_sha256": "4039d6d6098e772403662cb993f44352423cb83b90e7b023f9f8dc4ac4cdce63",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "00d0c2ce7315d34385081d575cabc6056baa036ad88bc1b27a0ef5c37a8ad843",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "author",
+        "source_sha256": "e5c64b7e308182abfa524ead451527a38dbcd8d09d8fac6541af756d4c3c1b64",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "4489f168ecc4b304feb5dbf057129e1545111d147cc43fba5887c68265dc1fd3",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "collection.user",
+        "source_sha256": "8888e7e41b07d79e6488ce5463101a3fc5d57130541138bfb198a95b4081146d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c5a59329467ff8338d4bb8f67e2ba0a178f771ee45747cefd7e5de95f0f39b62",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.capture.fps",
+        "source_sha256": "56d10f4f1f897ce794b4db8eb4eaa947332c0d93f7bdac9b0c7a4f8e51a58578",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "528a8d4faf994570d86c12df61f35a57b79bff45d698e26aaabd8740aaaf3655",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.manufacturer",
+        "source_sha256": "c6d5d897ad2a88af48dfc19db6c751297e251954d71dede3b8bb64a8436aa6a2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c20ece850ecad654019e414e9189824300c656ff4d008a193f2bbfd475902541",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.model",
+        "source_sha256": "2c367eac3220cfea3f38f46c97fdfb7af86b0ba229a293030836e4ccd2cedc6c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "0df892fbd05694c1352a3e93c385c4653837d081c5ef55353140b7c217242de6",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.version",
+        "source_sha256": "ae1a9bf788d14e5517ede790bd2bcaca3c67d95f971e2ca17ccb50a06d2fe4a7",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "f6c20b573659c0888f15fc77038b363ba51af5ca7df9c40cae7b9aa6e1f6a8d7",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "com.xiaomi.hdr10",
+        "source_sha256": "dc5511ba40c7ee6a23a14a8ac6e6a1409193f3a1a539c38ccf1cf790680a5313",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "3dcb362f83719f1e821619d76c9228f0dc2361e0b9d437f5f4ecde02a75285a4",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "com.xiaomi.preview_video_cover",
+        "source_sha256": "bb1c1fdbacee897268931d244221206682c9a67ecb8cf39aac849ef897c38025",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "66737f7627d6984d8a60cba5a2df851a38c6c3947aa599e053e93e0d365036da",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "comment",
+        "source_sha256": "cccff505b0c08f49bbe077d16aef9060b6319a891657692349aa93c181b4af95",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "71f94c33919290d3bc1188f98a98740962302b4936a59c286ce210a14a30aa53",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "compatible_brands",
+        "source_sha256": "3e5d6e7511d71f3bd60a9588b7c41d9df156e4b478fe8178e171f4038bac8b1d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "239f792847cda8f10d407e69b6a62c7081b706cf1ec5a53a32eaa087029e7c60",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "content.identifier",
+        "source_sha256": "03343c03c13fc127e1da7fa5ebcb61eee1bc2c78eca4ba9e4ed021221954f4dd",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "58882001cd8c6f245e84d6d1ae0cfb567ed07d4bcd9a6ae2e83ae52648edc77b",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "copyright",
+        "source_sha256": "c1f8f8fa52db7ca61f9a0201db5e6ed7790f42f99b506d79407bf57490f7c048",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "creation_time",
+        "source_sha256": "0bcbc34d2fb432ddd461d2fc6d1cf52f4d4bc2b7e343d7d76517455b7bde65a8",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "uncaptured_source_property:Shift",
+        "unsupported_print_conversion",
+        "unsupported_source_property:ValueConv"
+      ]
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "creationdate",
+        "source_sha256": "c0858fa1c7acff5ebfdfa10f8f6c52ef1f45402e3131b8dcc1620ee3c84fe5ce",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "uncaptured_source_property:Shift",
+        "unsupported_print_conversion",
+        "unsupported_source_property:ValueConv"
+      ]
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "ad24e50260d0a7f4265b39e21c83ea4413313245200d917cb6a7b5e370ba8b77",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "description",
+        "source_sha256": "b9df7035feadcbbd17fb17cba44279307ea4ca305509279ecfaff25623912cca",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face",
+        "source_sha256": "7eee7b3da6283ed02861911e72da2ebf992782925e4545431abff566b8677fd9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_source_property:SubDirectory"
+      ]
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.bounds",
+        "source_sha256": "6ac667ba4be8f0e4ffd84d57781bb4738947d50a822e6d973b7e0f088cd0af80",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_print_conversion"
+      ]
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "4c6d6115b1a97087e3e8035ac22987f4f3cc1b54aa2b1b474abe01c2271dbd29",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.face-id",
+        "source_sha256": "2e71fb44aacb25fcd2a08ff285c9c2e7610d5bcd9c1ad1ea46baad0221332e58",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "d59c7bb06123a48c03a5fa1c629a52793d7e040280598c65917f9ea1bb171e78",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.roll-angle",
+        "source_sha256": "c8ea9b8ce68a44541d7618fb68d39703e281cd5d7a3253f3b788db2a7915c349",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "f6793eca6fbaf67897d19129ea27693cbd098cc5c1df862abaca267f1d4f1109",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.yaw-angle",
+        "source_sha256": "323b24196577e7db5e41172ac8358a76df401cb67c1f3cf05a8f0572f6def4ab",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "6ba5486558f784507ff3042aade7a48a0695bf5edf9190d3e7c2de5c8a490849",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "direction.facing",
+        "source_sha256": "5d923b7d342e2144ed6873f78b27f294cc7309a502b56395de2c7d5d9ad22d2a",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "228f8f4746e59b5978854b87f2bc568b03dc2ab574679dc77d39d6466a140840",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "direction.motion",
+        "source_sha256": "25c1d11564470c5de057e700968d38fed8a9c742fd5d13e702001527bb10a1e8",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c5f05122795a1e667df57bc9b83aa34bf0d1330bf756d849f8fcf6ed37a33fe9",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "director",
+        "source_sha256": "65b53253a330b33450a22326792aca0d01aa23a9630f7d025a8a4b12c280dadd",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "7c9c3cb6d8aab2e2d5fcad208a89a3fa9375fd575bccad2568dcc4d9c44263c0",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "displayname",
+        "source_sha256": "6acfdd154378ce0422ff8649aa5965d4852b024499fe557877d52c7a7b572731",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "439a174ebd6e223a554b9dfdfdf17a99b43fb7327f581c1083445f5394daadb3",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "encoder",
+        "source_sha256": "489b6923f6c0f9045e8e953952be85b1f11c4917a3f741efe663faca3f183ceb",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c92cc05a99a89be8b96274ae6245b7fbfce09a1174288acb05d6c6128a01798a",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "full-frame-rate-playback-intent",
+        "source_sha256": "6da7edab2c221f5251d455dd491663ec1ed7a6e1966dc084da8efc7c0802bd6c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "bf412da2be2d827d6f8a32eef41295c123ebdcb126c680a71ad39b34409520e5",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "genre",
+        "source_sha256": "9f64af9de6f5884d9412e0097ef95431b8b83947f5a2c57a782d13595403aaae",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "5625455a774a7732206b4f66be427c526ed457f469a303f6f3a1b5eaaf214cfb",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "information",
+        "source_sha256": "af14f79edbeba9b66078fef80a7f767afab426b8c35042a4d601cae583a53eff",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "e92f42d620dfb89afd69239a10aa566daef4da89c8e6f195d709f71d04495cf4",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "keywords",
+        "source_sha256": "07bb15da0ecacc6c4cacb4222af342e308aa7817390229262dc8d74f08c65df7",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo-info",
+        "source_sha256": "38944aa0305018f64fa1d5b22c8c83403a340c6cedfd0ac8162622315680458d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_source_property:ValueConv"
+      ]
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "cfca4ae8d34df371b61ec34b189cdbc8b4290f3805e810d102114436b85e1a15",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo.auto",
+        "source_sha256": "44dd4a4282eebb05e952d699ed23759a116c3390a32a7a1e311a7f5bb8774369",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "0d7fc039169538c1feb24e4883f2768813d15903075ce75f76aef022d7f494b7",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo.vitality-score",
+        "source_sha256": "30b0473cb1da486a63f0c93b56d4a9c4090639776d229be071d6c0bbedf32066",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "3b1fd7e8f35f730ee9087eb9c7102de98e5c5dc71a50a0a07cb5daa3a27061cd",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo.vitality-scoring-version",
+        "source_sha256": "f7fb86572c034ee952bc6a9585666f72cfac14abfddc86da381c758f48a8d56f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.ISO6709",
+        "source_sha256": "b5cbc3b0bbc635dd582b1c79e31765a99f46b762ee7b519fe00913d6de34f977",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_print_conversion",
+        "unsupported_source_property:ValueConv"
+      ]
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "e92681d42bdbecacc765ec7d1a7b7a4c844baf018ade3bd144970afe0752e56b",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.accuracy.horizontal",
+        "source_sha256": "b712929d0c39f66ac1a4cf47f2cb52ee6cd62e310cd277ce3d231ad0e51426d2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "2f2a6bcd410b671bf91132be516159007240280d587121cd57715d26b5fa5446",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.body",
+        "source_sha256": "aaf9062d4257e3ffbbbff62c5b3f7da2e1f8a0b4b8be1c3e26dda18ed110db8c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.date",
+        "source_sha256": "800c542767794ab2538efd82eeba337084cedbddfec4256f4a4e894a0ee46eb8",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "uncaptured_source_property:Shift",
+        "unsupported_print_conversion",
+        "unsupported_source_property:ValueConv"
+      ]
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "8eb841731d8154fe65967123f9c3b6a4bfc923ba09cd732bbd53fd142ab33d8c",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.name",
+        "source_sha256": "b4f0f9328653240869f6fb9ad0b67ee1a733293e14a38e84119b57c95e114a5b",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "4864598c417b6f2991ab6f4e36d7a38659dd059b89a6c6a2e275ceb28f047de7",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.note",
+        "source_sha256": "beccfecf0f7818d7855ac3d3f4fee1992fa5bdc22862c3917ab54842dccbd462",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "373026e2afb702a2f9efb2351a57793be4080e7a0934de89f3938474b4369115",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "location.role",
+        "source_sha256": "eb177c68533c1c3c9e2241b87054f569ff55c57892d0626c9d7c801015c1701f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "955c2bfe463e300c6793b63fdbb32d538c9c9f37074660f33b4605c070b7f7b1",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "major_brand",
+        "source_sha256": "9858efa402f769dbc3e54cf802792ca5294824911859e44545cda679f4eb7c89",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "cef8c3b819238dc3f10973168c453768e0aa7f1b513bd4ba13854d4ed9f82a4c",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "make",
+        "source_sha256": "6d67d8681aeaf6019e5372f25da5921d7c9433b49e31c7578f425142565ef89b",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "23f1baf64dba6540ecd433db4ea8e4d41330ff5521401f0ce1e7f71502d3f610",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "minor_version",
+        "source_sha256": "f1b51790eea7274059d67fde423ebb67c829e3c6e90a4a766705173ba6def866",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "af9bed03f278dce0ac6d4a6c49e00b56bd90ebb9da2a5a3efa3ee4592475fa65",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "model",
+        "source_sha256": "ddd77d0365d7b0f8ddeb11344332346041c1a4536199ef4e1008876b139528f9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "2ea1e0444f62b040a3e6f59f9bbfbbd6d97ebf373f5e721e9f8e40ba9b3cb856",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.balance",
+        "source_sha256": "d18c14c8290a27e03d0040d869c0dacbf564d569ec6c64b3ef9f119c6824ff6e",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "3ac7f1b9f4886d5e7cecec5cf1a257007324cba9a45abc94a7d994410a975a2f",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.bass",
+        "source_sha256": "64abf64e84a5e6578c201cb75ca8f7cd33093e0621cd9272ed8f981ffa18380d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "22d7985ab609a35950d78e5411373cf1cd5808640264b331f441873a8de4cf8d",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.gain",
+        "source_sha256": "0481b3a6da85c1149967a154912c79213584e2056ce2e973c1e448cfbfaf36d2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "1fe6c724470e62180e7e2992455b36547fb73238ca117582978c057684534afd",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.mute",
+        "source_sha256": "124acc0c6dadef76ce0f1aa41638786fc4e0d00c06dc302efa68d68773960f3c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "5844a9da4f8bef0175fc1c8a091da9be441e828fa1cd8650ac18f0d314dbd9a9",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.pitchshift",
+        "source_sha256": "f7c50309c7760f80f4605df95ea6658eaffedcd8decd769ccc3cdf9e03691d1d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "73d496e9c81c5fd7ef7293432d3e521d01e062840e444e24650c62ef75cceffc",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.treble",
+        "source_sha256": "71ba1eed04d5b01dc016b717012b9fd0f4d13cc4836ba732e2f1e1e0707aab31",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "8148d66b17c3cb0d25cf9f3be932ca8be57fda5c5ca57ebb1519ce947dea99d3",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.brightness",
+        "source_sha256": "2fea05fae3064d4949d40b8a8c77854adf25931b228ca42807fdb60101a9a57c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "7eb89973f0ca4fdfacaa762fe9204024ada70462a71341080deefe48ed888fc3",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.color",
+        "source_sha256": "b75be4b101ef57f6a0b517c39595f7dd5dbcffeb3a8a7a00e4bd9dc8541d1572",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c4a44e124dc373307560c6e762ab3e33bd4ab9bebe11deb8f7de024decf2fc56",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.contrast",
+        "source_sha256": "26164a02f61395cbfcd0b2452107d7627f39b9182a2eb6b9dac7a3fbde2b1889",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c9856f85bea764b0e81a5df0d4913423f096980c6c5d267cb86579a709c4dbaf",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.tint",
+        "source_sha256": "cd463178249d9e1627aa4ae92d03d99e16aa22a174ca6dc75495ebce59de81aa",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "a609e6e5b0cf186d22be2b276651b3e0184c95f0a5f9d0342d8698b41c22b5cf",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "player.version",
+        "source_sha256": "1bdd921117c9b9d3e4c97c372130de030d1c008f53ca8d8eb203bca7a968b82f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "e6f823521eae5c377a25090acca443e2160148deac32ca802a461afa80cf0425",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "producer",
+        "source_sha256": "4640415655366ae946d028707ba79842cb4b3fc3b4ce79cbb9cab2940ccf13b5",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "31c54c9bb0a391b7ccf2fa3813b0796c0bd22fbe18904bfee10d86ed287601cd",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "publisher",
+        "source_sha256": "f418345b3440111a2bb0b5c17e1b8020c892c0868befe1cfe53ac787a4f89efb",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "964d7468df2462163ff24011bd159042c3715c8bf33c0cf62e3ae9d7726465ce",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "rating.user",
+        "source_sha256": "448538c9d5d0c1c9c13ff9bb36067b2b5c55faca39d052944af13b5c9ac340ae",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "80ff0253c975bc88a25c2b3ab1bdfbb425fa46011b1fd72f7acee30a63e9b25d",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "samsung.android.utc_offset",
+        "source_sha256": "4c409d13be789ffb1c752ab659a05f32109dd21a4448f69fbb97742431470a17",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "scene-illuminance",
+        "source_sha256": "4f37bb691ebe3bb45516c5e88d00827afda89785957a95e9460355d09f6489d2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_source_property:ValueConv"
+      ]
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "sdpd",
+        "source_sha256": "92051c0d5ddd7f87493184bdcc07eceac518e4869e25c45c65aff6766e961575",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_source_property:SubDirectory"
+      ]
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "setu",
+        "source_sha256": "fcdbce26ee3fa62ad74c6bcf0a271c4376180b73ec7efac0495eb342f104aeb3",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_source_property:SubDirectory"
+      ]
+    },
+    {
+      "generated": false,
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle-info",
+        "source_sha256": "c4194a0be0ab5f862a083110cc99c5999397aa4ae07fa25c4d5adcd8ee5aa0e9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": [
+        "unsupported_source_property:SubDirectory"
+      ]
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "436a26610bf30c6b5f3d165eda6ee7754a083cbe299ff7dbfc37c02afc1a4c4d",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.bypassed",
+        "source_sha256": "2a76c91b4aa0a9981fb1a4666edc90fbcbb8f1711d9e4b6bc073139883ccbad8",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "b0be47c2e380cad20d52d2e1055c7ddda148188a7a94797601c340a589ff6af1",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.cast",
+        "source_sha256": "a52e0081c32c2681e03b477ae301fd290c46e3dc01083055de067a30bb9bf282",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "c8b8fb9effa0966b090d3564498595179ad25aeca900d6f7ff0acdd4ade48ba8",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.color",
+        "source_sha256": "520799da6d535a3723b83ead3b5e05b6212f98f67daa7c533d84f5e7928a2a33",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "09430467b3b22c8a09fa5bafd9be4083c93541bb6d54ef0a649da52b80d6ab53",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.intensity",
+        "source_sha256": "d601192a948dc6d2f27dd18e49caa2d8e2ff2864cfea17a8db1951f37cc671c1",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "111600b838c437c490c125553d966452bb6d591fd7b7f3f82685d52f4452fde1",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.rendering-version",
+        "source_sha256": "b106597d62c73a9802a2beb115efe4a1cfff5f591ad1558d8b9e1e41eb3ae9a3",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "1bf545e56107fd0f2e920bed3b7780c44f49a2c7a56f9f97d3126b0e3725660e",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.tone",
+        "source_sha256": "84f9e72b1de30c6d63b97e7e54077a09531505b1f0cff3d20a5398371436936b",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "a35694c43eeafceba00142a990b769deeae8431096d507ced0a7ec150d2a2f72",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "software",
+        "source_sha256": "656179d8e89d289c1f3c8ffb994db3b0ed5357140c35bddfb36c4b6ee80cb6cf",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "5dc85e26a703535cf26bf442b6baa7a3b68b3298e779d99daed4213c45b91bda",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "still-image-time",
+        "source_sha256": "1879e2f916a31654717ab2d9f10d6d8bd830303485a0832ee7d157243b2c86a0",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "b4a38b48ad8daab0dbf0fcc9ce6c3d5e719e97b8c4e9f82736584136826b0bb7",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "title",
+        "source_sha256": "0a3a98e79e83baca179a522175c671f578e9fcbc1e53023a1958cb65fc3addf2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "937d8442235c92b182c23742bc781e6ed7f9f123fde5480eec5931f797274712",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "version",
+        "source_sha256": "5ce5257c2a5b50bfd593dce2ff7dc2d1e1d19783a4e3c39587b1e2207340e8c2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "af80076ba4a902c40f68d15a540c2fff395949039061f751327ec70ca54a640a",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "video-orientation",
+        "source_sha256": "853e257938692f65f35cd5e52766a638a57f86bcf36d4059376b4a5361126f5f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "935d1e5fbcdbcb198527aa7773ea27f48e08e37d28e7297419d29e29525a517e",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "xiaomi.exifInfo.videoinfo",
+        "source_sha256": "f9f558d4260de1e4472d8f02a5d27550ab91430dc4dd7d3457b921a1adf436a9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    },
+    {
+      "generated": true,
+      "generated_spec_sha256": "59517121ad693b8e144184f03f99c372b27e6121349ebfe565a98ab4dccc3ae8",
+      "identity": {
+        "module": "QuickTime",
+        "raw_key": "year",
+        "source_sha256": "0f3392dd66a4a9fb037a43bed4f596488e299063f6b875a88980bd89dce99fcc",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "reasons": []
+    }
+  ],
+  "protocol": {
+    "eligible": true,
+    "normalization": "ProcessKeys: NUL-truncate; for mdta try com./com.apple.quicktime.-stripped key then full key; ordinal starts at 1",
+    "processor": {
+      "__deparse_sha256": "294ea57533595f3e988c8042e2588f0fa874e46bd456af55936633273f051c76",
+      "__name": "Image::ExifTool::QuickTime::ProcessKeys",
+      "source_file": "Image/ExifTool/QuickTime.pm",
+      "source_sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e"
+    },
+    "reason": null
+  },
+  "schema": "quicktime_generated_keys_specs_v1",
+  "scope": "direct Keys-table matches in moov/meta keys+ilst only; ItemList/UserData fallback and dynamic unknown names are omitted",
+  "source": {
+    "exiftool_version": "13.59",
+    "table_sha256": "b1d4bd595657b7b352f40e8e6fb695ed804c80b138311516365ce6120f653adb"
+  },
+  "specs": [
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "EncodedWith",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "Encoded_With",
+        "source_sha256": "2d2272d8d0aa6bf5e44d6b8b0095dee51fee3fac94673fa07b2d8364e1b623f7",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "Encoded_With"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Album",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "album",
+        "source_sha256": "aeda24556896a66820f48eca822722d480e7901d12dba3deef6cffa716e23537",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "album"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "ApplePhotosVariationIdentifier",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "apple.photos.variation-identifier",
+        "source_sha256": "e2181cf75f75f043cfcccf4cac8c1b7c92a258225c3bda338eeda7543da79da9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "apple.photos.variation-identifier"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Artist",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "artist",
+        "source_sha256": "bd75ff6dcda49b44ba65e4184015fe37b101bfdd5405d94115cdd9b04c91cc38",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "artist"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Artwork",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "artwork",
+        "source_sha256": "4039d6d6098e772403662cb993f44352423cb83b90e7b023f9f8dc4ac4cdce63",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "artwork"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Author",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "author",
+        "source_sha256": "e5c64b7e308182abfa524ead451527a38dbcd8d09d8fac6541af756d4c3c1b64",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "author"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "UserCollection",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "collection.user",
+        "source_sha256": "8888e7e41b07d79e6488ce5463101a3fc5d57130541138bfb198a95b4081146d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "collection.user"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "AndroidCaptureFPS",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.capture.fps",
+        "source_sha256": "56d10f4f1f897ce794b4db8eb4eaa947332c0d93f7bdac9b0c7a4f8e51a58578",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "com.android.capture.fps"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "AndroidMake",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.manufacturer",
+        "source_sha256": "c6d5d897ad2a88af48dfc19db6c751297e251954d71dede3b8bb64a8436aa6a2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "com.android.manufacturer"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "AndroidModel",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.model",
+        "source_sha256": "2c367eac3220cfea3f38f46c97fdfb7af86b0ba229a293030836e4ccd2cedc6c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "com.android.model"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "AndroidVersion",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "com.android.version",
+        "source_sha256": "ae1a9bf788d14e5517ede790bd2bcaca3c67d95f971e2ca17ccb50a06d2fe4a7",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "com.android.version"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "XiaomiHDR10",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "com.xiaomi.hdr10",
+        "source_sha256": "dc5511ba40c7ee6a23a14a8ac6e6a1409193f3a1a539c38ccf1cf790680a5313",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "com.xiaomi.hdr10"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "XiaomiPreviewVideoCover",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "com.xiaomi.preview_video_cover",
+        "source_sha256": "bb1c1fdbacee897268931d244221206682c9a67ecb8cf39aac849ef897c38025",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "com.xiaomi.preview_video_cover"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Comment",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "comment",
+        "source_sha256": "cccff505b0c08f49bbe077d16aef9060b6319a891657692349aa93c181b4af95",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "comment"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "CompatibleBrands",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "compatible_brands",
+        "source_sha256": "3e5d6e7511d71f3bd60a9588b7c41d9df156e4b478fe8178e171f4038bac8b1d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "compatible_brands"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "ContentIdentifier",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "content.identifier",
+        "source_sha256": "03343c03c13fc127e1da7fa5ebcb61eee1bc2c78eca4ba9e4ed021221954f4dd",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "content.identifier"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Copyright",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "copyright",
+        "source_sha256": "c1f8f8fa52db7ca61f9a0201db5e6ed7790f42f99b506d79407bf57490f7c048",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "copyright"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Description",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "description",
+        "source_sha256": "b9df7035feadcbbd17fb17cba44279307ea4ca305509279ecfaff25623912cca",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "description"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "DetectedFaceID",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.face-id",
+        "source_sha256": "2e71fb44aacb25fcd2a08ff285c9c2e7610d5bcd9c1ad1ea46baad0221332e58",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "detected-face.face-id"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "DetectedFaceRollAngle",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.roll-angle",
+        "source_sha256": "c8ea9b8ce68a44541d7618fb68d39703e281cd5d7a3253f3b788db2a7915c349",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "detected-face.roll-angle"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "DetectedFaceYawAngle",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "detected-face.yaw-angle",
+        "source_sha256": "323b24196577e7db5e41172ac8358a76df401cb67c1f3cf05a8f0572f6def4ab",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "detected-face.yaw-angle"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "CameraDirection",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "direction.facing",
+        "source_sha256": "5d923b7d342e2144ed6873f78b27f294cc7309a502b56395de2c7d5d9ad22d2a",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "direction.facing"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "CameraMotion",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "direction.motion",
+        "source_sha256": "25c1d11564470c5de057e700968d38fed8a9c742fd5d13e702001527bb10a1e8",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "direction.motion"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Director",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "director",
+        "source_sha256": "65b53253a330b33450a22326792aca0d01aa23a9630f7d025a8a4b12c280dadd",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "director"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "DisplayName",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "displayname",
+        "source_sha256": "6acfdd154378ce0422ff8649aa5965d4852b024499fe557877d52c7a7b572731",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "displayname"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Encoder",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "encoder",
+        "source_sha256": "489b6923f6c0f9045e8e953952be85b1f11c4917a3f741efe663faca3f183ceb",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "encoder"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "FullFrameRatePlaybackIntent",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "full-frame-rate-playback-intent",
+        "source_sha256": "6da7edab2c221f5251d455dd491663ec1ed7a6e1966dc084da8efc7c0802bd6c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "full-frame-rate-playback-intent"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Genre",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "genre",
+        "source_sha256": "9f64af9de6f5884d9412e0097ef95431b8b83947f5a2c57a782d13595403aaae",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "genre"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Information",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "information",
+        "source_sha256": "af14f79edbeba9b66078fef80a7f767afab426b8c35042a4d601cae583a53eff",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "information"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Keywords",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "keywords",
+        "source_sha256": "07bb15da0ecacc6c4cacb4222af342e308aa7817390229262dc8d74f08c65df7",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "keywords"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LivePhotoAuto",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo.auto",
+        "source_sha256": "44dd4a4282eebb05e952d699ed23759a116c3390a32a7a1e311a7f5bb8774369",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "live-photo.auto"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LivePhotoVitalityScore",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo.vitality-score",
+        "source_sha256": "30b0473cb1da486a63f0c93b56d4a9c4090639776d229be071d6c0bbedf32066",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "live-photo.vitality-score"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LivePhotoVitalityScoringVersion",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "live-photo.vitality-scoring-version",
+        "source_sha256": "f7fb86572c034ee952bc6a9585666f72cfac14abfddc86da381c758f48a8d56f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "live-photo.vitality-scoring-version"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LocationAccuracyHorizontal",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "location.accuracy.horizontal",
+        "source_sha256": "b712929d0c39f66ac1a4cf47f2cb52ee6cd62e310cd277ce3d231ad0e51426d2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "location.accuracy.horizontal"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LocationBody",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "location.body",
+        "source_sha256": "aaf9062d4257e3ffbbbff62c5b3f7da2e1f8a0b4b8be1c3e26dda18ed110db8c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "location.body"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LocationName",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "location.name",
+        "source_sha256": "b4f0f9328653240869f6fb9ad0b67ee1a733293e14a38e84119b57c95e114a5b",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "location.name"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LocationNote",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "location.note",
+        "source_sha256": "beccfecf0f7818d7855ac3d3f4fee1992fa5bdc22862c3917ab54842dccbd462",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "location.note"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "LocationRole",
+      "safe_enum_operands": [
+        {
+          "raw": "0",
+          "rendered": "Shooting Location"
+        },
+        {
+          "raw": "1",
+          "rendered": "Real Location"
+        },
+        {
+          "raw": "2",
+          "rendered": "Fictional Location"
+        }
+      ],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "location.role",
+        "source_sha256": "eb177c68533c1c3c9e2241b87054f569ff55c57892d0626c9d7c801015c1701f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "location.role"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "MajorBrand",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "major_brand",
+        "source_sha256": "9858efa402f769dbc3e54cf802792ca5294824911859e44545cda679f4eb7c89",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "major_brand"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Make",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "make",
+        "source_sha256": "6d67d8681aeaf6019e5372f25da5921d7c9433b49e31c7578f425142565ef89b",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "make"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "MinorVersion",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "minor_version",
+        "source_sha256": "f1b51790eea7274059d67fde423ebb67c829e3c6e90a4a766705173ba6def866",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "minor_version"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Model",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "model",
+        "source_sha256": "ddd77d0365d7b0f8ddeb11344332346041c1a4536199ef4e1008876b139528f9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "model"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Balance",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.balance",
+        "source_sha256": "d18c14c8290a27e03d0040d869c0dacbf564d569ec6c64b3ef9f119c6824ff6e",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.audio.balance"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Bass",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.bass",
+        "source_sha256": "64abf64e84a5e6578c201cb75ca8f7cd33093e0621cd9272ed8f981ffa18380d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.audio.bass"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "AudioGain",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.gain",
+        "source_sha256": "0481b3a6da85c1149967a154912c79213584e2056ce2e973c1e448cfbfaf36d2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.audio.gain"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Mute",
+      "safe_enum_operands": [
+        {
+          "raw": "0",
+          "rendered": "Off"
+        },
+        {
+          "raw": "1",
+          "rendered": "On"
+        }
+      ],
+      "source_format": {
+        "kind": "unsigned",
+        "width": 8
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.mute",
+        "source_sha256": "124acc0c6dadef76ce0f1aa41638786fc4e0d00c06dc302efa68d68773960f3c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.audio.mute"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "PitchShift",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.pitchshift",
+        "source_sha256": "f7c50309c7760f80f4605df95ea6658eaffedcd8decd769ccc3cdf9e03691d1d",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.audio.pitchshift"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Treble",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.audio.treble",
+        "source_sha256": "71ba1eed04d5b01dc016b717012b9fd0f4d13cc4836ba732e2f1e1e0707aab31",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.audio.treble"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Brightness",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.brightness",
+        "source_sha256": "2fea05fae3064d4949d40b8a8c77854adf25931b228ca42807fdb60101a9a57c",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.visual.brightness"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Color",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.color",
+        "source_sha256": "b75be4b101ef57f6a0b517c39595f7dd5dbcffeb3a8a7a00e4bd9dc8541d1572",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.visual.color"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Contrast",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.contrast",
+        "source_sha256": "26164a02f61395cbfcd0b2452107d7627f39b9182a2eb6b9dac7a3fbde2b1889",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.visual.contrast"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Tint",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.movie.visual.tint",
+        "source_sha256": "cd463178249d9e1627aa4ae92d03d99e16aa22a174ca6dc75495ebce59de81aa",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.movie.visual.tint"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "PlayerVersion",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "player.version",
+        "source_sha256": "1bdd921117c9b9d3e4c97c372130de030d1c008f53ca8d8eb203bca7a968b82f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "player.version"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Producer",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "producer",
+        "source_sha256": "4640415655366ae946d028707ba79842cb4b3fc3b4ce79cbb9cab2940ccf13b5",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "producer"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Publisher",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "publisher",
+        "source_sha256": "f418345b3440111a2bb0b5c17e1b8020c892c0868befe1cfe53ac787a4f89efb",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "publisher"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "UserRating",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "rating.user",
+        "source_sha256": "448538c9d5d0c1c9c13ff9bb36067b2b5c55faca39d052944af13b5c9ac340ae",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "rating.user"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "AndroidTimeZone",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "samsung.android.utc_offset",
+        "source_sha256": "4c409d13be789ffb1c752ab659a05f32109dd21a4448f69fbb97742431470a17",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "samsung.android.utc_offset"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "SmartstyleBypassed",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.bypassed",
+        "source_sha256": "2a76c91b4aa0a9981fb1a4666edc90fbcbb8f1711d9e4b6bc073139883ccbad8",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "smartstyle.bypassed"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "SmartstyleCast",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.cast",
+        "source_sha256": "a52e0081c32c2681e03b477ae301fd290c46e3dc01083055de067a30bb9bf282",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "smartstyle.cast"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "SmartstyleColor",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.color",
+        "source_sha256": "520799da6d535a3723b83ead3b5e05b6212f98f67daa7c533d84f5e7928a2a33",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "smartstyle.color"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "SmartstyleIntensity",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.intensity",
+        "source_sha256": "d601192a948dc6d2f27dd18e49caa2d8e2ff2864cfea17a8db1951f37cc671c1",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "smartstyle.intensity"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "SmartstyleRenderingVersion",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.rendering-version",
+        "source_sha256": "b106597d62c73a9802a2beb115efe4a1cfff5f591ad1558d8b9e1e41eb3ae9a3",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "smartstyle.rendering-version"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "SmartstyleTone",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "smartstyle.tone",
+        "source_sha256": "84f9e72b1de30c6d63b97e7e54077a09531505b1f0cff3d20a5398371436936b",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "smartstyle.tone"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Software",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "software",
+        "source_sha256": "656179d8e89d289c1f3c8ffb994db3b0ed5357140c35bddfb36c4b6ee80cb6cf",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "software"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "StillImageTime",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "still-image-time",
+        "source_sha256": "1879e2f916a31654717ab2d9f10d6d8bd830303485a0832ee7d157243b2c86a0",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "still-image-time"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Title",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "title",
+        "source_sha256": "0a3a98e79e83baca179a522175c671f578e9fcbc1e53023a1958cb65fc3addf2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "title"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Version",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "version",
+        "source_sha256": "5ce5257c2a5b50bfd593dce2ff7dc2d1e1d19783a4e3c39587b1e2207340e8c2",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "version"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "VideoOrientation",
+      "safe_enum_operands": [
+        {
+          "raw": "1",
+          "rendered": "Horizontal (normal)"
+        },
+        {
+          "raw": "2",
+          "rendered": "Mirror horizontal"
+        },
+        {
+          "raw": "3",
+          "rendered": "Rotate 180"
+        },
+        {
+          "raw": "4",
+          "rendered": "Mirror vertical"
+        },
+        {
+          "raw": "5",
+          "rendered": "Mirror horizontal and rotate 270 CW"
+        },
+        {
+          "raw": "6",
+          "rendered": "Rotate 90 CW"
+        },
+        {
+          "raw": "7",
+          "rendered": "Mirror horizontal and rotate 90 CW"
+        },
+        {
+          "raw": "8",
+          "rendered": "Rotate 270 CW"
+        }
+      ],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "video-orientation",
+        "source_sha256": "853e257938692f65f35cd5e52766a638a57f86bcf36d4059376b4a5361126f5f",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "video-orientation"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "XiaomiExifInfo",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "xiaomi.exifInfo.videoinfo",
+        "source_sha256": "f9f558d4260de1e4472d8f02a5d27550ab91430dc4dd7d3457b921a1adf436a9",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "xiaomi.exifInfo.videoinfo"
+    },
+    {
+      "group": "Keys",
+      "group0": "QuickTime",
+      "name": "Year",
+      "safe_enum_operands": [],
+      "source_format": {
+        "kind": "implicit"
+      },
+      "source_identity": {
+        "module": "QuickTime",
+        "raw_key": "year",
+        "source_sha256": "0f3392dd66a4a9fb037a43bed4f596488e299063f6b875a88980bd89dce99fcc",
+        "table": "Keys",
+        "variant_path": []
+      },
+      "source_key": "year"
+    }
+  ]
+}

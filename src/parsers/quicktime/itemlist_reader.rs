@@ -28,12 +28,15 @@ pub(crate) fn read_item(
         return false;
     };
 
-    let Some((display, raw)) = decode_data_atom(spec, data_atom_payload) else {
-        return true;
-    };
+    read_spec(spec, data_atom_payload, metadata);
+    true
+}
 
-    // ItemList is the generated family-1 group; QuickTime is the ItemList
-    // table's source-declared family-0 group and therefore the canonical key.
+/// Decode a source declaration already resolved by an atom protocol.
+pub(crate) fn read_spec(spec: &ItemListSpec, data_atom_payload: &[u8], metadata: &mut MetadataMap) {
+    let Some((display, raw)) = decode_data_atom(spec, data_atom_payload) else {
+        return;
+    };
     metadata.insert_occurrence_with_raw(
         format!("{}:{}", spec.group0, spec.name),
         display,
@@ -42,10 +45,9 @@ pub(crate) fn read_item(
         spec.group,
         Instance::default(),
     );
-    true
 }
 
-fn decode_data_atom(spec: &ItemListSpec, data: &[u8]) -> Option<(TagValue, TagValue)> {
+pub(crate) fn decode_data_atom(spec: &ItemListSpec, data: &[u8]) -> Option<(TagValue, TagValue)> {
     let flags = u32::from_be_bytes(data.get(..4)?.try_into().ok()?);
     // The country and language fields are included in this fixed header but
     // are handled only by ExifTool's separate language-tag protocol.
