@@ -7,6 +7,8 @@ claim that a fixture exercised the row.
 from __future__ import annotations
 
 import json
+from collections import defaultdict
+from pathlib import Path
 
 import quicktime_atom_tables as selector
 import quicktime_userdata_specs as compiler
@@ -69,3 +71,25 @@ def implementation(ledger, bounded_source, emitted_rust, *, project, rust_matche
             or sum(row["generated"] for row in rows.values()) != expected["identity_counts"]["generated"]):
         raise ValueError("UserData source identity conservation failed")
     return rows
+
+
+def observed_reads(evidence, source, ledger, rust, paths):
+    """Use the live verifier boundary, then credit complete two-mode fixtures."""
+    if evidence is None:
+        return set()
+    if (source is None or ledger is None or rust is None or paths is None
+            or len(paths) != 3 or any(path is None for path in paths)):
+        raise ValueError("UserData observations require all authenticated artifact paths")
+    source_path, ledger_path, rust_path = map(Path, paths)
+    if (source_path.read_bytes() != source or json.loads(ledger_path.read_bytes()) != ledger
+            or rust_path.read_text(encoding="utf-8") != rust):
+        raise ValueError("UserData observation artifact paths differ from joined inputs")
+    import verify_quicktime_userdata_reader as verifier
+    observations = verifier.validate_evidence(evidence, source_path, ledger_path, rust_path)
+    modes = defaultdict(set)
+    for row in observations:
+        identity = row["source_identity"]
+        key = (row["fixture"], identity["raw_key"], tuple(identity["variant_path"]),
+               row["group1"], row["tag_name"])
+        modes[key].add(row["mode"])
+    return {key[1:] for key, matched in modes.items() if matched == set(verifier.MODES)}

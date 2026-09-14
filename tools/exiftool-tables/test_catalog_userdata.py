@@ -1,7 +1,10 @@
 import copy
 import hashlib
 import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import catalog_userdata
 import join_catalog_hydrated as join
@@ -115,6 +118,34 @@ class CatalogUserDataTests(unittest.TestCase):
         self.assertEqual(result["source_tables"][table_name]["catalog_entries"], len(catalog["entries"]))
         with self.assertRaisesRegex(ValueError, "input digests"):
             build({**userdata_inputs, "rust_sha256": "0" * 64})
+
+    def test_observation_import_requires_live_authentication_and_complete_same_fixture_modes(self):
+        # The native verifier has separate receipt-forgery tests. This mocks
+        # its return to exercise only the catalog consumer's admission rules.
+        spec = self.ledger["specs"][0]
+        def row(fixture, mode):
+            return {"fixture": fixture, "mode": mode, "source_identity": spec["source_identity"],
+                    "group1": spec["group"], "tag_name": spec["name"]}
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = tuple(Path(temporary) / name for name in ("source.json", "ledger.json", "generated.rs"))
+            paths[0].write_bytes(self.source)
+            paths[1].write_text(json.dumps(self.ledger))
+            paths[2].write_text(self.rust)
+            def observed():
+                return catalog_userdata.observed_reads({}, self.source, self.ledger, self.rust, paths)
+            with patch("verify_quicktime_userdata_reader.validate_evidence", side_effect=ValueError("stale native receipt")):
+                with self.assertRaisesRegex(ValueError, "stale native receipt"):
+                    observed()
+            with patch("verify_quicktime_userdata_reader.validate_evidence", return_value=[row("a", "print"), row("b", "raw")]):
+                self.assertEqual(observed(), set())
+            with patch("verify_quicktime_userdata_reader.validate_evidence", return_value=[row("a", "print"), row("a", "raw")]) as validate:
+                expected = {(spec["source_identity"]["raw_key"], tuple(spec["source_identity"]["variant_path"]),
+                             spec["group"], spec["name"])}
+                self.assertEqual(observed(), expected)
+                validate.assert_called_once_with({}, *paths)
+            paths[2].write_text("forged artifact")
+            with self.assertRaisesRegex(ValueError, "differ from joined inputs"):
+                observed()
 
 
 if __name__ == "__main__":
