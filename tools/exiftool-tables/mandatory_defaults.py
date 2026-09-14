@@ -130,6 +130,17 @@ def _source_context(value: Any) -> tuple[JfifOverride, MandatorySelection]:
         (int(groups["unit"]), groups["unitprop"], 1),
     )), MandatorySelection("dirName", no_mandatory, "numEntries == 0")
 
+_CLASSIFIER = "while (defined $allMandatory) { if (defined $$mandatory{$newID}) { # values must correspond to mandatory values my $form = $$newInfo{Format} || $newFormName; my $mandVal = WriteValue($$mandatory{$newID}, $form, $newCount); if (defined $mandVal and $mandVal eq $$newValuePt) { ++$allMandatory; # count mandatory tags last; } } undef $deleteAll; undef $allMandatory; } } if (%validateInfo) {"
+
+def _classifier_policy(fact: Mapping[str, Any]) -> None:
+    source, digest = fact.get("mandatory_classifier_source"), fact.get("mandatory_classifier_source_sha256")
+    if not isinstance(source, str) or not isinstance(digest, str) or not _SHA.fullmatch(digest):
+        raise MandatoryMalformed("mandatory classifier provenance is unavailable")
+    if hashlib.sha256(source.encode()).hexdigest() != digest:
+        raise MandatoryRefused("mandatory classifier source digest differs")
+    if re.sub(r"\s+", " ", source).strip() != _CLASSIFIER:
+        raise MandatoryRefused("mandatory classifier is outside the closed grammar")
+
 def _cleanup_policy(fact: Mapping[str, Any]) -> MandatoryCleanup:
     source = fact.get("mandatory_cleanup_source")
     digest = fact.get("mandatory_cleanup_source_sha256")
@@ -184,6 +195,7 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
         directories.append(DirectoryDefaults(directory, tuple(defaults)))
     if not directories: raise MandatoryRefused("mandatory map is empty")
     override, selection = _source_context(fact.get("new_directory_context_deparse"))
+    _classifier_policy(fact)
     cleanup = _cleanup_policy(fact)
     return MandatoryRecipe(str(source), digest, tuple(directories), override, selection, cleanup)
 
@@ -312,13 +324,18 @@ def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any
     sizes = registry.get("format_size")
     names = registry.get("format_name")
     survivor = []
+    # These closed physical forms are tied to the exact helpers compiled in
+    # compile_numeric_write. A registry remap/width change is a new native
+    # layout, never an implicit activation of a Rust conversion.
+    physical = {"int16u": (3, 2), "int32u": (4, 4), "rational64u": (5, 8)}
     for format_name in numeric.formats:
+        expected_type, expected_width = physical[format_name]
         type_code = numbers.get(format_name)
-        if (type(type_code) is not int or not isinstance(sizes, list) or not isinstance(names, list)
-                or type_code <= 0 or type_code >= len(sizes) or type_code >= len(names)
-                or type(sizes[type_code]) is not int or names[type_code] != format_name):
-            raise MandatoryRefused("mandatory survivor format registry entry is unsupported")
-        survivor.append(SurvivorEncoding(format_name, type_code, sizes[type_code], "write_value_scalar"))
+        if (type_code != expected_type or not isinstance(sizes, list) or not isinstance(names, list)
+                or type_code >= len(sizes) or type_code >= len(names)
+                or sizes[type_code] != expected_width or names[type_code] != format_name):
+            raise MandatoryRefused("mandatory survivor format registry layout is unsupported")
+        survivor.append(SurvivorEncoding(format_name, type_code, expected_width, "write_value_scalar"))
     return replace(recipe, encodings=tuple(encodings),
                    unencoded_numeric_defaults=tuple(omissions),
                    write_value_source_sha256=str(write_value["source_sha256"]),
