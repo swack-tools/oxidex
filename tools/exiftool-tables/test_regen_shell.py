@@ -53,7 +53,9 @@ elif mode=='chosen-perl':
     elif name in ('dump_tables.pl','dump_filetypes.pl'):
         reader_only=args.pop(0)=='--reader-only' if args[0]=='--reader-only' else False
         assert pathlib.Path(args[0]).resolve()==lib
-        print(json.dumps({'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}))
+        captured={'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}
+        if reader_only: captured['reader_only']=True
+        print(json.dumps(captured))
     elif name=='dump_af_points.pl':
         assert pathlib.Path(args[0]).resolve()==lib/'Image/ExifTool/Nikon.pm'
         pathlib.Path(args[1]).write_text(json.dumps({'marker':'explicit-A'}))
@@ -313,8 +315,9 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
                 if full:
-                    self.assertTrue(dump_calls)
-                    self.assertTrue(all(c['argv'][0] != '--reader-only' for c in dump_calls))
+                    self.assertEqual(len(dump_calls), 2)
+                    self.assertNotEqual(dump_calls[0]['argv'][0], '--reader-only')
+                    self.assertEqual(dump_calls[1]['argv'][0], '--reader-only')
                 else:
                     self.assertEqual(len(dump_calls), 1)
                     self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')
@@ -348,8 +351,13 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertTrue(all(c['target'] == str(self.base / 'oracle-target') for c in calls))
                 for name in (n for n in self.extra_leaves() if n.startswith('verify_')):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
-                dump_cache = self.cache / (f'tables-{self.pin}.json' if full else f'tables-reader-{self.pin}.json')
+                dump_cache = self.cache / f'tables-reader-{self.pin}.json'
                 self.assertEqual(json.loads(dump_cache.read_text())['marker'], 'explicit-A')
+                self.assertIs(json.loads(dump_cache.read_text())['reader_only'], True)
+                if full:
+                    full_cache = self.cache / f'tables-{self.pin}.json'
+                    self.assertEqual(json.loads(full_cache.read_text())['marker'], 'explicit-A')
+                    self.assertNotIn('reader_only', json.loads(full_cache.read_text()))
                 self.assertIn('regeneration write-set PASS', result.stdout)
                 self.assertEqual('unexpected PATH Perl' in result.stderr, False)
 

@@ -56,8 +56,10 @@ reviewed head. The final review-thread audit found no unresolved threads.
 The development branch now registers 55 generated artifacts (33 tier 1 and
 22 tier 2), including raw JFIF properties captured from executable native
 writer dispatch and table definitions. This does not mean 55 tag families or
-55 percent coverage. Full real regeneration of the expanded inventory remains
-outstanding; the last full local regeneration covered 44 artifacts.
+55 percent coverage. Official `full-55-regen-r4` at `e145f517` completed both
+tiers and the artifact write-set checks. All four reader Rust outputs are
+byte-identical to that source checkpoint. Seven writer/ledger artifacts changed;
+their static review and compiled acceptance remain separate requirements.
 
 Fresh JPEG creation now consumes raw JFIF properties only before the creation
 boundary selected by the native writer. Native fixtures cover multiple APP0
@@ -105,6 +107,16 @@ refusals, 270 fresh cases, 216 JFIF timing cases, 51 instrument tests and
 workspace all-feature Clippy. Overall gate status remains failed because of
 the expanded batch results.
 
+A separate numeric draft adds six source-derived numeric identities to the
+nine string identities. Its first public matrix (`numeric-public-gate-r2`)
+matched all 432 original string cases and 216 of 252 numeric cases; all 36
+numeric deletions failed. Six library regressions also remain in that tested
+draft, including generated descriptor types and preferred-directory lookup.
+Its 684 cases cover EXIF/IFD0 aliases, not the new explicit IFD1 route.
+The next revision must fix those failures, authenticate the directory operand,
+and add actual selected-IFD1 byte-placement comparisons. These draft counts
+are not merged coverage or an overall generated-tag percentage.
+
 After collision handling was strengthened, the same source build passed
 4,863 library tests (four ignored), 32 instrument tests with canonical native
 environment, and workspace all-feature Clippy. Ambiguous current physical or
@@ -124,8 +136,20 @@ still needs to replay the recorded load context. The probe now replays and verif
 module closure before deparsing. The focused saved-capture path passed from
 address input through native lookup and Rust codegen: 191 rows, 561 query
 names, 1,261 lookup candidates and 179 authenticated modules. Six native and
-21 portable tests passed. Another complete regeneration is still required.
-Full55, reader projection review and compiled parity remain pending.
+21 portable tests passed. The subsequent complete `full-55-regen-r4` passed
+on September 14 at 12:41:48 UTC. Including its source tests, the run took
+22 minutes 37 seconds. Compiled acceptance first stopped on an existing
+module-order formatting error in `src/writers/mod.rs`; that formatting is
+corrected for the retry. No build or public-parity result came from that
+failed formatting stage.
+
+Tier 2 was needlessly repeating the complete writer capture after tier 1.
+The revised shell uses its existing reader-only capture mode for tier 2 in
+both invocation modes, retaining a fresh native reader capture and preserving
+the complete writer dump. Ten shell-control tests passed. A real canonical
+13.59 comparison found all 153 modules and every other reader-projection field
+identical to the completed full dump; reader capture took 13.62 seconds.
+This is capture equivalence, not a newly measured corpus conformance result.
 
 Source-derived numeric mandatory encoding now includes representable IFD1
 defaults. Unrepresented numeric defaults, including ExifIFD ColorSpace, remain
@@ -137,12 +161,19 @@ separately. `mandatory-native-acceptance-r2` passed 17 native-backed tests,
 including all four source-derived IFD1 defaults in both byte orders (eight
 exact native/Rust byte comparisons), and workspace Clippy. This selective recovery does not turn the failed full run green.
 
-The separate version-rehearsal integration has historical raw-JFIF profiles
-for 11.78 and 12.64: eight native tests include 44 raw-value/endian cases;
-13.59 generated output remained byte-identical. This is one compiler component,
-not a complete release rehearsal. The adapter now builds and records both CLI
-and library-test executables; implementing its actual write stage is in
-progress. Broader writer rules and the persisted 11.78/12.64 read/write upgrade
+The separate version-rehearsal integration at `81f59e97` has historical raw-JFIF
+profiles for 11.78 and 12.64: eight native tests include 44 raw-value/endian
+cases; 13.59 generated output remained byte-identical. It also admits the
+historical final WriteExif string paths from complete source profiles. All 19
+final-stage tests passed with the canonical 13.59 native environment; this
+does not prove public file writing with either historical release.
+
+The adapter now implements actual selected-version writes and records both CLI
+and library-test executables. Its 41 offline contract tests verify exact source
+cohorts, generated operands, native and binary identities, immutable fixtures,
+and failure propagation. Native 11.78/12.64 execution remains pending; their
+fresh-JPEG byte-order compiler profiles are the next source-compatibility task.
+Broader writer rules and the persisted 11.78/12.64 read/write upgrade
 rehearsal remain open. No new overall
 generated-output percentage is claimed by this work.
 
