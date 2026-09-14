@@ -12,47 +12,62 @@ from generated_tiff_write_matrix import GeneratedTarget
 
 
 class FreshJpegPublicBatchMatrixTests(unittest.TestCase):
-    def test_mandatory_candidate_is_joined_from_generated_source_artifacts(self) -> None:
-        candidate = matrix.mandatory_ifd0_candidate()
-        self.assertGreaterEqual(candidate.raw_tag_id, 0)
-        self.assertTrue(candidate.name)
-        self.assertTrue(candidate.group0)
-        self.assertEqual(candidate.qualifier, f"{candidate.write_group}:{candidate.name}")
+    def test_mandatory_candidates_join_generated_source_artifacts(self) -> None:
+        candidates = matrix.mandatory_legacy_candidates()
+        self.assertGreater(len(candidates), 0)
+        for candidate in candidates:
+            with self.subTest(candidate=candidate):
+                self.assertTrue(candidate.name)
+                self.assertTrue(candidate.directory)
+                self.assertNotEqual(candidate.default_value, candidate.override_value)
+                self.assertEqual(candidate.qualifier, f"{candidate.directory}:{candidate.name}")
 
-    def test_mandatory_candidate_refuses_unjoined_or_ambiguous_source_rows(self) -> None:
+    def test_mandatory_candidates_refuse_ambiguous_or_unjoined_source_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             ledger = root / "mandatory.json"
             rules = root / "address.rs"
             ledger.write_text(
                 '{"writer_tables_joined": true, "recipe": {"directories": '
-                '[{"directory": "IFD0", "defaults": [{"tag_id": 531}]}]}}',
+                '[{"directory": "IFD1", "defaults": ['
+                '{"tag_id": 282, "kind": "Integer", "value": 72},'
+                '{"tag_id": 283, "kind": "Integer", "value": 2}]}]}}',
                 encoding="utf-8",
             )
             rules.write_text("", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "no generated address identity"):
-                matrix.mandatory_ifd0_candidate(ledger, rules)
+            with self.assertRaisesRegex(ValueError, "no source-addressed"):
+                matrix.mandatory_legacy_candidates(ledger, rules)
             rules.write_text(
-                '''StaticSetNewValueAddress { index: 0, module: "Exif", table: "Main", full_name: "Image::ExifTool::Exif::Main", raw_id: "0x213", name: "One", group0: "EXIF", group1: "Image", write_group: "IFD0", }
-                   StaticSetNewValueAddress { index: 1, module: "Exif", table: "Main", full_name: "Image::ExifTool::Exif::Main", raw_id: "0x213", name: "Two", group0: "EXIF", group1: "Image", write_group: "IFD0", }''',
+                '''StaticSetNewValueAddress { index: 0, module: "Exif", table: "Main", full_name: "Image::ExifTool::Exif::Main", raw_id: "282", name: "One", group0: "EXIF", group1: "IFD0", write_group: "IFD0", }
+                   StaticSetNewValueAddress { index: 1, module: "Exif", table: "Main", full_name: "Image::ExifTool::Exif::Main", raw_id: "282", name: "Two", group0: "EXIF", group1: "IFD0", write_group: "IFD0", }''',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "ambiguous"):
-                matrix.mandatory_ifd0_candidate(ledger, rules)
+                matrix.mandatory_legacy_candidates(ledger, rules)
 
     def test_cases_use_source_selected_target_and_mandatory_identity(self) -> None:
         target = GeneratedTarget(0xBEEF, "TargetFromLedger", "EXIF", "IFD0")
-        mandatory = matrix.MandatoryCandidate(0xBEAD, "MandatoryFromLedger", "EXIF", "IFD0")
+        mandatory = matrix.MandatoryCandidate(0xBEAD, "MandatoryFromLedger", "EXIF", "IFD0", "IFD1", 72, 2)
         delete_legacy = matrix.batch_case(target, mandatory, "generated-delete-legacy-set")
         override = matrix.batch_case(target, mandatory, "generated-set-mandatory-override")
         removal = matrix.batch_case(target, mandatory, "generated-set-mandatory-delete")
 
         self.assertEqual(delete_legacy["native"][0], {"tag": "EXIF:TargetFromLedger", "scalar": "undefined"})
         self.assertEqual(delete_legacy["public"][1], {"key": "IFD0:Artist", "scalar": "utf8", "value": "batch-artist"})
-        self.assertEqual(override["native"][1], {"tag": "IFD0:MandatoryFromLedger", "scalar": "utf8", "value": "2"})
-        self.assertEqual(override["public"][1], {"key": "IFD0:MandatoryFromLedger", "scalar": "integer", "value": "2"})
-        self.assertEqual(removal["native"][1], {"tag": "IFD0:MandatoryFromLedger", "scalar": "undefined"})
-        self.assertEqual(removal["public"][1], {"key": "IFD0:MandatoryFromLedger", "scalar": "undefined"})
+        self.assertEqual(override["native"][1], {"tag": "IFD1:MandatoryFromLedger", "scalar": "utf8", "value": "2"})
+        self.assertEqual(override["public"][1], {"key": "IFD1:MandatoryFromLedger", "scalar": "integer", "value": "2"})
+        self.assertEqual(removal["native"][1], {"tag": "IFD1:Artist", "scalar": "utf8", "value": "batch-artist"})
+        self.assertEqual(removal["native"][2], {"tag": "IFD1:MandatoryFromLedger", "scalar": "undefined"})
+
+    def test_ifd1_mandatory_entry_uses_parsed_next_ifd(self) -> None:
+        document = {
+            "exif": {"tags": {"282": {"value_hex": "wrong-level"}},
+                     "children": {"NextIFD": {"tags": {"282": {"value_hex": "right-level"}}}}}
+        }
+        self.assertEqual(matrix._entry(document, 282, "IFD1"), {"value_hex": "right-level"})
+        self.assertEqual(matrix._entry(document, 282, "IFD0"), {"value_hex": "wrong-level"})
+        with self.assertRaisesRegex(ValueError, "outside parsed JPEG scope"):
+            matrix._entry(document, 282, "ExifIFD")
 
     def test_native_batch_requires_typed_utf8_input_state(self) -> None:
         expected = [{"tag": "EXIF:Source", "scalar": "utf8", "value": "ascii"}]
@@ -67,7 +82,7 @@ class FreshJpegPublicBatchMatrixTests(unittest.TestCase):
 
     def test_request_uses_only_committed_public_batch_schema(self) -> None:
         target = GeneratedTarget(0xBEEF, "Target", "EXIF", "IFD0")
-        mandatory = matrix.MandatoryCandidate(0xBEAD, "Mandatory", "EXIF", "IFD0")
+        mandatory = matrix.MandatoryCandidate(0xBEAD, "Mandatory", "EXIF", "IFD0", "IFD1", 72, 2)
         spec = matrix.batch_case(target, mandatory, "generated-set-mandatory-override")
         request = {"route": "public-batch", "carrier": "jpeg", "input": "input.jpg", "output": "output.jpg", "batch": spec["public"]}
         self.assertEqual(set(request), {"route", "carrier", "input", "output", "batch"})

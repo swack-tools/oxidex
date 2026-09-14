@@ -51,19 +51,31 @@ _ADDRESS = re.compile(
 
 @dataclass(frozen=True)
 class MandatoryCandidate:
+    """One source-default operand with a native-authorized user override."""
+
     raw_tag_id: int
     name: str
     group0: str
-    write_group: str
+    source_write_group: str
+    directory: str
+    default_value: int
+    override_value: int
 
     @property
     def qualifier(self) -> str:
-        return f"{self.write_group}:{self.name}"
+        # The `%mandatory` directory is where WriteExif applies the default;
+        # `WriteGroup` is only a preferred address in the source table.
+        return f"{self.directory}:{self.name}"
 
 
-def mandatory_ifd0_candidate(ledger_path: Path = MANDATORY_LEDGER,
-                              address_path: Path = ADDRESS_RULES) -> MandatoryCandidate:
-    """Join the selected mandatory IFD0 default ID to a source address row."""
+def mandatory_legacy_candidates(ledger_path: Path = MANDATORY_LEDGER,
+                                address_path: Path = ADDRESS_RULES) -> tuple[MandatoryCandidate, ...]:
+    """Join every integer default to its selected native table identity.
+
+    An override value is a *different* integer default from the same source
+    directory.  It is source data, never a handwritten expected default.  The
+    later native probe selects only an operand that SetNewValue accepts.
+    """
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     recipe = ledger.get("recipe")
     if ledger.get("writer_tables_joined") is not True or not isinstance(recipe, dict):
@@ -71,30 +83,84 @@ def mandatory_ifd0_candidate(ledger_path: Path = MANDATORY_LEDGER,
     directories = recipe.get("directories")
     if not isinstance(directories, list):
         raise ValueError("mandatory default directories are unavailable")
-    ifd0 = [item for item in directories if isinstance(item, dict) and item.get("directory") == "IFD0"]
-    if len(ifd0) != 1 or not isinstance(ifd0[0].get("defaults"), list):
-        raise ValueError("mandatory default ledger has no unique IFD0 defaults")
-    raw_ids = sorted(item.get("tag_id") for item in ifd0[0]["defaults"] if type(item.get("tag_id")) is int)
-    if not raw_ids:
-        raise ValueError("mandatory IFD0 default IDs are unavailable")
-    rows = []
+    address_rows = []
     for match in _ADDRESS.finditer(address_path.read_text(encoding="utf-8")):
         values = match.groupdict()
         try:
             raw_id = int(values["raw_id"], 0)
         except ValueError:
             continue
-        if (raw_id in raw_ids and values["module"] == "Exif" and values["table"] == "Main"
-                and values["full_name"] == "Image::ExifTool::Exif::Main"
-                and values["write_group"] == "IFD0"):
-            rows.append(MandatoryCandidate(raw_id, values["name"], values["group0"], values["write_group"]))
-    rows.sort(key=lambda item: (item.raw_tag_id, item.name, item.group0))
-    if not rows:
-        raise ValueError("mandatory IFD0 default has no generated address identity")
-    candidate = rows[0]
-    if sum(row.raw_tag_id == candidate.raw_tag_id for row in rows) != 1:
-        raise ValueError("mandatory IFD0 default address is ambiguous")
-    return candidate
+        if ((values["module"], values["table"], values["full_name"]) ==
+                ("Exif", "Main", "Image::ExifTool::Exif::Main")):
+            address_rows.append((raw_id, values))
+    candidates: list[MandatoryCandidate] = []
+    for directory in directories:
+        if not isinstance(directory, dict) or not isinstance(directory.get("directory"), str):
+            raise ValueError("mandatory default directory is malformed")
+        defaults = directory.get("defaults")
+        if not isinstance(defaults, list):
+            raise ValueError("mandatory default entries are unavailable")
+        integers = [item for item in defaults if isinstance(item, dict)
+                    and type(item.get("tag_id")) is int and type(item.get("value")) is int
+                    and item.get("kind") == "Integer"]
+        values = sorted({item["value"] for item in integers})
+        for item in integers:
+            alternatives = [value for value in values if value != item["value"]]
+            if not alternatives:
+                continue
+            rows = [values for raw_id, values in address_rows if raw_id == item["tag_id"]]
+            if len(rows) > 1:
+                raise ValueError("mandatory default address is ambiguous")
+            if not rows:
+                continue
+            row = rows[0]
+            candidates.append(MandatoryCandidate(
+                item["tag_id"], row["name"], row["group0"], row["write_group"],
+                directory["directory"], item["value"], alternatives[0],
+            ))
+    if not candidates:
+        raise ValueError("mandatory defaults have no source-addressed integer override candidates")
+    return tuple(sorted(candidates, key=lambda item: (
+        item.directory, item.raw_tag_id, item.name, item.override_value,
+    )))
+
+
+def select_native_mandatory_candidate(*, perl: Path, library: Path, root: Path,
+                                      target: GeneratedTarget, ledger_path: Path = MANDATORY_LEDGER,
+                                      address_path: Path = ADDRESS_RULES) -> tuple[MandatoryCandidate, list[dict[str, Any]]]:
+    """Select a default only when native SetNewValue accepts both operations."""
+    probe_root = root / "mandatory-selection"
+    probe_root.mkdir()
+    source = probe_root / "fresh-source.jpg"
+    write_carrier(source, CARRIERS[0])
+    probes: list[dict[str, Any]] = []
+    for index, candidate in enumerate(mandatory_legacy_candidates(ledger_path, address_path)):
+        set_spec = [
+            native_item(target.qualifiers[0], "utf8", "batch-target"),
+            native_item(candidate.qualifier, "utf8", str(candidate.override_value)),
+        ]
+        delete_spec = [
+            native_item(target.qualifiers[0], "utf8", "batch-target"),
+            # This source-independent legacy edit makes the candidate's
+            # directory exist, so the requested deletion must win over its
+            # generated mandatory defaults.
+            native_item(f"{candidate.directory}:Artist", "utf8", "batch-artist"),
+            native_item(candidate.qualifier, "undefined"),
+        ]
+        set_call = native.run_native_batch(perl, library, source, probe_root / f"{index}-set.jpg", set_spec)
+        delete_call = native.run_native_batch(perl, library, source, probe_root / f"{index}-delete.jpg", delete_spec)
+        accepted = all(
+            call.get("returncode") == 0
+            and isinstance(call.get("result"), dict)
+            and call["result"].get("write_return") == 1
+            and all(item.get("return") in (1, 2) for item in call["result"].get("set_calls", []))
+            for call in (set_call, delete_call)
+        )
+        probes.append({"candidate": asdict(candidate), "set": set_call, "delete": delete_call,
+                       "accepted": accepted})
+        if accepted:
+            return candidate, probes
+    raise ValueError("no source-addressed mandatory default accepted both native override and deletion")
 
 
 def public_item(key: str, scalar: str, value: str | None = None) -> dict[str, str]:
@@ -124,15 +190,21 @@ def batch_case(target: GeneratedTarget, mandatory: MandatoryCandidate, case: str
         # Integer is the public typed input; native SetNewValue receives its
         # textual spelling and is the oracle for conversion/type/count/bytes.
         return {
-            "native": [native_item(generated_name, "utf8", "batch-target"), native_item(mandatory.qualifier, "utf8", "2")],
-            "public": [public_item(generated_name, "utf8", "batch-target"), public_item(mandatory.qualifier, "integer", "2")],
+            "native": [native_item(generated_name, "utf8", "batch-target"),
+                       native_item(mandatory.qualifier, "utf8", str(mandatory.override_value))],
+            "public": [public_item(generated_name, "utf8", "batch-target"),
+                       public_item(mandatory.qualifier, "integer", str(mandatory.override_value))],
             "target_present": True,
             "mandatory_state": "present",
         }
     if case == "generated-set-mandatory-delete":
         return {
-            "native": [native_item(generated_name, "utf8", "batch-target"), native_item(mandatory.qualifier, "undefined")],
-            "public": [public_item(generated_name, "utf8", "batch-target"), public_item(mandatory.qualifier, "undefined")],
+            "native": [native_item(generated_name, "utf8", "batch-target"),
+                       native_item(f"{mandatory.directory}:Artist", "utf8", "batch-artist"),
+                       native_item(mandatory.qualifier, "undefined")],
+            "public": [public_item(generated_name, "utf8", "batch-target"),
+                       public_item(f"{mandatory.directory}:Artist", "utf8", "batch-artist"),
+                       public_item(mandatory.qualifier, "undefined")],
             "target_present": True,
             "mandatory_state": "absent",
         }
@@ -169,9 +241,19 @@ def assert_native_batch(call: dict[str, Any], label: str, expected: list[dict[st
                 raise AssertionError(f"{label}: native batch operand {key} differs")
 
 
-def _entry(document: dict[str, Any], raw_tag_id: int) -> dict[str, Any] | None:
+def _entry(document: dict[str, Any], raw_tag_id: int, directory: str = "IFD0") -> dict[str, Any] | None:
     exif = document["exif"]
-    return None if exif is None else exif["tags"].get(str(raw_tag_id))
+    if exif is None:
+        return None
+    if directory == "IFD0":
+        tree = exif
+    elif directory == "IFD1":
+        # `native.parse_jpeg` names TIFF's next top-level IFD `NextIFD`.
+        # This is a parser-tree location, not a tag-name or ID allowlist.
+        tree = exif.get("children", {}).get("NextIFD")
+    else:
+        raise ValueError(f"mandatory candidate directory is outside parsed JPEG scope: {directory}")
+    return None if tree is None else tree["tags"].get(str(raw_tag_id))
 
 
 def compare_batch(source: Path, native_output: Path, generated_output: Path,
@@ -189,8 +271,8 @@ def compare_batch(source: Path, native_output: Path, generated_output: Path,
     native_target, generated_target = _entry(native_doc, target.raw_tag_id), _entry(generated_doc, target.raw_tag_id)
     if (native_target is not None) != spec["target_present"] or native_target != generated_target:
         raise AssertionError("mixed public batch generated target transition differs")
-    native_mandatory = _entry(native_doc, mandatory.raw_tag_id)
-    generated_mandatory = _entry(generated_doc, mandatory.raw_tag_id)
+    native_mandatory = _entry(native_doc, mandatory.raw_tag_id, mandatory.directory)
+    generated_mandatory = _entry(generated_doc, mandatory.raw_tag_id, mandatory.directory)
     if spec["mandatory_state"] == "present" and native_mandatory is None:
         raise AssertionError("authored mandatory override was lost to generated defaults")
     if spec["mandatory_state"] == "absent" and native_mandatory is not None:
@@ -204,9 +286,14 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
     if not hasattr(native, "run_native_batch"):
         raise RuntimeError("fresh public batch matrix requires the committed native batch oracle helper")
     targets = generated_targets(ledger, rules)
-    mandatory = mandatory_ifd0_candidate(mandatory_ledger, address_rules)
     root = output.parent / "fresh-jpeg-public-batch-files"
     root.mkdir(parents=True, exist_ok=False)
+    # Candidate admission is a source/native fact: Protected and PrintConv
+    # controls may reject a mandatory table row even though WriteExif uses it.
+    mandatory, mandatory_probes = select_native_mandatory_candidate(
+        perl=perl, library=library, root=root, target=targets[0],
+        ledger_path=mandatory_ledger, address_path=address_rules,
+    )
     rows, requests = [], []
     for carrier in CARRIERS:
         source = root / f"{carrier.label}-source.jpg"
@@ -235,8 +322,9 @@ def run_matrix(*, test_binary: Path, perl: Path, library: Path, output: Path,
     results = json.loads(result_path.read_text(encoding="utf-8"))
     if not isinstance(results, list) or len(results) != len(rows):
         raise AssertionError("public batch fixture results differ from requests")
-    report: dict[str, Any] = {"instrument": "fresh_jpeg_public_batch_matrix_v1", "declared": len(rows),
-                              "passed": 0, "mandatory_candidate": asdict(mandatory), "rows": rows}
+    report: dict[str, Any] = {"instrument": "fresh_jpeg_public_batch_matrix_v2", "declared": len(rows),
+                              "passed": 0, "mandatory_candidate": asdict(mandatory),
+                              "mandatory_selection_probes": mandatory_probes, "rows": rows}
     for row, result in zip(rows, results, strict=True):
         row["driver_result"] = result
         try:
