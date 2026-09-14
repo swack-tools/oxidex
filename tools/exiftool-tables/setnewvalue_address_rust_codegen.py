@@ -10,7 +10,7 @@ from setnewvalue_addressing import (RUNTIME_STATUS, Addressing, _owned_names,
                                     _candidate_identity, compile_addressing,
                                     _observed_candidates)
 from setnewvalue_ownership_ledger import (build_ledger, owned_names,
-                                           qualified_ownership)
+                                           qualified_ownership, validate_ledger)
 
 
 def _opt_text(value: Any) -> str:
@@ -127,6 +127,22 @@ def _families(groups: Mapping[str, Any]) -> tuple[tuple[int, str], ...]:
     return tuple(sorted(values))
 
 
+def _omitted_source(prelude: str, names: set[str] | frozenset[str], qualified, *,
+                    reason: str, ledger: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    """Render the complete inactive API without retiring protected ownership."""
+    chunks = [prelude, "// SetNewValue addressing omitted: unsupported source.\n",
+              "pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[];\n",
+              "pub(crate) const SET_NEW_VALUE_LOOKUP: &[StaticNativeLookupCandidate] = &[];\n",
+              "pub(crate) const SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE: &[StaticSetNewValueQualifierScope] = &[];\n",
+              _owned_names_const(names), _qualified_owned_const(qualified), _capture_const(None),
+              "pub(crate) const SET_NEW_VALUE_ADDRESSING: Option<&[StaticSetNewValueAddress]> = None;\n"]
+    return "".join(chunks), {
+        "emitted": False, "reason": reason, "runtime_status": RUNTIME_STATUS,
+        "owned_names": len(names), "removed_owned_names": sum(entry.removed for entry in qualified),
+        "ownership_ledger_sha256": None if ledger is None else ledger["ledger_sha256"],
+    }
+
+
 def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
              prior_ledger: Mapping[str, Any] | None = None,
              bootstrap_ownership_ledger: bool = False) -> tuple[str, dict[str, Any]]:
@@ -139,8 +155,12 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
         "pub(crate) struct StaticSetNewValueOwnedName { pub group0: &'static str, pub group1: &'static str, pub name: &'static str, pub removed: bool }\n"
         "pub(crate) struct StaticSetNewValueAddressCapture { pub exiftool_version: &'static str, pub main_source_sha256: &'static str, pub write_exif_source_sha256: &'static str, pub writer_source_sha256: &'static str, pub exif_source_sha256: &'static str }\n"
     )
+    # Validate a published ledger before inspecting current source.  A bad
+    # historical artifact must fail the command before it can overwrite its
+    # terminal ownership union with a convenient current-source projection.
+    validated_prior = validate_ledger(prior_ledger) if prior_ledger is not None else None
     try:
-        ledger = build_ledger(document, prior_ledger, bootstrap=bootstrap_ownership_ledger)
+        ledger = build_ledger(document, validated_prior, bootstrap=bootstrap_ownership_ledger)
         ledger_names = owned_names(ledger)
         ledger_qualified = qualified_ownership(ledger)
         addressing, report = compile_addressing(document)
@@ -161,20 +181,18 @@ def generate(document: Mapping[str, Any], observations: Mapping[str, Any], *,
                     raise RecipeMalformed("native lookup candidate lacks groups")
                 lookup.append((name, index, identity is not None, _families(groups)))
     except (KeyError, RecipeMalformed, RecipeRefused) as error:
-        # Even when the execution recipe is unavailable, current source rows
-        # remain owned.  This preserves the terminal router classification
-        # without keeping a hand-maintained historical tag-name list.
+        # Once a ledger was authenticated, its full historical qualified union
+        # remains terminal even if this release's source grammar is unsupported.
+        # Without a prior ledger there is no published history to preserve.
+        if validated_prior is not None:
+            return _omitted_source(prelude, owned_names(validated_prior),
+                                   qualified_ownership(validated_prior),
+                                   reason=str(error), ledger=validated_prior)
         try:
             current_owned_names = _owned_names(document)
         except (RecipeMalformed, RecipeRefused):
             current_owned_names = set()
-        return (
-            prelude + "// SetNewValue addressing omitted: unsupported source.\n"
-            + _owned_names_const(current_owned_names) + _capture_const(None) +
-            "pub(crate) const SET_NEW_VALUE_ADDRESSING: Option<&[StaticSetNewValueAddress]> = None;\n",
-            {"emitted": False, "reason": str(error), "runtime_status": RUNTIME_STATUS,
-             "owned_names": len(current_owned_names)},
-        )
+        return _omitted_source(prelude, current_owned_names, (), reason=str(error))
     chunks = [
         prelude,
         "pub(crate) const SET_NEW_VALUE_ADDRESS_ROWS: &[StaticSetNewValueAddress] = &[\n",

@@ -1,5 +1,11 @@
 """Generated static EXIF address operands are complete and inactive."""
+from copy import deepcopy
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
+
+from checkexif_recipes import RecipeRefused
 
 from setnewvalue_address_rust_codegen import generate
 from test_setnewvalue_addressing import observations, refresh_find_tag_info_warmup, source
@@ -50,6 +56,10 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertFalse(report["emitted"])
         self.assertIn("noallowlist", rust)
         self.assertIn("SET_NEW_VALUE_ADDRESSING: Option", rust)
+        for constant in ("SET_NEW_VALUE_ADDRESS_ROWS", "SET_NEW_VALUE_LOOKUP",
+                         "SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE",
+                         "SET_NEW_VALUE_OWNED_QUALIFIED"):
+            self.assertIn(constant, rust)
 
     def test_prior_ledger_keeps_renamed_name_in_generated_terminal_union(self):
         from setnewvalue_addressing import compile_addressing
@@ -69,6 +79,39 @@ class SetNewValueAddressRustCodegenTests(unittest.TestCase):
         self.assertIn('"noallowlist"', rust)
         self.assertIn('"newname"', rust)
         self.assertIn("removed: true", rust)
+
+    def test_removed_ledger_name_survives_unsupported_next_source(self):
+        from setnewvalue_ownership_ledger import build_ledger
+        first = build_ledger(source(), None, bootstrap=True)
+        removed = source()
+        del removed["native_write_tables"]["Exif"]["Main"]["rows"]["raw-not-name"]
+        refresh_find_tag_info_warmup(removed)
+        prior = build_ledger(removed, first, bootstrap=False)
+        unsupported = deepcopy(removed)
+        unsupported["native_write_helpers"]["set_new_value"]["__deparse"] = "sub { return 0; }"
+        rust, report = generate(unsupported, {}, prior_ledger=prior)
+        self.assertFalse(report["emitted"])
+        self.assertEqual(report["removed_owned_names"], 1)
+        self.assertIn('"noallowlist"', rust)
+        self.assertIn("removed: true", rust)
+        for constant in ("SET_NEW_VALUE_ADDRESS_ROWS", "SET_NEW_VALUE_LOOKUP",
+                         "SET_NEW_VALUE_ADMITTED_QUALIFIER_SCOPE",
+                         "SET_NEW_VALUE_OWNED_QUALIFIED"):
+            self.assertIn(constant, rust)
+        with tempfile.TemporaryDirectory() as directory:
+            source_file = Path(directory) / "omitted.rs"
+            source_file.write_text(rust, encoding="utf-8")
+            subprocess.run(["rustc", "--crate-type", "lib", str(source_file),
+                            "-o", str(Path(directory) / "omitted.rlib")], check=True,
+                           capture_output=True, text=True)
+
+    def test_tampered_prior_ledger_refuses_before_omission_render(self):
+        from setnewvalue_ownership_ledger import build_ledger
+        prior = build_ledger(source(), None, bootstrap=True)
+        tampered = deepcopy(prior)
+        tampered["entries"][0]["name"] = "forged"
+        with self.assertRaisesRegex(RecipeRefused, "ledger digest"):
+            generate(source(), {}, prior_ledger=tampered)
 
     def test_mixed_final_source_closure_is_an_explicit_omission(self):
         document = source()
