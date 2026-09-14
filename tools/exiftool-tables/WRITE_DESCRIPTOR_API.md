@@ -67,7 +67,8 @@ and `full_name` before applying this source class. It rejects malformed or
 non-relative provenance paths, non-SHA-256 digests, and unrepresentable group
 maps. `--write-out` is optional: requesting this inactive artifact does not
 change the ordinary generated binary artifact.
-# Loaded helper hash state
+
+## Loaded helper hash state
 
 The top-level `native_write_helpers` facts also carry `lexical_hashes` from
 the final callable's live Perl pad. A resolved capture has a `bindings` map,
