@@ -96,16 +96,6 @@ my $query_digest = sha256_hex($canonical->encode(\@query_names));
 die "probe query-name digest disagrees with capture\n"
     unless defined($capture->{query_names_sha256}) && $capture->{query_names_sha256} eq $query_digest;
 
-my $runtime_find = helper_fact('Image::ExifTool::TagLookup::FindTagInfo');
-my $runtime_setnew = helper_fact('Image::ExifTool::SetNewValue');
-for my $key (qw(find_tag_info set_new_value)) {
-    die "capture helper is not an object: $key\n" unless ref($capture->{$key}) eq 'HASH';
-}
-die "FindTagInfo identity differs from supplied dump capture\n"
-    unless $canonical->encode($runtime_find) eq $canonical->encode($capture->{find_tag_info});
-die "SetNewValue identity differs from supplied dump capture\n"
-    unless $canonical->encode($runtime_setnew) eq $canonical->encode($capture->{set_new_value});
-
 my $context = $capture->{native_capture_context};
 die "native capture context is not an object\n" unless ref($context) eq 'HASH';
 my %actual_context = (
@@ -135,6 +125,51 @@ for my $module (@{$captured_closure->{modules}}) {
         if exists $captured_by_inc{$module->{inc}};
     $captured_by_inc{$module->{inc}} = $module;
 }
+
+# B::Deparse uses the currently loaded package/glob context.  The dump sealed
+# that context after all selected modules were loaded, so replay every exact
+# recorded selected binding before taking helper facts.  The manifest is not a
+# name-only hint: each path, source digest, and final closure must match.
+sub replay_captured_closure {
+    my ($modules, $expected) = @_;
+    for my $module (@$modules) {
+        my ($inc, $file, $sha) = @{$module}{qw(inc source_file source_sha256)};
+        die "dump capture module path is unsafe: $inc\n"
+            unless $inc eq $file
+                && $inc =~ m{\AImage/ExifTool(?:\.pm|/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+\.(?:pm|pl))\z};
+        my $selected = abs_path(File::Spec->catfile($lib_abs, split('/', $file)));
+        die "dump capture module is unavailable in selected library: $inc\n"
+            unless defined($selected) && -f $selected && index($selected, "$lib_abs/") == 0;
+        die "dump capture module source differs from selected library: $inc\n"
+            unless sha256_hex(read_raw($selected)) eq $sha;
+        if (exists $INC{$inc}) {
+            my $loaded = abs_path($INC{$inc});
+            die "captured module was preloaded from a different source: $inc\n"
+                unless defined($loaded) && $loaded eq $selected;
+        } else {
+            eval { require $inc; 1 }
+                or die "cannot replay captured selected module $inc: $@";
+            my $loaded = abs_path($INC{$inc});
+            die "captured module loaded from a different source: $inc\n"
+                unless defined($loaded) && $loaded eq $selected;
+        }
+    }
+    my $closure = loaded_closure();
+    die "replayed selected closure differs from dump capture\n"
+        unless $canonical->encode($closure) eq $canonical->encode($expected);
+    return $closure;
+}
+
+replay_captured_closure($captured_closure->{modules}, $captured_closure);
+my $runtime_find = helper_fact('Image::ExifTool::TagLookup::FindTagInfo');
+my $runtime_setnew = helper_fact('Image::ExifTool::SetNewValue');
+for my $key (qw(find_tag_info set_new_value)) {
+    die "capture helper is not an object: $key\n" unless ref($capture->{$key}) eq 'HASH';
+}
+die "FindTagInfo identity differs from supplied dump capture\n"
+    unless $canonical->encode($runtime_find) eq $canonical->encode($capture->{find_tag_info});
+die "SetNewValue identity differs from supplied dump capture\n"
+    unless $canonical->encode($runtime_setnew) eq $canonical->encode($capture->{set_new_value});
 
 my %selected;
 for my $row (@$rows) {
@@ -167,12 +202,8 @@ for my $lower (@query_names) {
     $queries{$lower} = { query => $name, candidates => \@candidates };
 }
 my $closure = loaded_closure();
-for my $module (@{$closure->{modules}}) {
-    my $captured = $captured_by_inc{$module->{inc}};
-    die "loaded module is missing from dump capture: $module->{inc}\n" unless $captured;
-    die "loaded module differs from dump capture: $module->{inc}\n"
-        unless $canonical->encode($module) eq $canonical->encode($captured);
-}
+die "selected closure changed after native lookup observations\n"
+    unless $canonical->encode($closure) eq $canonical->encode($captured_closure);
 print JSON::PP->new->canonical->utf8->encode({
     schema => 'native_setnewvalue_addressing_v2', capture => $capture,
     runtime => { %actual_context, loaded_closure => $closure,
