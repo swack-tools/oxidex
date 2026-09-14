@@ -269,6 +269,27 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
                 with self.assertRaisesRegex(generator.Unsupported, "invalid PrintConvColumns"):
                     generator.render(changed)
 
+    def test_reader_ignored_native_properties_are_closed_by_shape_and_location(self):
+        row = fixture()["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]
+        identity = ("Nikon", "Test")
+        generator.reader_ignored_properties(identity, "1", {"DelValue": 0})
+        generator.reader_ignored_properties(identity, "1", {"AlwaysDecrypt": 1})
+        for property, value in (("DelValue", -1), ("AlwaysDecrypt", 0)):
+            with self.subTest(property=property), self.assertRaises(generator.Unsupported):
+                generator.reader_ignored_properties(identity, "1", {property: value})
+
+        typo = {
+            "0": "None", "1": "Choose Image Area", "2": "One Step Speed/Aperture",
+            "3": "Choose Non-CPU Lens Number", "5": "Auto bracketing",
+            "6": "Dynamic AF Area", "7": "Shutter speed & Aperture lock",
+        }
+        generator.reader_ignored_properties(("NikonCustom", "SettingsD700"), "32.1", {"Prinonv": typo})
+        typo["0"] = "changed"
+        with self.assertRaises(generator.Unsupported):
+            generator.reader_ignored_properties(("NikonCustom", "SettingsD700"), "32.1", {"Prinonv": typo})
+        with self.assertRaises(generator.Unsupported):
+            generator.reader_ignored_properties(("NikonCustom", "Other"), "32.1", {"Prinonv": {}})
+
     def test_rust_string_escaping_preserves_literal_backslash_sequences(self):
         self.assertEqual(generator.rs(r"a\nb\tc\rd"), r'"a\\nb\\tc\\rd"')
         self.assertEqual(generator.rs("a\nb\tc\rd\x01"), r'"a\u{a}b\u{9}c\u{d}d\u{1}"')

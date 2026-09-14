@@ -537,6 +537,7 @@ my @TAG_KEYS = qw(
     PrintConv ValueConv RawConv PrintConvInv ValueConvInv Hook
     SubDirectory Flags Unknown Hidden Avoid Binary Protected List
     Priority ByteOrder DataMember RelatedTag SeparateTable PrintHex PrintConvColumns
+    DelValue AlwaysDecrypt Prinonv
     Base Offset ChangeBase
     Require Desire Inhibit
     BitsPerWord BitsTotal

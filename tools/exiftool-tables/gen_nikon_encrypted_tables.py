@@ -22,7 +22,7 @@ class Unsupported(ValueError): pass
 # self member an explicit parser/runtime decision rather than guessed output.
 DMS = {x: x for x in '''AFAreaMode AfAreaInitialHeight AfAreaInitialWidth AutoCapturedFrame BracketSet CmdDialsReverseRotExposureComp DynamicAFAreaSize FirmwareVersion FlashControlBuiltin FlashControlMode FlashGroupOptionsMasterMode FocusDistanceRangeWidth FocusMode FocusShiftNumberShots FocusShiftShooting FocusStepsFromInfinity HDMIBitDepth HDMIOutputNLog HDR ImageArea IntervalFrame IntervalShooting IntervalShootingIntervals IntervalShootingShotsPerInterval LensDriveEnd LensID MovieType MultipleExposureMode NewLensData OldLensData PixelShiftActive PixelShiftShooting ShotInfoVersion ShutterMode SingleFrame ZebraPatternToneRange'''.split()}
 FORMATS = {'int8u':'U8','int8s':'I8','int16u':'U16','int16s':'I16','int32u':'U32','int32s':'I32','fixed32u':'Fixed32u','string':'Str','undef':'Undef'}
-ALLOWED = {'Name','Description','Notes','Format','Condition','RawConv','ValueConv','PrintConv','ValueConvInv','PrintConvInv','Writable','Mask','BitShift','PrintHex','PrintConvColumns','Priority','DataMember','Groups','SeparateTable','_extra_keys','_shorthand','SubDirectory','Unknown','Protected','List','Avoid','Binary','Hidden','RelatedTag','WriteGroup','Require','Desire','Inhibit','Hook'}
+ALLOWED = {'Name','Description','Notes','Format','Condition','RawConv','ValueConv','PrintConv','ValueConvInv','PrintConvInv','Writable','Mask','BitShift','PrintHex','PrintConvColumns','DelValue','AlwaysDecrypt','Prinonv','Priority','DataMember','Groups','SeparateTable','_extra_keys','_shorthand','SubDirectory','Unknown','Protected','List','Avoid','Binary','Hidden','RelatedTag','WriteGroup','Require','Desire','Inhibit','Hook'}
 CODE = {
  ('Image::ExifTool::CheckBinaryData','6e141f4f7ef93338d1ccedaa4d66a330f11b5de7695b0789a31fcd87a00521d0'),
  ('Image::ExifTool::WriteBinaryData','6e141f4f7ef93338d1ccedaa4d66a330f11b5de7695b0789a31fcd87a00521d0'),
@@ -250,6 +250,27 @@ def expr(row,k):
 def omitted(row):
  return (expr(row,'RawConv') == 'unless (defined $$self{FocusDistanceRangeWidth} and not $$self{FocusDistanceRangeWidth}) { if ($val == 0 ) {$$self{LensDriveEnd} = "No"} else { $$self{LensDriveEnd} = "CFD"} } else{ $$self{LensDriveEnd} = "Inf"}' or
          (isinstance(row.get('PrintConv'),dict) and row['PrintConv'].get('kind')=='expr' and hashlib.sha256(row['PrintConv']['expr'].encode()).hexdigest() in OMITTED_PC))
+
+def reader_ignored_properties(identity, key, row):
+ """Validate native fields with no effect on the generated read interpreter.
+
+ ``DelValue`` drives ExifTool writes only. ``AlwaysDecrypt`` controls native
+ pre-decryption directory-length discovery; this runtime decrypts the complete
+ buffer before calling ``process``. ``Prinonv`` is a one-off misspelled native
+ property and has no Image::ExifTool consumer. Keep each captured value, and
+ reject new placements or shapes instead of treating arbitrary extra fields as
+ reader-inert.
+ """
+ if 'DelValue' in row:
+  u(row['DelValue'])
+ if 'AlwaysDecrypt' in row and row['AlwaysDecrypt'] not in (1, True):
+  fail(f'{identity}[{key}]: unsupported AlwaysDecrypt {row["AlwaysDecrypt"]!r}')
+ if 'Prinonv' in row:
+  expected = {'0':'None','1':'Choose Image Area','2':'One Step Speed/Aperture',
+              '3':'Choose Non-CPU Lens Number','5':'Auto bracketing',
+              '6':'Dynamic AF Area','7':'Shutter speed & Aperture lock'}
+  if identity != ('NikonCustom','SettingsD700') or key != '32.1' or row['Prinonv'] != expected:
+   fail(f'{identity}[{key}]: unregistered reader-ignored Prinonv')
 def dm(s):
  if s not in DMS: fail(f'unknown data member {s!r}')
  return f'Dm::{s}'
@@ -432,6 +453,7 @@ def render(data):
     # shape so an executable or malformed replacement cannot disappear here.
     if 'PrintConvColumns' in row and (isinstance(row['PrintConvColumns'],bool) or not isinstance(row['PrintConvColumns'],int) or row['PrintConvColumns'] < 1):
      fail(f'{n}[{key}]: invalid PrintConvColumns {row["PrintConvColumns"]!r}')
+    reader_ignored_properties(n, key, row)
     # These declarations need runtime operations absent from binary_data.rs.
     # They are intentionally omitted by the checked-in projection; every
     # other unregistered executable fact remains a hard refusal.
