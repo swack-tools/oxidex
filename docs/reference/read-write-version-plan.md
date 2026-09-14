@@ -47,6 +47,47 @@ not completion of automatic adoption. The upgrade ledger must retain that gap.
 
 Later sections preserve earlier checkpoints; this table is the current status.
 
+## Address-to-file checkpoint, September 14
+
+The generated address resolver now joins a complete captured row identity to
+its generated scalar writer. Dispatch takes source hashes only from the selected
+generated capture and verifies every row identity field against that capture
+before the TIFF/JPEG writer checks the final recipe. The native
+`generated_tiff_write_matrix.py --route resolved-address` run passed **432/432**
+cases: nine emitted identities, eight operations, two group spellings and three
+carriers. This covers existing EXIF blocks through internal entry points; it
+still does not prove public API admission or new JPEG EXIF creation.
+
+The same source checkpoint passed 193 Rust writer tests (two explicitly ignored
+instrument drivers). Combined manifest, regeneration-shell and ownership
+controls passed 31 Python tests. Workspace Clippy with all features and warnings
+denied passed. The broader all-targets lint attempt failed on pre-existing
+test-only unused-import and duplicate-module findings; that attempt is not green.
+The official manifest now contains 49 artifacts,
+including generated address operands, their report/history and source-derived
+mandatory defaults. A full real regeneration of all 49 is still required; the
+previous complete regeneration covered 44 artifacts.
+
+Public migration must use the generated intersection of complete address and
+final-writer identities, with retained history for previously migrated entries.
+The broader 561-name source inventory is not the public migration set. Tags
+never migrated retain their existing route; migrated tags whose newer native
+rules are removed or unsupported must not silently use old manual rules.
+
+PR #768 remains open at `68b30d5f`: both hosted table-check attempts ended in
+runner shutdown during the tier-2 dump, so neither gives a completed drift
+verdict. All review threads must be addressed and resolved, alongside passing
+required checks on the exact head, before merge.
+
+The persisted 11.78/12.64 rehearsal has not passed. Its first 11.78 dump succeeded,
+but the following expression verifier rejected the deliberately changed version
+pin as a dirty tree. The adapter correction allows that change only during the
+sanctioned generation stage. The failed journal is retained; both-version
+build/read/write results remain outstanding. Do not select a different pair to
+avoid this failure.
+
+
+
 ## Finish line
 
 OxiDex should derive all tag-specific reading and native-writable tag behavior

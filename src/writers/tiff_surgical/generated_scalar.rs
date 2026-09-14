@@ -325,6 +325,7 @@ mod tests {
             input: std::path::PathBuf,
             output: std::path::PathBuf,
             carrier: Option<String>,
+            route: Option<String>,
             key: String,
             scalar: String,
             value: Option<String>,
@@ -345,20 +346,55 @@ mod tests {
                 _ => return Err("invalid typed scalar request".into()),
             };
             let input = std::fs::read(&request.input).map_err(|error| error.to_string())?;
-            let requests = vec![ScalarWriteRequest {
-                key: &request.key,
-                value,
-            }];
-            let result = match request.carrier.as_deref() {
-                None | Some("tiff_little" | "tiff_big") => {
-                    rewrite_generated_scalars(&input, requests, &generated_rules())
+            let result = if request.route.as_deref() == Some("resolved-address") {
+                use crate::writers::generated_write_address::{self, Resolution};
+                let address_rules = generated_write_address::generated_rules();
+                let row = match generated_write_address::resolve(&request.key, &address_rules) {
+                    Resolution::Resolved(row) => row,
+                    Resolution::OutsideMigratedScope => {
+                        return Err("outside generated address scope".into());
+                    }
+                    Resolution::Unsupported(reason) => return Err(reason.into()),
+                };
+                let resolved = crate::writers::generated_write_dispatch::resolved_scalar_request(
+                    row,
+                    value,
+                )
+                .map_err(|error| error.to_string())?;
+                match request.carrier.as_deref() {
+                    None | Some("tiff_little" | "tiff_big") => rewrite_resolved_generated_scalars(
+                        &input,
+                        vec![resolved],
+                        &generated_rules(),
+                    ),
+                    Some("jpeg") => {
+                        crate::writers::jpeg_writer::rewrite_resolved_generated_exif_scalars(
+                            &crate::test_support::TestReader::new(input),
+                            vec![resolved],
+                            &generated_rules(),
+                        )
+                    }
+                    _ => return Err("unsupported test carrier".into()),
                 }
-                Some("jpeg") => crate::writers::jpeg_writer::rewrite_generated_exif_scalars(
-                    &crate::test_support::TestReader::new(input),
-                    requests,
-                    &generated_rules(),
-                ),
-                _ => return Err("unsupported test carrier".into()),
+            } else {
+                if !matches!(request.route.as_deref(), None | Some("final-key")) {
+                    return Err("unsupported test route".into());
+                }
+                let requests = vec![ScalarWriteRequest {
+                    key: &request.key,
+                    value,
+                }];
+                match request.carrier.as_deref() {
+                    None | Some("tiff_little" | "tiff_big") => {
+                        rewrite_generated_scalars(&input, requests, &generated_rules())
+                    }
+                    Some("jpeg") => crate::writers::jpeg_writer::rewrite_generated_exif_scalars(
+                        &crate::test_support::TestReader::new(input),
+                        requests,
+                        &generated_rules(),
+                    ),
+                    _ => return Err("unsupported test carrier".into()),
+                }
             }
             .map_err(|error| error.to_string())?;
             std::fs::write(&request.output, result.bytes).map_err(|error| error.to_string())?;

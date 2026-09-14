@@ -148,6 +148,8 @@ def main():
     parser.add_argument("--jpeg-base", type=Path, help="also exercise generated JPEG cohort operations")
     parser.add_argument("--ledger", type=Path, default=LEDGER, help="emitted final-stage ledger")
     parser.add_argument("--rules", type=Path, default=RULES, help="rendered final-stage Rust rules")
+    parser.add_argument("--route", choices=("final-key", "resolved-address"), default="final-key",
+                        help="internal dispatch path exercised; neither is public API proof")
     args = parser.parse_args()
     carriers = ("tiff_little", "tiff_big") + (("jpeg",) if args.jpeg_base else ())
     targets = generated_targets(args.ledger, args.rules)
@@ -164,7 +166,7 @@ def main():
     native.assert_contract_version(identity)
     print_header(tool="generated_scalar_write_matrix_v2", git=state, binary=binary,
                  dirty_overridden=overridden,
-                 extra=[f"native: {identity}", f"{declared} internal TIFF/JPEG operations; public routing not covered"])
+                 extra=[f"native: {identity}", f"{declared} internal TIFF/JPEG operations via {args.route}; public routing not covered"])
     root = args.output.parent / "generated-tiff-matrix-files"
     root.mkdir(parents=True, exist_ok=False)
     rows, requests = [], []
@@ -183,7 +185,7 @@ def main():
                     native.assert_native(operation_call, stem + " operation")
                     scalar = "undefined" if operation == "delete" else "utf8" if operation == "utf8" else "bytes"
                     value = None if operation == "delete" else native.CASE_INPUT_BYTES[operation].decode("utf-8") if scalar == "utf8" else native.CASE_INPUT_BYTES[operation].hex()
-                    requests.append({"carrier": carrier, "input": str(seeded), "output": str(output), "key": name, "scalar": scalar, "value": value})
+                    requests.append({"route": args.route, "carrier": carrier, "input": str(seeded), "output": str(output), "key": name, "scalar": scalar, "value": value})
                     rows.append({"carrier": carrier, "id": stem, "target": {"raw_tag_id": target.raw_tag_id, "name": target.name, "table_group0": target.table_group0, "physical_write_group": target.physical_write_group}, "requested_name": name, "operation": operation, "seeded": str(seeded), "native_output": str(expected), "output": str(output), "native_call": operation_call})
     request_path, result_path = root / "requests.json", root / "results.json"
     request_path.write_text(json.dumps(requests, indent=2) + "\n")
@@ -193,7 +195,7 @@ def main():
     (root / "driver.log").write_text(result.stdout + result.stderr)
     result.check_returncode()
     results = json.loads(result_path.read_text())
-    report = {"instrument": "generated_scalar_write_matrix_v2", "native_identity": identity,
+    report = {"instrument": "generated_scalar_write_matrix_v2", "route": args.route, "native_identity": identity,
               "source_commit": state.commit, "dirty_files": state.dirty_files,
               "test_binary_sha256": hashlib.sha256(binary.path.read_bytes()).hexdigest(),
               "ledger_sha256": hashlib.sha256(args.ledger.read_bytes()).hexdigest(),
