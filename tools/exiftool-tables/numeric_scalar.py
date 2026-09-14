@@ -61,7 +61,14 @@ def compile_numeric_scalar(document):
     # the source integer range; changes in that range must propagate/refuse.
     if ranges.get('entries', {}).get('int16u') != ['0', '65535']:
         raise RecipeRefused('numeric CheckValue int16u range is unsupported')
-    return NumericScalarRecipe(packing.formats, tuple((1 << bits) - 1 for bits in packing.unsigned_bits), provenance.source_sha256, closure['Image/ExifTool.pm'])
+    # NumericWriteRecipe authenticates a wider private WriteValue closure for
+    # mandatory-directory cleanup.  The public NumericScalarRecipe is a fixed
+    # two-format runtime ABI, so select its independently proven subset rather
+    # than leaking that cleanup capability through positional arrays.
+    public_formats = ('int16u', 'rational64u')
+    if not set(public_formats).issubset(packing.formats) or not {16, 32}.issubset(packing.unsigned_bits):
+        raise RecipeRefused('numeric public scalar subset is absent from authenticated WriteValue capability')
+    return NumericScalarRecipe(public_formats, (65535, 4294967295), provenance.source_sha256, closure['Image/ExifTool.pm'])
 
 
 def render_numeric(recipe):

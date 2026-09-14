@@ -528,8 +528,8 @@ def compile_numeric_write(helpers: Mapping[str, Any], closure: Mapping[str, Any]
     bindings = _numeric_mapping(hashes.get('bindings'), 'byte-order lexical bindings')
     if hashes.get('resolved') is not True:
         raise RecipeRefused('numeric WriteValue byte-order maps are unresolved')
-    for name, expected in (('%unpackMotorola', {'S': 'n', 'L': 'N'}),
-                           ('%unpackIntel', {'S': 'v', 'L': 'V'})):
+    for name, expected in (('%unpackMotorola', {'S': 'n', 'L': 'N', 'C': 'C', 'c': 'c'}),
+                           ('%unpackIntel', {'S': 'v', 'L': 'V', 'C': 'C', 'c': 'c'})):
         captured = _numeric_mapping(bindings.get(name), name)
         entries = _numeric_mapping(captured.get('entries'), name + ' entries')
         if captured.get('resolved') is not True or any(entries.get(k) != v for k, v in expected.items()):

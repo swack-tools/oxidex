@@ -485,10 +485,16 @@ fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", def
             with self.subTest(registry=key), self.assertRaises(MandatoryRefused):
                 compile_mandatory_joined(fact, changed)
         for name in ('%unpackMotorola', '%unpackIntel'):
-            changed = deepcopy(original)
-            changed['native_write_helpers']['set_byte_order']['lexical_hashes']['bindings'][name]['entries']['S'] = 'C'
-            with self.subTest(packing_map=name), self.assertRaisesRegex(MandatoryRefused, 'packing templates'):
-                compile_mandatory_joined(fact, changed)
+            for key, replacement in (('S', 'C'), ('C', 'n'), ('c', 'C')):
+                changed = deepcopy(original)
+                changed['native_write_helpers']['set_byte_order']['lexical_hashes']['bindings'][name]['entries'][key] = replacement
+                with self.subTest(packing_map=name, mutation=f'{key}={replacement}'), self.assertRaisesRegex(MandatoryRefused, 'packing templates'):
+                    compile_mandatory_joined(fact, changed)
+            for key in ('C', 'c'):
+                changed = deepcopy(original)
+                del changed['native_write_helpers']['set_byte_order']['lexical_hashes']['bindings'][name]['entries'][key]
+                with self.subTest(packing_map=name, missing=key), self.assertRaisesRegex(MandatoryRefused, 'packing templates'):
+                    compile_mandatory_joined(fact, changed)
 
     @unittest.skipUnless(NATIVE is not None, 'selected native source required')
     def test_copied_native_packing_dependencies_and_format_registry_refuse(self):
@@ -507,6 +513,33 @@ fn main() {{ let r=&writers::generated::MANDATORY_DEFAULTS; println!("{{}}", def
                 self.assertEqual(body.count(before), 1); target.write_text(body.replace(before, after))
                 fact = capture(copied); document = self._document(fact, copied)
                 with self.assertRaises(MandatoryRefused): compile_mandatory_joined(fact, document)
+
+    @unittest.skipUnless(NATIVE is not None, 'selected native source required')
+    def test_copied_native_byte_pack_map_mutations_and_deletions_refuse(self):
+        """C/c are executable DoPackStd operands, not inert map entries."""
+        assert NATIVE is not None
+        lines = {
+            '%unpackMotorola': "my %unpackMotorola = ( S => 'n', L => 'N', C => 'C', c => 'c' );",
+            '%unpackIntel': "my %unpackIntel    = ( S => 'v', L => 'V', C => 'C', c => 'c' );",
+        }
+        for map_name, line in lines.items():
+            for key, replacement in (('C', 'n'), ('c', 'C')):
+                with self.subTest(map=map_name, key=key, mutation='replace'), tempfile.TemporaryDirectory() as temporary:
+                    copied = Path(temporary) / 'lib'; shutil.copytree(NATIVE[1], copied)
+                    target = copied / 'Image/ExifTool.pm'; body = target.read_text()
+                    self.assertEqual(body.count(line), 1)
+                    target.write_text(body.replace(line, line.replace(f"{key} => '{key}'", f"{key} => '{replacement}'")))
+                    fact = capture(copied); document = self._document(fact, copied)
+                    with self.assertRaisesRegex(MandatoryRefused, 'packing templates'):
+                        compile_mandatory_joined(fact, document)
+                with self.subTest(map=map_name, key=key, mutation='delete'), tempfile.TemporaryDirectory() as temporary:
+                    copied = Path(temporary) / 'lib'; shutil.copytree(NATIVE[1], copied)
+                    target = copied / 'Image/ExifTool.pm'; body = target.read_text()
+                    self.assertEqual(body.count(line), 1)
+                    target.write_text(body.replace(line, line.replace(f", {key} => '{key}'", '')))
+                    fact = capture(copied); document = self._document(fact, copied)
+                    with self.assertRaisesRegex(MandatoryRefused, 'packing templates'):
+                        compile_mandatory_joined(fact, document)
 
     @unittest.skipUnless(NATIVE is not None, 'selected native source required')
     def test_native_integer_boundaries_match_rust_in_both_byte_orders(self):

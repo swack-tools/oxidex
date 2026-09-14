@@ -1,6 +1,7 @@
 """Portable source mutation and actual shared Rust numeric-runtime checks."""
 import copy
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -20,6 +21,26 @@ class NumericScalarTests(unittest.TestCase):
         recipe = compile_numeric_scalar(source())
         self.assertEqual(recipe.formats, ('int16u', 'rational64u'))
         self.assertEqual(recipe.maxima, (65535, 4294967295))
+
+    def test_cleanup_capabilities_do_not_leak_into_public_fixed_two_format_recipe(self):
+        recipe = compile_numeric_scalar(source())
+        # The source capture now authenticates seven WriteValue forms for
+        # private mandatory-directory cleanup. Public generated_scalar keeps
+        # its two-slot ABI and original ordered operands.
+        self.assertEqual(recipe.formats, ('int16u', 'rational64u'))
+        self.assertEqual(recipe.maxima, (65535, 4294967295))
+        rendered = render_numeric(recipe)
+        self.assertIn('formats: ["int16u", "rational64u"]', rendered)
+        self.assertNotIn('int8u', rendered)
+        self.assertNotIn('int32u', rendered)
+        rules = (ROOT / 'src/writers/generated_scalar_rules.rs').read_text()
+        block = re.search(r'pub\(crate\) const NUMERIC_SCALAR:.*?^\}\);$', rules, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(block)
+        public = block.group(0)
+        self.assertIn('formats: ["int16u", "rational64u"]', public)
+        self.assertIn('maxima: [65535, 4294967295]', public)
+        self.assertNotIn('int8u', public)
+        self.assertNotIn('int32u', public)
 
     def test_every_validation_statement_and_dependency_is_consumed(self):
         original = source()
