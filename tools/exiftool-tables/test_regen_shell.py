@@ -274,6 +274,8 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('setnewvalue_address_probe.pl'), int(full))
                 self.assertEqual(names.count('setnewvalue_address_rust_codegen.py'), int(full))
                 self.assertEqual(names.count('setnewvalue_public_migration_ledger.py'), int(full))
+                self.assertEqual(names.count('fresh_jpeg_byte_order_native.py'), int(full))
+                self.assertEqual(names.count('fresh_jpeg_byte_order_codegen.py'), int(full))
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 if full:
                     self.assertLess(names.index('serial_directory.py'), names.index('rustfmt'))
@@ -290,6 +292,8 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('setnewvalue_address_probe.pl'), names.index('setnewvalue_address_rust_codegen.py'))
                     self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('setnewvalue_public_migration_ledger.py'))
                     self.assertLess(names.index('setnewvalue_public_migration_ledger.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('fresh_jpeg_byte_order_native.py'), names.index('fresh_jpeg_byte_order_codegen.py'))
+                    self.assertLess(names.index('fresh_jpeg_byte_order_codegen.py'), names.index('rustfmt'))
                     self.assertGreater(names.index('verify_serial_directory.py'), names.index('rustfmt'))
                 self.assertEqual(names.count('rustfmt'), 2 if full else 1)
                 format_calls = [c for c in calls if c['tool'] == 'rustfmt']

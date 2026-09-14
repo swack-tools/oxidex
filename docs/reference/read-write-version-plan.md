@@ -14,7 +14,7 @@ automatic upgrade path is not finished.
 | Source facts and shared writer helpers | PRs #761–#766 merged; #766 is `82f97ae6`, with all five required checks passing at `d505d179` | Integrate and validate the next complete writer operation |
 | Internal generated TIFF/JPEG scalar writes | All nine final recipes passed 432/432 native file comparisons under `generated_tiff_write_matrix.py` at the September 14 frozen source checkpoint | Public operations, new EXIF blocks and additional native-writable rule classes |
 | Full-library final writer compilation | Official 44-artifact regeneration passed; all 153 decoded reader modules identical to control; Python, Rust workspace and Clippy passed | Expand unsupported writer semantics without changing reader behavior |
-| Public generated writing and manual lookup removal | Internal path implemented; public path not migrated | Route public operations, test new EXIF-block defaults and remove replaced manual rules |
+| Public generated writing and manual lookup removal | Development public modify/remove route passed 432 native file cases for nine scalar identities; not merged | Fresh/empty EXIF creation, native mixed batches and retirement of replaced manual rules |
 | Release upgrades | Random pair 11.78/12.64 selected and sources verified | Generate/build both versions and test each against its own native reader and writer |
 
 The first September 14 regeneration revealed that creating the native writer
@@ -138,6 +138,32 @@ PR #768 is separate from this public wiring. Its current head `8b8be088` keeps
 the full module-complete writer capture and moves table verification to the
 existing larger runner after SIGTERM on the previous runner. The fresh hosted
 run is pending; the termination cause has not been established.
+
+## Integrated source contracts after the public checkpoint
+
+Numeric mandatory packing now admits a complete, finite executable grammar
+for count-one u16/u32 integer inputs. Its validation and packing dependencies,
+byte-order maps and native TIFF format registry must join the selected source.
+Copied-native statement and helper mutations must refuse when unsupported;
+boundary values are compared with actual native and rendered Rust results.
+The integrated compiler/capture suite passed **53 tests without skips**, and
+workspace/all-features Clippy passed after regenerating the mandatory operand.
+
+Fresh JPEG byte-order generation now checks the complete recognized caller
+body, its reachable byte-order helpers and their common source identity. A
+supported native fallback change can change the generated order; unsupported
+caller/helper executable changes refuse. These are finite recognized-body
+contracts, not general Perl translation. Byte-order, manifest and selected
+regeneration-shell tests passed **14 tests without skips**; workspace Clippy
+passed. The merged development inventory is **53 artifacts: 31 tier 1 and
+22 tier 2**. A real full regeneration of this expanded inventory is outstanding.
+
+These helpers still await fresh-JPEG activation. Raw JFIF inputs must come from
+the actual native binary table and writer path, including undefined versus zero,
+not display values or newly handwritten offsets. The next parallel work items
+are source-derived raw JFIF operands, fresh/empty-JPEG native fixtures and mixed
+public whole-map transaction fixtures. Public creation and manual-rule removal
+remain explicit acceptance requirements before landing the migration.
 
 ## Finish line
 

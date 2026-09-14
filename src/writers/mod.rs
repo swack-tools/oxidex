@@ -22,6 +22,7 @@ pub(crate) mod generated_sanitize;
 pub(crate) mod generated_sanitize_rules;
 // Source-derived new-directory defaults remain inactive until public creation routing lands.
 pub(crate) mod generated_mandatory_defaults;
+pub(crate) mod generated_fresh_jpeg_byte_order;
 #[allow(dead_code)]
 pub(crate) mod generated_scalar;
 pub(crate) mod generated_scalar_rules;
