@@ -1,4 +1,4 @@
-import copy,json,unittest
+import copy,json,unittest,subprocess
 from pathlib import Path
 import quicktime_keys_specs as specs
 HERE=Path(__file__).resolve().parent
@@ -11,6 +11,11 @@ class KeysSpecsTests(unittest.TestCase):
   self.assertEqual(specs.render_rust(r),(specs.ROOT/'src/parsers/quicktime/generated_keys_specs.rs').read_text())
   bad={x['identity']['raw_key'] for x in r['ledger'] if not x['generated']}
   self.assertEqual(bad,{'creation_time','creationdate','detected-face','detected-face.bounds','live-photo-info','location.ISO6709','location.date','scene-illuminance','sdpd','setu','smartstyle-info'})
+ def test_rendered_keys_survive_canonical_rustfmt(self):
+  for source in (snapshot(),):
+   rendered=specs.render_rust(specs.compile_document(source))
+   formatted=subprocess.run(['rustfmt','--edition','2024','--emit','stdout'],input=rendered,text=True,capture_output=True,check=True).stdout
+   self.assertEqual(formatted,rendered)
  def test_new_literal_key_is_generated_without_alias_mapping(self):
   d=snapshot();t=d['modules']['QuickTime']['tables']['Keys'];t['tags']['future.source']={'Name':'FutureSource'};t['tag_count']+=1
   r=specs.compile_document(d); self.assertIn('future.source',{x['source_key'] for x in r['specs']});self.assertIn('name: "FutureSource"',specs.render_rust(r))

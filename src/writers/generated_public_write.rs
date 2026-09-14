@@ -6,8 +6,8 @@
 use super::generated_scalar::Scalar;
 use super::generated_setnewvalue_address_rules::StaticSetNewValueAddress;
 use super::generated_setnewvalue_public_migration_rules::{
-    StaticPublicSetNewValueMigration as Migration, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
-    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE,
+    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
+    StaticPublicSetNewValueMigration as Migration,
 };
 use super::generated_write_address::{self, AddressRules, Resolution};
 use super::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest;
@@ -329,7 +329,7 @@ fn should_cleanup_mandatory_ifd1(
 /// Apply only the generated WriteExif mandatory-only predicate after a scalar
 /// deletion has shrunk IFD1. Tag IDs and encodings come from the capture.
 fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
-    use crate::writers::exif_surgical::{scan_exif_entries, IfdKind};
+    use crate::writers::exif_surgical::{IfdKind, scan_exif_entries};
     use crate::writers::tiff_surgical::entry_edits::{EntryMutation, ScopedEntryEdit};
     use crate::writers::{
         generated_mandatory_defaults::MANDATORY_DEFAULTS, mandatory_defaults_runtime as mandatory,
@@ -338,8 +338,8 @@ fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
         .map_err(ExifToolError::unsupported_format)?;
     let scan = scan_exif_entries(bytes)?;
     let order = match scan.byte_order {
-        crate::io::ByteOrder::LittleEndian => mandatory::TiffByteOrder::Little,
-        crate::io::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
+        crate::parsers::tiff::ifd_parser::ByteOrder::LittleEndian => mandatory::TiffByteOrder::Little,
+        crate::parsers::tiff::ifd_parser::ByteOrder::BigEndian => mandatory::TiffByteOrder::Big,
     };
     let defaults = MANDATORY_DEFAULTS
         .directories
