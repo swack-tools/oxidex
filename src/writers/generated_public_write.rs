@@ -6,8 +6,8 @@
 use super::generated_scalar::Scalar;
 use super::generated_setnewvalue_address_rules::StaticSetNewValueAddress;
 use super::generated_setnewvalue_public_migration_rules::{
-    StaticPublicSetNewValueMigration as Migration, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
-    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE,
+    PUBLIC_SET_NEW_VALUE_MIGRATION_CAPTURE, PUBLIC_SET_NEW_VALUE_MIGRATIONS,
+    StaticPublicSetNewValueMigration as Migration,
 };
 use super::generated_write_address::{self, AddressRules, Resolution};
 use super::tiff_surgical::generated_scalar::ResolvedScalarWriteRequest;
@@ -699,8 +699,7 @@ mod tests {
 
         assert!(mandatory_cleanup_capture_joins(&MANDATORY_DEFAULTS).is_ok());
         let stale = crate::writers::mandatory_defaults_runtime::MandatoryRecipe {
-            writer_source_sha256:
-                "0000000000000000000000000000000000000000000000000000000000000000",
+            writer_source_sha256: "0000000000000000000000000000000000000000000000000000000000000000",
             ..MANDATORY_DEFAULTS
         };
         assert!(mandatory_cleanup_capture_joins(&stale).is_err());

@@ -453,44 +453,52 @@ mod tests {
             tag_id: 77,
             value: MandatoryValue::Integer(6),
         };
-        assert!(matches_existing_mandatory_value(
-            &test_recipe(),
-            default,
-            4,
-            1,
-            &6u32.to_le_bytes(),
-            TiffByteOrder::Little,
-        )
-        .unwrap());
-        assert!(matches_existing_mandatory_value(
-            &test_recipe(),
-            default,
-            4,
-            1,
-            &6u32.to_be_bytes(),
-            TiffByteOrder::Big,
-        )
-        .unwrap());
-        assert!(!matches_existing_mandatory_value(
-            &test_recipe(),
-            default,
-            4,
-            1,
-            &7u32.to_be_bytes(),
-            TiffByteOrder::Big,
-        )
-        .unwrap());
+        assert!(
+            matches_existing_mandatory_value(
+                &test_recipe(),
+                default,
+                4,
+                1,
+                &6u32.to_le_bytes(),
+                TiffByteOrder::Little,
+            )
+            .unwrap()
+        );
+        assert!(
+            matches_existing_mandatory_value(
+                &test_recipe(),
+                default,
+                4,
+                1,
+                &6u32.to_be_bytes(),
+                TiffByteOrder::Big,
+            )
+            .unwrap()
+        );
+        assert!(
+            !matches_existing_mandatory_value(
+                &test_recipe(),
+                default,
+                4,
+                1,
+                &7u32.to_be_bytes(),
+                TiffByteOrder::Big,
+            )
+            .unwrap()
+        );
         // WriteValue splits the scalar input and cannot pack it twice, so it
         // is not mandatory and the containing IFD remains.
-        assert!(matches_existing_mandatory_value(
-            &test_recipe(),
-            default,
-            4,
-            2,
-            &[0; 8],
-            TiffByteOrder::Little,
-        )
-        .is_ok_and(|matches| !matches));
+        assert!(
+            matches_existing_mandatory_value(
+                &test_recipe(),
+                default,
+                4,
+                2,
+                &[0; 8],
+                TiffByteOrder::Little,
+            )
+            .is_ok_and(|matches| !matches)
+        );
         // Pinned WriteValue helper capability artifact permits only the
         // capture-validated int16u/int32u/rational64u physical forms.
         for (field_type, bytes) in [
@@ -513,26 +521,30 @@ mod tests {
         }
         // Positive multi-value numeric input is native undef, so it is a
         // non-match and cannot turn a successful deletion into an error.
-        assert!(!matches_existing_mandatory_value(
-            &test_recipe(),
-            default,
-            4,
-            2,
-            &[0; 8],
-            TiffByteOrder::Little,
-        )
-        .unwrap());
+        assert!(
+            !matches_existing_mandatory_value(
+                &test_recipe(),
+                default,
+                4,
+                2,
+                &[0; 8],
+                TiffByteOrder::Little,
+            )
+            .unwrap()
+        );
         // An unlisted physical form is not silently interpreted by an old
         // conversion implementation.
-        assert!(!matches_existing_mandatory_value(
-            &test_recipe(),
-            default,
-            11,
-            1,
-            &6f32.to_le_bytes(),
-            TiffByteOrder::Little,
-        )
-        .unwrap());
+        assert!(
+            !matches_existing_mandatory_value(
+                &test_recipe(),
+                default,
+                11,
+                1,
+                &6f32.to_le_bytes(),
+                TiffByteOrder::Little,
+            )
+            .unwrap()
+        );
     }
 }
 /// Apply the captured new-directory branch. A caller must provide the already
