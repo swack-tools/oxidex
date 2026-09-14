@@ -7,7 +7,7 @@
   },
   "instrument": {
     "build_timeout_seconds": 1800,
-    "et_lib": "target/exiftool-src/exiftool-13.59/lib",
+    "et_lib": "/tmp/oxidex-exiftool-cache/exiftool/lib",
     "perl": "perl5.38.2",
     "perl_version": "v5.38.2",
     "probe_timeout_seconds": 180,
@@ -21,7 +21,7 @@
     "skip": 14
   },
   "schema": 2,
-  "tables_sha256": "b73906ec2e88154399e38cb6f0d58ede982cd73becb46b516b50f04580727032",
+  "tables_sha256": "05c13f3ee804838a6d8db5b2f8d64156883dd98afe5a5b0983b6870a8a561556",
   "use_counts": {
     "total": 7377,
     "verified": 5511

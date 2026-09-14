@@ -36,6 +36,22 @@ use OxiDex::Utf8PrimitiveContract ();
 use Scalar::Util qw(refaddr);
 use B ();
 
+# These memo tables retain only source facts captured after module hydration.
+# They never cache a glob lookup or a dependency graph: a later module may
+# rebind a name, and code_ref_fact must still reconstruct its
+# ancestor-sensitive dependency facts.  Forward declarations may mutate their
+# CV in place, so the generic deparse path remains uncached. Source file bytes
+# are likewise read and hashed for every capture: Perl stat timestamps cannot
+# prove freshness for a same-size in-place rewrite within one second.
+my %CODE_FACT_DEPARSE_BY_CV;
+my $B_DEPARSE_AVAILABLE;
+
+sub code_fact_cache_enabled {
+    # Test-only escape hatch: compare this memoized code-body capture against the
+    # direct path without changing any emitted fact.
+    return !$ENV{OXIDEX_DISABLE_CODE_FACT_CACHE};
+}
+
 # Resolve a code ref to its fully-qualified sub name.
 #
 # Worth the trouble because PROCESS_PROC is how a table declares what kind of
@@ -67,9 +83,25 @@ sub code_name {
 # edit shows up as an unknown key rather than as a silently stale conversion.
 sub deparse {
     my ($cv) = @_;
-    return undef unless eval { require B::Deparse; 1 };
+    $B_DEPARSE_AVAILABLE = eval { require B::Deparse; 1 }
+        unless defined $B_DEPARSE_AVAILABLE;
+    return undef unless $B_DEPARSE_AVAILABLE;
     my $text = eval { B::Deparse->new('-p', '-sC')->coderef2text($cv) };
-    return defined $text ? to_text($text) : undef;
+    return defined($text) ? to_text($text) : undef;
+}
+
+# code_ref_fact runs after requested modules and writer helpers have loaded.
+# At that point its CV body is stable for this dump.  Retaining the CV prevents
+# refaddr reuse by a short-lived closure; callers still resolve every current
+# package binding and build dependencies afresh.
+sub code_fact_deparse {
+    my ($cv) = @_;
+    my $id = refaddr($cv);
+    return $CODE_FACT_DEPARSE_BY_CV{$id}[1]
+        if code_fact_cache_enabled() && defined($id) && exists $CODE_FACT_DEPARSE_BY_CV{$id};
+    my $body = deparse($cv);
+    return defined($id) && code_fact_cache_enabled()
+        ? ($CODE_FACT_DEPARSE_BY_CV{$id} = [ $cv, $body ])->[1] : $body;
 }
 
 # `SubDirectory.Validate` is normally a Perl expression string.  A fully
@@ -113,6 +145,24 @@ sub unresolved_code_fact {
         resolved => JSON::PP::false, __deparse => undef,
         source_file => undef, source_sha256 => undef, reason => $reason,
     };
+}
+
+# GetTagInfo is recorded only as the native resolver identity for effective
+# row selection. Its executable body is not a ConvInv operand, and deparsing
+# its broad general-purpose implementation would needlessly recurse through
+# read machinery unrelated to this inactive projection.
+sub effective_row_resolver_fact {
+    my ($lib_abs) = @_;
+    no strict 'refs';
+    my $cv = *{'Image::ExifTool::GetTagInfo'}{CODE};
+    return { actual_name => 'Image::ExifTool::GetTagInfo', resolved => JSON::PP::false,
+             reason => 'code_ref_unavailable' } unless $cv;
+    my $name = code_name($cv);
+    return { actual_name => defined($name) ? $name : 'Image::ExifTool::GetTagInfo', resolved => JSON::PP::false,
+             reason => 'code_name_unavailable' } unless defined $name;
+    my ($file, $sha, $error) = source_file_fact($cv, $lib_abs);
+    return { actual_name => $name, resolved => JSON::PP::false, reason => $error } if defined $error;
+    return { actual_name => $name, resolved => JSON::PP::true, source_file => $file, source_sha256 => $sha };
 }
 
 sub direct_code_dependencies {
@@ -160,7 +210,7 @@ sub code_ref_fact {
     return { %fact, reason => 'code_name_unavailable' } unless defined $resolved_name;
     return unresolved_code_fact($resolved_name, 'dependency_cycle') if $ancestors->{$resolved_name};
     $fact{__name} = $resolved_name;
-    my $body = deparse($cv);
+    my $body = code_fact_deparse($cv);
     return { %fact, reason => 'deparse_unavailable' } unless defined $body;
     $fact{__deparse} = $body;
     my ($source_file, $source_sha256, $source_error) = source_file_fact($cv, $lib_abs);
@@ -257,6 +307,14 @@ my $pristine_utf8 = OxiDex::Utf8PrimitiveContract::capture_pristine($^X);
 # during this require unless its configFile global is the empty string.
 BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 require Image::ExifTool;
+# GetTagInfo suppresses unknown rows only when it is neither in writing mode
+# nor configured to expose unknown tags.  This sidecar is a write projection,
+# so resolve it with the same IsWriting gate a native writer uses.  Keep the
+# context as an explicit fact below: it must never be mistaken for the normal
+# read-side lookup, and none of this mutates the existing read projection.
+# Instantiate only after the read projection is detached: new() can load
+# tables and install runtime properties on their hashes.
+my $WRITE_EFFECTIVE_ET;
 
 # Keys that describe the table itself rather than a tag within it.
 my %TABLE_META = map { $_ => 1 } qw(
@@ -312,6 +370,15 @@ my @WRITE_CONTROL_KEYS = qw(
     WriteHook WriteLast WritePseudo CanCreate
 );
 my %WRITE_KNOWN_TAG_KEY = map { $_ => 1 } (@TAG_KEYS, @WRITE_CONTROL_KEYS);
+
+# ConvInv receives the result of GetTagInfo, not the literal hash entry.  Keep
+# the effective values separate from the raw row so a writer compiler never
+# guesses inheritance/default resolution from an absent source key.
+my @WRITE_EFFECTIVE_ROW_KEYS = qw(
+    Name WriteGroup Format Writable Count Groups
+    PrintConv PrintConvInv ValueConv ValueConvInv
+    List RawJoin WriteCheck RawConvInv
+);
 
 sub scrub {
     my ($v, $depth) = @_;
@@ -448,14 +515,89 @@ sub write_source_property {
     return \%property;
 }
 
+# A raw Table property may be a source declaration or an already-installed
+# runtime pointer.  It can point at an entire cyclic tag graph, so preserve its
+# observable reference identity instead of recursively serializing the graph.
+# This keeps non-containing Table declarations explicit for the compiler; it
+# does not silently erase them as if they were the normal native back-pointer.
+sub write_table_source_property {
+    my ($hash, $key, $containing) = @_;
+    return write_source_property($hash, $key) unless exists $hash->{$key};
+    my $value = $hash->{$key};
+    return write_source_property($hash, $key) unless ref($value) eq 'HASH';
+    my $same = defined($containing) && ref($containing) eq 'HASH'
+        && refaddr($value) == refaddr($containing);
+    return {
+        present => JSON::PP::true,
+        value => {
+            __ref => 'HASH',
+            table_ref_identical_to_containing => $same ? JSON::PP::true : JSON::PP::false,
+        },
+    };
+}
+
+# The effective GetTagInfo view is only consumed as ConvInv state: conversion
+# keys use Perl ``defined`` and the gate keys use Perl truth.  Serializing an
+# entire CODE/hash conversion a second time is both unnecessary and, for a few
+# generated conversion maps, prohibitively expensive.  Preserve the exact
+# state needed by that call site without inventing a conversion payload.
+sub write_effective_property {
+    my ($hash, $key) = @_;
+    return { present => JSON::PP::false } unless exists $hash->{$key};
+    my $value = $hash->{$key};
+    if ($key =~ /^(?:PrintConv|PrintConvInv|ValueConv|ValueConvInv)$/) {
+        return { present => JSON::PP::true, value => defined($value) ? { __defined => JSON::PP::true } : undef };
+    }
+    if ($key =~ /^(?:List|RawJoin|WriteCheck|RawConvInv)$/ && defined($value) && ref($value)) {
+        return { present => JSON::PP::true, value => { __perl_truth => JSON::PP::true } };
+    }
+    if ($key eq 'Groups') {
+        return { present => JSON::PP::true, value => { __unsupported_ref => ref($value) || 'SCALAR' } }
+            unless ref($value) eq 'HASH';
+        my %groups;
+        for my $group (sort keys %$value) {
+            $groups{to_text($group)} = ref($value->{$group})
+                ? { __unsupported_ref => ref($value->{$group}) }
+                : to_text($value->{$group});
+        }
+        return { present => JSON::PP::true, value => \%groups };
+    }
+    if (ref($value)) {
+        return { present => JSON::PP::true, value => { __unsupported_ref => ref($value) } };
+    }
+    return write_source_property($hash, $key);
+}
+
 sub is_table_property {
     my ($key) = @_;
     no warnings 'once';
     return $TABLE_META{$key} || $Image::ExifTool::specialTags{$key};
 }
 
+sub dump_effective_properties {
+    my ($effective) = @_;
+    return { map { $_ => write_effective_property($effective, $_) } @WRITE_EFFECTIVE_ROW_KEYS };
+}
+
+# ConvInv obtains CHECK_PROC through the effective row's Table link.  A row
+# can therefore not safely borrow the containing table's recipe merely because
+# it was looked up there.  Record only the pointer relationship; a redirected
+# table has no authenticated identity in this compact row projection and the
+# compiler must omit it until one is added deliberately.
+sub effective_table_binding {
+    my ($effective, $containing) = @_;
+    return { kind => 'not_resolved' } unless ref($effective) eq 'HASH';
+    return { kind => 'missing' } unless exists $effective->{Table};
+    my $table = $effective->{Table};
+    return { kind => 'non_table', ref_kind => ref($table) || 'SCALAR' }
+        unless ref($table) eq 'HASH';
+    return { kind => 'containing_table', ref_identical_to_containing => JSON::PP::true }
+        if refaddr($table) == refaddr($containing);
+    return { kind => 'redirected_table', ref_identical_to_containing => JSON::PP::false };
+}
+
 sub dump_write_entry {
-    my ($entry) = @_;
+    my ($entry, $effective, $resolution, $containing, $raw_id) = @_;
     my $kind = ref($entry) || 'SCALAR';
     if (!$entry || !ref($entry)) {
         return {
@@ -467,15 +609,30 @@ sub dump_write_entry {
         return {
             entry_kind => 'ARRAY',
             # Array order is native variant-selection order.  Do not sort it.
-            alternatives => [ map { dump_write_entry($_) } @$entry ],
+            alternatives => [ map { dump_write_entry($_, undef, 'not_resolved') } @$entry ],
         };
     }
     return { entry_kind => $kind, value => scrub($entry) } unless $kind eq 'HASH';
 
+    # SetupTagTable/GetTagInfo may already have installed this exact runtime
+    # pair before the sidecar begins.  Suppress only that unambiguous pair.
+    # A source row with an unusual Table or TagID still survives below as an
+    # ordinary raw property (and is then refused by the closed compiler).
+    my $standard_runtime_links = defined($containing) && ref($containing) eq 'HASH'
+        && ref($entry->{Table}) eq 'HASH'
+        && refaddr($entry->{Table}) == refaddr($containing)
+        && exists($entry->{TagID}) && !ref($entry->{TagID})
+        && defined($raw_id) && "$entry->{TagID}" eq "$raw_id";
     my %properties;
     my %unknown;
     for my $key (sort keys %$entry) {
-        my $property = write_source_property($entry, $key);
+        # This detached snapshot is taken before GetTagInfo.  Preserve even
+        # unusual source declarations named Table or TagID; only the *native
+        # effective* Table link below is treated as a runtime binding.
+        next if $standard_runtime_links && ($key eq 'Table' || $key eq 'TagID');
+        my $property = $key eq 'Table'
+            ? write_table_source_property($entry, $key, $containing)
+            : write_source_property($entry, $key);
         $properties{to_text($key)} = $property;
         $unknown{to_text($key)} = $property unless $WRITE_KNOWN_TAG_KEY{$key};
     }
@@ -485,11 +642,14 @@ sub dump_write_entry {
         properties => \%properties,
         write_controls => \%controls,
         unknown_properties => \%unknown,
+        effective_properties => dump_effective_properties($effective),
+        effective_resolution => $resolution,
+        effective_table_binding => { kind => 'not_resolved' },
     };
 }
 
 sub dump_write_table {
-    my ($module, $table, $full_name, $hash) = @_;
+    my ($module, $table, $full_name, $hash, $lib_abs) = @_;
     my (%properties, %unknown);
     for my $key (sort keys %$hash) {
         next unless is_table_property($key);
@@ -502,7 +662,38 @@ sub dump_write_table {
     my %rows;
     for my $key (sort keys %$hash) {
         next if is_table_property($key) || $key =~ /^_/;
-        $rows{to_text($key)} = dump_write_entry($hash->{$key});
+        my $entry = $hash->{$key};
+        # Capture the detached raw declaration *before* a conditional native
+        # lookup, because GetTagInfo may attach runtime Table pointers.
+        my $rendered = dump_write_entry($entry, {}, 'not_hash', $hash, $key);
+        my ($effective, $resolution) = ({}, 'not_hash');
+        if (ref($entry) eq 'HASH') {
+            # GetTagInfo evaluates Condition in the supplied object/value
+            # context.  A static row has no such context, so selecting one
+            # branch here would turn a conditional native declaration into an
+            # unconditional writer row.  Preserve the raw Condition fact and
+            # make the unsupported effective selection explicit instead.
+            if (exists $entry->{Condition}) {
+                $resolution = 'native_get_tag_info_condition_unrepresented';
+            }
+            elsif (!$WRITE_EFFECTIVE_ET) {
+                $resolution = 'native_get_tag_info_unavailable';
+            } else {
+                my $resolved = $WRITE_EFFECTIVE_ET->GetTagInfo($hash, $key);
+                if (ref($resolved) eq 'HASH') {
+                    $effective = $resolved;
+                    $resolution = 'native_get_tag_info';
+                } else {
+                    $resolution = 'native_get_tag_info_no_effective_row';
+                }
+            }
+        }
+        if ($rendered->{entry_kind} eq 'HASH') {
+            $rendered->{effective_properties} = dump_effective_properties($effective);
+            $rendered->{effective_resolution} = $resolution;
+            $rendered->{effective_table_binding} = effective_table_binding($effective, $hash);
+        }
+        $rows{to_text($key)} = $rendered;
     }
     return {
         module => $module,
@@ -513,6 +704,11 @@ sub dump_write_table {
         unknown_table_properties => \%unknown,
         rows => \%rows,
         row_count => scalar(keys %rows),
+        effective_row_resolver => effective_row_resolver_fact($lib_abs),
+        effective_row_context => {
+            is_writing => JSON::PP::true,
+            selection => 'native_get_tag_info_write_context',
+        },
     };
 }
 
@@ -665,6 +861,62 @@ sub hydrate_write_procedures {
         }
     }
     return \%status;
+}
+
+# WriteExif dynamically requires these modules in branches outside the ordinary
+# scalar slice. B::Deparse nevertheless consults their final prototypes while
+# printing that entire CV. Use the same explicit post-load context in bounded
+# and all-module captures; never erase an ampersand from deparsed Perl, since
+# it can preserve arguments which a prototype would otherwise transform.
+# This is capture provenance, not permission to execute the writer body.
+sub final_write_capture_context {
+    my ($lib_abs) = @_;
+    my @modules;
+    my $resolved = 1;
+    for my $file (qw(Image/ExifTool/Canon.pm Image/ExifTool/PanasonicRaw.pm Image/ExifTool/Sony.pm)) {
+        my %module = (file => $file, resolved => JSON::PP::false);
+        my $selected = abs_path(File::Spec->catfile($lib_abs, $file));
+        if (!defined($selected) || !-f $selected || index($selected, "$lib_abs/") != 0) {
+            $module{reason} = 'selected_context_module_unavailable';
+        } elsif (!eval { require $file; 1 }) {
+            $module{reason} = 'context_module_load_failed';
+        } elsif ((abs_path($INC{$file}) // '') ne $selected) {
+            $module{reason} = 'context_module_outside_selected_library';
+        } else {
+            open(my $fh, '<:raw', $selected) or die "cannot read writer context: $file";
+            local $/;
+            $module{source_sha256} = sha256_hex(<$fh>);
+            close($fh) or die "cannot close writer context: $file";
+            $module{resolved} = JSON::PP::true;
+        }
+        $resolved = 0 unless $module{resolved};
+        push @modules, \%module;
+    }
+    # Authenticate the loaded ExifTool closure too: e.g. selected Sony.pm may
+    # require Minolta.pm, which must not fall through to an ambient installation.
+    my %loaded_modules;
+    my @load_errors;
+    for my $file (sort keys %INC) {
+        next unless $file eq 'Image/ExifTool.pm' || index($file, 'Image/ExifTool/') == 0;
+        my $selected = abs_path(File::Spec->catfile($lib_abs, $file));
+        my $actual = abs_path($INC{$file});
+        if (!defined($selected) || !defined($actual) || $actual ne $selected || index($actual, "$lib_abs/") != 0) {
+            push @load_errors, { file => $file, reason => 'loaded_context_module_outside_selected_library' };
+            $resolved = 0;
+            next;
+        }
+        open(my $fh, '<:raw', $actual) or die "cannot read loaded writer context: $file";
+        local $/;
+        $loaded_modules{$file} = sha256_hex(<$fh>);
+        close($fh) or die "cannot close loaded writer context: $file";
+    }
+    # A deparse captured before these prototype/glob changes is no longer a
+    # representation of this context, even when the retained CV is unchanged.
+    %CODE_FACT_DEPARSE_BY_CV = ();
+    return { kind => 'write_exif_postload_context_v1',
+        deparse_options => ['-p', '-sC'],
+        resolved => $resolved ? JSON::PP::true : JSON::PP::false,
+        modules => \@modules, loaded_modules => \%loaded_modules, load_errors => \@load_errors };
 }
 
 sub effective_write_code_fact {
@@ -1116,6 +1368,11 @@ for my $full_name (sort keys %processor_tables) {
 # loading must not alter the existing read projection.  The sidecar gets the
 # table's stored CV, its final implementation source fact, and raw source
 # controls separately.
+$WRITE_EFFECTIVE_ET = eval {
+    my $et = Image::ExifTool->new;
+    $et->{IsWriting} = 1;
+    $et;
+};
 my $write_autoload_router = write_autoload_router_fact($EXIFTOOL_LIB_ABS);
 my $write_autoload_router_status = {
     router => $write_autoload_router,
@@ -1127,9 +1384,10 @@ my $write_autoload_status = hydrate_write_procedures(\%write_tables, $write_auto
 # changed its call spelling despite an identical CV. All writer facts must share
 # the final loaded state. The read projection above is already detached.
 my $write_helper_status = hydrate_write_helpers();
+my $native_write_capture_context = final_write_capture_context($EXIFTOOL_LIB_ABS);
 for my $full_name (sort keys %write_tables) {
     my $entry = $write_tables{$full_name};
-    my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash});
+    my $fact = dump_write_table($entry->{module}, $entry->{table}, $full_name, $entry->{hash}, $EXIFTOOL_LIB_ABS);
     $fact->{effective_write_proc} = effective_write_code_fact(
         $entry->{hash}, 'WRITE_PROC', "${full_name}::WRITE_PROC",
         $EXIFTOOL_LIB_ABS, $write_autoload_status);
@@ -1171,6 +1429,7 @@ print $json->encode({
     # separate prevents write-only properties from becoming accidental read
     # admission or changing the existing module/table/tag projection.
     native_write_autoload => $write_autoload_router_status,
+    native_write_capture_context => $native_write_capture_context,
     native_write_tables => \%native_write_tables,
     native_write_helpers => $native_write_helpers,
     native_write_format_registry => $native_write_format_registry,

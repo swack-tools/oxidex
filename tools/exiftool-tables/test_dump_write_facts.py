@@ -58,6 +58,18 @@ class NativeWriteFacts(unittest.TestCase):
                     no strict 'refs';
                     return &$autoload(@_);
                 }
+                sub new { return bless {}, shift; }
+                sub GetTagInfo($$$) {
+                    my ($self, $table, $id) = @_;
+                    die "condition lookup was evaluated\n" if
+                        ref($table->{$id}) eq 'HASH' and exists $table->{$id}{Condition};
+                    if ($Image::ExifTool::Exif::RedirectEffective and $id == 316) {
+                        my %redirected = %{ $table->{$id} };
+                        $redirected{Table} = \\%Image::ExifTool::Exif::Redirected;
+                        return \\%redirected;
+                    }
+                    return $table->{$id};
+                }
                 1;
             """),
             encoding="utf-8",
@@ -71,13 +83,18 @@ class NativeWriteFacts(unittest.TestCase):
         self.write_writer_helpers()
         self.write_later("return 'late';")
 
-    def write_exif(self, host_group: str, host_group_expr: str | None = None):
+    def write_exif(self, host_group: str, host_group_expr: str | None = None,
+                   host_condition: str | None = None, *, redirect_effective: bool = False,
+                   host_source_extra: str = ""):
         write_group = host_group_expr if host_group_expr is not None else f"'{host_group}'"
+        condition = f", Condition => {host_condition}" if host_condition is not None else ""
         self.exif.write_text(textwrap.dedent(f"""\
             package Image::ExifTool::Exif;
             sub WriteExif($$$);
             sub CheckExif($$$);
             sub DeferredWrite($$$);
+            our $RedirectEffective = {1 if redirect_effective else 0};
+            our %Redirected = ( CHECK_PROC => \\&DeferredWrite );
             our %Main = (
                 GROUPS => {{ 0 => 'EXIF', 1 => 'IFD0', 2 => 'Image' }},
                 WRITE_PROC => \\&WriteExif,
@@ -89,7 +106,7 @@ class NativeWriteFacts(unittest.TestCase):
                     WriteGroup => {write_group}, RawConvInv => '$val',
                     ValueConvInv => 0, PrintConvInv => '', Mandatory => 0,
                     DelValue => '', Validate => undef,
-                    FutureWriterSwitch => {{ zero => 0, empty => '', undef => undef }},
+                    FutureWriterSwitch => {{ zero => 0, empty => '', undef => undef }}{condition}{host_source_extra},
                 }},
                 0x140 => [
                     {{ Name => 'First', WriteLast => 0, WriteGroup => 'IFD0' }},
@@ -136,16 +153,51 @@ class NativeWriteFacts(unittest.TestCase):
             1;
         """), encoding="utf-8")
 
-    def dump(self):
+    def dump(self, extra_env: dict[str, str] | None = None):
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
         result = subprocess.run(
             [PERL, str(DUMP), str(self.lib), "Exif", "Later"],
-            check=True, text=True, capture_output=True,
+            check=True, text=True, capture_output=True, env=env,
         )
         return json.loads(result.stdout)
 
     @staticmethod
     def sidecar(doc, table="Main"):
         return doc["native_write_tables"]["Exif"][table]
+
+    def test_writer_capture_context_loads_selected_modules_without_erasing_prototype_calls(self):
+        self.write_writer("return Image::ExifTool::Canon::ReadODD(@_);")
+        before = self.dump()
+        self.assertFalse(before["native_write_capture_context"]["resolved"])
+        for name, body in (("Canon", "sub ReadODD($) { return join ',', @_; }"),
+                           ("PanasonicRaw", ""), ("Sony", "")):
+            (self.lib / f"Image/ExifTool/{name}.pm").write_text(f"package Image::ExifTool::{name}; {body} 1;\n")
+        after = self.dump()
+        context = after["native_write_capture_context"]
+        self.assertTrue(context["resolved"])
+        self.assertEqual(context["deparse_options"], ["-p", "-sC"])
+        for item in context["modules"]:
+            self.assertEqual(item["source_sha256"], hashlib.sha256((self.lib / item["file"]).read_bytes()).hexdigest())
+        body = self.sidecar(after)["effective_write_proc"]["effective"]["__deparse"]
+        self.assertIn("&Image::ExifTool::Canon::ReadODD(@_)", body)
+        self.assertNotIn("&Image::ExifTool::Canon::ReadODD", self.sidecar(before)["effective_write_proc"]["effective"]["__deparse"])
+        self.assertEqual(before["modules"], after["modules"])
+        self.assertEqual(after, self.dump({"OXIDEX_DISABLE_CODE_FACT_CACHE": "1"}))
+
+    def test_writer_context_refuses_ambient_transitive_native_module(self):
+        for name in ("Canon", "PanasonicRaw", "Sony"):
+            dependency = "require 'Image/ExifTool/Minolta.pm';" if name == "Sony" else ""
+            (self.lib / f"Image/ExifTool/{name}.pm").write_text(f"package Image::ExifTool::{name}; {dependency} 1;\n")
+        ambient = Path(self.tmp.name) / "ambient"
+        minolta = ambient / "Image/ExifTool/Minolta.pm"
+        minolta.parent.mkdir(parents=True)
+        minolta.write_text("package Image::ExifTool::Minolta; 1;\n")
+        context = self.dump({"PERL5LIB": str(ambient)})["native_write_capture_context"]
+        self.assertFalse(context["resolved"])
+        self.assertTrue(all(item["resolved"] for item in context["modules"]))
+        self.assertEqual(context["load_errors"], [{"file": "Image/ExifTool/Minolta.pm", "reason": "loaded_context_module_outside_selected_library"}])
 
     def test_preserves_complete_controls_variants_and_unknown_values(self):
         doc = self.dump()
@@ -181,6 +233,34 @@ class NativeWriteFacts(unittest.TestCase):
         value = self.sidecar(self.dump())["rows"]["316"]["write_controls"]["WriteGroup"]["value"]
         self.assertEqual(value, {"__ref": "SCALAR", "value": "IFD0"})
 
+    def test_condition_row_is_never_resolved_in_context_free_effective_lookup(self):
+        self.write_exif("IFD0", host_condition="'die q(condition lookup was evaluated)'")
+        host = self.sidecar(self.dump())["rows"]["316"]
+        self.assertEqual(host["effective_resolution"], "native_get_tag_info_condition_unrepresented")
+        self.assertEqual(host["properties"]["Condition"]["value"],
+                         "die q(condition lookup was evaluated)")
+
+    def test_redirected_effective_table_is_recorded_not_treated_as_containing(self):
+        self.write_exif("IFD0", redirect_effective=True)
+        host = self.sidecar(self.dump())["rows"]["316"]
+        self.assertEqual(host["effective_resolution"], "native_get_tag_info")
+        self.assertEqual(host["effective_table_binding"], {
+            "kind": "redirected_table", "ref_identical_to_containing": False,
+        })
+
+    def test_unusual_raw_table_and_tagid_properties_are_preserved(self):
+        self.write_exif("IFD0", host_source_extra=", Table => { source => 'unusual' }, TagID => 'raw-id'")
+        host = self.sidecar(self.dump())["rows"]["316"]
+        self.assertEqual(host["properties"]["Table"], {
+            "present": True,
+            "value": {"__ref": "HASH", "table_ref_identical_to_containing": False},
+        })
+        self.assertEqual(host["properties"]["TagID"], {
+            "present": True, "value": "raw-id",
+        })
+        self.assertIn("Table", host["unknown_properties"])
+        self.assertIn("TagID", host["unknown_properties"])
+
     def test_mutated_autoload_router_refuses_forced_writer_loading(self):
         core = self.lib / "Image/ExifTool.pm"
         text = core.read_text(encoding="utf-8")
@@ -202,6 +282,7 @@ class NativeWriteFacts(unittest.TestCase):
 
     def test_forward_declarations_capture_loaded_writer_bodies(self):
         doc = self.dump()
+        self.assertEqual(doc, self.dump({"OXIDEX_DISABLE_CODE_FACT_CACHE": "1"}))
         table = self.sidecar(doc)
         for key in ("effective_write_proc", "effective_check_proc"):
             effective = table[key]["effective"]
@@ -250,6 +331,22 @@ class NativeWriteFacts(unittest.TestCase):
             "source_file_unreadable", "source_outside_selected_lib",
             "deparse_unavailable",
         })
+
+    def test_writer_constructor_mutation_preserves_read_projection(self):
+        main = self.lib / "Image/ExifTool.pm"
+        source = main.read_text()
+        original = "sub new { return bless {}, shift; }"
+        self.assertIn(original, source)
+        main.write_text(source.replace(original, """sub new {
+            require Image::ExifTool::Exif;
+            $Image::ExifTool::Exif::Main{316}{Name} = 'ConstructorMutated';
+            return bless {}, shift;
+        }"""))
+        document = self.dump()
+        self.assertEqual(document["modules"]["Exif"]["tables"]["Main"]["tags"]["316"]["Name"],
+                         "HostComputer")
+        self.assertEqual(self.sidecar(document)["rows"]["316"]["properties"]["Name"]["value"],
+                         "ConstructorMutated")
 
     def test_sanitize_source_change_preserves_read_projection(self):
         before = self.dump()
@@ -338,6 +435,20 @@ class NativeWriteFacts(unittest.TestCase):
         before_candidates, _ = write_descriptors.generate(before, ["Exif"])
         changed_candidates, _ = write_descriptors.generate(changed, ["Exif"])
         self.assertEqual(before_candidates, changed_candidates)
+
+    def test_memoized_code_facts_match_uncached_after_final_rebinding(self):
+        uncached = {"OXIDEX_DISABLE_CODE_FACT_CACHE": "1"}
+        before = self.dump()
+        self.assertEqual(before, self.dump(uncached))
+        self.write_writer("return 1;", extra=textwrap.dedent("""\
+            package Image::ExifTool;
+            no warnings 'redefine';
+            *Image::ExifTool::WriteValue = sub($$) { return 'later'; };
+        """))
+        rebound = self.dump()
+        self.assertEqual(rebound, self.dump(uncached))
+        self.assertNotEqual(before["native_write_helpers"]["write_value"]["__deparse"],
+                            rebound["native_write_helpers"]["write_value"]["__deparse"])
 
     def test_missing_helper_is_explicit_without_discarding_the_read_projection(self):
         self.writer_helpers.write_text(textwrap.dedent("""\

@@ -29,6 +29,7 @@ NAMES = ("EXIF:HostComputer", "IFD0:HostComputer")
 # requested field is a string, so the carrier inspector must support them.
 TIFF_TYPES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2,
               9: 4, 10: 8, 11: 4, 12: 8}
+IFD_POINTERS = {"34665": "ExifIFD", "34853": "GPS", "40965": "InteropIFD"}
 CONTRACT_EXIFTOOL_RELEASE = "13.59"
 
 # This is deliberately a pinned-native acceptance contract, not a writer
@@ -91,12 +92,13 @@ sub value_for { my ($name) = @_;
 }
 my $et = Image::ExifTool->new;
 my @sets;
-if ($action eq 'seed_artist' || $action eq 'seed_artist_host') {
+if ($action eq 'seed_artist' || $action eq 'seed_artist_target') {
   my $artist_return = scalar $et->SetNewValue('IFD0:Artist', 'seed-artist');
   push @sets, {tag => 'IFD0:Artist', input => state('seed-artist'), return => $artist_return};
-  if ($action eq 'seed_artist_host') {
-    my $host_return = scalar $et->SetNewValue('IFD0:HostComputer', 'seed-host');
-    push @sets, {tag => 'IFD0:HostComputer', input => state('seed-host'), return => $host_return};
+  if ($action eq 'seed_artist_target') {
+    die 'seed target is required' unless defined($tag) && length($tag);
+    my $target_return = scalar $et->SetNewValue($tag, 'seed-target');
+    push @sets, {tag => $tag, input => state('seed-target'), return => $target_return};
   }
 } else {
   my $value = value_for($action);
@@ -227,13 +229,17 @@ def make_tiff(path: Path, order: str) -> None:
     path.write_bytes(data)
 
 
-def parse_tiff(data: bytes, require_strip: bool = True) -> dict[str, Any]:
+def parse_tiff(data: bytes, require_strip: bool = True, *, _offset=None, _visited=None) -> dict[str, Any]:
     if len(data) < 10 or data[:2] not in (b"II", b"MM"):
         raise ValueError("not a complete TIFF header")
     order = "little" if data[:2] == b"II" else "big"
     if int.from_bytes(data[2:4], order) != 42:
         raise ValueError("TIFF magic is not 42")
-    offset = int.from_bytes(data[4:8], order)
+    offset = int.from_bytes(data[4:8], order) if _offset is None else _offset
+    visited = set() if _visited is None else _visited
+    if offset < 8 or offset in visited or len(visited) >= 32:
+        raise ValueError("invalid, repeated or excessive TIFF directory pointer")
+    visited.add(offset)
     if offset + 2 > len(data):
         raise ValueError("IFD count is out of bounds")
     count = int.from_bytes(data[offset:offset + 2], order)
@@ -243,6 +249,8 @@ def parse_tiff(data: bytes, require_strip: bool = True) -> dict[str, Any]:
     tags: dict[str, Any] = {}
     for position in range(offset + 2, end - 4, 12):
         tag = int.from_bytes(data[position:position + 2], order)
+        if str(tag) in tags:
+            raise ValueError(f"duplicate tag {tag} in TIFF directory")
         kind = int.from_bytes(data[position + 2:position + 4], order)
         item_count = int.from_bytes(data[position + 4:position + 8], order)
         if kind not in TIFF_TYPES:
@@ -269,7 +277,19 @@ def parse_tiff(data: bytes, require_strip: bool = True) -> dict[str, Any]:
         image_payload_hex = data[strip_offset:strip_offset + strip_length].hex()
     elif require_strip:
         raise ValueError("carrier lacks StripOffsets/StripByteCounts")
-    return {"byte_order": order, "sha256": hashlib.sha256(data).hexdigest(), "tags": tags,
+    children = {}
+    for tag, name in IFD_POINTERS.items():
+        if tag not in tags:
+            continue
+        pointer = tags[tag]
+        if pointer["type"] != 4 or pointer["count"] != 1:
+            raise ValueError(f"malformed TIFF {name} pointer")
+        at = int.from_bytes(bytes.fromhex(pointer["value_hex"]), order)
+        children[name] = parse_tiff(data, False, _offset=at, _visited=visited)
+    next_ifd = int.from_bytes(data[end - 4:end], order)
+    if next_ifd:
+        children["NextIFD"] = parse_tiff(data, False, _offset=next_ifd, _visited=visited)
+    return {"byte_order": order, "sha256": hashlib.sha256(data).hexdigest(), "tags": tags, "children": children,
             "image_payload_hex": image_payload_hex}
 
 
@@ -280,6 +300,7 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
     position = 2
     exif: dict[str, Any] | None = None
     sos_tail: bytes | None = None
+    non_exif_parts = [data[:2]]
     while position < len(data):
         if data[position] != 0xff:
             raise ValueError("JPEG marker is missing 0xff prefix")
@@ -292,10 +313,12 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
         position += 1
         if marker == 0xda:
             sos_tail = data[marker_start:]
+            non_exif_parts.append(sos_tail)
             break
         if marker == 0xd9:
             break
         if marker in {0x01, *range(0xd0, 0xd8)}:
+            non_exif_parts.append(data[marker_start:position])
             continue
         if position + 2 > len(data):
             raise ValueError("truncated JPEG segment length")
@@ -304,12 +327,19 @@ def parse_jpeg(path: Path) -> dict[str, Any]:
             raise ValueError("JPEG segment is out of bounds")
         payload = data[position + 2:position + length]
         if marker == 0xe1 and payload.startswith(b"Exif\x00\x00"):
+            if exif is not None:
+                raise ValueError("ambiguous multiple JPEG EXIF segments")
             exif = parse_tiff(payload[6:], require_strip=False)
+            # Preserve marker fill bytes, which precede the final FF marker.
+            non_exif_parts.append(data[marker_start:position - 2])
+        else:
+            non_exif_parts.append(data[marker_start:position + length])
         position += length
     if sos_tail is None:
         raise ValueError("JPEG lacks SOS marker")
     return {"sha256": hashlib.sha256(data).hexdigest(),
             "sos_to_end_sha256": hashlib.sha256(sos_tail).hexdigest(),
+            "non_exif_sha256": hashlib.sha256(b"".join(non_exif_parts)).hexdigest(),
             "sos_to_end_length": len(sos_tail), "exif": exif}
 
 
@@ -350,10 +380,31 @@ def expected_host(operation: str) -> dict[str, Any] | None:
     return {"type": 2, "count": len(value), "value_hex": value.hex()}
 
 
-def host_storage(entry: dict[str, Any] | None) -> dict[str, Any] | None:
+def entry_storage(entry: dict[str, Any] | None) -> dict[str, Any] | None:
     if entry is None:
         return None
     return {key: entry[key] for key in ("type", "count", "value_hex")}
+
+
+# Compatibility alias for the original single-target native matrix.
+host_storage = entry_storage
+
+
+def target_entry(document: dict[str, Any], carrier: str, raw_tag_id: int) -> dict[str, Any] | None:
+    return tags(document, carrier).get(str(raw_tag_id))
+
+
+def assert_target_transition(seed: dict[str, Any], expected: dict[str, Any], carrier: str,
+                             raw_tag_id: int, operation: str) -> None:
+    before, after = target_entry(seed, carrier, raw_tag_id), target_entry(expected, carrier, raw_tag_id)
+    if operation == "insert":
+        if before is not None or after is None:
+            raise AssertionError(f"insert did not create requested tag {raw_tag_id}")
+    elif operation == "delete":
+        if before is None or after is not None:
+            raise AssertionError(f"delete did not remove requested tag {raw_tag_id}")
+    elif entry_storage(before) == entry_storage(after):
+        raise AssertionError(f"native operation was a no-op for requested tag {raw_tag_id}")
 
 
 def assert_host_contract(actual: dict[str, Any] | None, expected: dict[str, Any] | None) -> None:
@@ -455,8 +506,8 @@ def main(argv: list[str] | None = None) -> int:
                 stem = f"{carrier}-{name.replace(':', '_')}-{operation}"
                 source, seeded, output = (root / f"{stem}-{part}{suffix}" for part in ("carrier", "seeded", "output"))
                 make_carrier(source, carrier, args.jpeg_base)
-                seed_action = "seed_artist" if operation == "insert" else "seed_artist_host"
-                seed_call = run_native(perl, library, source, seeded, seed_action, None)
+                seed_action = "seed_artist" if operation == "insert" else "seed_artist_target"
+                seed_call = run_native(perl, library, source, seeded, seed_action, None if operation == "insert" else name)
                 assert_native(seed_call, f"{stem} seed")
                 operation_call = run_native(perl, library, seeded, output, operation, name)
                 assert_native(operation_call, f"{stem} {operation}")

@@ -9,6 +9,8 @@ pub mod exif_inplace;
 pub mod exif_surgical;
 // Shared source-derived helpers are not yet connected to public writes.
 pub(crate) mod generated_convinv;
+// Static source rows remain inactive until complete file parity is proved.
+pub(crate) mod generated_convinv_rows;
 pub(crate) mod generated_convinv_rules;
 pub(crate) mod generated_sanitize;
 pub(crate) mod generated_sanitize_rules;
@@ -21,6 +23,9 @@ pub(crate) mod generated_checkexif_rules;
 pub mod jpeg_writer;
 pub mod pdf_writer;
 pub mod png_writer;
+// Source-selected final scalar stage remains internal until file parity is proved.
+pub(crate) mod generated_tiff_scalar_final_rules;
+pub(crate) mod tiff_scalar_final_stage;
 pub mod tiff_surgical;
 pub mod tiff_writer;
 

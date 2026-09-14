@@ -3,6 +3,50 @@
 Updated September 14, 2026. This records the expanded read/write and version
 objective alongside the [main plan](../AUTOGENERATION-PLAN.md).
 
+## Current status
+
+The upgrade requirement is newer-native behavior: parsing fixes, new tags,
+changed types and formatting must come from the selected release. The complete
+automatic upgrade path is not finished.
+
+| Work | Evidence now | Remaining acceptance |
+| --- | --- | --- |
+| Source facts and shared writer helpers | PRs #761–#766 merged; #766 is `82f97ae6`, with all five required checks passing at `d505d179` | Integrate and validate the next complete writer operation |
+| Internal generated TIFF/JPEG scalar writes | All nine final recipes passed 432/432 native file comparisons under `generated_tiff_write_matrix.py` at the September 14 frozen source checkpoint | Public operations, new EXIF blocks and additional native-writable rule classes |
+| Full-library final writer compilation | Official 44-artifact regeneration passed; all 153 decoded reader modules identical to control; Python, Rust workspace and Clippy passed | Expand unsupported writer semantics without changing reader behavior |
+| Public generated writing and manual lookup removal | Internal path implemented; public path not migrated | Route public operations, test new EXIF-block defaults and remove replaced manual rules |
+| Release upgrades | Random pair 11.78/12.64 selected and sources verified | Generate/build both versions and test each against its own native reader and writer |
+
+The first September 14 regeneration revealed that creating the native writer
+context before read capture installed runtime properties in EXIF tables and
+changed reader admission. Initialization now occurs after read capture. The
+constructor-mutation regression verifies this separation, and the completed
+regeneration preserved all 153 reader modules exactly.
+
+Validation completed on the frozen development tree based on `b6b7f8c1`:
+`regen-all.sh` regenerated 44 artifacts; the full Python run executed 1,004
+tests with 14 skipped because its Perl environment used a relative filename.
+A replay with the absolute selected Perl executable passed all 14 missing tests
+and repeated one standalone Rust test. Thus 1,004 distinct Python tests were
+verified across the two runs; the original run itself was not skip-free.
+`cargo test --workspace --all-features`, the 432-case native TIFF/JPEG matrix,
+and workspace Clippy with warnings denied all passed. The matrix covers nine
+emitted scalar identities, eight operations, two name spellings, and three
+carriers. These are internal entry points, not public API write conformance.
+
+The full regeneration attempt also exposed a valid empty QuickTime hash key
+that the row compiler incorrectly rejected. The corrected row compiler emits
+191 data rows from the full capture and records unsupported rows explicitly.
+That count does not measure completed writers or generated-output share.
+
+The writer compiler currently recognizes a bounded function grammar. It adopts
+supported data changes such as a native tag's writable type; arbitrary changes
+to Perl control flow still require extending shared compiler support. Refusing
+an unknown rule prevents a stale implementation from silently winning, but is
+not completion of automatic adoption. The upgrade ledger must retain that gap.
+
+Later sections preserve earlier checkpoints; this table is the current status.
+
 ## Finish line
 
 OxiDex should derive all tag-specific reading and native-writable tag behavior
@@ -84,7 +128,7 @@ the pin, generated artifacts and matching oracle together after validation.
    and semantic inventory. Random tests are a discovery tool; they cannot
    certify untested versions or behaviors.
 
-Current writer checkpoint: PRs #761–#765 have merged the source-fact foundation,
+Earlier writer checkpoint: PRs #761–#765 merged the source-fact foundation,
 readiness tooling, inactive scalar helper compiler/runtime, CheckExif
 composition and generated input sanitization. The latest merge is #765 at
 `e2df687b`, with all five required hosted checks passing at `56d3cbe5`.
@@ -210,3 +254,69 @@ This does not establish OxiDex/native conformance. Generating and building
 OxiDex for both versions, comparing both readers and writers with their own
 native release, and accounting for unsupported behavior remain the next
 rehearsal steps. A ready native oracle must never mark those steps passed.
+
+## Writer row integration checkpoint, September 14
+
+Unmerged work on `codex/writer-row-integration-20260914` now generates static
+ConvInv inputs from native GetTagInfo in explicit write context. Conditional
+selection is a named omission. The first Exif capture contains 191 data rows;
+that is not a writable-tag count. Root integrated the worker with official
+row-output registration and preserved the earlier helper tests. Six focused
+suites passed 52 tests without skips; full regeneration and gates for this
+branch remain required.
+
+The internal final scalar stage consumes a complete parsed WriteExif token
+template and native row operands. Review rejected two earlier implementations
+that accepted inserted output-changing assignments. Four independent insertion
+probes now refuse; 12 native/standalone-Rust tests passed in the integration
+checkout. The oracle writes an actual TIFF through native WriteExif and reads
+its entry fields. Final-stage registry emission, effective table-binding checks,
+physical route composition and manual-rule retirement remain unfinished.
+These are internal component proofs, not complete generated file writing.
+
+The following integration update adds effective native Table-pointer identity:
+a row cannot borrow its containing table's CHECK_PROC when native GetTagInfo
+redirects it elsewhere. Generated final-stage output now also contains the
+canonical native format registry and aliases; its Rust proof consumes those
+constants and freshly generated scalar helpers from the same source document.
+Both row and final-stage outputs are registered (44 artifacts total). The
+registration's 13 native/standalone final-stage tests, 19 manifest tests and
+five shell controls pass; four additional registry/freshness tests pass.
+Full official regeneration and full gates for this unmerged branch remain due.
+
+The next acceptance milestone is complete operations: join generated inputs and
+final recipes by full source identity, normalize and validate values, then feed
+resolved type/count/value edits into the existing TIFF carrier. Compare actual
+TIFF/JPEG insert/update/grow/shrink/delete/empty/UTF-8/NUL operations with native
+ExifTool, including unrelated metadata and image preservation. Pass that matrix
+before public routing and manual lookup retirement; internal helper tests do
+not satisfy it. Then repeat against the saved random releases using each
+release's own generated artifacts and native oracle.
+
+## September 14: carrier composition under validation
+
+The 40-artifact helper checkpoint passed official regeneration, all 957 Python tests (zero skips), all-feature workspace Rust tests and CI Clippy. It is pushed as ready PR #766 at `045b739d`; hosted checks and merge remain pending.
+
+The next local branch joins generated source identities through normalization, conversion and final encoding into raw TIFF edits. Defined false conversion errors quietly preserve the file, following native SetNewValue. The new actual-file instrument declares 32 TIFF operations across two byte orders, two qualified names and eight scalar operations. The named `generated_tiff_write_matrix_v1` instrument matched all 32 against actual ExifTool 13.59 files using canonical Perl 5.38.2; type/count/value bytes, unrelated tags and image payload preservation passed. Focused composition tests and CI Clippy also passed. This was an explicitly dirty development checkpoint, using bounded generated inputs; full official 44-artifact regeneration remains required before landing. Public routing, JPEG composition, manual lookup retirement and full version rehearsals remain unfinished.
+
+## September 14: JPEG file proof and full-capture correction
+
+The internal path now handles existing JPEG EXIF blocks through the same
+generated scalar rules and shared byte-preserving carrier. The actual-file
+comparison covers 48 operations across TIFF little/big endian and JPEG, two
+qualified names and eight scalar actions. The first JPEG score was 32/48 because
+the instrument compared ExifIFD physical offsets; native legitimately relocated
+the directory. The corrected instrument follows and compares directory targets,
+rejects cycles and changed target data, and checks all non-EXIF JPEG bytes.
+Regrading the saved outputs with the original binary hash and 570 unchanged
+runtime-source hashes verified 48/48. This proves the internal default-option
+HostComputer class against native 13.59, not public writes or general version
+compatibility. JPEG unit tests and CI Clippy pass.
+
+The full 44-artifact regeneration exposed a separate compiler bug: a valid empty
+Perl hash key in QuickTime::eeBox was treated as malformed. The correction keeps
+the exact key and records its unsupported writer rule as an omission. Eight
+row-compiler tests and a complete saved-native-dump row compilation pass. Full
+regeneration and whole-project gates must now rerun before this work lands.
+Public caller admission, creating JPEG EXIF blocks from source-defined defaults,
+manual lookup retirement and complete version rehearsals remain unfinished.

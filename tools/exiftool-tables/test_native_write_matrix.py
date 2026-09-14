@@ -17,6 +17,26 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class NativeWriteMatrixTests(unittest.TestCase):
+    def test_jpeg_parser_hashes_all_non_exif_bytes_and_rejects_duplicate_exif(self):
+        def segment(marker, payload):
+            return bytes((0xff, marker)) + (len(payload) + 2).to_bytes(2, "big") + payload
+        tiff = b"II\x2a\0\x08\0\0\0" + bytes(6)
+        exif = segment(0xe1, b"Exif\0\0" + tiff)
+        before = b"\xff\xd8" + segment(0xe2, b"unknown APP2")
+        after = segment(0xda, b"scan header") + b"\x01\xff\0\x02\xff\xd9trailer"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "test.jpg"
+            path.write_bytes(before + exif + after)
+            baseline = module.parse_jpeg(path)
+            self.assertEqual(baseline["non_exif_sha256"], module.hashlib.sha256(before + after).hexdigest())
+            path.write_bytes(before + segment(0xe1, b"Exif\0\0" + tiff + b"different-unused-data") + after)
+            self.assertEqual(module.parse_jpeg(path)["non_exif_sha256"], baseline["non_exif_sha256"])
+            path.write_bytes(before.replace(b"APP2", b"APP3") + exif + after)
+            self.assertNotEqual(module.parse_jpeg(path)["non_exif_sha256"], baseline["non_exif_sha256"])
+            path.write_bytes(before + exif + exif + after)
+            with self.assertRaisesRegex(ValueError, "multiple JPEG EXIF"):
+                module.parse_jpeg(path)
+
     def test_native_resolution_rationals_and_numeric_storage_are_preserved(self):
         import struct
         # One classic TIFF directory with inline and offset-stored values.
