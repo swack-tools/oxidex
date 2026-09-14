@@ -340,13 +340,13 @@ def quicktime_observed_reads(evidence: dict | None, input_digests: dict[str, str
     producer = require_mapping(evidence.get("producer"), "QuickTime read evidence producer")
     if producer.get("source_dirty") is not False:
         raise ValueError("QuickTime read evidence is not from an immutable clean source")
-    for key in ("source_commit", "source_fingerprint", "runtime_artifact_sha256", "fixture_manifest_sha256"):
+    for key in ("source_commit", "source_fingerprint", "runtime_input_manifest_sha256", "runtime_artifact_sha256", "fixture_manifest_sha256"):
         if not isinstance(producer.get(key), str) or not re.fullmatch(r"[a-f0-9]{40,64}", producer[key]):
             raise ValueError("QuickTime read evidence producer binding is malformed")
     if producer.get("pin") != (quicktime_selector.ROOT / ".exiftool-version").read_text().strip():
         raise ValueError("QuickTime read evidence pin differs from repository pin")
-    if producer["source_fingerprint"] != baseline.source_fingerprint(quicktime_selector.ROOT):
-        raise ValueError("QuickTime read evidence runtime source fingerprint differs from current inputs")
+    if producer["runtime_input_manifest_sha256"] != baseline.runtime_input_manifest(quicktime_selector.ROOT):
+        raise ValueError("QuickTime read evidence runtime input manifest differs from current inputs")
     if evidence.get("inputs") != dict(sorted(input_digests.items())):
         raise ValueError("QuickTime read evidence generated artifact binding differs")
     from verify_quicktime_reader import observation_evidence

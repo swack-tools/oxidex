@@ -201,6 +201,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
             evidence = {"schema": join.QUICKTIME_READ_EVIDENCE_SCHEMA, "inputs": dict(sorted(digests.items())),
                         "producer": {"source_dirty": False, "source_commit": "a" * 40,
                                      "source_fingerprint": join.baseline.source_fingerprint(join.quicktime_selector.ROOT), "runtime_artifact_sha256": "c" * 64,
+                                     "runtime_input_manifest_sha256": join.baseline.runtime_input_manifest(join.quicktime_selector.ROOT),
                                      "fixture_manifest_sha256": manifest, "pin": "13.59"},
                         "observations": observations, "matched_occurrences": occurrences,
                         "observed_identities": identities}
@@ -209,8 +210,8 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                                 digests, evidence)
             self.assertEqual(result["entries"][0]["observed_read"], "observed_matched_read")
             self.assertIn("quicktime_read_evidence", result["inputs"])
-            with patch.object(join.baseline, "source_fingerprint", return_value="d" * 64):
-                with self.assertRaisesRegex(ValueError, "runtime source fingerprint"):
+            with patch.object(join.baseline, "runtime_input_manifest", return_value="d" * 64):
+                with self.assertRaisesRegex(ValueError, "runtime input manifest"):
                     join.quicktime_observed_reads(evidence, digests, ledger["specs"])
             for key, value in (("raw_key", "cpil"), ("source_sha256", "f" * 64)):
                 changed = copy.deepcopy(evidence)
