@@ -72,6 +72,31 @@ echo ">> extracting tag tables from Perl symbol table"
 echo ">> coverage analysis"
 python3 "$HERE/analyze.py" "$JSON"
 
+# The expression oracle builds the runtime crate. Refresh source-only address
+# types before that build so a new runtime consumer can use newly generated
+# identity fields. This step emits lookup operands, not expression conversions;
+# conversion generation below still requires the oracle PASS ledger.
+echo
+echo ">> generating authenticated SetNewValue address operands"
+ADDRESS_ROWS="$CACHE/setnewvalue-address-rows-$VERSION.json"
+ADDRESS_REPORT="$CACHE/setnewvalue-address-report-$VERSION.json"
+ADDRESS_OBSERVATIONS="$CACHE/setnewvalue-address-observations-$VERSION.json"
+ADDRESS_OWNERSHIP="$(artifact_path setnewvalue-ownership-ledger)"
+python3 "$HERE/setnewvalue_addressing.py" "$JSON" \
+    --rows "$ADDRESS_ROWS" --report "$ADDRESS_REPORT"
+"$PERL" "$HERE/setnewvalue_address_probe.pl" "$LIB" "$ADDRESS_ROWS" > "$ADDRESS_OBSERVATIONS"
+ADDRESS_LEDGER_ARGS=(--ownership-ledger "$ADDRESS_OWNERSHIP")
+if [[ ! -f "$ADDRESS_OWNERSHIP" ]]; then
+    # Bootstrap is an explicit one-time creation path only. Later regenerations
+    # validate and carry forward the committed ownership history.
+    ADDRESS_LEDGER_ARGS=(--bootstrap-ownership-ledger)
+fi
+python3 "$HERE/setnewvalue_address_rust_codegen.py" "$JSON" "$ADDRESS_OBSERVATIONS" \
+    --output "$(artifact_path setnewvalue-address-rules)" \
+    --report "$(artifact_path setnewvalue-address-ledger)" \
+    --write-ownership-ledger "$ADDRESS_OWNERSHIP" "${ADDRESS_LEDGER_ARGS[@]}"
+
+
 echo
 echo ">> differential expression oracle (must PASS before conversion rollout)"
 # R2's non-negotiable ordering: codegen receives a PASS-only ledger, never a
@@ -153,25 +178,6 @@ python3 "$HERE/raw_jfif_codegen.py" "$RAW_JFIF_FACT" \
     --output "$(artifact_path raw-jfif-rules)" \
     --report "$(artifact_path raw-jfif-ledger)"
 
-echo
-echo ">> generating authenticated SetNewValue address operands"
-ADDRESS_ROWS="$CACHE/setnewvalue-address-rows-$VERSION.json"
-ADDRESS_REPORT="$CACHE/setnewvalue-address-report-$VERSION.json"
-ADDRESS_OBSERVATIONS="$CACHE/setnewvalue-address-observations-$VERSION.json"
-ADDRESS_OWNERSHIP="$(artifact_path setnewvalue-ownership-ledger)"
-python3 "$HERE/setnewvalue_addressing.py" "$JSON" \
-    --rows "$ADDRESS_ROWS" --report "$ADDRESS_REPORT"
-"$PERL" "$HERE/setnewvalue_address_probe.pl" "$LIB" "$ADDRESS_ROWS" > "$ADDRESS_OBSERVATIONS"
-ADDRESS_LEDGER_ARGS=(--ownership-ledger "$ADDRESS_OWNERSHIP")
-if [[ ! -f "$ADDRESS_OWNERSHIP" ]]; then
-    # Bootstrap is an explicit one-time creation path only. Later regenerations
-    # validate and carry forward the committed ownership history.
-    ADDRESS_LEDGER_ARGS=(--bootstrap-ownership-ledger)
-fi
-python3 "$HERE/setnewvalue_address_rust_codegen.py" "$JSON" "$ADDRESS_OBSERVATIONS" \
-    --output "$(artifact_path setnewvalue-address-rules)" \
-    --report "$(artifact_path setnewvalue-address-ledger)" \
-    --write-ownership-ledger "$ADDRESS_OWNERSHIP" "${ADDRESS_LEDGER_ARGS[@]}"
 
 echo
 echo ">> generating composed public SetNewValue migration ownership"
