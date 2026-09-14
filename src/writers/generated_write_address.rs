@@ -102,6 +102,35 @@ fn same_source_physical(a: &StaticSetNewValueAddress, b: &StaticSetNewValueAddre
         && a.write_group == b.write_group
 }
 
+/// `FindTagInfo` has a global namespace, but `WriteExif` later asks for a
+/// NEW_VALUE through the concrete table for the directory being written.  A
+/// same-named tag in a different source table therefore cannot address this
+/// generated EXIF row.  Keep this identity comparison complete: a numeric ID
+/// or group coincidence is not a physical-table match.
+fn same_native_identity(
+    candidate: &StaticNativeLookupCandidate,
+    row: &StaticSetNewValueAddress,
+) -> bool {
+    candidate.module == Some(row.module)
+        && candidate.table == Some(row.table)
+        && candidate.full_name == Some(row.full_name)
+        && candidate.raw_id == row.raw_id
+        && candidate.name.eq_ignore_ascii_case(row.name)
+}
+
+fn shares_source_table(
+    candidate: &StaticNativeLookupCandidate,
+    row: &StaticSetNewValueAddress,
+) -> bool {
+    candidate.module == Some(row.module)
+        && candidate.table == Some(row.table)
+        && candidate.full_name == Some(row.full_name)
+}
+
+fn has_complete_source_table_identity(candidate: &StaticNativeLookupCandidate) -> bool {
+    candidate.module.is_some() && candidate.table.is_some() && candidate.full_name.is_some()
+}
+
 fn same_physical(a: &SelectedAddress<'_>, b: &SelectedAddress<'_>) -> bool {
     same_source_physical(a.row, b.row) && a.selected_group == b.selected_group
 }
@@ -158,14 +187,35 @@ pub(crate) fn resolve<'a>(key: &str, rules: &AddressRules<'a>) -> Resolution<'a>
         matches += 1;
         source_identity_present |= candidate.source_identity_present;
         let Some(index) = candidate.row_index else {
-            external = true;
+            // A known different table is not a second physical field in the
+            // selected EXIF directory.  This is how native `SetNewValue`
+            // can queue the same spelling for, for example, Exif::Main and
+            // PanasonicRaw::Main while WriteExif applies only the entry from
+            // the directory's concrete table.  An unknown or same-table
+            // candidate stays terminal: filtering must never hide an
+            // ungenerated physical EXIF field or an unsupported control.
+            if !candidate.source_identity_present || !has_complete_source_table_identity(candidate)
+            {
+                external = true;
+            } else if rows.iter().any(|row| shares_source_table(candidate, row)) {
+                external = true;
+            }
             continue;
         };
         let Some(row) = rows.get(index) else {
             return Resolution::Unsupported("generated lookup index is out of bounds");
         };
-        if row.index != index || !candidate.source_identity_present {
+        if row.index != index
+            || !candidate.source_identity_present
+            || !same_native_identity(candidate, row)
+        {
             return Resolution::Unsupported("generated lookup identity is inconsistent");
+        }
+        // `Writable` may be inherited from the selected table, so an absent
+        // per-tag value is not by itself a refusal.  `Permanent` changes
+        // delete semantics, which this scalar route does not model.
+        if candidate.permanent {
+            return Resolution::Unsupported("generated lookup has unsupported write controls");
         }
         if selected.is_some_and(|prior| !same_source_physical(prior, row)) {
             return Resolution::Unsupported("native lookup selects multiple physical fields");
@@ -334,6 +384,16 @@ mod tests {
             value: "Other",
         },
     ];
+    const EXIF_DIRECTORY: &[StaticNativeLookupFamily] = &[
+        StaticNativeLookupFamily {
+            family: 0,
+            value: "EXIF",
+        },
+        StaticNativeLookupFamily {
+            family: 1,
+            value: "IFD0",
+        },
+    ];
     const SCOPE: &[StaticSetNewValueQualifierScope] = &[
         StaticSetNewValueQualifierScope {
             family: 0,
@@ -367,7 +427,35 @@ mod tests {
             name: "field",
             row_index: index,
             source_identity_present: index.is_some(),
+            module: index.map(|_| "Fixture"),
+            table: index.map(|_| "Main"),
+            full_name: index.map(|_| "Image::ExifTool::Fixture::Main"),
+            raw_id: "123",
+            writable: index.map(|_| "string"),
+            permanent: false,
+            write_group: index.map(|_| "Directory"),
             groups,
+        }
+    }
+
+    const fn foreign_candidate(
+        module: &'static str,
+        table: &'static str,
+        full_name: &'static str,
+        raw_id: &'static str,
+    ) -> StaticNativeLookupCandidate {
+        StaticNativeLookupCandidate {
+            name: "field",
+            row_index: None,
+            source_identity_present: true,
+            module: Some(module),
+            table: Some(table),
+            full_name: Some(full_name),
+            raw_id,
+            writable: Some("string"),
+            permanent: false,
+            write_group: Some("IFD0"),
+            groups: EXIF_DIRECTORY,
         }
     }
 
@@ -450,6 +538,74 @@ mod tests {
     }
 
     #[test]
+    fn explicit_exif_directory_ignores_a_known_foreign_table_but_not_a_same_table_field() {
+        let rows = [row(0, "Field", "123")];
+        let lookup = [
+            candidate(Some(0), EXIF_DIRECTORY),
+            foreign_candidate("Other", "Main", "Image::ExifTool::Other::Main", "123"),
+        ];
+        let rules = AddressRules {
+            explicit_directories: &["IFD1"],
+            qualifier_scope: SCOPE,
+            rows: Some(&rows),
+            lookup: &lookup,
+            owned_names: &["field"],
+        };
+        assert!(matches!(
+            resolve("IFD1:Field", &rules),
+            Resolution::Resolved(row) if row.raw_id == "123"
+        ));
+
+        let lookup = [
+            candidate(Some(0), EXIF_DIRECTORY),
+            foreign_candidate("Fixture", "Main", "Image::ExifTool::Fixture::Main", "456"),
+        ];
+        let rules = AddressRules {
+            explicit_directories: &["IFD1"],
+            qualifier_scope: SCOPE,
+            rows: Some(&rows),
+            lookup: &lookup,
+            owned_names: &["field"],
+        };
+        assert!(matches!(
+            resolve("IFD1:Field", &rules),
+            Resolution::Unsupported(_)
+        ));
+    }
+
+    #[test]
+    fn indexed_lookup_requires_full_identity_and_supported_controls() {
+        let rows = [row(0, "Field", "123")];
+        let mut mismatched = candidate(Some(0), FAMILY);
+        mismatched.raw_id = "456";
+        let rules = AddressRules {
+            explicit_directories: &[],
+            qualifier_scope: SCOPE,
+            rows: Some(&rows),
+            lookup: &[mismatched],
+            owned_names: &["field"],
+        };
+        assert!(matches!(
+            resolve("Field", &rules),
+            Resolution::Unsupported(_)
+        ));
+
+        let mut permanent = candidate(Some(0), FAMILY);
+        permanent.permanent = true;
+        let rules = AddressRules {
+            explicit_directories: &[],
+            qualifier_scope: SCOPE,
+            rows: Some(&rows),
+            lookup: &[permanent],
+            owned_names: &["field"],
+        };
+        assert!(matches!(
+            resolve("Field", &rules),
+            Resolution::Unsupported(_)
+        ));
+    }
+
+    #[test]
     fn missing_rules_and_retired_names_cannot_fall_back() {
         let rules = AddressRules {
             explicit_directories: &[],
@@ -467,6 +623,13 @@ mod tests {
             name: "renamed",
             row_index: Some(0),
             source_identity_present: true,
+            module: Some("Fixture"),
+            table: Some("Main"),
+            full_name: Some("Image::ExifTool::Fixture::Main"),
+            raw_id: "456",
+            writable: Some("string"),
+            permanent: false,
+            write_group: Some("Directory"),
             groups: FAMILY,
         }];
         let rules = AddressRules {
