@@ -85,6 +85,15 @@ def encrypted_callback(data, decrypt_body="canonical decrypt body"):
 
 
 class NikonEncryptedGeneratorTests(unittest.TestCase):
+    def test_map_insertion_order_does_not_change_generated_output(self):
+        first = fixture()
+        second = fixture()
+        values = second["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["PrintConv"]["map"]
+        second["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["PrintConv"]["map"] = {
+            key: values[key] for key in reversed(list(values))
+        }
+        self.assertEqual(generator.render(first), generator.render(second))
+
     def test_rebound_decrypt_helper_refuses_unchanged_callback(self):
         data = fixture()
         callback_pair, decrypt_pair, callback = encrypted_callback(data)

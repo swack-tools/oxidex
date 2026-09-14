@@ -46,28 +46,23 @@ CODE = {
 NIKON_ENCRYPTED_CALLBACKS = {
  ('Image::ExifTool::Nikon::ProcessNikonEncrypted','2eaf021035b51e5f8f0577a76420d0d217e3d52d14596fd10c8ff8a53532706b'): {
   'source_file':'Image/ExifTool/Nikon.pm',
-  'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
   'dependencies': {
    'Image::ExifTool::Nikon::Decrypt': {
     'body_sha256':'b373a90204cb00e317f330a1a8432a75668e027641088a97a7ede89e2c91326d',
     'source_file':'Image/ExifTool/Nikon.pm',
-    'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
    },
    'Image::ExifTool::Nikon::InitEncryptedSubdir': {
     'body_sha256':'ceecb4b7085857c703fecfd2fa870ac293f9a2d75b67e8572f26dc82af0df6e8',
     'source_file':'Image/ExifTool/Nikon.pm',
-    'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
    },
    'Image::ExifTool::Nikon::PrepareNikonOffsets': {
     'body_sha256':'437fd2d08043ac213b639560c4a037b4fa0f3950745c07211ae3caa0a381bea5',
     'source_file':'Image/ExifTool/Nikon.pm',
-    'source_sha256':'9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298',
    },
    'Image::ExifTool::Nikon::SetByteOrder': {
     'name':'Image::ExifTool::SetByteOrder',
     'body_sha256':'ab615336391af90d9ab9b1e146cdcc6fb76bc20e096a3a2afb72d798da5f13d4',
     'source_file':'Image/ExifTool.pm',
-    'source_sha256':'95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508',
    },
   },
  },
@@ -154,7 +149,7 @@ def encrypted_callback(v):
  name=code(v); pair=(name,hashlib.sha256(v['__deparse'].encode()).hexdigest())
  expected=NIKON_ENCRYPTED_CALLBACKS.get(pair)
  if expected is None: fail(f'unregistered encrypted callback: {name!r}')
- if v['source_file']!=expected['source_file'] or v['source_sha256']!=expected['source_sha256']:
+ if v['source_file']!=expected['source_file']:
   fail(f'{name}: source provenance changed')
  deps=v.get('dependencies')
  if not isinstance(deps,dict): fail(f'{name}: missing helper dependencies')
@@ -167,9 +162,10 @@ def encrypted_callback(v):
   actual=code(fact)
   digest=hashlib.sha256(fact['__deparse'].encode()).hexdigest()
   if (actual!=contract.get('name',helper) or digest!=contract['body_sha256']
-      or fact['source_file']!=contract['source_file']
-      or fact['source_sha256']!=contract['source_sha256']):
+      or fact['source_file']!=contract['source_file']):
    fail(f'{name}: unregistered helper body or source {helper!r} {digest}')
+  if fact['source_file']=='Image/ExifTool/Nikon.pm' and fact['source_sha256']!=v['source_sha256']:
+   fail(f'{name}: Nikon helper source is not from the callback capture')
   if helper=='Image::ExifTool::Nikon::Decrypt': decrypt_lookup=decrypt_xlat(fact)
  if decrypt_lookup is None: fail(f'{name}: missing Decrypt lookup closure')
  return name,decrypt_lookup

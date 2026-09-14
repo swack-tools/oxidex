@@ -230,7 +230,9 @@ mod tests {
 use std::collections::HashMap;
 
 use super::binary_data::{Ctx, Root, process, select_root};
-use super::encrypted_tables::{COLOR_BALANCE_ROOTS, LENS_DATA_ROOTS, SHOT_INFO_ROOTS, XLAT0, XLAT1};
+use super::encrypted_tables::{
+    COLOR_BALANCE_ROOTS, LENS_DATA_ROOTS, SHOT_INFO_ROOTS, XLAT0, XLAT1,
+};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// The two pre-scanned key tags, already reduced to ExifTool's key integers.
