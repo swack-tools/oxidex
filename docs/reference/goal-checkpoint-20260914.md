@@ -32,6 +32,14 @@ python3 tools/exiftool-tables/quicktime_baseline.py --check-fixtures
 python3 -m unittest discover -s tools/exiftool-tables -p 'test_quicktime*.py'
 ```
 
+Reconcile this branch with refactor/tag-machinery and the numeric checkpoint,
+regenerate every joined artifact from one canonical capture, then run the
+combined gate. Numeric work is based on an earlier writer snapshot: do not
+replace full source-closure ledgers with its older ledgers during integration.
+The retained numeric scalar, IFD1, mandatory-directory and 19-target matrix
+work therefore remains unverified until that combined regeneration completes.
+The historical checkpoint carries additional version profiles and adapters.
+
 Replace `--check` with `--replace` to regenerate both reports. Existing outputs
 require explicit replacement; outputs can never alias the input snapshot. The
 selector prints the standard instrument header and refuses an unexplained dirty

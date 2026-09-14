@@ -55,6 +55,7 @@ class Addressing:
     query_names_sha256: str
     capture_context: Mapping[str, Any]
     qualifier_scope: tuple[tuple[int, str], ...]
+    explicit_directories: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,27 @@ class Resolution:
     state: str
     row: AddressRow | None = None
     reason: str | None = None
+    selected_group: str | None = None
+
+
+@dataclass(frozen=True)
+class NativeLookupCandidate:
+    """One native FindTagInfo result; identity is never inferred from groups."""
+    module: str | None
+    table: str | None
+    full_name: str | None
+    raw_id: str
+    name: str
+    groups: tuple[tuple[int, str], ...]
+    writable: str | None
+    permanent: bool
+    write_group: str | None
+
+    @property
+    def identity(self) -> tuple[str, str, str, str, str] | None:
+        if None in (self.module, self.table, self.full_name):
+            return None
+        return self.module, self.table, self.full_name, self.raw_id, self.name
 
 
 def _mapping(value: Any, context: str) -> Mapping[str, Any]:
@@ -241,6 +263,19 @@ def _owned_names(document: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def compile_explicit_directories(document: Mapping[str, Any]) -> tuple[str, ...]:
+    setnew = _mapping(_mapping(document.get("native_write_helpers"), "native_write_helpers").get("set_new_value"), "SetNewValue")
+    compile_setnewvalue_convinv(setnew)
+    # The full SetNewValue grammar proves the assignment, its guards,
+    # and the later family-1 override. Extract its directory spelling operand;
+    # the carrier supports the first two IFDs of this source-recognized family.
+    directory_match = re.search(r'if \((/[^;\n]+/i)\) \{\s*\(\$grpName = \(\$ifdName = "([A-Za-z]+)\$1"\)\);', setnew['__deparse'])
+    if (not directory_match or directory_match[1].replace(" ", "") != '/^' + directory_match[2] + r'(\d+)$/i'):
+        raise RecipeRefused("source explicit IFD directory operand is unsupported")
+    explicit_directories = tuple(directory_match[2] + str(index) for index in (0, 1))
+    return explicit_directories
+
+
 def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[str, Any]]:
     """Compile rows only after both native caller and lookup sources match."""
     document = _mapping(document, "document")
@@ -253,6 +288,7 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
         setnew, "Image::ExifTool::SetNewValue", context="SetNewValue")
     if setnew_actual != "Image::ExifTool::SetNewValue":
         raise RecipeRefused("SetNewValue is rebound")
+    explicit_directories = compile_explicit_directories(document)
     lookup_actual, source_file, source_sha256, body_sha256 = _find_tag_info_source(document)
     if lookup_actual != "Image::ExifTool::TagLookup::FindTagInfo":
         raise RecipeRefused("FindTagInfo is rebound")
@@ -278,7 +314,7 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
                        _address_rows_digest(address_rows), _query_names_digest(owned_names),
                        capture_context,
                        tuple(sorted({(0, row.group0) for row in address_rows} |
-                                    {(1, row.group1) for row in address_rows})))
+                                    {(1, row.group1) for row in address_rows})), explicit_directories)
     return result, {
         "runtime_status": RUNTIME_STATUS,
         "rows_emitted": len(result.rows),
@@ -315,10 +351,40 @@ def _candidate_identity(value: Mapping[str, Any]) -> tuple[str, str, str, str, s
     return fields if all(isinstance(item, str) for item in fields) else None
 
 
+def native_candidate(value: Mapping[str, Any]) -> NativeLookupCandidate:
+    """Validate the lossless v3 probe operand before any route projection."""
+    value = _mapping(value, "native lookup candidate")
+    name, raw_id = value.get("name"), value.get("raw_id")
+    if not isinstance(name, str) or not isinstance(raw_id, str):
+        raise RecipeMalformed("native lookup candidate lacks name/raw_id")
+    identity = tuple(value.get(key) for key in ("module", "table", "full_name"))
+    if any(item is not None and not isinstance(item, str) for item in identity):
+        raise RecipeMalformed("native lookup candidate identity is malformed")
+    if any(item is None for item in identity) and any(item is not None for item in identity):
+        raise RecipeRefused("native lookup candidate has incomplete table identity")
+    groups = value.get("groups")
+    if not isinstance(groups, Mapping):
+        raise RecipeMalformed("native lookup candidate lacks groups")
+    parsed_groups = tuple(sorted((int(k), v) for k, v in groups.items()
+                                 if isinstance(k, str) and k.isdecimal() and isinstance(v, str)))
+    if len(parsed_groups) != len(groups):
+        raise RecipeMalformed("native lookup candidate groups are malformed")
+    writable, write_group, permanent = value.get("writable"), value.get("write_group"), value.get("permanent")
+    if writable is not None and not isinstance(writable, str):
+        raise RecipeMalformed("native lookup candidate writable is malformed")
+    if write_group is not None and not isinstance(write_group, str):
+        raise RecipeMalformed("native lookup candidate write group is malformed")
+    if permanent is None:
+        permanent = False # v2 synthetic fixtures; live v3 probe always emits it
+    if type(permanent) is not bool:
+        raise RecipeMalformed("native lookup candidate permanent is malformed")
+    return NativeLookupCandidate(*identity, raw_id, name, parsed_groups, writable, permanent, write_group)
+
+
 def observation_input(addressing: Addressing) -> dict[str, Any]:
     """The sealed payload accepted by the canonical native probe."""
     return {
-        "schema": "native_setnewvalue_address_probe_input_v2",
+        "schema": "native_setnewvalue_address_probe_input_v3",
         "capture": _observation_capture(addressing),
         "rows": [asdict(row) for row in addressing.rows],
         "query_names": sorted(addressing.owned_names),
@@ -349,7 +415,7 @@ def _observation_capture(addressing: Addressing) -> dict[str, Any]:
 
 def _validate_observations(addressing: Addressing, observations: Mapping[str, Any]) -> Mapping[str, Any]:
     observations = _mapping(observations, "native lookup observations")
-    if observations.get("schema") != "native_setnewvalue_addressing_v2":
+    if observations.get("schema") not in {"native_setnewvalue_addressing_v2", "native_setnewvalue_addressing_v3"}:
         raise RecipeMalformed("native lookup observations have unknown schema")
     capture = _mapping(observations.get("capture"), "native lookup observations.capture")
     if capture != _observation_capture(addressing):
@@ -398,6 +464,7 @@ def _observed_candidates(addressing: Addressing, observations: Mapping[str, Any]
         raise RecipeMalformed("native lookup observation is malformed")
     candidates = [_mapping(item, "native lookup candidate") for item in query["candidates"]]
     for candidate in candidates:
+        native_candidate(candidate)
         if not isinstance(candidate.get("name"), str) or candidate["name"].lower() != name.lower():
             raise RecipeMalformed("native lookup candidate name does not match its query")
     return candidates
@@ -436,6 +503,7 @@ def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) 
     selected = []
     external = 0
     wanted = group.lower() if group is not None else None
+    explicit = next((directory for directory in addressing.explicit_directories if directory.lower() == wanted), None)
     matched_native = 0
     matched_external = 0
     matched_generated = 0
@@ -446,7 +514,8 @@ def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) 
         if not isinstance(groups, Mapping):
             raise RecipeMalformed("native lookup candidate lacks groups")
         if group is not None:
-            matches = any(isinstance(value, str) and value.lower() == wanted for value in groups.values())
+            matches = (groups.get("0") == "EXIF" if explicit else
+                       any(isinstance(value, str) and value.lower() == wanted for value in groups.values()))
             if not matches:
                 continue
             matched_native += 1
@@ -460,7 +529,7 @@ def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) 
     # owned by this EXIF/IFD0 migration, even when its bare spelling collides
     # with a source-owned EXIF field.  The unqualified spelling remains
     # terminal because native ambiguity is real.
-    if group is not None and wanted not in {"exif", "ifd0"}:
+    if group is not None and wanted not in {"exif", "ifd0"} and explicit is None:
         if matched_native and matched_generated == 0 and matched_external == matched_native:
             return Resolution("outside_migrated_scope", reason="qualified native lookup selects only an unmigrated group")
         return Resolution("owned_unsupported", reason="group qualifier is outside EXIF/IFD0 subset")
@@ -471,25 +540,33 @@ def resolve(addressing: Addressing, observations: Mapping[str, Any], text: str) 
         return Resolution("owned_unsupported", reason="qualifier does not select a generated row")
     if len(unique) != 1:
         return Resolution("owned_unsupported", reason="native lookup remains ambiguous")
-    return Resolution("resolved", row=next(iter(unique.values())))
+    row = next(iter(unique.values()))
+    return Resolution("resolved", row=row, selected_group=explicit or row.write_group)
+
+
+@dataclass(frozen=True)
+class SelectedAddress:
+    row: AddressRow
+    selected_group: str
 
 
 def resolve_batch(addressing: Addressing, observations: Mapping[str, Any],
-                  requests: Mapping[str, Any]) -> tuple[tuple[tuple[AddressRow, Any], ...], tuple[Resolution, ...]]:
+                  requests: Mapping[str, Any]) -> tuple[tuple[tuple[SelectedAddress, Any], ...], tuple[Resolution, ...]]:
     """Resolve aliases and reject conflicting writes to one physical identity."""
-    accepted: dict[tuple[str, str, str, str, str], tuple[AddressRow, Any]] = {}
+    accepted: dict[tuple[str, ...], tuple[SelectedAddress, Any]] = {}
     failures = []
     for text, value in requests.items():
         answer = resolve(addressing, observations, text)
         if answer.state != "resolved" or answer.row is None:
             failures.append(answer)
             continue
-        prior = accepted.get(answer.row.identity)
+        identity = (*answer.row.identity, answer.selected_group)
+        prior = accepted.get(identity)
         if prior is not None and prior[1] != value:
             failures.append(Resolution("owned_unsupported", row=answer.row,
                                        reason="conflicting duplicate requests resolve to one physical field"))
             continue
-        accepted[answer.row.identity] = (answer.row, value)
+        accepted[identity] = (SelectedAddress(answer.row, answer.selected_group), value)
     # This is an atomic admission API.  A caller may not send the earlier
     # accepted operands after one alias is rejected; otherwise a conflicting
     # duplicate request could partially write a file.

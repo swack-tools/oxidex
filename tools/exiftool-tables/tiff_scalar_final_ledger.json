@@ -217,12 +217,8 @@
       "reason": "row has unmodeled final-stage properties"
     },
     {
-      "raw_id": "11",
-      "reason": "row has unmodeled final-stage properties"
-    },
-    {
       "raw_id": "254",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row DataMember activates a RawConv branch outside this specialization"
     },
     {
       "raw_id": "255",
@@ -242,7 +238,7 @@
     },
     {
       "raw_id": "259",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row DataMember activates a RawConv branch outside this specialization"
     },
     {
       "raw_id": "262",
@@ -270,11 +266,11 @@
     },
     {
       "raw_id": "271",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row DataMember activates a RawConv branch outside this specialization"
     },
     {
       "raw_id": "272",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row DataMember activates a RawConv branch outside this specialization"
     },
     {
       "raw_id": "273",
@@ -297,32 +293,8 @@
       "reason": "row is not a physical HASH u16 entry"
     },
     {
-      "raw_id": "280",
-      "reason": "row Writable format is outside generated scalar WriteValue formats"
-    },
-    {
-      "raw_id": "281",
-      "reason": "row Writable format is outside generated scalar WriteValue formats"
-    },
-    {
-      "raw_id": "282",
-      "reason": "row has unmodeled final-stage properties"
-    },
-    {
-      "raw_id": "283",
-      "reason": "row has unmodeled final-stage properties"
-    },
-    {
       "raw_id": "284",
       "reason": "row has unmodeled final-stage properties"
-    },
-    {
-      "raw_id": "286",
-      "reason": "row Writable format is outside generated scalar WriteValue formats"
-    },
-    {
-      "raw_id": "287",
-      "reason": "row Writable format is outside generated scalar WriteValue formats"
     },
     {
       "raw_id": "288",
@@ -366,14 +338,10 @@
     },
     {
       "raw_id": "305",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row DataMember activates a RawConv branch outside this specialization"
     },
     {
       "raw_id": "306",
-      "reason": "row has unmodeled final-stage properties"
-    },
-    {
-      "raw_id": "315",
       "reason": "row has unmodeled final-stage properties"
     },
     {
@@ -1205,10 +1173,6 @@
       "reason": "row has unmodeled final-stage properties"
     },
     {
-      "raw_id": "34118",
-      "reason": "row has unmodeled final-stage properties"
-    },
-    {
       "raw_id": "34152",
       "reason": "row has unmodeled final-stage properties"
     },
@@ -1970,7 +1934,7 @@
     },
     {
       "raw_id": "50706",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row DataMember activates a RawConv branch outside this specialization"
     },
     {
       "raw_id": "50707",
@@ -2078,10 +2042,6 @@
     },
     {
       "raw_id": "50734",
-      "reason": "row has unmodeled final-stage properties"
-    },
-    {
-      "raw_id": "50735",
       "reason": "row has unmodeled final-stage properties"
     },
     {
@@ -2482,11 +2442,11 @@
     },
     {
       "raw_id": "52554",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row Writable format is outside generated scalar WriteValue formats"
     },
     {
       "raw_id": "52555",
-      "reason": "row has unmodeled final-stage properties"
+      "reason": "row Writable format is outside generated scalar WriteValue formats"
     },
     {
       "raw_id": "52897",
@@ -2567,6 +2527,26 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "ProcessingSoftware",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 11,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "string",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "string",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "DocumentName",
       "physical_write_group": "IFD0",
@@ -2575,7 +2555,84 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "int16u",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "MinSampleValue",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 280,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "int16u",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "int16u",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "MaxSampleValue",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 281,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "int16u",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "rational64u",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "XResolution",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 282,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "rational64u",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "rational64u",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "YResolution",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 283,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "rational64u",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
       "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
@@ -2584,6 +2641,7 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "PageName",
       "physical_write_group": "IFD0",
@@ -2592,6 +2650,64 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "string",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "rational64u",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "XPosition",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 286,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "rational64u",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "rational64u",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "YPosition",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 287,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "rational64u",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "string",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "Artist",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 315,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2601,6 +2717,7 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "HostComputer",
       "physical_write_group": "IFD0",
@@ -2609,6 +2726,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2618,6 +2736,7 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "TargetPrinter",
       "physical_write_group": "IFD0",
@@ -2626,6 +2745,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2635,6 +2755,26 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "SEMInfo",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 34118,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "string",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "string",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "GDALMetadata",
       "physical_write_group": "IFD0",
@@ -2643,6 +2783,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2652,6 +2793,7 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "GDALNoData",
       "physical_write_group": "IFD0",
@@ -2660,6 +2802,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2669,6 +2812,7 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "UniqueCameraModel",
       "physical_write_group": "IFD0",
@@ -2677,6 +2821,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2686,6 +2831,26 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "module": "Exif",
+      "name": "CameraSerialNumber",
+      "physical_write_group": "IFD0",
+      "raw_tag_id": 50735,
+      "registry_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+      "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
+      "table": "Main",
+      "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
+      "wire_format": "string",
+      "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
+      "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
+      "writer_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    {
+      "conversion_format": "string",
+      "count_rule": "CeilDivision",
+      "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "ReelName",
       "physical_write_group": "IFD0",
@@ -2694,6 +2859,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",
@@ -2703,6 +2869,7 @@
       "conversion_format": "string",
       "count_rule": "CeilDivision",
       "full_name": "Image::ExifTool::Exif::Main",
+      "main_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
       "module": "Exif",
       "name": "CameraLabel",
       "physical_write_group": "IFD0",
@@ -2711,6 +2878,7 @@
       "source_control_sha256": "267d091ed85ce88c1ceb8075cb598dd01ea46ec039c7d2ab72368c2761712882",
       "table": "Main",
       "table_group0": "EXIF",
+      "undefined_rule": "DeleteEntry",
       "wire_format": "string",
       "write_proc_body_sha256": "473e70a85d393ee88b218a60389fc5007649ff0eb9ff82819deea474eb751b9e",
       "write_proc_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533",

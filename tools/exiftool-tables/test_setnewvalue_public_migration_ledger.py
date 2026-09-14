@@ -45,8 +45,8 @@ def row(name: str, raw_id: str, *, write_group: str = "IFD0") -> AddressRow:
 
 def recipe(name: str, raw_id: int, *, write_group: str = "IFD0", control: str = h("3")) -> FinalScalarRecipe:
     return FinalScalarRecipe("Exif", "Main", "Image::ExifTool::Exif::Main", raw_id,
-                             name, "EXIF", write_group, "int16u", "int16u", "CeilDivision",
-                             control, h("4"), h("b"), h("d"), h("c"))
+                             name, "EXIF", write_group, "int16u", "int16u", "CeilDivision", "DeleteEntry",
+                             control, h("4"), h("b"), h("d"), h("c"), h("a"))
 
 
 class PublicMigrationLedgerTest(unittest.TestCase):
@@ -80,7 +80,7 @@ class PublicMigrationLedgerTest(unittest.TestCase):
     def test_rename_keeps_old_identity_terminal_and_new_identity_current(self):
         source1, current1 = self.current([row("OldName", "315")], [recipe("OldName", 315)])
         prior = build_from_current(source1, current1, None, bootstrap=True)
-        source2, current2 = self.current([row("NewName", "315")], [recipe("NewName", 315)],
+        source2, current2 = self.current([row("NewName", "315")], [replace(recipe("NewName", 315), main_source_sha256=h("7"))],
                                          {**CAPTURE, "exiftool_version": "13.60", "main_source_sha256": h("7")})
         upgraded = build_from_current(source2, current2, prior, bootstrap=False)
         self.assertEqual([(entry["name"], entry["state"]) for entry in upgraded["entries"]],
@@ -89,7 +89,7 @@ class PublicMigrationLedgerTest(unittest.TestCase):
     def test_typechange_is_current_with_new_semantics_history(self):
         source1, current1 = self.current([row("Artist", "315")], [recipe("Artist", 315)])
         prior = build_from_current(source1, current1, None, bootstrap=True)
-        changed = recipe("Artist", 315, control=h("5"))
+        changed = replace(recipe("Artist", 315, control=h("5")), main_source_sha256=h("6"))
         source2, current2 = self.current([row("Artist", "315")], [changed],
                                          {**CAPTURE, "exiftool_version": "13.60", "main_source_sha256": h("6")})
         upgraded = build_from_current(source2, current2, prior, bootstrap=False)
@@ -128,6 +128,10 @@ class PublicMigrationLedgerTest(unittest.TestCase):
         bad = {**ledger, "entries": [{**ledger["entries"][0], "name": "Injected"}]}
         with self.assertRaisesRegex(RecipeRefused, "digest"):
             validate_ledger(bad)
+
+    def test_final_core_source_must_join_address_capture(self):
+        with self.assertRaisesRegex(RecipeRefused, "core source"):
+            self.current([row("Artist", "315")], [replace(recipe("Artist", 315), main_source_sha256=h("f"))])
 
     def test_same_source_is_byte_for_byte_noop(self):
         source, current = self.current([row("Artist", "315")], [recipe("Artist", 315)])

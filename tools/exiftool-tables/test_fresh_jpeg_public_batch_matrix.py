@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fresh_jpeg_public_batch_matrix as matrix
@@ -96,6 +97,33 @@ class FreshJpegPublicBatchMatrixTests(unittest.TestCase):
         self.assertEqual(set(request), {"route", "carrier", "input", "output", "batch"})
         self.assertTrue(all(set(item).issubset({"key", "scalar", "value"}) for item in request["batch"]))
         self.assertNotIn("key", request)
+
+    def test_comparison_ignores_storage_relocation_but_rejects_storage_mutation(self) -> None:
+        target = GeneratedTarget(0x010D, "Target", "EXIF", "IFD0")
+        mandatory = matrix.MandatoryCandidate(0x0103, "Mandatory", "EXIF", "IFD0", "IFD0", 6, 5)
+        spec = {"target_present": True, "mandatory_state": "present"}
+        source = {"sos_to_end_sha256": "scan", "non_exif_sha256": "non-exif", "exif": {"tags": {}}}
+        native_document = {
+            "sos_to_end_sha256": "scan", "non_exif_sha256": "non-exif",
+            "exif": {"tags": {
+                "269": {"type": 2, "count": 4, "value_hex": "tag00", "value_offset": 38},
+                "259": {"type": 3, "count": 1, "value_hex": "0500", "value_offset": 50},
+            }},
+        }
+        relocated = __import__("copy").deepcopy(native_document)
+        relocated["exif"]["tags"]["269"]["value_offset"] = 164
+        relocated["exif"]["tags"]["259"]["value_offset"] = 176
+        with (patch.object(matrix.native, "parse_jpeg", side_effect=(source, native_document, relocated)),
+              patch.object(matrix, "jfif_payloads", side_effect=((), (), ())),
+              patch.object(matrix, "_compare_tiff")):
+            matrix.compare_batch(Path("source"), Path("native"), Path("generated"), target, mandatory, spec)
+        changed = __import__("copy").deepcopy(relocated)
+        changed["exif"]["tags"]["269"]["value_hex"] = "bad00"
+        with (patch.object(matrix.native, "parse_jpeg", side_effect=(source, native_document, changed)),
+              patch.object(matrix, "jfif_payloads", side_effect=((), (), ())),
+              patch.object(matrix, "_compare_tiff"),
+              self.assertRaisesRegex(AssertionError, "target transition")):
+            matrix.compare_batch(Path("source"), Path("native"), Path("generated"), target, mandatory, spec)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ import sys
 from typing import Any
 
 import native_write_matrix as native
-from generated_tiff_write_matrix import DRIVER, GeneratedTarget, compare_carrier, generated_targets
+from generated_tiff_write_matrix import DRIVER, GeneratedTarget, compare_carrier, generated_targets, target_text
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -70,13 +70,13 @@ def batch_case(target: GeneratedTarget, case: str) -> dict[str, Any]:
     # spelling is the alias used to exercise the public resolver.
     seed = [
         native_item(artist, scalar_value("seed-artist")),
-        native_item(physical_name, scalar_value("seed-target")),
+        native_item(physical_name, scalar_value(target_text(target, "seed-target", numeric="73"))),
         native_item("IFD0:Software", scalar_value("unrelated-software")),
     ]
     if case == "mixed_legacy_generated":
         # This keeps a true Unicode scalar in the mixed transaction; the
         # native batch record must show a UTF-8-flagged SetNewValue operand.
-        encoded = scalar_value("mixed-é")
+        encoded = scalar_value(target_text(target, "mixed-é"))
         return {
             "seed": seed,
             "native": [native_item(artist, scalar_value("artist-mixed")), native_item(table_name, encoded)],
@@ -85,7 +85,7 @@ def batch_case(target: GeneratedTarget, case: str) -> dict[str, Any]:
             "expect_ok": True,
         }
     if case == "alias_replacement":
-        encoded = scalar_value("alias-replacement")
+        encoded = scalar_value(target_text(target, "alias-replacement"))
         return {
             "seed": seed,
             # SetNewValue resolves these names to one physical entry; the
@@ -104,7 +104,7 @@ def batch_case(target: GeneratedTarget, case: str) -> dict[str, Any]:
             "expect_ok": True,
         }
     if case == "conflicting_aliases":
-        first, second = scalar_value("alias-first"), scalar_value("alias-second")
+        first, second = scalar_value(target_text(target, "alias-first", numeric="300")), scalar_value(target_text(target, "alias-second", numeric="600"))
         return {
             "seed": seed,
             "native": [native_item(artist, scalar_value("artist-conflict")), native_item(table_name, first), native_item(physical_name, second)],
@@ -114,7 +114,7 @@ def batch_case(target: GeneratedTarget, case: str) -> dict[str, Any]:
             "failure": "conflicting aliases",
         }
     if case == "forged_generated_identity_after_legacy":
-        encoded = scalar_value("after-legacy")
+        encoded = scalar_value(target_text(target, "after-legacy"))
         return {
             "seed": seed,
             "native": [native_item(artist, scalar_value("artist-before-refusal")), native_item(table_name, encoded)],
