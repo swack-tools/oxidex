@@ -102,7 +102,7 @@ class MandatoryTests(unittest.TestCase):
             # changes the B::Deparse fragment and closed admission refuses.
             target.write_text(body.replace('$mandatory = $mandatory{$dirName} unless $noMandatory;',
                                            '$mandatory = $mandatory{$dirName};'))
-            with self.assertRaisesRegex(MandatoryRefused, '(executable new-directory flow|executable body review hash)'):
+            with self.assertRaisesRegex(MandatoryRefused, '(executable new-directory flow|profile)'):
                 compile_mandatory(capture(copied))
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
@@ -125,7 +125,7 @@ class MandatoryTests(unittest.TestCase):
 class MandatoryCodegenTests(unittest.TestCase):
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_fresh_three_release_facts_render_and_rust_match_python(self):
-        """Only the reviewed executable WriteExif body is emitted; older bodies refuse."""
+        """Every reviewed whole WriteExif profile renders its own source facts."""
         from mandatory_defaults_codegen import evaluate, generate
         runtime = ROOT / 'src/writers/mandatory_defaults_runtime.rs'
         roots = [NATIVE[1]]
@@ -134,10 +134,6 @@ class MandatoryCodegenTests(unittest.TestCase):
         for library in roots:
             with self.subTest(library=library):
                 fact = capture(library)
-                if library != NATIVE[1]:
-                    with self.assertRaisesRegex(MandatoryRefused, 'executable body review hash'):
-                        generate(fact)
-                    continue
                 rendered, report = generate(fact)
                 self.assertFalse(report['writer_tables_joined'])
                 recipe = compile_mandatory(fact)
@@ -158,7 +154,46 @@ fn main() {{
                     subprocess.run(['rustc', '--edition=2021', str(driver), '-o', str(binary)], check=True, capture_output=True, text=True)
                     actual = tuple(sorted((int(key), int(value[2:]) if value.startswith('i:') else value[2:])
                                           for key, value in (line.split('=', 1) for line in subprocess.run([str(binary)], check=True, capture_output=True, text=True).stdout.splitlines())))
-                self.assertEqual(actual, expected)
+                    self.assertEqual(actual, expected)
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_historical_whole_body_profiles_bind_source_and_mandatory_fragments(self):
+        """Historical admission is exact source/profile matching, never a version exemption."""
+        evidence = Path(Path('/tmp/oxidex-sony-plain-current.txt').read_text().strip()) / 'shared-pilot/write-upgrade-integration-20260913/first-random-pair-20260913/source-attempt-01/sources'
+        for version in ('11.78', '12.64'):
+            library = next(evidence.glob(f'exiftool-{version}-*/lib'))
+            with self.subTest(version=version):
+                fact = capture(library)
+                compile_mandatory(fact)
+                for field, mutate in (
+                    ('whole body', lambda row: row.update(writer_deparse=row['writer_deparse'] + ' x')),
+                    ('context', lambda row: row.update(new_directory_context_deparse=row['new_directory_context_deparse'] + ' x')),
+                    ('cleanup', lambda row: row.update(mandatory_cleanup_source_sha256='0' * 64)),
+                    ('classifier', lambda row: row.update(mandatory_classifier_source_sha256='0' * 64)),
+                ):
+                    changed = deepcopy(fact)
+                    mutate(changed)
+                    if field == 'whole body':
+                        changed['writer_deparse_sha256'] = hashlib.sha256(changed['writer_deparse'].encode()).hexdigest()
+                    with self.subTest(field=field), self.assertRaisesRegex(
+                            MandatoryRefused, '(profile|closed grammar|digest differs)'):
+                        compile_mandatory(changed)
+
+    @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
+    def test_copied_historical_source_mutation_refuses_profile(self):
+        """A changed historical WriteExif.pl cannot borrow the reviewed profile."""
+        evidence = Path(Path('/tmp/oxidex-sony-plain-current.txt').read_text().strip()) / 'shared-pilot/write-upgrade-integration-20260913/first-random-pair-20260913/source-attempt-01/sources'
+        for version in ('11.78', '12.64'):
+            library = next(evidence.glob(f'exiftool-{version}-*/lib'))
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                copied = Path(temporary) / 'lib'
+                shutil.copytree(library, copied)
+                source = copied / 'Image/ExifTool/WriteExif.pl'
+                body = source.read_text()
+                self.assertEqual(body.count('unless ($numEntries)'), 1)
+                source.write_text(body.replace('unless ($numEntries)', 'if ($numEntries)'))
+                with self.assertRaisesRegex(MandatoryRefused, '(profile|closed grammar)'):
+                    compile_mandatory(capture(copied))
 
     @unittest.skipUnless(NATIVE is not None, 'EXIFTOOL_PERL and OXIDEX_EXIFTOOL_LIB must select a native source')
     def test_codegen_requires_same_selected_writeexif_when_general_sidecar_is_supplied(self):

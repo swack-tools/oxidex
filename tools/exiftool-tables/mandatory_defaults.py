@@ -17,9 +17,6 @@ class MandatoryRefused(ValueError): pass
 class MandatoryMalformed(ValueError): pass
 
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
-# Reviewed whole WriteExif implementation guard: a source refresh must receive an
-# explicit grammar review before mandatory-cleanup eligibility can reappear.
-_REVIEWED_WRITE_EXIF_SHA256 = "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
 _ID = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 _CONTEXT = re.compile(
     r"\Amy\(\$mandatory, \$allMandatory, \$addMandatory\); "
@@ -88,6 +85,44 @@ class MandatoryRecipe:
     write_value_source_sha256: str = ""
     survivor_encodings: tuple["SurvivorEncoding", ...] = ()
 
+
+@dataclass(frozen=True)
+class _ReviewedWriteExifProfile:
+    """A complete, source-authenticated WriteExif body admitted by this compiler.
+
+    Release labels are deliberately absent.  Each profile closes the actual
+    final-loaded CV and the three mandatory-path fragments consumed below.
+    The source/closure checks in ``compile_mandatory`` retain provenance while
+    allowing lexical default data to regenerate when executable semantics hold.
+    """
+
+    writer_deparse_sha256: str
+    context_sha256: str
+    cleanup_sha256: str
+    classifier_sha256: str
+
+
+_REVIEWED_WRITE_EXIF_PROFILES = (
+    _ReviewedWriteExifProfile(
+        "1d552eb0205bb742880c899474d215fc141af6730f4846e3485da8e392336c93",
+        "d15bfe416795fcd372ee3e4ca52f954d5de0fad5ef2032410805f962de94031e",
+        "37257b34d1f16adcd56f7f583a65a660f3a29673b85ed60b2e24102c189c2ab4",
+        "2dec7a7af0af0d4c0d72a4d9f3d07978e7fc0132c942d634b79250f281b2c6d2",
+    ),
+    _ReviewedWriteExifProfile(
+        "4e61222f9597c1601c7944c65352f69c8990ea0109e1b0f0d9788cfa857bbf0a",
+        "147b945c877da9c4e4f8bad786c409a2bb680cf0aa1816a645651206dfaed2aa",
+        "37257b34d1f16adcd56f7f583a65a660f3a29673b85ed60b2e24102c189c2ab4",
+        "2dec7a7af0af0d4c0d72a4d9f3d07978e7fc0132c942d634b79250f281b2c6d2",
+    ),
+    _ReviewedWriteExifProfile(
+        "fcd64531afd2a7cdb6e3b6b7ec5631031dd895fca76c1b02aca31649186a2bf4",
+        "147b945c877da9c4e4f8bad786c409a2bb680cf0aa1816a645651206dfaed2aa",
+        "37257b34d1f16adcd56f7f583a65a660f3a29673b85ed60b2e24102c189c2ab4",
+        "2dec7a7af0af0d4c0d72a4d9f3d07978e7fc0132c942d634b79250f281b2c6d2",
+    ),
+)
+
 @dataclass(frozen=True)
 class SurvivorEncoding:
     format_name: str
@@ -118,6 +153,40 @@ class DefaultEncodingOmission:
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping): raise MandatoryMalformed(f"{label} is not an object")
     return value
+
+
+def _normalized_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise MandatoryMalformed(f"{label} is not text")
+    return hashlib.sha256(re.sub(r"\s+", " ", value).strip().encode()).hexdigest()
+
+
+def _reviewed_write_exif_profile(fact: Mapping[str, Any]) -> None:
+    """Accept only a complete, reviewed native WriteExif implementation.
+
+    ``compile_mandatory`` separately binds the lexical map and helper closure
+    to their source; this guard closes the executable path they travel through.
+    """
+    executable = fact.get("writer_deparse")
+    executable_digest = fact.get("writer_deparse_sha256")
+    if (not isinstance(executable, str) or not isinstance(executable_digest, str)
+            or not _SHA.fullmatch(executable_digest)
+            or hashlib.sha256(executable.encode()).hexdigest() != executable_digest):
+        raise MandatoryMalformed("WriteExif executable body provenance is unavailable")
+    context_sha = _normalized_sha256(fact.get("new_directory_context_deparse"),
+                                     "mandatory executable new-directory flow")
+    cleanup_sha = fact.get("mandatory_cleanup_source_sha256")
+    classifier_sha = fact.get("mandatory_classifier_source_sha256")
+    if (not isinstance(cleanup_sha, str) or not _SHA.fullmatch(cleanup_sha)
+            or not isinstance(classifier_sha, str) or not _SHA.fullmatch(classifier_sha)):
+        raise MandatoryMalformed("mandatory executable fragment provenance is unavailable")
+    for profile in _REVIEWED_WRITE_EXIF_PROFILES:
+        if (executable_digest == profile.writer_deparse_sha256
+                and context_sha == profile.context_sha256
+                and cleanup_sha == profile.cleanup_sha256
+                and classifier_sha == profile.classifier_sha256):
+            return
+    raise MandatoryRefused("WriteExif executable body and mandatory-path profile are unrecognized")
 
 def _source_context(value: Any) -> tuple[JfifOverride, MandatorySelection]:
     if not isinstance(value, str): raise MandatoryMalformed("new_directory_context_deparse is not text")
@@ -173,12 +242,6 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     source = writer.get("source_file"); digest = writer.get("source_sha256")
     if source != "Image/ExifTool/WriteExif.pl" or writer.get("cv_file") != source or not isinstance(digest, str) or not _SHA.fullmatch(digest):
         raise MandatoryMalformed("WriteExif source identity is unavailable")
-    executable = fact.get("writer_deparse")
-    executable_digest = fact.get("writer_deparse_sha256")
-    if not isinstance(executable, str) or not isinstance(executable_digest, str) or not _SHA.fullmatch(executable_digest) or hashlib.sha256(executable.encode()).hexdigest() != executable_digest:
-        raise MandatoryMalformed("WriteExif executable body provenance is unavailable")
-    if executable_digest != "1d552eb0205bb742880c899474d215fc141af6730f4846e3485da8e392336c93":
-        raise MandatoryRefused("WriteExif executable body review hash is unrecognized")
     closure = _mapping(fact.get("loaded_exiftool_closure"), "loaded_exiftool_closure")
     if not closure or closure.get(source) != digest or any(not isinstance(k, str) or not k.startswith("Image/ExifTool") or not isinstance(v, str) or not _SHA.fullmatch(v) for k, v in closure.items()):
         raise MandatoryMalformed("selected native module closure is unavailable")
@@ -208,6 +271,7 @@ def compile_mandatory(fact: Mapping[str, Any]) -> MandatoryRecipe:
     override, selection = _source_context(fact.get("new_directory_context_deparse"))
     _classifier_policy(fact)
     cleanup = _cleanup_policy(fact)
+    _reviewed_write_exif_profile(fact)
     return MandatoryRecipe(str(source), digest, str(closure["Image/ExifTool.pm"]), str(closure["Image/ExifTool/Exif.pm"]), tuple(directories), override, selection, cleanup)
 
 def compile_mandatory_joined(fact: Mapping[str, Any], document: Mapping[str, Any]) -> MandatoryRecipe:
