@@ -1,80 +1,46 @@
 # Generated metadata parity checkpoint
 
-Status: active and incomplete, 2026-09-14. Work is consolidated in PR #779;
-#682 and #683 remain separate. This checkpoint distinguishes source declarations
-from behavior measured against pinned ExifTool 13.59.
+Status: active and incomplete, 2026-09-14. All current work is consolidated in PR #779; #682 and #683 remain separate. The goal remains full source-derived read/write parity across the pinned ExifTool catalog.
 
-## What exists
+## What is now accounted for
 
-The generated BuildTagLookup inventory contains 33,487 ordinary table entries.
-Every entry joins the hydrated source inventory. The case-insensitive entry-name
-count is 21,373; the native legacy total of 21,437 uses a different definition.
-Neither number measures extraction or writing success.
+The regenerated BuildTagLookup join classifies all 33,487 catalog entries against 35,886 hydrated source coordinates in 1,512 tables. The 21,373 distinct case-insensitive names appearing in those entries and the native legacy total of 21,437 have different definitions. Neither measures reading or writing success.
 
-QuickTime ItemList has 92 generated reader declarations. The integrated Keys
-reader has 70 direct source-derived declarations and 11 explicit refusals. The
-Keys catalog join is implemented; the published catalog report still requires
-regeneration with these new declarations. UserData remains
-blocked on its shared record/language protocol. The full hydrated QuickTime
-selector accounts for 399 variants across the three tables, including source
-rows outside the ordinary catalog denominator.
+The current source ledger distinguishes:
 
-The actual canonical writer dump replays 19 public writer declarations into the
-full catalog ledger. Reader and writer implementation classifications are now
-separate. The 193 helper/address rows and historical 15-row writer test cohort
-are different denominators. No declaration count is an observed-write count.
+| Classification | Catalog entries |
+| --- | ---: |
+| Generic QuickTime reader declarations | 179 |
+| Explicit QuickTime reader refusals | 151 |
+| Eligible IFD schema declarations | 3,815 |
+| IFD schema rows with withheld semantics | 1,217 |
+| Refused IFD schema rows | 9,563 |
+| Not yet indexed by these compiler joins | 18,562 |
 
-## What was validated
+These rows conserve the catalog denominator. The writer axis separately contains 19 authenticated generated public-writer declarations. A row may have both reader and writer facts; those axes must not be added together.
 
-The preceding combined run passed all-feature Clippy and 4,895 Rust library
-tests, with four ignored. Its integration suite passed 602 tests, failed one,
-and ignored 42; the later Python stage did not run. The failing JPEG test passed
-a Make-only replacement map, implicitly requesting removal of Model. Its repair
-preserves the existing metadata map and asserts exact SOS-through-EOI bytes.
+QuickTime declarations comprise 92 ItemList, 70 Keys and 17 UserData rows. The three source tables contain 399 variants, including rows outside the public catalog. UserData now has a generic movie-level direct-format reader; language records, implicit formats and custom controls retain explicit refusal reasons.
 
-That regeneration command also exposed a source-input defect: it omitted the
-hydrated-layout flag, silently reducing the QuickTime ledger by three records.
-The output is preserved as diagnostic evidence. A subsequent combined hydrated
-reader/writer capture was stopped deliberately while still active to replace
-that expensive capture arrangement. Reader and writer views now have separate
-fresh-capture inputs from the same pinned Perl library. The QuickTime generators
-consume the fully hydrated reader view. Neither diagnostic run establishes
-regeneration parity; a fresh complete regeneration and runtime gate are required.
+The IFD compiler ledger covers 17,851 source rows: 6,117 emitted schema rows (4,313 eligible and 1,804 with omissions), plus 11,734 refused rows. Only catalog-matched rows enter the table above. Schema eligibility alone proves neither dispatch reachability nor observed output.
 
-Fifty-four focused Python tests pass for catalog joins, authenticated Keys
-observations, write/readback evidence and the writer matrix. Nineteen manifest
-tests pass with both Keys artifacts included. Twelve Keys fixtures were checked
-in two print modes against pinned Perl, producing 24 native observations. These
-verify the fixture instrument, not OxiDex coverage; the fresh paired runtime
-comparison still needs to run.
+The machine-readable source ledger and per-table report are published at `docs/public/measurements/catalog-hydrated-join-13.59.json` and `docs/reference/catalog-hydrated-join.md`. Rows not indexed here may already have readers elsewhere; this is not a claim that they are unreadable.
 
-## Measurements still required
+## What has actually been measured
 
-All catalog observed-read and observed-write fields remain unclaimed until
-fresh authenticated runtime reports are imported. The reader verifier records
-native/OxiDex JSON, fixture bytes, generated source identities and compiled-input
-hashes. It reports distinct Group1 names, fixture/tag occurrences, and print-mode
-observations separately. Documentation edits cannot make an old parser binary
-current or invalidate unchanged runtime inputs.
+These are distinct immutable checkpoints, not a combined current coverage percentage:
 
-The original five-fixture pre-migration baseline is preserved in
-`docs/reference/quicktime-reading-baseline.json`: two matched ItemList projections
-and three unsigned-integer failures. It is historical evidence, not a current
-runtime verdict or corpus-wide percentage. Fresh evidence must be a new report.
+- At `0c733800`, M4 native/public reader comparisons observed six ItemList and three Keys Group1 names. The generated TIFF/JPEG transaction matrix passed 1,530 cases. Authenticated native readback credits 1,353 positive write operations across 38 Group1 names: 906 operations match 19 catalog entries; 447 exercise alternate directory contexts. Deletions and no-ops are excluded from positive write credit.
+- At `5862e046`, the authenticated UserData verifier passed all 126 mode comparisons across 63 fixtures, exercising 17 source identities and 15 Group1 names. It binds the real Cargo build, generated artifacts, native source, fixture bytes and full output transcripts.
+- Canonical regeneration at `6f34cff4` passed both selected tiers and the declared write-set check using Perl 5.38.2 and ExifTool 13.59. All-feature Clippy passed. All-feature Rust reported 6,093 passed, zero failed and 126 ignored, aggregated from completed test-result lines. The Python gate is still incomplete: its regeneration fixture omitted the new UserData producer; the focused repair passes, but the full corrected run is still required.
 
-## Next steps and completion criteria
+The published source snapshot deliberately has no observed credits attached. The historical observation publisher is implemented and requires live receipt validation; a fresh common-runtime snapshot still needs publication. Its integrity check preserves historical evidence when later source changes, while explicitly reporting that it is historical.
 
-1. Finish corrected canonical regeneration, Clippy, Rust and affected Python
-   gates; inspect generated changes and explicit refusals before accepting them.
-2. Regenerate the completed Keys catalog join as JSON plus the human-readable
-   report from matching catalog, hydrated source and reader/writer artifacts.
-3. Run fresh native reader and real writer/readback comparisons from immutable
-   source, import observed identities, and publish the family report through Pages.
-4. Resolve all 14 carried review findings with their required evidence before
-   squash-merging #779. Continue changes in that PR until it is ready.
-5. Use the family ledger to add shared UserData and other high-leverage protocols.
-   Full catalog-wide read/write parity remains the goal; this checkpoint does
-   not establish it.
+## Work remaining and how progress is measured
 
-See `docs/reference/source-family-migration-plan.md` for the full objective and
-`docs/reference/parity-rollup-review-20260914.md` for unresolved review evidence.
+1. Finish the corrected Python gate and validate the integrated writer cleanup changes. In particular, every physical-format decision must derive from captured WriteValue helpers and the complete native mandatory-default classifier. Unmodeled formats remain an explicit parity gap.
+2. Run readers and actual writes/readback from one clean common runtime, then publish the authenticated observation snapshot beside the source ledger. Count catalog entries, Group1 names, fixture occurrences and write operations separately.
+3. Resolve all 14 carried review findings with matching evidence before squash-merging #779. Keep further changes in this PR.
+4. Use the per-table omission ledger to choose the next shared protocol or conversion capability. Each milestone must reduce an identified refusal block, regenerate all affected rows and verify the relevant on-disk behaviors against the pin.
+5. Continue until the full catalog-wide goal is verified. The 179 reader declarations, 19 writer declarations and IFD schema counts are intermediate implementation evidence, not completion or an autogenerated-output percentage.
+
+The original five-fixture pre-migration result remains in `docs/reference/quicktime-reading-baseline.json`. The full migration objective is in `docs/reference/source-family-migration-plan.md`; carried review evidence is in `docs/reference/parity-rollup-review-20260914.md`.

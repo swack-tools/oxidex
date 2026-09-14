@@ -2,7 +2,7 @@
   "emitted": true,
   "lookup_candidates": 1261,
   "owned_names": 561,
-  "ownership_ledger_sha256": "42e6f334ac8b312fcf443af128dbd5f5fb67631ff40eee27f9143295fa289923",
+  "ownership_ledger_sha256": "1e14873ffcd741394f84faaf0278009d65a2bcbfa5971432c6584937bfd93db1",
   "removed_owned_names": 0,
   "rows": 193,
   "runtime_status": "inactive_source_addressing_no_public_setnewvalue_admission",
@@ -147,6 +147,11 @@
             "inc": "Image/ExifTool/Charset.pm",
             "source_file": "Image/ExifTool/Charset.pm",
             "source_sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+          },
+          {
+            "inc": "Image/ExifTool/Charset/MacRoman.pm",
+            "source_file": "Image/ExifTool/Charset/MacRoman.pm",
+            "source_sha256": "243a84e50839abbcee96ce4b72c115fbf8d6f0fd755d2e7ff796da6dcf42c1be"
           },
           {
             "inc": "Image/ExifTool/Charset/ShiftJIS.pm",
@@ -934,7 +939,7 @@
             "source_sha256": "4d07ff283e4e9f98bf50ef09e66bf3e37dd384c3ebb54aa5b2b3641adb156ee1"
           }
         ],
-        "sha256": "900cb2145a3d3922f73f6164f0af8d0e6060ac0b52ceb46552b5df743ac57cd2"
+        "sha256": "9112456c119a7a65ec7072c464230fb094863d17f029d4fca9f2af3384cedea4"
       },
       "perl_path": "/private/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
       "perl_version": "5.038002",

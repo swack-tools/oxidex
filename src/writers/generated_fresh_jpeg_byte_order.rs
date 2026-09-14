@@ -40,8 +40,8 @@ pub(crate) const FRESH_JPEG_BYTE_ORDER: FreshJpegByteOrderRecipe = FreshJpegByte
     caller_source_sha256: "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
     caller_body_sha256: "c6766768697bfb125e34269852979e9c697b0ab64476c4e2359528cca28a3692",
     closure_sha256: "e16edd3a6040e869351d13ca1239eca9f171a87573191146645bd3fbb8be6620",
-    writer_capture_closure_sha256: "6e7954dc68cbb2a849fe1923c762bd0cff77683b72701f7782dc7265c0dad470",
-    writer_read_capture_closure_sha256: "900cb2145a3d3922f73f6164f0af8d0e6060ac0b52ceb46552b5df743ac57cd2",
+    writer_capture_closure_sha256: "697e3e83593b9641b51b3adb3190d4ca6d60411160f917c28a4f3e256c7d8219",
+    writer_read_capture_closure_sha256: "9112456c119a7a65ec7072c464230fb094863d17f029d4fca9f2af3384cedea4",
     exiftool_version: "13.59",
     perl_version: "5.038002",
 };

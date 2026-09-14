@@ -854,7 +854,7 @@ def report(join: dict) -> str:
                   f"Distinct observed Group1 names: {writes['distinct_group1_names']}"]
     lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved. Published historical receipts are linked at [authenticated catalog observations](catalog-hydrated-observed.md); they remain historical if this source ledger changes.", "",
               "## Source-table progress", "",
-              "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations use an oracle-free replay and exclude rows with withheld semantics. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
+              "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations replay their exact source and, when bound, the expression-oracle ledger. Eligible, omitted and refused schema rows remain separate; schema eligibility does not establish a runtime route. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
               "| Source table | Source variants | Catalog entries | Reader declarations | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
               "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for table, value in join.get("source_tables", {}).items():

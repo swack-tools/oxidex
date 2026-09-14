@@ -30,6 +30,7 @@
       "Image/ExifTool/CaptureOne.pm": "ffed00eab470b7e102ad28910744918b103081eb6a8686f3e82272c4643fbd59",
       "Image/ExifTool/Casio.pm": "3bfa03d6bef4f8e865a13a29154bf8c2a0c7b4eb7a76ce1a4d4b6bea05269eda",
       "Image/ExifTool/Charset.pm": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e",
+      "Image/ExifTool/Charset/MacRoman.pm": "243a84e50839abbcee96ce4b72c115fbf8d6f0fd755d2e7ff796da6dcf42c1be",
       "Image/ExifTool/Charset/ShiftJIS.pm": "757bc7e41b0b9f8db6ac31c4e9cb99964dda73a84ec9e10c9f63ac5990502001",
       "Image/ExifTool/DICOM.pm": "b0fec72102220d05076a1d8557e1b1999d751e97e45bb87da66122131d64e9f4",
       "Image/ExifTool/DJI.pm": "2064e8df141f2ee20c6359a7581f9936b43535392dfeb10a827cc2ef8caa2520",
