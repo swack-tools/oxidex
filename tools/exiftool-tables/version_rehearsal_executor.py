@@ -33,6 +33,7 @@ RESULT_KIND = "oxidex_version_rehearsal_stage_result"
 STAGES = ("native", "generate", "build", "read", "write")
 REQUIRED_COMMANDS = ("generate", "build", "read")
 _SAFE_RELEASE = __import__("re").compile(r"^[0-9]+\.[0-9]+$")
+COMMAND_TIMEOUT_SECONDS = 3600
 _PLACEHOLDERS = {
     "release", "checkout", "target", "report", "native_source", "native_lib",
     "native_program", "native_perl", "native_probe", "native_probe_sha256", "source_commit",
@@ -314,11 +315,19 @@ def _require_fixture_proof(result: Mapping[str, Any]) -> None:
     for item in row["entries"]:
         if (not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("sha256"), str)
                 or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
-                or type(item.get("bytes")) is not int or item["bytes"] < 0):
+                or type(item.get("bytes")) is not int or item["bytes"] < 0
+                or not isinstance(item.get("corpus_path"), str) or not isinstance(item.get("corpus_sha256"), str)
+                or __import__("re").fullmatch(r"[0-9a-f]{64}", item["corpus_sha256"]) is None
+                or type(item.get("corpus_bytes")) is not int or item["corpus_bytes"] < 0):
             raise Refused("fixture identity proof is malformed")
         fixture = _regular(Path(item["source"]), "fixture")
         if hashlib.sha256(fixture.read_bytes()).hexdigest() != item["sha256"] or fixture.stat().st_size != item["bytes"]:
             raise Refused("fixture changed after comparison")
+        staged = _regular(Path(item["corpus_path"]), "staged fixture")
+        if (hashlib.sha256(staged.read_bytes()).hexdigest() != item["corpus_sha256"]
+                or staged.stat().st_size != item["corpus_bytes"]
+                or item["corpus_sha256"] != item["sha256"] or item["corpus_bytes"] != item["bytes"]):
+            raise Refused("staged fixture changed after comparison")
 
 
 def _require_native_identity(result: Mapping[str, Any], release: str, native: tuple[Path, Path, Path], perl: str) -> None:
@@ -383,7 +392,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             if started is not None:
                 started(child.pid, child.pid)
             try:
-                stdout, stderr = child.communicate(timeout=3600)
+                stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
                 os.killpg(child.pid, signal.SIGTERM)
                 try:
@@ -395,7 +404,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
         else:
-            result = run(argv, cwd=str(cwd), env=env, text=True, capture_output=True, timeout=3600,
+            result = run(argv, cwd=str(cwd), env=env, text=True, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS,
                          start_new_session=True, close_fds=False)
             process_identity = {}
         stdout, stderr = result.stdout or "", result.stderr or ""

@@ -91,7 +91,9 @@ class ExecutorTests(unittest.TestCase):
             "lib": {"path": str(native_lib.resolve()), "exiftool_pm_sha256": __import__("hashlib").sha256((native_lib / "Image/ExifTool.pm").read_bytes()).hexdigest()}}
         binary = Path(env["CARGO_TARGET_DIR"]) / "debug" / "oxidex"; binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"binary")
         body["binary"] = {"path": str(binary), "sha256": __import__("hashlib").sha256(binary.read_bytes()).hexdigest(), "bytes": binary.stat().st_size}
-        body["fixtures"] = {"manifest": str(self.fixture_manifest), "manifest_sha256": __import__("hashlib").sha256(self.fixture_manifest.read_bytes()).hexdigest(), "entries": [{"source": str(self.fixture), "sha256": __import__("hashlib").sha256(self.fixture.read_bytes()).hexdigest(), "bytes": self.fixture.stat().st_size}]}
+        staged = Path(env["CARGO_TARGET_DIR"]) / "fixtures" / "fixture.jpg"; staged.parent.mkdir(parents=True, exist_ok=True); staged.write_bytes(self.fixture.read_bytes())
+        fixture_sha = __import__("hashlib").sha256(self.fixture.read_bytes()).hexdigest()
+        body["fixtures"] = {"manifest": str(self.fixture_manifest), "manifest_sha256": __import__("hashlib").sha256(self.fixture_manifest.read_bytes()).hexdigest(), "entries": [{"source": str(self.fixture), "sha256": fixture_sha, "bytes": self.fixture.stat().st_size, "corpus_path": str(staged), "corpus_sha256": fixture_sha, "corpus_bytes": staged.stat().st_size}]}
         if stage in {"read", "write"}:
             body.update(native_release=env["OXIDEX_REHEARSAL_RELEASE"],
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],

@@ -25,6 +25,7 @@ import version_rehearsal_executor as executor
 
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 OID = rehearsal.GIT_OID_RE
+COMMAND_TIMEOUT_SECONDS = 3600
 
 
 class Refused(ValueError):
@@ -71,11 +72,33 @@ def _atomic(path: Path, value: dict[str, Any]) -> None:
 
 
 def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Run below the executor's process group and retain the actual output.
+
+    The executor owns a session and an inheritable host-lock descriptor.  A
+    nested generation/build/comparison process must stay in that group so an
+    executor timeout kills it too and its inherited lock cannot outlive the
+    supervisor.  Do not create another session here.
+    """
     try:
-        completed = run(argv, cwd=str(cwd), env=env, text=True, errors="replace", capture_output=True,
-                        timeout=3600, start_new_session=True)
+        if run is subprocess.run:
+            child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace", stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, start_new_session=False, close_fds=False)
+            try:
+                stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                child.terminate()
+                try: stdout, stderr = child.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    child.kill(); stdout, stderr = child.communicate()
+                return {"argv": argv, "cwd": str(cwd), "exit": None, "state": "timeout", "stdout": stdout or "", "stderr": (stderr or "") + str(exc), "pid": child.pid, "pgid": os.getpgid(child.pid) if child.poll() is None else None}
+            completed = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+            process = {"pid": child.pid, "pgid": os.getpgid(child.pid) if child.poll() is None else None}
+        else:
+            completed = run(argv, cwd=str(cwd), env=env, text=True, errors="replace", capture_output=True,
+                            timeout=COMMAND_TIMEOUT_SECONDS, start_new_session=False, close_fds=False)
+            process = {}
         stdout, stderr = completed.stdout or "", completed.stderr or ""
-        return {"argv": argv, "cwd": str(cwd), "exit": completed.returncode, "state": "ok" if completed.returncode == 0 else "exit_failed", "stdout": stdout, "stderr": stderr}
+        return {"argv": argv, "cwd": str(cwd), "exit": completed.returncode, "state": "ok" if completed.returncode == 0 else "exit_failed", "stdout": stdout, "stderr": stderr, **process}
     except subprocess.TimeoutExpired as exc:
         return {"argv": argv, "cwd": str(cwd), "exit": None, "state": "timeout", "stdout": "", "stderr": str(exc)}
     except OSError as exc:
@@ -195,7 +218,7 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
     pin = checkout / ".exiftool-version"
     _regular(pin, "owned checkout pin")
     pin.write_text(args.release + "\n", encoding="utf-8")
-    if _git(checkout, ["diff", "--name-only"], run) != ".exiftool-version":
+    if _git(checkout, ["diff", "--name-only"], run) not in {"", ".exiftool-version"}:
         raise Refused("only the owned checkout pin may change before generation")
     env = _environment(perl, native_lib, target)
     record = _run(["bash", str(checkout / "tools" / "exiftool-tables" / "regen-all.sh")], cwd=checkout, env=env, run=run)
@@ -261,8 +284,35 @@ def _fixtures(manifest: Path, target: Path) -> tuple[list[dict[str, Any]], str, 
         if _sha(original) != item["sha256"] or original.stat().st_size != item["bytes"]: raise Refused("fixture changed after manifest")
         copied = corpus / f"{index:04d}-{hashlib.sha256(str(original).encode()).hexdigest()[:16]}{original.suffix}"
         shutil.copyfile(original, copied); copied.chmod(0o444)
-        rows.append({"source": str(original), "sha256": _sha(original), "bytes": original.stat().st_size, "corpus_path": str(copied)})
+        if _sha(copied) != item["sha256"] or copied.stat().st_size != item["bytes"]:
+            raise Refused("staged fixture copy differs from immutable manifest")
+        rows.append({"source": str(original), "sha256": item["sha256"], "bytes": item["bytes"], "corpus_path": str(copied), "corpus_sha256": _sha(copied), "corpus_bytes": copied.stat().st_size})
     return rows, digest, corpus
+
+
+def _verify_staged_fixtures(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        staged = _regular(Path(row["corpus_path"]), "staged fixture")
+        if (_sha(staged) != row["sha256"] or staged.stat().st_size != row["bytes"]
+                or row.get("corpus_sha256") != row["sha256"] or row.get("corpus_bytes") != row["bytes"]):
+            raise Refused("staged fixture changed during read comparison")
+
+
+def _verify_conformance_scope(data: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    per_file = data.get("per_file")
+    expected = {row["corpus_path"] for row in rows}
+    if not isinstance(per_file, dict) or set(per_file) != expected:
+        raise Refused("conformance report did not cover exactly the staged fixture manifest")
+    per_format = data.get("per_format")
+    if not isinstance(per_format, dict):
+        raise Refused("conformance report lacks per-format counts")
+    file_count = 0
+    for counts in per_format.values():
+        if not isinstance(counts, dict) or type(counts.get("files")) is not int or counts["files"] < 0:
+            raise Refused("conformance report has malformed per-format file counts")
+        file_count += counts["files"]
+    if file_count != len(rows):
+        raise Refused("conformance report file count differs from staged fixture manifest")
 
 
 def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
@@ -281,8 +331,8 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     env = _environment(perl, native_lib, target); env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
     record = _run(command, cwd=checkout, env=env, run=run); raw = _raw(report, "read", record)
     if record["state"] != "ok" or not comparison.is_file(): raise Refused("actual conformance.py comparison failed")
-    data = _json(comparison); per_format = data.get("per_format")
-    if not isinstance(per_format, dict): raise Refused("conformance report lacks per-format counts")
+    _verify_staged_fixtures(fixtures)
+    data = _json(comparison); _verify_conformance_scope(data, fixtures); per_format = data["per_format"]
     matched = mismatched = 0
     for counts in per_format.values():
         if not isinstance(counts, dict): raise Refused("conformance format counts are malformed")

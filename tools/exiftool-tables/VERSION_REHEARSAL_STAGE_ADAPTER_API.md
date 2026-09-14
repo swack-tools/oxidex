@@ -42,6 +42,13 @@ Its result binds the execution source commit/tree, native identity, generated
 artifact hashes, Cargo binary identity, fixture identities and raw reports.
 The executor re-hashes these files before it accepts a stage.
 
+Adapter subprocesses remain in the executor-owned process group and inherit its
+host-lock descriptor. An executor timeout therefore terminates the adapter and
+its regeneration/build/comparison child together; the child cannot outlive the
+supervisor and retain the shared host lock. The generated corpus is copied into
+the isolated target, re-hashed before and after `conformance.py`, and the
+report must contain exactly one `per_file` entry for every staged fixture.
+
 Use command entries equivalent to the following, with a separately prepared,
 immutable fixture-manifest path substituted by the rehearsal owner:
 
