@@ -57,7 +57,7 @@ class AdapterTests(unittest.TestCase):
         self.seen = []; self.diff_output = ".exiftool-version\n"
         self.source_targets = tuple(
             V4Target(0x013c + index, f"StringTarget{index}", "EXIF", "IFD0", "string")
-            for index in range(9)
+            for index in range(13)
         ) + tuple(
             V4Target(0x0200 + index, f"NumericTarget{index}", "EXIF", "IFD0", "int16u")
             for index in range(6)
@@ -157,7 +157,7 @@ class AdapterTests(unittest.TestCase):
                                                  for family in sorted({row["coverage_family"] for row in rows})},
                 "declared_by_qualifier": {qualifier: sum(row["requested_name"].split(":", 1)[0] == qualifier for row in rows)
                                            for qualifier in sorted({row["requested_name"].split(":", 1)[0] for row in rows})},
-                "declared": len(rows), "passed": len(rows), "rows": rows}))
+                "declared": len(rows), "passed": len(rows), "rows": rows}, sort_keys=True))
             return subprocess.CompletedProcess(argv, 0, "matrix", "")
         if argv[0] == sys.executable:
             output = Path(argv[argv.index("--json-out") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
@@ -286,9 +286,9 @@ class AdapterTests(unittest.TestCase):
         result = adapter.write(self.args("write"), run=self.fake_run)
         self.assertEqual(result["state"], "passed")
         self.assertEqual(result["writer_binary"], built["writer_binary"])
-        self.assertEqual(result["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 1242, "mismatched": 0})
-        self.assertEqual(result["write_mode"]["original_subset"], 684)
-        self.assertEqual(result["write_mode"]["expanded_matrix"], 1242)
+        self.assertEqual(result["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 1530, "mismatched": 0})
+        self.assertEqual(result["write_mode"]["original_subset"], 876)
+        self.assertEqual(result["write_mode"]["expanded_matrix"], 1530)
         self.assertEqual(set(result["write_mode"]["source_contract"]), {"final_ledger", "final_rules", "scalar_helper_ledger", "scalar_rules", "address_rules"})
         self.assertIn("rehearsal-write-fixtures", result["fixtures"]["entries"][0]["corpus_path"])
         matrix = next(row for row in self.seen if row[0][0] == sys.executable and row[0][1].endswith("generated_tiff_write_matrix.py"))
@@ -367,8 +367,67 @@ class AdapterTests(unittest.TestCase):
         self.mock_generated_targets.return_value = self.source_targets + (
             V4Target(0x013d, "Software", "EXIF", "IFD0", "string"),
         )
-        with self.assertRaisesRegex(adapter.Refused, "source cohort"):
+        with self.assertRaisesRegex(adapter.Refused, "cohort differs"):
             adapter.write(self.args("write"), run=self.fake_run)
+
+    def test_write_counts_follow_changed_authenticated_source_family_totals(self):
+        # A different release may emit fewer string rows and more numeric rows.
+        # Every generated row/case is still mandatory in the report; no fixed
+        # historical tag count is itself a source-authentication condition.
+        self.source_targets = self.source_targets[:2] + self.source_targets[-6:]
+        self.mock_generated_targets.return_value = self.source_targets
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.write(self.args("write"), run=self.fake_run)
+        self.assertEqual(result["comparison"]["matched"], 2 * 72 + 6 * 99)
+        self.assertEqual(result["write_mode"]["original_subset"], 2 * 48 + 6 * 42)
+        self.assertEqual(result["write_mode"]["expanded_matrix"], 2 * 72 + 6 * 99)
+
+    def test_source_contract_refuses_empty_duplicate_or_incomplete_baselines(self):
+        paths = adapter._matrix_source_artifacts(self.checkout)
+        for targets in ((), self.source_targets + (self.source_targets[0],)):
+            with self.subTest(targets=len(targets)), patch.object(adapter, "generated_targets", return_value=targets):
+                with self.assertRaisesRegex(adapter.Refused, "empty|duplicate"):
+                    adapter._matrix_contract(paths)
+        for name, replacement in (
+            ("case_inputs", lambda target: {}),
+            ("matrix_inputs", lambda target: {}),
+            ("matrix_inputs", lambda target: {key: b"changed" for key in adapter.case_inputs(target)}),
+            ("selected_qualifiers", lambda target, dirs: target.qualifiers[:1]),
+            ("selected_qualifiers", lambda target, dirs: target.qualifiers + target.qualifiers[:1]),
+        ):
+            with self.subTest(operand=name), patch.object(adapter, name, replacement):
+                with self.assertRaisesRegex(adapter.Refused, "target contract"):
+                    adapter._matrix_contract(paths)
+
+    def test_report_refuses_missing_duplicate_fabricated_rows_and_changed_totals(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.write(self.args("write"), run=self.fake_run)
+        report = Path(result["matrix_reports"][0]["path"])
+        original = json.loads(report.read_text())
+        paths = adapter._matrix_source_artifacts(self.checkout)
+        for mutation in ("missing", "duplicate", "fabricated", "family_total"):
+            changed = json.loads(json.dumps(original))
+            if mutation == "missing":
+                changed["rows"].pop()
+            elif mutation == "duplicate":
+                changed["rows"][0] = changed["rows"][1]
+            elif mutation == "fabricated":
+                changed["rows"][0]["target"]["name"] = "FabricatedSourceTarget"
+            else:
+                changed["declared_by_case_family"]["native_string_scalar"] -= 1
+            if mutation != "family_total":
+                rows = changed["rows"]
+                changed["declared"] = changed["passed"] = len(rows)
+                changed["declared_by_case_family"] = dict(adapter.Counter(row["case_family"] for row in rows))
+                changed["declared_by_coverage_family"] = dict(adapter.Counter(row["coverage_family"] for row in rows))
+                changed["declared_by_qualifier"] = dict(adapter.Counter(row["requested_name"].split(":", 1)[0] for row in rows))
+            report.write_text(json.dumps(changed))
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(adapter.Refused, "not bound"):
+                adapter._matrix_report(report, args=self.args("write"), native_perl=self.perl,
+                                       native_lib=self.native / "lib", writer=built["writer_binary"],
+                                       paths=paths, pin=self.checkout / ".exiftool-version")
 
     def test_write_refuses_nonzero_matrix_command_and_forged_driver_success(self):
         adapter.generate(self.args("generate"), run=self.fake_run); adapter.build(self.args("build"), run=self.fake_run)
@@ -471,6 +530,28 @@ class AdapterTests(unittest.TestCase):
             self.fail("process-group fallback left the late child live")
         import version_rehearsal_executor as executor
         with executor._HostLock(lock): pass
+
+
+class CurrentGeneratedMatrixContractTests(unittest.TestCase):
+    def test_actual_committed_operands_define_complete_matrix_and_family_counts(self):
+        # Read the real joined ledger/Rust operands. This is a compiler-contract
+        # test, not a native/public execution claim, and has no tag-count pin.
+        paths = adapter._matrix_source_artifacts(HERE.parents[1])
+        targets = adapter.generated_targets(paths["final_ledger"], paths["final_rules"])
+        cohort, directories, expected, baseline = adapter._matrix_contract(paths)
+        self.assertEqual(len(cohort), len(targets))
+        counts = [3 * len(adapter.matrix_inputs(target))
+                  * len(adapter.selected_qualifiers(target, directories)) for target in targets]
+        self.assertEqual(len(expected), sum(counts))
+        self.assertEqual(baseline, sum(3 * len(target.qualifiers) * len(adapter.case_inputs(target))
+                                       for target in targets))
+        families, coverage, qualifiers = adapter._matrix_counts(expected)
+        for family in {target.case_family for target in targets}:
+            self.assertEqual(families[family], sum(count for target, count in zip(targets, counts)
+                                                  if target.case_family == family))
+        self.assertEqual(sum(coverage.values()), len(expected))
+        self.assertEqual(sum(qualifiers.values()), len(expected))
+        self.assertGreater(baseline, 0)
 
 
 if __name__ == "__main__": unittest.main()

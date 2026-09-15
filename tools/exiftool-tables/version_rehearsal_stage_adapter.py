@@ -9,6 +9,7 @@ the adapter never falls back to the repository's normal ExifTool pin.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -30,18 +31,6 @@ OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
 READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
-V4_ORIGINAL_SUBSET = 684
-V4_DECLARED = 1242
-V4_CASE_FAMILIES = {"native_string_scalar": 648, "native_unsigned_numeric_scalar": 594}
-V4_COVERAGE_FAMILIES = {
-    "baseline_native_string_scalar": 432,
-    "baseline_native_unsigned_numeric_scalar": 252,
-    "extended_baseline_native_unsigned_numeric_scalar": 144,
-    "extended_selected_directory_native_unsigned_numeric_scalar": 72,
-    "selected_directory_native_string_scalar": 216,
-    "selected_directory_native_unsigned_numeric_scalar": 126,
-}
-V4_QUALIFIERS = {"EXIF": 414, "IFD0": 414, "IFD1": 414}
 
 # The v4 matrix exposes these source-derived operands.  Keep the adapters as
 # module globals so the offline stage tests can supply a complete fixture
@@ -486,7 +475,9 @@ def _matrix_contract(paths: dict[str, Path]) -> tuple[list[dict[str, Any]], tupl
         raise Refused("generated write v4 source cohort is unavailable") from exc
     if directories != ("IFD0", "IFD1"):
         raise Refused("generated write v4 explicit directory operands are incomplete")
-    source_cohort, expected = [], set()
+    source_cohort, expected, identities = [], set(), set()
+    if not targets:
+        raise Refused("generated write v4 source cohort is empty")
     original_subset = 0
     for target in targets:
         try:
@@ -497,6 +488,7 @@ def _matrix_contract(paths: dict[str, Path]) -> tuple[list[dict[str, Any]], tupl
             family = target.case_family
             original = _v4_callable("case_inputs")(target)
             inputs = _v4_callable("matrix_inputs")(target)
+            baseline_qualifiers = tuple(target.qualifiers)
             qualifiers = tuple(_v4_callable("selected_qualifiers")(target, directories))
         except (AttributeError, TypeError, ValueError) as exc:
             raise Refused("generated write v4 target contract is malformed") from exc
@@ -505,10 +497,20 @@ def _matrix_contract(paths: dict[str, Path]) -> tuple[list[dict[str, Any]], tupl
                 or any(not isinstance(target_identity[name], str) or not target_identity[name]
                        for name in ("name", "table_group0", "physical_write_group", "wire_format"))
                 or not isinstance(family, str) or not family
-                or not isinstance(original, dict) or not isinstance(inputs, dict)
+                or not isinstance(original, dict) or not original or not isinstance(inputs, dict)
                 or not qualifiers or any(not isinstance(name, str) or not name for name in qualifiers)
-                or not set(original).issubset(inputs)):
+                or not baseline_qualifiers
+                or any(not isinstance(name, str) or not name for name in baseline_qualifiers)
+                or len(set(qualifiers)) != len(qualifiers)
+                or len(set(baseline_qualifiers)) != len(baseline_qualifiers)
+                or not set(baseline_qualifiers).issubset(qualifiers)
+                or not set(original).issubset(inputs)
+                or any(inputs[name] != value for name, value in original.items())):
             raise Refused("generated write v4 target contract is malformed")
+        identity = tuple(sorted(target_identity.items()))
+        if identity in identities:
+            raise Refused("generated write v4 source cohort has duplicate targets")
+        identities.add(identity)
         case_proof = {}
         for operation, value in inputs.items():
             if not isinstance(operation, str) or not operation or value is not None and not isinstance(value, bytes):
@@ -519,7 +521,9 @@ def _matrix_contract(paths: dict[str, Path]) -> tuple[list[dict[str, Any]], tupl
             case_proof[operation] = {"value_hex": None if value is None else value.hex(), "public_scalar": scalar}
         source_cohort.append({**target_identity, "case_family": family, "cases": list(inputs),
                               "case_inputs": case_proof, "qualifiers": list(qualifiers)})
-        original_subset += 3 * len(target.qualifiers) * len(original)
+        # Preserve every source-format baseline case and its original aliases,
+        # rather than freezing the number of tags a historical release emits.
+        original_subset += 3 * len(baseline_qualifiers) * len(original)
         for carrier in ("tiff_little", "tiff_big", "jpeg"):
             for qualifier in qualifiers:
                 try:
@@ -532,11 +536,21 @@ def _matrix_contract(paths: dict[str, Path]) -> tuple[list[dict[str, Any]], tupl
                     extended = operation not in original
                     coverage = ("extended_" if extended else "") + (
                         "selected_directory_" if target_directory else "baseline_") + family
-                    expected.add((carrier, tuple(target_identity.items()), qualifier, tuple(target_directory), family,
-                                  coverage, case["public_scalar"], operation))
-    if original_subset != V4_ORIGINAL_SUBSET or len(expected) != V4_DECLARED:
-        raise Refused("generated write v4 source cohort does not retain the 684-case subset and 1242-case matrix")
+                    row = (carrier, identity, qualifier, tuple(target_directory), family,
+                           coverage, case["public_scalar"], operation)
+                    if row in expected:
+                        raise Refused("generated write v4 source cohort has duplicate rows")
+                    expected.add(row)
+    if not expected or not 0 < original_subset <= len(expected):
+        raise Refused("generated write v4 source cohort has no complete baseline")
     return source_cohort, directories, expected, original_subset
+
+
+def _matrix_counts(expected: set[tuple[Any, ...]]) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    """Counts are projections of the complete authenticated row identities."""
+    return (dict(Counter(row[4] for row in expected)),
+            dict(Counter(row[5] for row in expected)),
+            dict(Counter(row[2].split(":", 1)[0] for row in expected)))
 
 
 def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, native_lib: Path,
@@ -544,6 +558,7 @@ def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, n
     value = _json(path)
     contract, matrix_native, cohort, rows = value.get("contract"), value.get("native_identity"), value.get("cohort"), value.get("rows")
     source_cohort, directories, expected, original_subset = _matrix_contract(paths)
+    expected_families, expected_coverage, expected_qualifiers = _matrix_counts(expected)
     if cohort != source_cohort or value.get("explicit_directories") != list(directories):
         raise Refused("generated write matrix cohort differs from current v4 source operands")
     actual: set[tuple[Any, ...]] = set()
@@ -564,7 +579,7 @@ def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, n
                 or not isinstance(row.get("output"), str) or not isinstance(driver, dict) or driver.get("ok") is not True
                 or driver.get("output") != row["output"] or driver.get("warnings") != [] or "error" in driver):
             raise Refused("generated write matrix row lacks an actual successful public-driver result")
-        actual.add((row["carrier"], tuple(target.items()), row["requested_name"], tuple(row["target_directory"]),
+        actual.add((row["carrier"], tuple(sorted(target.items())), row["requested_name"], tuple(row["target_directory"]),
                     row["case_family"], row["coverage_family"], row["public_scalar"], row["operation"]))
     family_counts = {family: sum(row.get("case_family") == family for row in rows) for family in sorted({row.get("case_family") for row in rows if isinstance(row, dict)})}
     coverage_counts = {family: sum(row.get("coverage_family") == family for row in rows) for family in sorted({row.get("coverage_family") for row in rows if isinstance(row, dict)})}
@@ -582,9 +597,9 @@ def _matrix_report(path: Path, *, args: argparse.Namespace, native_perl: Path, n
             or value.get("test_binary_path") != writer["path"] or value.get("test_binary_sha256") != writer["sha256"]
             or value.get("ledger_sha256") != _sha(paths["final_ledger"]) or value.get("rules_sha256") != _sha(paths["final_rules"])
             or value.get("declared_by_case_family") != family_counts or value.get("declared_by_coverage_family") != coverage_counts
-            or value.get("declared_by_qualifier") != qualifier_counts or family_counts != V4_CASE_FAMILIES
-            or coverage_counts != V4_COVERAGE_FAMILIES or qualifier_counts != V4_QUALIFIERS or type(value.get("declared")) is not int
-            or value["declared"] != V4_DECLARED or value["declared"] != len(expected) or type(value.get("passed")) is not int
+            or value.get("declared_by_qualifier") != qualifier_counts or family_counts != expected_families
+            or coverage_counts != expected_coverage or qualifier_counts != expected_qualifiers or type(value.get("declared")) is not int
+            or value["declared"] != len(expected) or type(value.get("passed")) is not int
             or not 0 <= value["passed"] <= value["declared"] or len(rows) != value["declared"]
             or actual != expected or len(actual) != len(rows) or value["passed"] != sum(row["state"] == "passed" for row in rows)):
         raise Refused("generated write matrix report is not bound to the selected v4 build and native release")
@@ -602,6 +617,7 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     writer = _build_binary(previous, target, "writer_binary", "writer driver")
     fixtures, fixture_digest, _corpus = _write_fixtures(Path(args.fixture_manifest), target)
     matrix_sources = _matrix_source_artifacts(checkout)
+    _, _, expected, original_subset = _matrix_contract(matrix_sources)
     ledger, rules = matrix_sources["final_ledger"], matrix_sources["final_rules"]
     source_proof = _source_proof(matrix_sources)
     native_sources = _native_writer_sources(native_lib)
@@ -658,7 +674,7 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
                              "ledger_sha256": source_proof["final_ledger"]["sha256"],
                              "rules_sha256": source_proof["final_rules"]["sha256"],
                              "source_contract": source_proof,
-                             "original_subset": V4_ORIGINAL_SUBSET, "expanded_matrix": V4_DECLARED},
+                             "original_subset": original_subset, "expanded_matrix": len(expected)},
               "scope": "selected-release public-api generated scalar cohort on staged JPEG fixtures plus synthetic little- and big-endian TIFF carriers",
               "limitations": ["Only the emitted TIFF/JPEG scalar cohort is exercised.",
                               "Fresh/empty EXIF, other writer grammars, and non-JPEG formats remain outside this rehearsal stage."]}
