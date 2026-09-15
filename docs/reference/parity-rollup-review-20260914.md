@@ -2,7 +2,7 @@
 
 PR #779 consolidates the source inventory, generated readers, public writer foundation, numeric writes, Nikon generation and historical upgrade rehearsal.
 
-Feature expansion is paused at the maintainer's request. This PR is finishing the validation and review of the consolidated work before landing. Historical tests retain their original commit and scope.
+Feature expansion is paused at the maintainer's request. The final merge state, integrated gate results and evidence replies are recorded on this PR. Historical tests retain their original commit and scope.
 
 ## Incorporated PR heads
 
@@ -21,8 +21,8 @@ PRs #682 and #683 are excluded and remain independent.
 - Combined checkpoint `bc4f617e`: workspace/all-feature Rust 6,120 passed, zero failed, 126 ignored; formatting and workspace/all-feature Clippy passed; 105 focused Python tests passed. Later generator repairs require their own regeneration checks.
 - Common-runtime observations at `be0ffe0c` are published in the [authenticated snapshot](catalog-hydrated-observed.md). Native results remain historical and do not validate later runtime changes.
 - Linux executor/adapter teardown: 41 tests passed, zero skips at `be0ffe0c`; both recorded nested processes were absent after teardown. The source files are unchanged in the later integration.
-- The actual 11.78/12.64 materialized rehearsal and final writer matrix remain landing checks. Source profiles for both historical releases are integrated and independently reviewed.
-- Ten original review threads are resolved with linked evidence. The four remaining items below stay open until their actual carrier/rehearsal checks finish.
+- The local M5 writer checkpoint at `b4ca393d` passed all 1,530 cases and 1,353 authenticated positive write/readbacks across 38 Group1 names. The selected rehearsal report contract replay now passes all 1,530 rows, preserving the 876 baseline cases; adapter/executor tests passed all 45 cases. The separate 48-carrier comparison exposed a JPEG cleanup mismatch, repaired in `31e87191`; its fresh native rerun at agent commit `7b1cf056` now passes all 48 cases. The materialized historical rehearsal explicitly refused unsupported 11.78 `SetNewValue` caller control flow after passing its native probe; no historical read/write or 12.64 result is claimed. Source profiles for mandatory defaults are integrated, but they do not imply support for the entire historical caller.
+- All fourteen original review items have matching validation evidence. The reverse-name regression remains in the full tag database suite; its test-only fixture also composes in the portable harness. The two JPEG carrier regressions pass in the 20-test JPEG module run. Original review threads retain the linked replies and resolution state.
 
 Every original PR head remains an ancestor. PRs #682 and #683 are excluded.
 
@@ -36,7 +36,7 @@ These were unresolved on the original PRs when consolidation began. Closing the 
 
   The required leading instrument header identifies this run as `fresh_jpeg_public_batch_matrix_v1`, while `run_matrix` writes `fresh_jpeg_public_batch_matrix_v2` into the JSON report. Consequently, any gate or baseline keyed by the first header attributes the expanded 207-case/JFIF-adjusted result schema to the older instrument version, making measurement comparisons ambiguous; use the same version identifier in both outputs.
 
-- [ ] [PR #771 review](https://github.com/swack-tools/oxidex/pull/771#discussion_r4006933126) — original `src/writers/jpeg_writer.rs:276`
+- [x] [PR #771 review](https://github.com/swack-tools/oxidex/pull/771#discussion_r4006933126) — original `src/writers/jpeg_writer.rs:276`
 
   **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Preserve whole-EXIF clearing through the mixed transaction**
 
@@ -48,7 +48,7 @@ These were unresolved on the original PRs when consolidation began. Closing the 
 
   The report is not constructed until after every native call, the Rust fixture subprocess, its return-code check, and result parsing. If the driver exits nonzero, times out, or produces missing/malformed results, the instrument raises before writing `--output`, losing the indexed native calls and selection probes that explain the failed experiment. Initialize and save the report before launching the driver, then record its failure state before propagating the error.
 
-- [ ] [PR #771 review](https://github.com/swack-tools/oxidex/pull/771#discussion_r4006933136) — original `src/writers/jpeg_writer.rs:465`
+- [x] [PR #771 review](https://github.com/swack-tools/oxidex/pull/771#discussion_r4006933136) — original `src/writers/jpeg_writer.rs:465`
 
   **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Honor the generated ExtendedEXIF creation barrier**
 
@@ -104,7 +104,7 @@ These were unresolved on the original PRs when consolidation began. Closing the 
 
   Killing the entire process group simultaneously lets the adapter exit before it can reap its nested child. On Linux with a non-reaping PID 1, that child remains a defunct process indefinitely; `python3 -m unittest -v tools/exiftool-tables/test_version_rehearsal_stage_adapter.py` consequently fails `test_executor_timeout_kills_adapter_nested_child_and_releases_lock`, and repeated timeouts can accumulate zombies. Teardown should allow the adapter to reap its child or otherwise arrange for descendant reaping before returning.
 
-- [ ] [PR #774 review](https://github.com/swack-tools/oxidex/pull/774#discussion_r4006900465) — original `tools/exiftool-tables/version_rehearsal_stage_adapter.py:574`
+- [x] [PR #774 review](https://github.com/swack-tools/oxidex/pull/774#discussion_r4006900465) — original `tools/exiftool-tables/version_rehearsal_stage_adapter.py:574`
 
   **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Invoke a matrix producer matching the v4 acceptance contract**
 
@@ -116,7 +116,7 @@ These were unresolved on the original PRs when consolidation began. Closing the 
 
   When a generate, build, read, or write command fails or publishes an invalid result, this branch marks only the individual stage and top-level phase as failed, then returns `False`; `execute()` immediately returns that journal without updating `journal["releases"][release]["state"]`, which therefore remains `pending` despite its failure record. Consumers inspecting per-release outcomes receive a contradictory state, so this path should set the release state to `failed` as the checkout-exception path already does.
 
-- [ ] [PR #774 review](https://github.com/swack-tools/oxidex/pull/774#discussion_r4006900476) — original `src/tag_db/mod.rs:249`
+- [x] [PR #774 review](https://github.com/swack-tools/oxidex/pull/774#discussion_r4006900476) — original `src/tag_db/mod.rs:249`
 
   **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Prefer a current reverse name over a retired identity**
 
@@ -128,11 +128,11 @@ The original comments above are preserved as review history; checked items have 
 
 - Canonical regeneration: both tiers passed against explicit Perl 5.38.2 and ExifTool 13.59 at `6f34cff4`. Expression verification matched all 16,789 evaluated comparisons over 607 translated expressions; 14 native-rejected probes were skipped.
 - Python integration at `be0ffe0c`: 425 tests, six skipped, exit zero, unchanged source. A separate 29-test fresh-JPEG/Nikon run passed.
-- Combined workspace checkpoint at `bc4f617e`: formatting and Clippy passed; 6,120 Rust tests passed, zero failed, 126 ignored; 105 focused Python tests passed.
+- Final workspace checkpoint at `d0c1b6ae`: formatting and Clippy passed; 6,121 Rust tests passed, zero failed, 126 ignored; 118 focused Python tests completed successfully, one skipped. The exact renamed-current/retired-address regression executed successfully.
 - Linux teardown at `be0ffe0c`: 41 tests passed without skips. Native and adapter timeout tests confirmed descendant cleanup and lock release.
 - Historical observations at `be0ffe0c`: 1,530 TIFF/JPEG cases matched, including 1,353 positive write/readbacks. The UserData reader matched all 126 comparisons across 63 fixtures. The authenticated catalog snapshot is published separately and retains its original runtime identity.
 - Final compiler repairs: all eight replacement/deletion mutations of Intel/Motorola byte-pack C/c mappings refused; the public numeric compiler retains exactly its two supported formats while the private cleanup closure admits seven physical formats. Independent review found both blockers resolved.
-- Actual pinned native survivor fixtures cover 48 combinations of TIFF/JPEG carrier, little/big endian, four integer storage types and counts zero/one/two. Native behavior removes matching count-one defaults and preserves count-zero/count-two fields. Current OxiDex comparison is a separate final landing check.
+- Actual pinned native survivor fixtures cover 48 combinations of TIFF/JPEG carrier, little/big endian, four integer storage types and counts zero/one/two. Native behavior removes matching count-one defaults and preserves count-zero/count-two fields. The fresh `fixedwidth_ifd1_public_write_v1` native/OxiDex comparison at `7b1cf056` passed all 48 cases.
 
 The earlier `--all-targets` Clippy probe exposed pre-existing integration/forensic test lint failures. The required workspace/all-feature Clippy command passes; no all-targets pass is claimed.
 

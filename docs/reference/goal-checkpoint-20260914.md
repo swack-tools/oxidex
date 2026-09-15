@@ -1,6 +1,6 @@
 # Generated metadata parity checkpoint
 
-Status: feature expansion paused at the maintainer's request, 2026-09-14. Existing work is being finished and landed through PR #779; #682 and #683 remain separate. The full source-derived read/write parity objective remains incomplete. See [resume instructions](metadata-parity-resume.md).
+Status: feature expansion paused at the maintainer's request, 2026-09-14. Existing work is consolidated in PR #779; its merge and final CI receipts are recorded on GitHub. PRs #682 and #683 remain separate. The full source-derived read/write parity objective remains incomplete. See [resume instructions](metadata-parity-resume.md).
 
 ## What is now accounted for
 
@@ -38,13 +38,19 @@ The source-only snapshot deliberately has no observed credits. A separate [authe
 
 Snapshot import replayed the live receipt validators with the original clean runtime preserved. The reviewed publisher repair aligned non-ASCII receipt hashing with the join producer. Current-source applicability is reported separately from historical runtime evidence; the snapshot does not validate later writer changes.
 
-The combined checkpoint at `bc4f617e` passed formatting, workspace/all-feature Clippy, 6,120 Rust tests (zero failed, 126 ignored), and 105 focused Python tests. Final generator review repairs authenticate byte packing maps and keep the public two-format scalar ABI separate from seven private cleanup formats. Both repairs passed independent review. Final `regen-all.sh` at `980d5efe` passed both tiers with zero net generated changes; native writer checks follow those repairs.
+The completed local checkpoint at `d0c1b6ae` passed formatting, workspace/all-feature Clippy, 6,121 Rust tests (zero failed, 126 ignored), and 118 focused Python tests (one skipped). This includes the actual current/retired reverse-name regression. Final generator repairs authenticate byte packing maps and keep the public two-format scalar ABI separate from seven private cleanup formats. Both repairs passed independent review; official regeneration at `980d5efe` passed both tiers with zero net generated changes.
 
-Linux rehearsal teardown passed 41 executor/adapter tests, zero skips, at `be0ffe0c`. Recorded descendants were absent after teardown and the shared lock was released. The relevant source files are unchanged in the later integration. Exact historical mandatory-default source profiles for ExifTool 11.78 and 12.64 are now integrated and independently reviewed.
+Linux rehearsal teardown passed 41 executor/adapter tests, zero skips, at `be0ffe0c`. Recorded descendants were absent after teardown and the shared lock was released. The relevant source files are unchanged in the later integration. Exact historical mandatory-default source profiles for ExifTool 11.78 and 12.64 are integrated and independently reviewed. The fresh materialized rehearsal at `980d5efe` passed its 11.78 native probe (denominator two), then explicitly refused unsupported historical `SetNewValue` caller control flow during generation. Read/write stages and 12.64 did not run; promotion is forbidden. This is preserved remaining capability work, not a successful upgrade claim.
+
+The writer checkpoint at `b4ca393d` executed locally on the Apple M5. It passed all 1,530 public TIFF/JPEG matrix cases (1,524 mutating and six native-idempotent cases). Authenticated native readback credited 1,353 positive write operations across 38 distinct Group1 names. This result is separate from the historical `be0ffe0c` published snapshot. The originally proposed remote M4 run did not occur: SSH was unavailable, and the first local run was mislabeled and aborted; its partial artifacts are preserved without credit.
+
+The subsequent 48-carrier comparison found a JPEG mandatory-only IFD1 cleanup mismatch. The repair in `31e87191` applies the existing source-derived physical survivor matcher to JPEG, including JFIF default substitutions. Its focused regression, 20 JPEG module tests and Clippy pass; independent review found no actionable defect. The fresh `fixedwidth_ifd1_public_write_v1` comparison at clean commit `7b1cf056` passed all 48 native/OxiDex cases using Perl 5.38.2 and pinned ExifTool 13.59. The full public matrix at the same clean runtime also matched all 1,530 cases (1,524 mutating, six native-idempotent). Authenticated readback and final integrated gate receipts are recorded on PR #779; the published observed catalog snapshot remains bound to its original runtime.
+
+The selected-release matrix adapter now derives its cohort from authenticated generated inputs rather than obsolete fixed totals. It accepted the actual 1,530-row selected report, including all 876 baseline cases, with zero mismatches. Its 45 adapter/executor tests passed. Historical 11.78 generation still refuses independently of this report-contract repair.
 
 ## Work remaining and how progress is measured
 
-1. Finish current writer/native checks, the materialized 11.78/12.64 rehearsal and four remaining carried review items. Merge the existing PR after its checks pass; do not expand feature scope during this pause.
+1. Before resuming, verify PR #779 is merged and inspect its final integrated gate and review receipts. The CI source-bound ledger replay and numeric composition harness repairs are included; do not infer their outcome from an older green commit.
 2. On resumption, use the per-table omission ledger to select the next shared protocol or conversion capability. Each milestone must reduce an identified refusal block, regenerate affected rows and verify the relevant on-disk behaviors against the pin.
 3. Grow observed read/write evidence separately from implementation declarations. Record catalog coordinates, Group1 names, fixture occurrences and positive write operations independently.
 4. Continue toward full catalog-wide parity when the maintainer resumes the work. The 179 reader declarations, 19 writer declarations and IFD schema counts are intermediate evidence, not completion or an autogenerated-output percentage.
