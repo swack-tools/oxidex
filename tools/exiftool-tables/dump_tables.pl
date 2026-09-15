@@ -465,6 +465,102 @@ sub quicktime_userdata_reader_protocol_fact {
     };
 }
 
+# Garmin FIT records are self-describing: a definition message names each
+# field's FIT base type, and ProcessFIT maps that type through the lexical
+# `%baseType` it closes over (format, FIT name, invalid value).  That table is
+# not in any symbol-table hash, so capture the live pad value -- the same data
+# Perl executes -- rather than an initializer parsed from source.  The invalid
+# value is recorded as its Perl string form because ProcessFIT compares
+# `lc $val eq $baseType{$type}[2]` as text.  Facts only: a consumer must still
+# refuse an unresolved capture or a changed ProcessFIT body.
+sub garmin_fit_base_types {
+    my ($cv) = @_;
+    my (@names, @values);
+    my $loaded = eval {
+        my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
+        die "missing pad" unless @pad >= 2;
+        @names = $pad[0]->ARRAY;
+        @values = $pad[1]->ARRAY;
+        1;
+    };
+    return { resolved => JSON::PP::false, reason => 'lexical_pad_unavailable' } unless $loaded;
+    my @matches = grep {
+        my $name = eval { $names[$_]->PV };
+        defined($name) && $name eq '%baseType';
+    } 0 .. $#names;
+    return { resolved => JSON::PP::false, reason => 'missing_base_type_pad' } unless @matches == 1;
+    my $hash = eval {
+        $values[$matches[0]]->isa('B::HV') ? $values[$matches[0]]->object_2svref : undef;
+    };
+    return { resolved => JSON::PP::false, reason => 'base_type_pad_unavailable' } unless ref($hash) eq 'HASH';
+    my %entries;
+    for my $key (sort { $a <=> $b } keys %$hash) {
+        my $entry = $hash->{$key};
+        return { resolved => JSON::PP::false, reason => 'base_type_entry_shape' }
+            unless ref($entry) eq 'ARRAY' && @$entry == 3 && !grep { !defined($_) || ref($_) } @$entry;
+        $entries{to_text($key)} = {
+            format => to_text('' . $entry->[0]),
+            fit_name => to_text('' . $entry->[1]),
+            invalid => to_text('' . $entry->[2]),
+        };
+    }
+    return { resolved => JSON::PP::true, entries => \%entries };
+}
+
+sub garmin_fit_reader_protocol_fact {
+    my ($lib_abs) = @_;
+    no strict 'refs';
+    my $process_fit = *{'Image::ExifTool::Garmin::ProcessFIT'}{CODE};
+    my $base_types = $process_fit
+        ? garmin_fit_base_types($process_fit)
+        : { resolved => JSON::PP::false, reason => 'code_ref_unavailable' };
+    my %format_sizes;
+    if ($base_types->{resolved}) {
+        for my $entry (values %{$base_types->{entries}}) {
+            my $size = Image::ExifTool::FormatSize($entry->{format});
+            $format_sizes{$entry->{format}} = defined $size ? 0 + $size : undef;
+        }
+    }
+    # `IsTimeStamp` is a row key outside @TAG_KEYS, so the table projection
+    # keeps only its presence (`_extra_keys`).  Record the values here without
+    # changing any row's shape or digest.
+    my %is_timestamp;
+    for my $name (sort keys %Image::ExifTool::Garmin::) {
+        next unless $name =~ /^[A-Za-z_]\w*$/;
+        my $table = \%{"Image::ExifTool::Garmin::$name"};
+        next unless %$table && ref($table->{GROUPS}) eq 'HASH';
+        for my $key (sort keys %$table) {
+            my $row = $table->{$key};
+            next unless ref($row) eq 'HASH' && exists $row->{IsTimeStamp};
+            $is_timestamp{$name}{to_text($key)} = to_text('' . ($row->{IsTimeStamp} // ''));
+        }
+    }
+    # Get64u/Get64s are prototype-only stubs here (their bodies autoload from
+    # Writer.pl on first use), so a digest of them would authenticate nothing.
+    # Their exact-integer behavior depends on `perl_integer` below and is
+    # proven by native fixtures, not by this fact.
+    my %dependencies;
+    for my $name (qw(Image::ExifTool::ReadValue Image::ExifTool::GetFloat
+                    Image::ExifTool::GetDouble)) {
+        $dependencies{$name} = code_source_fact($name, $lib_abs, undef, undef, 0);
+    }
+    require Config;
+    return {
+        kind => 'garmin_fit_reader_protocol_v1',
+        process_fit => code_ref_fact($process_fit,
+            'Image::ExifTool::Garmin::ProcessFIT', $lib_abs, undef, undef, 0),
+        base_types => $base_types,
+        format_sizes => \%format_sizes,
+        is_timestamp => \%is_timestamp,
+        dependencies => \%dependencies,
+        perl_integer => {
+            ivsize => 0 + $Config::Config{ivsize},
+            uvsize => 0 + $Config::Config{uvsize},
+            nvsize => 0 + $Config::Config{nvsize},
+        },
+    };
+}
+
 sub collect_subdirectory_validate_function_names {
     my ($value, $names, $seen, $depth) = @_;
     return if !defined $value || $depth > 24;
@@ -1981,6 +2077,13 @@ if (exists $out{QuickTime} && exists $out{QuickTime}{tables}{UserData}) {
     $quicktime_userdata_reader_protocol = quicktime_userdata_reader_protocol_fact($EXIFTOOL_LIB_ABS);
 }
 
+# Same detached state for Garmin FIT: the executor's protocol is ProcessFIT,
+# whose base-type table is a closed-over lexical rather than a tag table.
+my $garmin_fit_reader_protocol;
+if (exists $out{Garmin} && exists $out{Garmin}{tables}{FIT}) {
+    $garmin_fit_reader_protocol = garmin_fit_reader_protocol_fact($EXIFTOOL_LIB_ABS);
+}
+
 # Hydration deliberately follows every detached reader contract.  It may load
 # the catalog and attach native back-pointers, but must not change the source
 # facts already recorded above.
@@ -2065,6 +2168,8 @@ my %document = (
         ? (quicktime_userdata_reader_protocol => $quicktime_userdata_reader_protocol) : ()),
     (defined $quicktime_itemlist_reader_protocol
         ? (quicktime_itemlist_reader_protocol => $quicktime_itemlist_reader_protocol) : ()),
+    (defined $garmin_fit_reader_protocol
+        ? (garmin_fit_reader_protocol => $garmin_fit_reader_protocol) : ()),
 );
 $document{hydrated_layouts} = $hydrated_layouts if $HYDRATED_LAYOUTS;
 unless ($READER_ONLY) {

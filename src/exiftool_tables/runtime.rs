@@ -277,6 +277,119 @@ pub fn apply_value_conv(
     })
 }
 
+/// The value domain an [`super::ExprId`] was compiled for.
+///
+/// Each `ExprId` has exactly one input domain (`exprs.py`'s `compile_any`):
+/// its methods for every other domain return `None`, which is otherwise the
+/// spelling of a Perl `undef` result. A static schema (binary/IFD tables)
+/// proves the domain at generation time from `Format`/`Writable`. A
+/// self-describing record -- a FIT field, whose base type arrives in the file
+/// -- can only learn it at run time, so the conversion carries its domain as
+/// data and [`apply_typed`] checks it before calling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConvDomain {
+    /// `$val` is one number (`value_num` / `apply`).
+    Num,
+    /// `$val` is a Perl string produced by an earlier conversion.
+    Str,
+    /// `$val` is raw `undef` bytes.
+    Bytes,
+}
+
+/// An oracle-approved conversion together with the domain it was compiled
+/// for (see [`ConvDomain`]).
+#[derive(Clone, Copy, Debug)]
+pub struct TypedConv {
+    pub expr: super::ExprId,
+    pub domain: ConvDomain,
+}
+
+/// The outcome of applying a [`TypedConv`] to a run-time value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Typed<T> {
+    /// The conversion ran and returned this value.
+    Value(T),
+    /// The conversion ran and returned Perl `undef`.
+    Undef,
+    /// The value is not in the conversion's compiled domain; the conversion
+    /// was not run. Never a reason to fall back to the raw value.
+    DomainMismatch,
+}
+
+/// The domain a run-time value presents to a conversion, if any.
+///
+/// `StringBytes` (a raw `string` read) and arrays have no domain here: the
+/// string-domain programs are verified against converted Perl strings, and a
+/// fixed-count list needs the separate list compiler, so both refuse.
+fn runtime_domain(value: &DecodedValue) -> Option<ConvDomain> {
+    /// 2^53: past this an `i64` has no exact `f64`, while Perl keeps a 64-bit
+    /// IV exact through interpolation and integer arithmetic. The compiled
+    /// numeric programs take `f64`, so such a value is outside their domain.
+    const EXACT_F64_INTEGER: i64 = 1 << 53;
+    match value {
+        DecodedValue::Integer(integer) if integer.unsigned_abs() > EXACT_F64_INTEGER as u64 => None,
+        DecodedValue::Integer(_) | DecodedValue::Float(_) => Some(ConvDomain::Num),
+        DecodedValue::String(_) => Some(ConvDomain::Str),
+        DecodedValue::Undefined(_) => Some(ConvDomain::Bytes),
+        DecodedValue::UnsignedRational(..)
+        | DecodedValue::SignedRational(..)
+        | DecodedValue::StringBytes(_)
+        | DecodedValue::Array(_) => None,
+    }
+}
+
+/// Apply a `RawConv`/`ValueConv` [`TypedConv`] to `value` only when the value
+/// is in the conversion's compiled domain. The result has the same numeric
+/// normalization as [`apply_value_conv`].
+#[must_use]
+pub fn apply_typed(conv: TypedConv, value: &DecodedValue) -> Typed<DecodedValue> {
+    if runtime_domain(value) != Some(conv.domain) {
+        return Typed::DomainMismatch;
+    }
+    let output = match value {
+        DecodedValue::Integer(_) | DecodedValue::Float(_) => match value.number() {
+            Some(number) => conv.expr.value_num(number),
+            None => return Typed::DomainMismatch,
+        },
+        DecodedValue::String(text) => conv.expr.value_str(text),
+        DecodedValue::Undefined(bytes) => conv.expr.value_bytes(bytes),
+        _ => return Typed::DomainMismatch,
+    };
+    match output {
+        None => Typed::Undef,
+        Some(ExprValue::Number(number))
+            if number.is_finite()
+                && number.fract() == 0.0
+                && number >= i64::MIN as f64
+                && number <= i64::MAX as f64 =>
+        {
+            Typed::Value(DecodedValue::Integer(number as i64))
+        }
+        Some(ExprValue::Number(number)) => Typed::Value(DecodedValue::Float(number)),
+        Some(ExprValue::String(text)) => Typed::Value(DecodedValue::String(text)),
+        Some(ExprValue::Bytes(bytes)) => Typed::Value(DecodedValue::StringBytes(bytes)),
+    }
+}
+
+/// Render a `PrintConv` [`TypedConv`] under the same domain rule as
+/// [`apply_typed`].
+#[must_use]
+pub fn render_typed(conv: TypedConv, value: &DecodedValue) -> Typed<String> {
+    if runtime_domain(value) != Some(conv.domain) {
+        return Typed::DomainMismatch;
+    }
+    let output = match value {
+        DecodedValue::Integer(_) | DecodedValue::Float(_) => match value.number() {
+            Some(number) => conv.expr.apply(number),
+            None => return Typed::DomainMismatch,
+        },
+        DecodedValue::String(text) => conv.expr.apply_str(text),
+        DecodedValue::Undefined(bytes) => conv.expr.apply_bytes(bytes),
+        _ => return Typed::DomainMismatch,
+    };
+    output.map_or(Typed::Undef, Typed::Value)
+}
+
 /// Render a [`DecodedValue`] as a [`TagValue`] with no conversion applied.
 ///
 /// The fallback [`DecodedField::emit`] and [`RawAccess::emit_raw`] both use

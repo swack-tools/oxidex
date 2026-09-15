@@ -53,6 +53,10 @@ IFD_IDENTITY_LEDGER="$(artifact_path ifd-identity-ledger)"
 # Generate and verify inactive keyed definitions too; publishing their source
 # facts does not enable a runtime parser route.
 KEYED_OUT="$(artifact_path keyed)"
+# Garmin FIT message/field specs and their acceptance ledger. Compiled by
+# codegen.py itself so FIT conversions join the shared ExprId enum.
+FIT_OUT="$(artifact_path garmin-fit)"
+FIT_LEDGER="$(artifact_path garmin-fit-ledger)"
 SERIAL_OUT="$(artifact_path serial)"
 JSON="$CACHE/tables-$VERSION.json"
 HYDRATED_JSON="$CACHE/tables-hydrated-reader-$VERSION.json"
@@ -117,6 +121,7 @@ echo
 echo ">> generating Rust"
 python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --ifd-identity-ledger-out "$IFD_IDENTITY_LEDGER" --keyed-out "$KEYED_OUT" \
+    --fit-out "$FIT_OUT" --fit-ledger-out "$FIT_LEDGER" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
