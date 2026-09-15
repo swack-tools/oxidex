@@ -4208,6 +4208,20 @@ def main():
         "--write-out",
         help="write inactive source-derived write candidates; this does not activate a writer route",
     )
+    ap.add_argument(
+        "--fit-out",
+        help="write Garmin FIT message/field specs (src/exiftool_tables/fit_tables.rs); "
+        "requires --fit-protocol-fact",
+    )
+    ap.add_argument(
+        "--fit-protocol-fact",
+        help="capture_garmin_fit_fact.pl output. Without it every FIT row is refused, so the "
+        "FIT conversions (and their ExprId variants) are absent from the shared enum",
+    )
+    ap.add_argument(
+        "--fit-ledger-out",
+        help="write the Garmin FIT acceptance/refusal ledger (requires --fit-out)",
+    )
     args = ap.parse_args()
 
     with open(args.tables_json, encoding="utf-8") as fh:
@@ -4275,6 +4289,22 @@ def main():
     import keyed_directory
     keyed_src, keyed_stats = keyed_directory.generate(doc, verified_exprs, names)
 
+    # Garmin FIT field specs carry run-time-typed conversions (the base type
+    # arrives in the file, so no static domain exists). Compile them before
+    # the ExprId enum is frozen for the same reason as keyed source: a
+    # FIT-only approved conversion must not dangle.
+    import garmin_fit_specs
+    fit_protocol = None
+    if args.fit_protocol_fact:
+        with open(args.fit_protocol_fact, encoding="utf-8") as fh:
+            fit_protocol = json.load(fh)
+    fit_src, fit_ledger = (
+        garmin_fit_specs.generate(doc, verified_exprs, fit_protocol)
+        if garmin_fit_specs.MODULE in (doc.get("modules") or {})
+        and (names is None or garmin_fit_specs.MODULE in names)
+        else ("", None)
+    )
+
     # Collect the expressions actually referenced so the enum has no dead arms.
     # Iterate in sorted order: set iteration order varies between runs, and a
     # generator whose output depends on it cannot be checked into git.
@@ -4294,6 +4324,7 @@ def main():
             f"ExprId::{ident}" in joined
             or f"ExprId::{ident}" in ifd_joined
             or f"ExprId::{ident}" in keyed_src
+            or f"ExprId::{ident}" in fit_src
         ):
             used[ident] = e
 
@@ -4403,6 +4434,29 @@ def main():
             f"tables={write_report.emitted_tables}, rows={write_report.emitted_rows}; "
             f"omitted tables={write_report.omitted_tables}, rows={write_report.omitted_rows}"
         )
+
+    if args.fit_ledger_out and not args.fit_out:
+        raise SystemExit("--fit-ledger-out requires --fit-out")
+    if args.fit_out:
+        if fit_ledger is None:
+            raise SystemExit("--fit-out requested but the dump has no Garmin module in scope")
+        if not args.fit_protocol_fact:
+            raise SystemExit("--fit-out requires --fit-protocol-fact (capture_garmin_fit_fact.pl)")
+        if not fit_ledger["protocol"]["admitted"]:
+            # Recorded, not fatal: an upgrade that changes ProcessFIT must
+            # regenerate to a fully withheld FIT table (and a failing
+            # `fit::tests::generated_protocol_is_admitted`) until reviewed.
+            print("WARNING: FIT protocol REFUSED: " + "; ".join(fit_ledger["protocol"]["reasons"]))
+        with open(args.fit_out, "w", encoding="utf-8") as fh:
+            fh.write(fit_src)
+        print(f"wrote FIT specs      {args.fit_out}")
+        counts = fit_ledger["counts"]
+        print(f"  FIT source rows: {counts['source_rows']} generated={counts['generated']} "
+              f"refused={counts['refused']} protocol_admitted={fit_ledger['protocol']['admitted']}")
+        if args.fit_ledger_out:
+            with open(args.fit_ledger_out, "w", encoding="utf-8") as fh:
+                fh.write(garmin_fit_specs.serialized(fit_ledger))
+            print(f"wrote FIT ledger     {args.fit_ledger_out}")
 
     if args.keyed_out:
         # Normal regeneration always requests this output; focused generator

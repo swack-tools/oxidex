@@ -43,6 +43,8 @@ pub mod enabled_ifd;
 pub mod enabled_serial;
 pub mod engine;
 pub mod exprs;
+pub mod fit_schema;
+pub mod fit_tables;
 pub mod ifd_engine;
 pub mod ifd_schema;
 pub mod ifd_tables;
