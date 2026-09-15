@@ -299,6 +299,54 @@ fn lookup_tag_name_with_generated(
 mod tests {
     use super::*;
 
+    #[test]
+    fn renamed_current_address_wins_retired_reverse_without_reviving_yaml() {
+        use crate::writers::generated_setnewvalue_public_migration_rules::PUBLIC_SET_NEW_VALUE_MIGRATIONS;
+        use generated_scalar_descriptor_fallback::tests::{
+            ReverseLookupFixture, reverse_lookup_fixture,
+        };
+
+        // Choose a real generated identity whose old spelling also exists in
+        // the legacy index. A YAML miss would not exercise the stale fallback.
+        let source = PUBLIC_SET_NEW_VALUE_MIGRATIONS
+            .iter()
+            .find(|migration| {
+                !migration.removed_or_unsupported
+                    && migration.write_group == "IFD0"
+                    && TAG_ID_TO_NAME_INDEX
+                        .get(&(migration.raw_tag_id, FormatFamily::EXIF))
+                        .is_some_and(|name| {
+                            name.split_once(':').map(|(_, name)| name) == Some(migration.name)
+                        })
+            })
+            .expect("a migrated source identity must have a real legacy YAML spelling");
+        let old_name = format!("{}:{}", source.write_group, source.name);
+        assert_eq!(
+            lookup_tag_name(source.raw_tag_id, source.write_group),
+            old_name
+        );
+        let lookup = |facts: &ReverseLookupFixture| {
+            lookup_tag_name_with_generated(
+                source.raw_tag_id,
+                source.write_group,
+                |id, family, group| facts.terminal(id, family, group),
+                |id, family, group| facts.name(id, family, group),
+            )
+        };
+        for retired_first in [false, true] {
+            let renamed =
+                reverse_lookup_fixture(source, Some("SourceRenamedCurrentTag"), retired_first);
+            assert_eq!(lookup(&renamed), "IFD0:SourceRenamedCurrentTag");
+            assert_ne!(lookup(&renamed), old_name);
+        }
+        let removed = reverse_lookup_fixture(source, None, false);
+        assert_eq!(
+            lookup(&removed),
+            format!("{}:0x{:04X}", source.write_group, source.raw_tag_id)
+        );
+        assert_ne!(lookup(&removed), old_name);
+    }
+
     /// `Uncompressed` is a genuine `Exif::Main` tag at 0xBC03 -- HD Photo's
     /// compression value -- but it was unreachable, because the enum-value
     /// blocklist that kept PrintConv display strings out of this index also
