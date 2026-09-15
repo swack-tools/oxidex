@@ -59,44 +59,46 @@ fn test_parse_sample_mp4_metadata() {
         metadata.len()
     );
 
-    // Verify specific iTunes metadata fields
-    // The sample.mp4 file should contain these tags
+    // Generated ItemList occurrences use QuickTime as their family-0 storage
+    // key. The CLI's -G1 view uses their ItemList occurrence group (verified
+    // independently by verify_quicktime_reader.py against pinned ExifTool).
+    // The legacy date alias remains outside the generated scalar subset.
     assert!(
-        metadata.contains_key("ItemList:Title"),
-        "ItemList:Title not found in metadata"
+        metadata.contains_key("QuickTime:Title"),
+        "QuickTime:Title not found in metadata"
     );
     assert!(
-        metadata.contains_key("ItemList:Artist"),
-        "ItemList:Artist not found in metadata"
+        metadata.contains_key("QuickTime:Artist"),
+        "QuickTime:Artist not found in metadata"
     );
     assert!(
-        metadata.contains_key("ItemList:Album"),
-        "ItemList:Album not found in metadata"
+        metadata.contains_key("QuickTime:Album"),
+        "QuickTime:Album not found in metadata"
     );
     assert!(
         metadata.contains_key("ItemList:Year"),
         "ItemList:Year not found in metadata"
     );
     assert!(
-        metadata.contains_key("ItemList:Comment"),
-        "ItemList:Comment not found in metadata"
+        metadata.contains_key("QuickTime:Comment"),
+        "QuickTime:Comment not found in metadata"
     );
 
     // Verify expected values
     assert_eq!(
-        metadata.get_string("ItemList:Title"),
+        metadata.get_string("QuickTime:Title"),
         Some("Sample Video Title"),
-        "ItemList:Title value incorrect"
+        "QuickTime:Title value incorrect"
     );
     assert_eq!(
-        metadata.get_string("ItemList:Artist"),
+        metadata.get_string("QuickTime:Artist"),
         Some("Sample Artist"),
-        "ItemList:Artist value incorrect"
+        "QuickTime:Artist value incorrect"
     );
     assert_eq!(
-        metadata.get_string("ItemList:Album"),
+        metadata.get_string("QuickTime:Album"),
         Some("Sample Album"),
-        "ItemList:Album value incorrect"
+        "QuickTime:Album value incorrect"
     );
     assert_eq!(
         metadata.get_string("ItemList:Year"),
@@ -112,17 +114,9 @@ fn test_parse_mp4_with_quicktime_user_data() {
     let reader = BufferedReader::new(&mp4_path).expect("Failed to open MP4 file");
     let metadata = parse_quicktime_metadata(&reader).expect("Failed to parse MP4");
 
-    // The sample file also has classic QuickTime user data
-    assert!(
-        metadata.contains_key("QuickTime:Title"),
-        "QuickTime:Title not found in metadata"
-    );
-
-    assert_eq!(
-        metadata.get_string("QuickTime:Title"),
-        Some("Sample Video Title"),
-        "QuickTime:Title value incorrect"
-    );
+    // Check the separate classic user-data value, rather than accidentally
+    // testing the ItemList title a second time.
+    assert_eq!(metadata.get_string("UserData:Title"), Some("QT Title!!"));
 
     println!("QuickTime user data extracted successfully:");
     for (key, value) in metadata.iter() {
@@ -141,12 +135,12 @@ fn test_parse_mp4_extracts_multiple_tags() {
 
     // List of tags we expect to find
     let expected_tags = [
-        "ItemList:Title",
-        "ItemList:Artist",
-        "ItemList:Album",
-        "ItemList:Year",
-        "ItemList:Comment",
         "QuickTime:Title",
+        "QuickTime:Artist",
+        "QuickTime:Album",
+        "ItemList:Year",
+        "QuickTime:Comment",
+        "UserData:Title",
     ];
 
     let mut found_count = 0;
@@ -174,14 +168,14 @@ fn test_parse_mp4_copyright_tag() {
 
     // Verify copyright field
     assert!(
-        metadata.contains_key("ItemList:Copyright"),
-        "ItemList:Copyright not found"
+        metadata.contains_key("QuickTime:Copyright"),
+        "QuickTime:Copyright not found"
     );
 
     assert_eq!(
-        metadata.get_string("ItemList:Copyright"),
+        metadata.get_string("QuickTime:Copyright"),
         Some("Copyright 2024"),
-        "ItemList:Copyright value incorrect"
+        "QuickTime:Copyright value incorrect"
     );
 }
 
@@ -194,14 +188,14 @@ fn test_parse_mp4_genre_tag() {
 
     // Verify genre field
     assert!(
-        metadata.contains_key("ItemList:Genre"),
-        "ItemList:Genre not found"
+        metadata.contains_key("QuickTime:Genre"),
+        "QuickTime:Genre not found"
     );
 
     assert_eq!(
-        metadata.get_string("ItemList:Genre"),
+        metadata.get_string("QuickTime:Genre"),
         Some("Test Genre"),
-        "ItemList:Genre value incorrect"
+        "QuickTime:Genre value incorrect"
     );
 }
 
@@ -244,14 +238,15 @@ fn test_parse_mp4_atom_hierarchy() {
     // If we successfully extracted iTunes metadata, it means we navigated:
     // moov → udta → meta → ilst → ©nam → data
     assert!(
-        metadata.contains_key("ItemList:Title"),
+        metadata.contains_key("QuickTime:Title"),
         "Failed to navigate atom hierarchy to extract iTunes metadata"
     );
 
     // If we successfully extracted QuickTime user data, it means we navigated:
     // moov → udta → ©nam
-    assert!(
-        metadata.contains_key("QuickTime:Title"),
+    assert_eq!(
+        metadata.get_string("UserData:Title"),
+        Some("QT Title!!"),
         "Failed to navigate atom hierarchy to extract QuickTime user data"
     );
 }

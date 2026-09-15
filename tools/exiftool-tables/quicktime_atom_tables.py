@@ -24,13 +24,20 @@ FORMATS = {None, "string", "int8u", "int16u", "int32u", "int64u"}
 NON_READING_PROPERTIES = {
     "Name", "Description", "Notes", "Groups", "_shorthand", "Avoid",
     "Writable", "WriteGroup", "Preferred", "SeparateTable", "ValueConvInv",
-    "PrintConvInv", "Format", "PrintConv",
+    "PrintConvInv", "Format", "PrintConv", "PrintConvColumns",
 }
 
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                                      ensure_ascii=False).encode()).hexdigest()
+
+
+def semantic_normal_form(row):
+    """Remove only selector-declared behavior-inert source metadata markers."""
+    if not isinstance(row, dict):
+        return row
+    return {key: value for key, value in row.items() if key != "_shorthand"}
 
 
 def variants(row, path=()):
@@ -73,9 +80,20 @@ def inspect_row(table_name, table, raw_key, path, row, structural_reason):
         reasons.append("unsupported_format:" + str(fmt))
     for prop in sorted(set(row) - NON_READING_PROPERTIES):
         if prop == "_extra_keys" and isinstance(row[prop], list):
-            reasons.extend("uncaptured_source_property:" + str(key) for key in row[prop])
+            # BuildTagLookup uses PrintConvColumns only to lay out the HTML
+            # enum table. It has no role in reading bytes or converting values.
+            reasons.extend("uncaptured_source_property:" + str(key) for key in row[prop]
+                           if key != "PrintConvColumns")
         else:
             reasons.append("unsupported_source_property:" + prop)
+    # This captured field controls catalog enum-table presentation, not reads.
+    # Its old uncaptured-key form is handled above; validate the newly exposed
+    # scalar so an unsupported replacement is still visible in the ledger.
+    if "PrintConvColumns" in row:
+        columns = row["PrintConvColumns"]
+        if not ((type(columns) is int and columns > 0)
+                or (isinstance(columns, str) and re.fullmatch(r"[1-9][0-9]*", columns))):
+            reasons.append("unsupported_display_column_count")
     pc = row.get("PrintConv")
     enum = None
     if pc is not None:
@@ -89,16 +107,19 @@ def inspect_row(table_name, table, raw_key, path, row, structural_reason):
     groups = table.get("meta", {}).get("GROUPS", {})
     override = row.get("Groups", {})
     if not isinstance(groups, dict) or not isinstance(override, dict):
-        group = None
+        group = group0 = None
     else:
         group = override.get("1", groups.get("1"))
+        group0 = override.get("0", groups.get("0", "QuickTime"))
     if not isinstance(group, str) or not group:
         reasons.append("missing_literal_output_group")
+    if not isinstance(group0, str) or not group0:
+        reasons.append("missing_literal_family0_group")
     result = {"identity": identity, "reasons": sorted(set(reasons)),
               "runtime_connected": False, "observed_read": None, "observed_write": None}
     if not reasons:
         result["spec"] = {"key_hex": key_bytes.hex(), "name": row["Name"],
-                          "group": group, "format": fmt, "print_enum": enum}
+                          "group": group, "group0": group0, "format": fmt, "print_enum": enum}
     else:
         result["refused_source"] = original_row
     return result
@@ -149,9 +170,31 @@ def report(raw: bytes):
             raise ValueError("missing or malformed capture provenance: " + key)
     if not re.fullmatch(r"\d+\.\d+\.\d+", str(capture.get("perl_version", ""))):
         raise ValueError("missing Perl capture version")
-    tool = (ROOT / "tools/exiftool-tables/dump_tables.pl").read_bytes()
-    if hashlib.sha256(tool).hexdigest() != capture["dump_tool_sha256"]:
-        raise ValueError("capture dump tool hash is stale; recapture using the current dump tool")
+    tool_sha256 = hashlib.sha256((ROOT / "tools/exiftool-tables/dump_tables.pl").read_bytes()).hexdigest()
+    if tool_sha256 != capture["dump_tool_sha256"]:
+        # A bounded table snapshot remains verbatim evidence of its recorded
+        # hydrated full dump.  A later dump-tool improvement may add a source
+        # fact without changing those selected tables; in that case a separate
+        # bounded canonical-Perl refresh records exactly which new fact came
+        # from the current tool.  Never let an undocumented stale tool hash
+        # pass as a fresh capture.
+        refresh = capture.get("source_fact_refresh")
+        protocol_key = {
+            "quicktime_itemlist_reader_protocol_from_canonical_perl": "quicktime_itemlist_reader_protocol",
+            "quicktime_userdata_reader_protocol_from_canonical_perl": "quicktime_userdata_reader_protocol",
+        }.get(refresh.get("kind")) if isinstance(refresh, dict) else None
+        protocol = document.get(protocol_key) if protocol_key else None
+        if (not isinstance(refresh, dict)
+                or protocol_key is None
+                or refresh.get("dump_tool_sha256") != tool_sha256
+                or refresh.get("captured_dump_tool_sha256") != capture["dump_tool_sha256"]
+                or refresh.get("exiftool_version") != pinned
+                or not re.fullmatch(r"\d+\.\d+\.\d+", str(refresh.get("perl_version", "")))
+                or not isinstance(protocol, dict)
+                or refresh.get("protocol_sha256") != hashlib.sha256(
+                    json.dumps(protocol, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+                ).hexdigest()):
+            raise ValueError("capture dump tool hash is stale; recapture using the current dump tool")
     result = inventory(document)
     result["source"] = {"dump_sha256": hashlib.sha256(raw).hexdigest(),
                         "selector_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

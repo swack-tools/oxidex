@@ -450,10 +450,11 @@ jobs:
     # termination pattern does not establish its cause. Try the already
     # supported 4x class while retaining the full source inventory.
     runs-on: warp-ubuntu-latest-x64-4x
-    # PR #761 at 149387d2 used 5m47s for setup/tier verification, then hit the
-    # former 20m job cap during native inventory mutations (679 tests reached).
-    # No check is removed; retain a finite bound with room for the full suite.
-    timeout-minutes: 35
+    # PR #779 run 34914682473 reached the 35m cap after source-bound replay,
+    # table verification and tier-2 regeneration, while the full tool suite
+    # was still exercising native source mutations. Keep all checks and allow
+    # a finite hour for the complete capture, verification and mutation suite.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The release comes from .exiftool-version, the repo-wide pin. This job
@@ -508,6 +509,97 @@ jobs:
           python3 tools/exiftool-tables/catalog_snapshot.py \
             --exiftool-dir "$EXIFTOOL_SOURCE" --perl perl \
             --output "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" --check
+      - name: Capture and audit hydrated reader table graph
+        run: |
+          set -euo pipefail
+          export EXIFTOOL_PERL=perl OXIDEX_PINNED_EXIFTOOL="$EXIFTOOL_SOURCE"
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_hydrated_layout_projection.py'
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_audit_hydrated_layouts.py'
+          perl tools/exiftool-tables/dump_tables.pl --reader-only --hydrated-layouts \
+            "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/hydrated-reader.json"
+          python3 tools/exiftool-tables/audit_hydrated_layouts.py \
+            --dump "$RUNNER_TEMP/hydrated-reader.json" --output "$RUNNER_TEMP/hydrated-reader-audit.json" \
+            --expected-audit "docs/public/measurements/hydrated-reader-layout-audit-$(cat .exiftool-version).json" \
+            --catalog "docs/public/measurements/catalog-source-$(cat .exiftool-version).json"
+      - name: Reconcile every catalog entry with hydrated source
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_join_catalog_hydrated.py'
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_replay_ifd_catalog_inputs.py'
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_catalog_userdata.py'
+          # One post-load full dump binds writer declarations to this runner's
+          # pinned native closure.  The hydrated reader dump remains the
+          # catalog source coordinate authority.
+          perl tools/exiftool-tables/dump_tables.pl "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/catalog-writer-source.json"
+          # Expression proofs and IFD identity ledgers bind the entire capture,
+          # including interpreter-specific envelopes. Re-prove on this runner;
+          # never relabel the committed oracle as a fresh native observation.
+          python3 tools/exiftool-tables/verify_exprs.py "$RUNNER_TEMP/catalog-writer-source.json" \
+            --perl perl --et-lib "$EXIFTOOL_SOURCE/lib" \
+            --ledger-out "$RUNNER_TEMP/catalog-expr-oracle.json"
+          python3 tools/exiftool-tables/replay_ifd_catalog_inputs.py \
+            --source "$RUNNER_TEMP/catalog-writer-source.json" \
+            --committed-ledger tools/exiftool-tables/ifd_identity_ledger.json \
+            --committed-rust src/exiftool_tables/ifd_tables.rs \
+            --committed-expr-ledger tools/exiftool-tables/expr_oracle_ledger.json \
+            --fresh-expr-ledger "$RUNNER_TEMP/catalog-expr-oracle.json" \
+            --output "$RUNNER_TEMP/catalog-ifd-identity.json"
+          python3 tools/exiftool-tables/join_catalog_hydrated.py \
+            --catalog "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" \
+            --hydrated "$RUNNER_TEMP/hydrated-reader.json" \
+            --quicktime-bounded-source "tools/exiftool-tables/fixtures/quicktime_source_13_59.json" \
+            --quicktime-itemlist-ledger "tools/exiftool-tables/quicktime_generated_itemlist_ledger.json" \
+            --quicktime-source-capabilities "tools/exiftool-tables/quicktime_source_capabilities.json" \
+            --quicktime-itemlist-rust "src/parsers/quicktime/generated_itemlist_specs.rs" \
+            --quicktime-keys-ledger "tools/exiftool-tables/quicktime_generated_keys_ledger.json" \
+            --quicktime-keys-rust "src/parsers/quicktime/generated_keys_specs.rs" \
+            --quicktime-userdata-ledger "tools/exiftool-tables/quicktime_generated_userdata_ledger.json" \
+            --quicktime-userdata-rust "src/parsers/quicktime/generated_userdata_specs.rs" \
+            --ifd-source "$RUNNER_TEMP/catalog-writer-source.json" \
+            --ifd-identity-ledger "$RUNNER_TEMP/catalog-ifd-identity.json" \
+            --ifd-rust "src/exiftool_tables/ifd_tables.rs" \
+            --ifd-expr-ledger "$RUNNER_TEMP/catalog-expr-oracle.json" \
+            --writer-source "$RUNNER_TEMP/catalog-writer-source.json" \
+            --writer-final-ledger "tools/exiftool-tables/tiff_scalar_final_ledger.json" \
+            --writer-final-rust "src/writers/generated_tiff_scalar_final_rules.rs" \
+            --writer-public-ledger "tools/exiftool-tables/setnewvalue_public_migration_ledger.json" \
+            --writer-public-rust "src/writers/generated_setnewvalue_public_migration_rules.rs" \
+            --output "$RUNNER_TEMP/catalog-hydrated-join.json" \
+            --report "$RUNNER_TEMP/catalog-hydrated-join.md"
+          python3 - "$RUNNER_TEMP/catalog-hydrated-join.json" \
+            "docs/public/measurements/catalog-hydrated-join-$(cat .exiftool-version).json" <<'PYCODE'
+          import json, sys
+          actual, expected = [json.load(open(path)) for path in sys.argv[1:]]
+          # Full dumps may differ in serialization outside these source rows.
+          # Retain exact per-row/table hashes, catalog hash and all status fields.
+          for document in (actual, expected):
+              document['inputs'].pop('hydrated_sha256')
+              # Full native captures include runner-specific capture identity;
+              # compare the replayed rows/artifact digests, not that envelope.
+              document['inputs'].get('writer', {}).pop('source_sha256', None)
+              # The replay step already proved exact IFD Rust, complete rows,
+              # classifications, counts and expression approval inventory.
+              # Retain the actual bindings in each output receipt; only this
+              # cross-runner comparison excludes their differing envelopes.
+              for field in ('source_sha256', 'ledger_sha256', 'expr_ledger_sha256'):
+                  document['inputs'].get('ifd', {}).pop(field, None)
+          if actual != expected:
+              raise SystemExit('catalog/source ledger drift: regenerate and review')
+          print('=== instrument: catalog/source ledger semantic check ===')
+          print('All catalog identities, row/table hashes and statuses match.')
+          PYCODE
+      - name: Validate published observed catalog receipt, when present
+        run: |
+          set -euo pipefail
+          observed="docs/public/measurements/catalog-hydrated-observed-$(cat .exiftool-version).json"
+          if [[ -f "$observed" ]]; then
+            python3 tools/exiftool-tables/catalog_observed_snapshot.py \
+              --snapshot "$observed" --verify \
+              --current-source-join "docs/public/measurements/catalog-hydrated-join-$(cat .exiftool-version).json"
+          else
+            echo '=== instrument: catalog observed receipt check ==='
+            echo 'No published native receipt yet; source declaration ledger remains independent.'
+          fi
       - name: Verify committed tables against ExifTool
         env:
           ET_VERSION: ${{ steps.stamp.outputs.version }}
@@ -576,11 +668,11 @@ jobs:
           # runner).
           ROOT="$EXIFTOOL_SOURCE"
           LIB="$ROOT/lib"
-          DUMP="$RUNNER_TEMP/tables-${ET_VERSION}.json"
+          DUMP="$RUNNER_TEMP/catalog-writer-source.json"
           PROCESSORS="$RUNNER_TEMP/native-processors-${ET_VERSION}.tsv"
           unset PERL5LIB PERLLIB PERL5OPT
           export EXIFTOOL_PERL=perl LENS_TEST_PERL=perl
-          "$EXIFTOOL_PERL" tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
+          # Reuse the complete capture already independently replayed above.
           "$EXIFTOOL_PERL" tools/exiftool-tables/oracle.pl "$LIB" > "$PROCESSORS"
           test -s "$DUMP"
           test -s "$PROCESSORS"
@@ -612,6 +704,8 @@ jobs:
               --exclude hand_enum_drift_baseline.json \
               --exclude quicktime_source_13_59.json \
               --exclude quicktime_oracle_sources_13_59.json \
+              --exclude quicktime_reader_protocol_bounded_13_59.json \
+              --exclude quicktime_userdata_native_13_59.json \
               --exclude ifd_tables_sample.rs; then
             echo "::error::committed staleness fixtures are stale relative to ExifTool ${ET_VERSION} -- re-run 'python3 tools/exiftool-tables/gen_staleness_facts.py <dump.json> tools/exiftool-tables/fixtures', update the Rust these fixtures check, and commit both." >&2
             exit 1

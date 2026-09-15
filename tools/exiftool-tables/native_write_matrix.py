@@ -74,7 +74,7 @@ BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 use strict; use warnings; use utf8; use JSON::PP; use Encode ();
 use Image::ExifTool; require 'Image/ExifTool/Writer.pl';
 ''' + NATIVE_LIBRARY_GUARD + r'''
-my ($in, $out, $action, $tag) = @ARGV;
+my ($in, $out, $action, $tag, $batch_json) = @ARGV;
 sub state { my ($v) = @_; return {defined => JSON::PP::false} unless defined $v;
   my $utf8 = utf8::is_utf8($v) ? JSON::PP::true : JSON::PP::false;
   my $bytes = $utf8 ? Encode::encode('UTF-8', $v) : $v;
@@ -90,9 +90,36 @@ sub value_for { my ($name) = @_;
   return pack('H*', '610062') if $name eq 'embedded_nul';
   die "unknown action $name";
 }
+sub batch_value { my ($spec) = @_;
+  die 'batch item must be an object' unless ref($spec) eq 'HASH';
+  my $scalar = $spec->{scalar};
+  die 'batch item scalar is absent' unless defined($scalar) && !ref($scalar);
+  return undef if $scalar eq 'undefined';
+  my $value = $spec->{value};
+  die 'defined batch item value is absent' unless defined($value) && !ref($value);
+  if ($scalar eq 'bytes') {
+    die 'batch bytes must be even lowercase hex' unless $value =~ /\A(?:[0-9a-f]{2})*\z/;
+    return pack('H*', $value);
+  }
+  if ($scalar eq 'utf8') {
+    utf8::upgrade($value); # JSON may leave ASCII unflagged; honor the typed request.
+    return $value;
+  }
+  die "unsupported batch scalar $scalar";
+}
 my $et = Image::ExifTool->new;
 my @sets;
-if ($action eq 'seed_artist' || $action eq 'seed_artist_target') {
+if ($action eq 'batch') {
+  die 'batch JSON is absent' unless defined($batch_json);
+  my $batch = JSON::PP::decode_json($batch_json);
+  die 'batch must be a non-empty array' unless ref($batch) eq 'ARRAY' && @$batch;
+  for my $spec (@$batch) {
+    die 'batch tag is absent' unless ref($spec) eq 'HASH' && defined($spec->{tag}) && !ref($spec->{tag}) && length($spec->{tag});
+    my $value = batch_value($spec);
+    my $set_return = scalar $et->SetNewValue($spec->{tag}, $value);
+    push @sets, {tag => $spec->{tag}, input => state($value), return => $set_return};
+  }
+} elsif ($action eq 'seed_artist' || $action eq 'seed_artist_target') {
   my $artist_return = scalar $et->SetNewValue('IFD0:Artist', 'seed-artist');
   push @sets, {tag => 'IFD0:Artist', input => state('seed-artist'), return => $artist_return};
   if ($action eq 'seed_artist_target') {
@@ -153,6 +180,19 @@ def resolve_library(value: Path) -> Path:
     return (path / "lib").resolve() if (path / "lib").is_dir() else path
 
 
+def optional_native_configuration(perl_value: str | None, library_value: str | None) -> tuple[Path, Path] | None:
+    """Resolve explicit native inputs; missing optional inputs leave a test skippable."""
+    if perl_value is None and library_value is None:
+        return None
+    if not perl_value or not library_value:
+        raise ValueError("EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL must be supplied together")
+    perl, library = resolve_perl(Path(perl_value)), resolve_library(Path(library_value))
+    if not perl.is_file():
+        raise ValueError(f"selected Perl executable is not a file: {perl}")
+    validate_library(library)
+    return perl, library
+
+
 def validate_library(library: Path) -> None:
     for name in ("Image/ExifTool.pm", "Image/ExifTool/Writer.pl"):
         path = library / name
@@ -176,6 +216,51 @@ def run_native(perl: Path, library: Path, source: Path, target: Path,
             pass
     return {"command": [str(perl), "-I" + str(library), "-e", "<native-write-program>",
                          str(library), str(source), str(target), action, tag or ""],
+            "returncode": completed.returncode, "stdout": stdout, "stderr": stderr,
+            "result": parsed}
+
+
+def run_native_batch(perl: Path, library: Path, source: Path, target: Path,
+                     batch: list[dict[str, str]]) -> dict[str, Any]:
+    """Apply one ordered native SetNewValue batch through one WriteInfo call.
+
+    This accepts only the scalar states exercised by the generated public
+    transaction probe.  Validating here makes the recorded JSON both a native
+    operand record and an unambiguous replay input; it never falls back to a
+    shell or an ambient ExifTool executable.
+    """
+    if not batch:
+        raise ValueError("native batch is empty")
+    checked: list[dict[str, str]] = []
+    for item in batch:
+        if set(item) - {"tag", "scalar", "value"} or not isinstance(item.get("tag"), str) or not item["tag"]:
+            raise ValueError("native batch item has malformed tag/schema")
+        scalar, value = item.get("scalar"), item.get("value")
+        if scalar == "undefined":
+            if value is not None:
+                raise ValueError("undefined native batch item has a value")
+            checked.append({"tag": item["tag"], "scalar": scalar})
+        elif scalar == "utf8" and isinstance(value, str):
+            checked.append({"tag": item["tag"], "scalar": scalar, "value": value})
+        elif scalar == "bytes" and isinstance(value, str) and len(value) % 2 == 0 and all(char in "0123456789abcdef" for char in value):
+            checked.append({"tag": item["tag"], "scalar": scalar, "value": value})
+        else:
+            raise ValueError("native batch item has unsupported scalar/value")
+    validate_library(library)
+    encoded = json.dumps(checked, sort_keys=True, separators=(",", ":"))
+    command = [str(perl), "-I" + str(library), "-e", NATIVE_WRITE,
+               str(library), str(source), str(target), "batch", "", encoded]
+    completed = subprocess.run(command, env=clean_env(), capture_output=True, timeout=30)
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    parsed: dict[str, Any] | None = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            pass
+    return {"command": [str(perl), "-I" + str(library), "-e", "<native-write-program>",
+                         str(library), str(source), str(target), "batch", "", checked],
             "returncode": completed.returncode, "stdout": stdout, "stderr": stderr,
             "result": parsed}
 
@@ -228,6 +313,142 @@ def make_tiff(path: Path, order: str) -> None:
     data += pack(0, 4, order) + b"\xff"
     path.write_bytes(data)
 
+
+def _mandatory_ifd1_recipe() -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], dict[int, int]]:
+    """Load only the source-generated IFD1 operands needed by raw fixtures."""
+    ledger = json.loads((ROOT / "tools/exiftool-tables/mandatory_defaults_ledger.json").read_text())
+    if ledger.get("writer_tables_joined") is not True:
+        raise ValueError("mandatory fixture ledger did not join native writer tables")
+    recipe = ledger.get("recipe")
+    if not isinstance(recipe, dict):
+        raise ValueError("mandatory fixture ledger has no recipe")
+    directories = recipe.get("directories")
+    encodings = recipe.get("encodings")
+    survivor_encodings = recipe.get("survivor_encodings")
+    if not isinstance(directories, list) or not isinstance(encodings, list) or not isinstance(survivor_encodings, list):
+        raise ValueError("mandatory fixture recipe is malformed")
+    groups = [group for group in directories if isinstance(group, dict) and group.get("directory") == "IFD1"]
+    if len(groups) != 1 or not isinstance(groups[0].get("defaults"), list):
+        raise ValueError("mandatory fixture recipe has no unique IFD1 defaults")
+    defaults = groups[0]["defaults"]
+    by_tag = {entry.get("tag_id"): entry for entry in encodings if isinstance(entry, dict) and type(entry.get("tag_id")) is int}
+    widths = {entry.get("tiff_type"): entry.get("width") for entry in survivor_encodings
+              if isinstance(entry, dict) and type(entry.get("tiff_type")) is int and type(entry.get("width")) is int}
+    if not all(type(entry.get("tag_id")) is int and type(entry.get("value")) is int and entry.get("kind") == "Integer"
+               for entry in defaults):
+        raise ValueError("mandatory fixture IFD1 defaults are not scalar integers")
+    if not all(default["tag_id"] in by_tag for default in defaults):
+        raise ValueError("mandatory fixture IFD1 default lacks source encoding")
+    return defaults, by_tag, widths
+
+
+def _mandatory_default_bytes(value: int, encoding: dict[str, Any], order: str) -> tuple[int, int, bytes]:
+    """Encode a source-emitted normal IFD1 default for the raw carrier."""
+    name, field_type = encoding.get("format_name"), encoding.get("tiff_type")
+    if type(field_type) is not int:
+        raise ValueError("mandatory fixture default type is malformed")
+    if name == "int16u" and field_type == 3 and 0 <= value <= 0xffff:
+        return field_type, 1, value.to_bytes(2, order)
+    if name == "rational64u" and field_type == 5 and 0 <= value <= 0xffffffff:
+        return field_type, 1, value.to_bytes(4, order) + (1).to_bytes(4, order)
+    raise ValueError(f"mandatory fixture default has unsupported emitted encoding {name!r}")
+
+
+def make_mandatory_ifd1_survivor_tiff(path: Path, order: str, survivor_type: int,
+                                       survivor_count: int, artist_tag_id: int) -> dict[str, Any]:
+    """Construct a real TIFF with a source-derived IFD1 and raw survivor form.
+
+    Every mandatory tag/value and its normal source encoding comes from the
+    generated joined mandatory-default ledger.  ``survivor_type`` changes one
+    scalar default's physical carrier, exactly as WriteExif selects an existing
+    survivor's Format while deciding whether an IFD1 may be pruned.
+    """
+    if order not in {"little", "big"} or type(survivor_type) is not int or type(survivor_count) is not int or survivor_count < 0:
+        raise ValueError("mandatory IFD1 carrier operands are malformed")
+    defaults, encodings, survivor_widths = _mandatory_ifd1_recipe()
+    width = survivor_widths.get(survivor_type)
+    if type(width) is not int or survivor_type not in TIFF_TYPES or TIFF_TYPES[survivor_type] != width:
+        raise ValueError("mandatory IFD1 survivor type is not capture-authenticated")
+    # The first source default whose scalar fits the selected carrier becomes
+    # the altered physical survivor.  No tag name/id is embedded in this policy.
+    survivor = next((entry for entry in defaults if 0 <= entry["value"] < (1 << (width * 8))), None)
+    if survivor is None:
+        raise ValueError("no source IFD1 mandatory value fits survivor carrier")
+    make_tiff(path, order)
+    data = bytearray(path.read_bytes())
+    root = int.from_bytes(data[4:8], order)
+    root_count = int.from_bytes(data[root:root + 2], order)
+    root_link = root + 2 + root_count * 12
+    if int.from_bytes(data[root_link:root_link + 4], order):
+        raise ValueError("base TIFF unexpectedly already has IFD1")
+    if len(data) % 2:
+        data.append(0)
+    ifd_offset = len(data)
+    data[root_link:root_link + 4] = ifd_offset.to_bytes(4, order)
+    entries: list[tuple[int, int, int, bytes]] = []
+    for default in defaults:
+        if default["tag_id"] == survivor["tag_id"]:
+            if survivor_count == 0:
+                value = b""
+            else:
+                scalar = default["value"].to_bytes(width, order, signed=False)
+                value = scalar * survivor_count
+            entries.append((default["tag_id"], survivor_type, survivor_count, value))
+        else:
+            kind, count, value = _mandatory_default_bytes(default["value"], encodings[default["tag_id"]], order)
+            entries.append((default["tag_id"], kind, count, value))
+    artist = b"fixture-artist\0"
+    entries.append((artist_tag_id, 2, len(artist), artist))
+    if len({entry[0] for entry in entries}) != len(entries):
+        raise ValueError("mandatory fixture has duplicate source identities")
+    entries.sort(key=lambda entry: entry[0])
+    directory_size = 2 + len(entries) * 12 + 4
+    # Serialize the directory before its out-of-line values.  TIFF offsets are
+    # absolute, and each payload is word-aligned exactly as the carrier writer
+    # expects; short fields remain in their four-byte entry slots.
+    data = data[:ifd_offset]
+    data += len(entries).to_bytes(2, order)
+    cursor = ifd_offset + directory_size
+    payloads: list[tuple[int, bytes]] = []
+    for tag_id, kind, count, value in entries:
+        if kind not in TIFF_TYPES or len(value) != count * TIFF_TYPES[kind]:
+            raise ValueError("mandatory fixture field bytes do not match TIFF type/count")
+        data += tag_id.to_bytes(2, order) + kind.to_bytes(2, order) + count.to_bytes(4, order)
+        if len(value) <= 4:
+            data += value.ljust(4, b"\0")
+            continue
+        if cursor % 2:
+            cursor += 1
+        data += cursor.to_bytes(4, order)
+        payloads.append((cursor, value))
+        cursor += len(value)
+    data += (0).to_bytes(4, order)
+    for offset, value in payloads:
+        if len(data) > offset:
+            raise ValueError("mandatory fixture TIFF payload offsets overlap")
+        data += bytes(offset - len(data)) + value
+    path.write_bytes(data)
+    return {"survivor_tag_id": survivor["tag_id"], "survivor_value": survivor["value"],
+            "survivor_type": survivor_type, "survivor_count": survivor_count,
+            "artist_tag_id": artist_tag_id}
+
+
+def wrap_tiff_exif_in_jpeg(path: Path, jpeg_base: Path, tiff: bytes) -> None:
+    """Add exactly one Exif APP1 carrying raw TIFF bytes to a known JFIF base."""
+    source = jpeg_base.read_bytes()
+    if not source.startswith(b"\xff\xd8\xff\xe0"):
+        raise ValueError("JPEG base lacks the expected leading JFIF segment")
+    app0_length = int.from_bytes(source[4:6], "big")
+    app0_end = 2 + 2 + app0_length
+    if app0_length < 2 or app0_end >= len(source) or source[6:11] != b"JFIF\0":
+        raise ValueError("JPEG base leading APP0 is not JFIF")
+    payload = b"Exif\0\0" + tiff
+    if len(payload) + 2 > 0xffff:
+        raise ValueError("raw TIFF cannot fit one JPEG APP1 segment")
+    app1 = b"\xff\xe1" + (len(payload) + 2).to_bytes(2, "big") + payload
+    # The common carrier helper preserves the JFIF and exact image stream;
+    # inserting APP1 after APP0 gives native a single, unambiguous Exif block.
+    path.write_bytes(source[:app0_end] + app1 + source[app0_end:])
 
 def parse_tiff(data: bytes, require_strip: bool = True, *, _offset=None, _visited=None) -> dict[str, Any]:
     if len(data) < 10 or data[:2] not in (b"II", b"MM"):

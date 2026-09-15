@@ -1,0 +1,602 @@
+{
+  "instrument": "verify_quicktime_reader.py; native and fresh oxidex -j -a -G1; ItemList projection",
+  "instrument_sha256": "7fa3324fb97ff6ad68bfe901df714844b5bf0e4607232184ed88df7cb60af080",
+  "baseline_helper_sha256": "3c43af08de7365a1b9906d31cd504b942cd298f5c8ec4055f3f1511e078244a1",
+  "source_commit": "ec5f54eb663dd17503ef1975ba8890090eec8db6",
+  "source_dirty": true,
+  "source_fingerprint": "81765bb1533a62c3cf98c5f3857559c4f7295304e2d7fac39a8cda611bf9bada",
+  "oracle_commit": "2200871d9cef988051d2a99d67df3bda6cbb30a8",
+  "oracle_manifest_sha256": "cd64114e10d5a94dadf5797059b1b2595556d19e950d933a236818f18ea21be1",
+  "binary_sha256": "e4ad7f0454705c50eb5ad1520361c34d9b37a6cc60b0307e7981b4574c7958cd",
+  "pin": "13.59",
+  "fixture_count": 25,
+  "observations": [
+    {
+      "fixture": "binary.m4a",
+      "mode": "print",
+      "fixture_sha256": "d54486c5fb33ac88ff9d5ad264e1c9d3182cce672c47f87f910c605126c21d85",
+      "expected": {
+        "ItemList:Title": "(Binary data 4 bytes, use -b option to extract)"
+      },
+      "actual": {
+        "ItemList:Title": "(Binary data 4 bytes, use -b option to extract)"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "binary.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "d54486c5fb33ac88ff9d5ad264e1c9d3182cce672c47f87f910c605126c21d85",
+      "expected": {
+        "ItemList:Title": "(Binary data 4 bytes, use -b option to extract)"
+      },
+      "actual": {
+        "ItemList:Title": "(Binary data 4 bytes, use -b option to extract)"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "double.m4a",
+      "mode": "print",
+      "fixture_sha256": "8cbbe04a1e5a77ad300f242214e0c01800bef20395980a16451a7083a61052fa",
+      "expected": {
+        "ItemList:Title": 1.25
+      },
+      "actual": {
+        "ItemList:Title": 1.25
+      },
+      "matched": true
+    },
+    {
+      "fixture": "double.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "8cbbe04a1e5a77ad300f242214e0c01800bef20395980a16451a7083a61052fa",
+      "expected": {
+        "ItemList:Title": 1.25
+      },
+      "actual": {
+        "ItemList:Title": 1.25
+      },
+      "matched": true
+    },
+    {
+      "fixture": "enum.m4a",
+      "mode": "print",
+      "fixture_sha256": "22761e79da430d5e4791e4683ebcf49ccf7c12e5081a696156a644a8455088ce",
+      "expected": {
+        "ItemList:Compilation": "Yes"
+      },
+      "actual": {
+        "ItemList:Compilation": "Yes"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "enum.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "22761e79da430d5e4791e4683ebcf49ccf7c12e5081a696156a644a8455088ce",
+      "expected": {
+        "ItemList:Compilation": 1
+      },
+      "actual": {
+        "ItemList:Compilation": 1
+      },
+      "matched": true
+    },
+    {
+      "fixture": "float-array.m4a",
+      "mode": "print",
+      "fixture_sha256": "41ddc5c5e4e135350ac824e7b1e64609b3e17dd4b29a0a03cf3b320ba3501d3f",
+      "expected": {
+        "ItemList:Title": "1.25 2.5"
+      },
+      "actual": {
+        "ItemList:Title": "1.25 2.5"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "float-array.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "41ddc5c5e4e135350ac824e7b1e64609b3e17dd4b29a0a03cf3b320ba3501d3f",
+      "expected": {
+        "ItemList:Title": "1.25 2.5"
+      },
+      "actual": {
+        "ItemList:Title": "1.25 2.5"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "float.m4a",
+      "mode": "print",
+      "fixture_sha256": "462519522d3d5d6783e85a53e36461eb3ea0159faeb466181b5e9df6816a546e",
+      "expected": {
+        "ItemList:Title": 1.25
+      },
+      "actual": {
+        "ItemList:Title": 1.25
+      },
+      "matched": true
+    },
+    {
+      "fixture": "float.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "462519522d3d5d6783e85a53e36461eb3ea0159faeb466181b5e9df6816a546e",
+      "expected": {
+        "ItemList:Title": 1.25
+      },
+      "actual": {
+        "ItemList:Title": 1.25
+      },
+      "matched": true
+    },
+    {
+      "fixture": "implicit-u64.m4a",
+      "mode": "print",
+      "fixture_sha256": "e0215b2510ede936893306cb9da856b300b1c7bc327e881cdd8d0d7b013f8ddc",
+      "expected": {
+        "ItemList:Title": "18446744073709551615"
+      },
+      "actual": {
+        "ItemList:Title": "18446744073709551615"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "implicit-u64.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "e0215b2510ede936893306cb9da856b300b1c7bc327e881cdd8d0d7b013f8ddc",
+      "expected": {
+        "ItemList:Title": "18446744073709551615"
+      },
+      "actual": {
+        "ItemList:Title": "18446744073709551615"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "integer-binary.m4a",
+      "mode": "print",
+      "fixture_sha256": "92a71cd64413b24dbad7ad80b17a56fbe97742c8166feaa97a64ca6777ca5e43",
+      "expected": {
+        "ItemList:Title": "(Binary data 3 bytes, use -b option to extract)"
+      },
+      "actual": {
+        "ItemList:Title": "(Binary data 3 bytes, use -b option to extract)"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "integer-binary.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "92a71cd64413b24dbad7ad80b17a56fbe97742c8166feaa97a64ca6777ca5e43",
+      "expected": {
+        "ItemList:Title": "(Binary data 3 bytes, use -b option to extract)"
+      },
+      "actual": {
+        "ItemList:Title": "(Binary data 3 bytes, use -b option to extract)"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "malformed-u64.m4a",
+      "mode": "print",
+      "fixture_sha256": "913c73a894ef15803abe2e5ab436b595dfdd5c449c6f0a5c88c0918b27802ec0",
+      "expected": {
+        "ItemList:AlbumID": ""
+      },
+      "actual": {
+        "ItemList:AlbumID": ""
+      },
+      "matched": true
+    },
+    {
+      "fixture": "malformed-u64.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "913c73a894ef15803abe2e5ab436b595dfdd5c449c6f0a5c88c0918b27802ec0",
+      "expected": {
+        "ItemList:AlbumID": ""
+      },
+      "actual": {
+        "ItemList:AlbumID": ""
+      },
+      "matched": true
+    },
+    {
+      "fixture": "media-enum.m4a",
+      "mode": "print",
+      "fixture_sha256": "d6ec2317daee06898880153a543246a27c7ed6e558abbb1b7851dbee6131cf1f",
+      "expected": {
+        "ItemList:MediaType": "Audiobook"
+      },
+      "actual": {
+        "ItemList:MediaType": "Audiobook"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "media-enum.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "d6ec2317daee06898880153a543246a27c7ed6e558abbb1b7851dbee6131cf1f",
+      "expected": {
+        "ItemList:MediaType": 2
+      },
+      "actual": {
+        "ItemList:MediaType": 2
+      },
+      "matched": true
+    },
+    {
+      "fixture": "shiftjis.m4a",
+      "mode": "print",
+      "fixture_sha256": "4692500aefde777eac80c4009feccc15d3cecb7df8d4a30c3bf21a039bf7bf47",
+      "expected": {
+        "ItemList:Title": "\u3042"
+      },
+      "actual": {
+        "ItemList:Title": "\u3042"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "shiftjis.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "4692500aefde777eac80c4009feccc15d3cecb7df8d4a30c3bf21a039bf7bf47",
+      "expected": {
+        "ItemList:Title": "\u3042"
+      },
+      "actual": {
+        "ItemList:Title": "\u3042"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "signed.m4a",
+      "mode": "print",
+      "fixture_sha256": "d53af55152b147aa7de77cd9d06d403d00ce8637128d39e3ea22ed229d0cb260",
+      "expected": {
+        "ItemList:Title": -1
+      },
+      "actual": {
+        "ItemList:Title": -1
+      },
+      "matched": true
+    },
+    {
+      "fixture": "signed.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "d53af55152b147aa7de77cd9d06d403d00ce8637128d39e3ea22ed229d0cb260",
+      "expected": {
+        "ItemList:Title": -1
+      },
+      "actual": {
+        "ItemList:Title": -1
+      },
+      "matched": true
+    },
+    {
+      "fixture": "source-string.m4a",
+      "mode": "print",
+      "fixture_sha256": "2afca4f29985f039672350ba3dadad2fff5e2549ec0f2f0b6614d384dcbd1685",
+      "expected": {
+        "ItemList:GoogleHostHeader": "A"
+      },
+      "actual": {
+        "ItemList:GoogleHostHeader": "A"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "source-string.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "2afca4f29985f039672350ba3dadad2fff5e2549ec0f2f0b6614d384dcbd1685",
+      "expected": {
+        "ItemList:GoogleHostHeader": "A"
+      },
+      "actual": {
+        "ItemList:GoogleHostHeader": "A"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "text-enum.m4a",
+      "mode": "print",
+      "fixture_sha256": "3345733a0fced4b43ec094bd4e3011e762d04ff71176c9545d3c5092b1d33ab5",
+      "expected": {
+        "ItemList:Compilation": "Yes"
+      },
+      "actual": {
+        "ItemList:Compilation": "Yes"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "text-enum.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "3345733a0fced4b43ec094bd4e3011e762d04ff71176c9545d3c5092b1d33ab5",
+      "expected": {
+        "ItemList:Compilation": 1
+      },
+      "actual": {
+        "ItemList:Compilation": 1
+      },
+      "matched": true
+    },
+    {
+      "fixture": "text.m4a",
+      "mode": "print",
+      "fixture_sha256": "5fe40986942d6597fc135f67caa60d206977c0c25284a608e7d9fe138f3fafd3",
+      "expected": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "actual": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "text.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "5fe40986942d6597fc135f67caa60d206977c0c25284a608e7d9fe138f3fafd3",
+      "expected": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "actual": {
+        "ItemList:Title": "Generic source reader"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u16.m4a",
+      "mode": "print",
+      "fixture_sha256": "db2de190ffe762b9e7d3d98c63647d29ff7dfab87d70131eecb9613820bb14e3",
+      "expected": {
+        "ItemList:BeatsPerMinute": 257
+      },
+      "actual": {
+        "ItemList:BeatsPerMinute": 257
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u16.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "db2de190ffe762b9e7d3d98c63647d29ff7dfab87d70131eecb9613820bb14e3",
+      "expected": {
+        "ItemList:BeatsPerMinute": 257
+      },
+      "actual": {
+        "ItemList:BeatsPerMinute": 257
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64-max.m4a",
+      "mode": "print",
+      "fixture_sha256": "237ee4773bf37589a753c1b8e184c46f96b9b2ed48c131581f0c8038894e433e",
+      "expected": {
+        "ItemList:AlbumID": "18446744073709551615"
+      },
+      "actual": {
+        "ItemList:AlbumID": "18446744073709551615"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64-max.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "237ee4773bf37589a753c1b8e184c46f96b9b2ed48c131581f0c8038894e433e",
+      "expected": {
+        "ItemList:AlbumID": "18446744073709551615"
+      },
+      "actual": {
+        "ItemList:AlbumID": "18446744073709551615"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64-short.m4a",
+      "mode": "print",
+      "fixture_sha256": "587501cf5ff0b0bd375281d09fb54339ec180f496e9ee17d40fa124e179d9be4",
+      "expected": {
+        "ItemList:AlbumID": 4660
+      },
+      "actual": {
+        "ItemList:AlbumID": 4660
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64-short.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "587501cf5ff0b0bd375281d09fb54339ec180f496e9ee17d40fa124e179d9be4",
+      "expected": {
+        "ItemList:AlbumID": 4660
+      },
+      "actual": {
+        "ItemList:AlbumID": 4660
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64-tail.m4a",
+      "mode": "print",
+      "fixture_sha256": "ba3c29cd55ceba88a53dc51e86801bfe32727c284ce328884e89ac8c6cc0b34c",
+      "expected": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "actual": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64-tail.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "ba3c29cd55ceba88a53dc51e86801bfe32727c284ce328884e89ac8c6cc0b34c",
+      "expected": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "actual": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64.m4a",
+      "mode": "print",
+      "fixture_sha256": "6cc8c8b1bed5e3746987ce7678e441b9529d27406f632a858ba0137ef1d11cc6",
+      "expected": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "actual": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "matched": true
+    },
+    {
+      "fixture": "u64.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "6cc8c8b1bed5e3746987ce7678e441b9529d27406f632a858ba0137ef1d11cc6",
+      "expected": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "actual": {
+        "ItemList:AlbumID": 4294967297
+      },
+      "matched": true
+    },
+    {
+      "fixture": "unknown-ascii.m4a",
+      "mode": "print",
+      "fixture_sha256": "d7a3df7e2931e63f30bdc51bc1f6de2ab0a389c31f65b3a9f32ac2766be90f18",
+      "expected": {},
+      "actual": {},
+      "matched": true
+    },
+    {
+      "fixture": "unknown-ascii.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "d7a3df7e2931e63f30bdc51bc1f6de2ab0a389c31f65b3a9f32ac2766be90f18",
+      "expected": {},
+      "actual": {},
+      "matched": true
+    },
+    {
+      "fixture": "unknown-binary-key.m4a",
+      "mode": "print",
+      "fixture_sha256": "d4a6b4914ffd859287d10775a32078f6d2f5402bafaff91276bfd92f37b76633",
+      "expected": {},
+      "actual": {},
+      "matched": true
+    },
+    {
+      "fixture": "unknown-binary-key.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "d4a6b4914ffd859287d10775a32078f6d2f5402bafaff91276bfd92f37b76633",
+      "expected": {},
+      "actual": {},
+      "matched": true
+    },
+    {
+      "fixture": "unsigned-over-signed.m4a",
+      "mode": "print",
+      "fixture_sha256": "0c83a9befad90fe9bc37f55eea30901824a129cc67b380a444b736b35252a766",
+      "expected": {
+        "ItemList:Compilation": "Unknown (255)"
+      },
+      "actual": {
+        "ItemList:Compilation": "Unknown (255)"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "unsigned-over-signed.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "0c83a9befad90fe9bc37f55eea30901824a129cc67b380a444b736b35252a766",
+      "expected": {
+        "ItemList:Compilation": 255
+      },
+      "actual": {
+        "ItemList:Compilation": 255
+      },
+      "matched": true
+    },
+    {
+      "fixture": "utf16-alias.m4a",
+      "mode": "print",
+      "fixture_sha256": "4ad9913feb030163bc451a7788ce86bc7c870ee1f7f2a1aa249f3a1508d74eeb",
+      "expected": {
+        "ItemList:Title": "Title"
+      },
+      "actual": {
+        "ItemList:Title": "Title"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "utf16-alias.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "4ad9913feb030163bc451a7788ce86bc7c870ee1f7f2a1aa249f3a1508d74eeb",
+      "expected": {
+        "ItemList:Title": "Title"
+      },
+      "actual": {
+        "ItemList:Title": "Title"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "utf16.m4a",
+      "mode": "print",
+      "fixture_sha256": "d2639627440e56275a9a9a96c375baf79f872044630fd81e81117c860876c9ff",
+      "expected": {
+        "ItemList:Title": "Title"
+      },
+      "actual": {
+        "ItemList:Title": "Title"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "utf16.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "d2639627440e56275a9a9a96c375baf79f872044630fd81e81117c860876c9ff",
+      "expected": {
+        "ItemList:Title": "Title"
+      },
+      "actual": {
+        "ItemList:Title": "Title"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "utf8-alias.m4a",
+      "mode": "print",
+      "fixture_sha256": "321a7ee8efda00fa391bf1a8edf7ffc87c2ca54f61db268124af7136b41182ae",
+      "expected": {
+        "ItemList:Title": "A"
+      },
+      "actual": {
+        "ItemList:Title": "A"
+      },
+      "matched": true
+    },
+    {
+      "fixture": "utf8-alias.m4a",
+      "mode": "no-print-conv",
+      "fixture_sha256": "321a7ee8efda00fa391bf1a8edf7ffc87c2ca54f61db268124af7136b41182ae",
+      "expected": {
+        "ItemList:Title": "A"
+      },
+      "actual": {
+        "ItemList:Title": "A"
+      },
+      "matched": true
+    }
+  ],
+  "matched_observations": 50,
+  "writing_observed": null,
+  "scope": "default-locale ItemList behavior fixtures; not corpus coverage or every source row"
+}

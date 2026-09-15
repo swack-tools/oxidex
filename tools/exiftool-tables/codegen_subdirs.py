@@ -22,6 +22,8 @@ Supported per field:
     Perl expression registered verbatim in `EXPR_PRINT_CONVS`, or a hash
     carrying a `BITMASK` sub-hash (an exact-value override checked first, a
     bit-by-bit decode of the rest).
+  * `PrintConvColumns`: a positive integer display-width hint. It changes the
+    rendering of ExifTool's PrintConv documentation, not scalar tag lookup.
   * `ValueConv`: absent, or an expression/sub body registered verbatim.
   * `RawConv`: absent, or one of ExifTool's two count-gate idioms --
     `$$self{X} = $val` (records a data member) and
@@ -589,9 +591,29 @@ KNOWN_TAG_KEYS = {
     "Condition", "Priority", "Avoid",
     "Notes", "Description", "DataMember", "Writable", "Groups", "PrintConvInv",
     "ValueConvInv", "Protected", "Permanent", "SeparateTable", "PrintHex",
-    "_shorthand", "_extra_keys", "Unknown", "Hidden", "Binary",
+    "PrintConvColumns", "_shorthand", "_extra_keys", "Unknown", "Hidden", "Binary",
     "RelatedTag", "Flags",
 }
+
+
+def validate_print_conv_columns(tag, table, key):
+    """Refuse malformed display-only `PrintConvColumns` facts.
+
+    ExifTool uses this to format a PrintConv *listing*.  Runtime lookup of a
+    scalar value uses the same map regardless of its display width, so the
+    Rust reader has no corresponding operand.  We nevertheless validate its
+    closed positive-u32 shape before classifying it as presentation-only.
+    """
+    if "PrintConvColumns" not in tag:
+        return
+    value = tag["PrintConvColumns"]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, str))
+        or not re.fullmatch(r"[1-9][0-9]*", str(value))
+        or int(value) >= 1 << 32
+    ):
+        raise Unsupported(table, key, f"invalid PrintConvColumns {value!r}")
 
 
 def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefix):
@@ -650,6 +672,7 @@ def gen_table(module, tname, tbl, pool, skips, allow_skip, conv_prefix, vc_prefi
                 for k in tag:
                     if k not in KNOWN_TAG_KEYS:
                         raise Unsupported(tname, key, f"unhandled tag key {k!r}")
+                validate_print_conv_columns(tag, tname, key)
                 idx = parse_index(key, tname)
                 cond = field_cond(tag, tname, key)
                 fmt, count = field_format(tag, tname, key)

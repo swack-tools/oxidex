@@ -1,0 +1,969 @@
+{
+  "native_capture_context": {
+    "loaded_closure": {
+      "modules": [
+        {
+          "inc": "Image/ExifTool.pm",
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        },
+        {
+          "inc": "Image/ExifTool/Writer.pl",
+          "source_file": "Image/ExifTool/Writer.pl",
+          "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+        }
+      ]
+    }
+  },
+  "native_write_capture_context": {
+    "loaded_modules": {
+      "Image/ExifTool.pm": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+      "Image/ExifTool/Writer.pl": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    }
+  },
+  "native_write_helpers": {
+    "check_value": {
+      "__deparse": "($$;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($valPtr, $format, $count) = @_);\n    my(@vals, $val, $n);\n    if ((($format eq 'string') or ($format eq 'undef'))) {\n        (($count and ($count > 0)) or (return (undef)));\n        (my($len) = length($$valPtr));\n        if (($format eq 'string')) {\n            (($len >= $count) and (return 'String too long'));\n        } else {\n            (($len > $count) and (return 'Data too long'));\n        }\n        if (($len < $count)) {\n            ($$valPtr .= (\"\\000\" x ($count - $len)));\n        }\n        (return (undef));\n    }\n    if (($count and ($count != 1))) {\n        (@vals = split(' ', $$valPtr, 0));\n        (($count < 0) and (($count = @vals) || (return (undef))));\n    } else {\n        ($count = 1);\n        (@vals = $$valPtr);\n    }\n    if ((@vals != $count)) {\n        (my($str) = ((@vals > $count) ? 'Too many' : 'Not enough'));\n        (return (\"$str values specified ($count required)\"));\n    }\n    for (($n = 0); ($n < $count); (++$n)) {\n        ($val = shift(@vals));\n        if (($format =~ /^int/)) {\n            unless (IsInt($val)) {\n                if (IsHex($val)) {\n                    ($val = ($$valPtr = hex($val)));\n                } else {\n                    ((IsFloat($val) and ($count == 1)) or (return 'Not an integer'));\n                    ($val = ($$valPtr = int(($val + (($val < 0) ? (-0.5) : 0.5)))));\n                }\n            }\n            ((my $rng = $intRange{$format}) or (return (\"Bad int format: $format\")));\n            (($val < $rng->[0]) and (return (\"Value below $format minimum\")));\n            ((($val > $rng->[1]) and ($val != 4277010157)) and (return (\"Value above $format maximum\")));\n        } elsif (((($format =~ /^rational/) or ($format eq 'float')) or ($format eq 'double'))) {\n            unless (IsFloat($val)) {\n                if (($format =~ /^rational/)) {\n                    ((($val eq 'inf') || ($val eq 'undef')) and (next));\n                    if (($val =~ m[^([-+]?\\d+)/(\\d+)$])) {\n                        ((($1 < 0) and ($format =~ /u$/)) or (next));\n                        (return 'Must be an unsigned rational');\n                    }\n                }\n                (return 'Not a floating point number');\n            }\n            if ((($format =~ /^rational\\d+u$/) and ($val < 0))) {\n                (return 'Must be a positive number');\n            }\n        }\n    }\n    (return (undef));\n}",
+      "__name": "Image::ExifTool::CheckValue",
+      "__opaque": true,
+      "__perl": "CODE",
+      "callback_references": {},
+      "dependencies": {
+        "Image::ExifTool::IsFloat": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (($_[0] =~ /^[+-]?(?=\\d|\\.\\d)\\d*(\\.\\d*)?([Ee]([+-]?\\d+))?$/) and (return 1));\n    (($_[0] =~ /^[+-]?(?=\\d|,\\d)\\d*(,\\d*)?([Ee]([+-]?\\d+))?$/) or (return 0));\n    ($_[0] =~ tr/,/./);\n    (return 1);\n}",
+          "__name": "Image::ExifTool::IsFloat",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        },
+        "Image::ExifTool::IsHex": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ /^(0x)?[0-9a-f]{1,8}$/i)));\n}",
+          "__name": "Image::ExifTool::IsHex",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        },
+        "Image::ExifTool::IsInt": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ /^[+-]?\\d+$/)));\n}",
+          "__name": "Image::ExifTool::IsInt",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        }
+      },
+      "lexical_hashes": {
+        "bindings": {
+          "%intRange": {
+            "entries": {
+              "int16s": [
+                "-32768",
+                "32767"
+              ],
+              "int16u": [
+                "0",
+                "65535"
+              ],
+              "int16uRev": [
+                "0",
+                "65535"
+              ],
+              "int32s": [
+                "-2147483648",
+                "2147483647"
+              ],
+              "int32u": [
+                "0",
+                "4294967295"
+              ],
+              "int64s": [
+                "-9223372036854775808",
+                "9223372036854775807"
+              ],
+              "int64u": [
+                "0",
+                "18446744073709551615"
+              ],
+              "int8s": [
+                "-128",
+                "127"
+              ],
+              "int8u": [
+                "0",
+                "255"
+              ]
+            },
+            "resolved": true
+          }
+        },
+        "resolved": true
+      },
+      "requested_binding": "Image::ExifTool::CheckValue",
+      "resolved": true,
+      "source_file": "Image/ExifTool/Writer.pl",
+      "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    },
+    "set_byte_order": {
+      "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (my($order) = (shift()));\n    if (($order eq 'MM')) {\n        (%Image::ExifTool::unpackStd = %unpackMotorola);\n    } elsif (($order eq 'II')) {\n        (%Image::ExifTool::unpackStd = %unpackIntel);\n    } elsif (($order =~ /^Big/i)) {\n        ($order = 'MM');\n        (%Image::ExifTool::unpackStd = %unpackMotorola);\n    } elsif (($order =~ /^Little/i)) {\n        ($order = 'II');\n        (%Image::ExifTool::unpackStd = %unpackIntel);\n    } else {\n        (return 0);\n    }\n    (my($val) = unpack('S', 'A '));\n    my($nativeOrder);\n    if (($val == 16672)) {\n        ($nativeOrder = 'MM');\n    } elsif (($val == 8257)) {\n        ($nativeOrder = 'II');\n    } else {\n        warn(sprintf(\"Unknown native byte order! (pattern %x)\\n\", $val));\n        (return 0);\n    }\n    ($Image::ExifTool::currentByteOrder = $order);\n    ($Image::ExifTool::swapBytes = ($order ne $nativeOrder));\n    (my($pack1d) = \"\\000\\000\\000\\000\\000\\000\\360?\");\n    ($Image::ExifTool::swapWords = (($pack1d eq \"\\000\\000\\cO\\363\\000\\000\\000\\000\") || ($pack1d eq \"\\000\\000\\360?\\000\\000\\000\\000\")));\n    (return 1);\n}",
+      "__name": "Image::ExifTool::SetByteOrder",
+      "__opaque": true,
+      "__perl": "CODE",
+      "callback_references": {},
+      "lexical_hashes": {
+        "bindings": {
+          "%unpackIntel": {
+            "entries": {
+              "C": "C",
+              "L": "V",
+              "S": "v",
+              "c": "c"
+            },
+            "resolved": true
+          },
+          "%unpackMotorola": {
+            "entries": {
+              "C": "C",
+              "L": "N",
+              "S": "n",
+              "c": "c"
+            },
+            "resolved": true
+          }
+        },
+        "resolved": true
+      },
+      "requested_binding": "Image::ExifTool::SetByteOrder",
+      "resolved": true,
+      "source_file": "Image/ExifTool.pm",
+      "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+    },
+    "write_value": {
+      "__deparse": "($$;$$$$) {\n    package Image::ExifTool;\n    use strict;\n    (my($val, $format, $count, $dataPt, $offset) = @_);\n    (my($proc) = $writeValueProc{$format});\n    my($packed);\n    if ($proc) {\n        (my @vals = split(' ', $val, 0));\n        if ($count) {\n            (($count < 0) and ($count = @vals));\n        } else {\n            ($count = 1);\n        }\n        ($packed = '');\n        while (($count--)) {\n            ($val = shift(@vals));\n            (defined($val) or (return (undef)));\n            if (($format =~ /^int/)) {\n                unless ((IsInt($val) or IsHex($val))) {\n                    (IsFloat($val) or (return (undef)));\n                    ($val = int(($val + (($val < 0) ? (-0.5) : 0.5))));\n                    ($_[0] = $val);\n                }\n            } elsif (not(IsFloat($val))) {\n                ((($format =~ /^rational/) and ((($val eq 'inf') || ($val eq 'undef')) || IsRational($val))) or (return (undef)));\n            }\n            ($packed .= &$proc($val));\n        }\n    } elsif ((($format eq 'string') or ($format eq 'undef'))) {\n        (($format eq 'string') and ($val .= \"\\000\"));\n        if (($count and ($count > 0))) {\n            (my($diff) = ($count - length($val)));\n            if ($diff) {\n                if (($diff < 0)) {\n                    if (($format eq 'string')) {\n                        ($count or (return (undef)));\n                        ($val = substr($val, 0, ($count - 1)) . \"\\000\");\n                    } else {\n                        ($val = substr($val, 0, $count));\n                    }\n                } else {\n                    ($val .= (\"\\000\" x $diff));\n                }\n            }\n        } else {\n            ($count = length($val));\n        }\n        ($dataPt and substr($$dataPt, $offset, $count) = $val);\n        (return $val);\n    } else {\n        warn((\"Sorry, Can't write $format values on this platform\\n\"));\n        (return (undef));\n    }\n    ($dataPt and substr($$dataPt, $offset, length($packed)) = $packed);\n    (return $packed);\n}",
+      "__name": "Image::ExifTool::WriteValue",
+      "__opaque": true,
+      "__perl": "CODE",
+      "callback_references": {},
+      "dependencies": {
+        "Image::ExifTool::IsFloat": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (($_[0] =~ /^[+-]?(?=\\d|\\.\\d)\\d*(\\.\\d*)?([Ee]([+-]?\\d+))?$/) and (return 1));\n    (($_[0] =~ /^[+-]?(?=\\d|,\\d)\\d*(,\\d*)?([Ee]([+-]?\\d+))?$/) or (return 0));\n    ($_[0] =~ tr/,/./);\n    (return 1);\n}",
+          "__name": "Image::ExifTool::IsFloat",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        },
+        "Image::ExifTool::IsHex": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ /^(0x)?[0-9a-f]{1,8}$/i)));\n}",
+          "__name": "Image::ExifTool::IsHex",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        },
+        "Image::ExifTool::IsInt": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ /^[+-]?\\d+$/)));\n}",
+          "__name": "Image::ExifTool::IsInt",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        },
+        "Image::ExifTool::IsRational": {
+          "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ m[^[-+]?\\d+/\\d+$])));\n}",
+          "__name": "Image::ExifTool::IsRational",
+          "__opaque": true,
+          "__perl": "CODE",
+          "resolved": true,
+          "source_file": "Image/ExifTool.pm",
+          "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+        }
+      },
+      "lexical_hashes": {
+        "bindings": {
+          "%writeValueProc": {
+            "entries": {
+              "double": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = SwapBytes(SwapWords(pack('d', $_[0])), 8));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::SetDouble",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::SwapBytes": {
+                    "__deparse": "($$) {\n    package Image::ExifTool;\n    use strict;\n    ($Image::ExifTool::swapBytes or (return $_[0]));\n    (my($val, $bytes) = @_);\n    (my($newVal) = '');\n    ($newVal .= substr($val, $bytes, 1)) while ($bytes--);\n    (return $newVal);\n}",
+                    "__name": "Image::ExifTool::SwapBytes",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  },
+                  "Image::ExifTool::SwapWords": {
+                    "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (($Image::ExifTool::swapWords and (length($_[0]) == 8)) or (return $_[0]));\n    (return (substr($_[0], 4, 4) . substr($_[0], 0, 4)));\n}",
+                    "__name": "Image::ExifTool::SwapWords",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "fixed16s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (return Set16s(int((($val * 256) + (($val < 0) ? (-0.5) : 0.5))), @_));\n}",
+                "__name": "Image::ExifTool::SetFixed16s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set16s": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and ($val += 65536));\n    (return Set16u($val, @_));\n}",
+                    "__name": "Image::ExifTool::Set16s",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Set16u": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                        "__name": "Image::ExifTool::Set16u",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::DoPackStd": {
+                            "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                            "__name": "Image::ExifTool::DoPackStd",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "fixed16u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = int((((shift()) * 256) + 0.5)));\n    (return Set16u($val, @_));\n}",
+                "__name": "Image::ExifTool::SetFixed16u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set16u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                    "__name": "Image::ExifTool::Set16u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "fixed32s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (return Set32s(int((($val * 65536) + (($val < 0) ? (-0.5) : 0.5))), @_));\n}",
+                "__name": "Image::ExifTool::SetFixed32s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set32s": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and (($val += 4294967295), (++$val)));\n    (return Set32u($val, @_));\n}",
+                    "__name": "Image::ExifTool::Set32s",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Set32u": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                        "__name": "Image::ExifTool::Set32u",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::DoPackStd": {
+                            "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                            "__name": "Image::ExifTool::DoPackStd",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "fixed32u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = int((((shift()) * 65536) + 0.5)));\n    (return Set32u($val, @_));\n}",
+                "__name": "Image::ExifTool::SetFixed32u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set32u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                    "__name": "Image::ExifTool::Set32u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "float": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = SwapBytes(pack('f', $_[0]), 4));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::SetFloat",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::SwapBytes": {
+                    "__deparse": "($$) {\n    package Image::ExifTool;\n    use strict;\n    ($Image::ExifTool::swapBytes or (return $_[0]));\n    (my($val, $bytes) = @_);\n    (my($newVal) = '');\n    ($newVal .= substr($val, $bytes, 1)) while ($bytes--);\n    (return $newVal);\n}",
+                    "__name": "Image::ExifTool::SwapBytes",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "ifd": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                "__name": "Image::ExifTool::Set32u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::DoPackStd": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::DoPackStd",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "int16s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and ($val += 65536));\n    (return Set16u($val, @_));\n}",
+                "__name": "Image::ExifTool::Set16s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set16u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                    "__name": "Image::ExifTool::Set16u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "int16u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                "__name": "Image::ExifTool::Set16u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::DoPackStd": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::DoPackStd",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "int16uRev": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackRev('S', @_));\n}",
+                "__name": "Image::ExifTool::Set16uRev",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::DoPackRev": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($unpackRev{$Image::ExifTool::unpackStd{$_[0]}}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::DoPackRev",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "int32s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and (($val += 4294967295), (++$val)));\n    (return Set32u($val, @_));\n}",
+                "__name": "Image::ExifTool::Set32s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set32u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                    "__name": "Image::ExifTool::Set32u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "int32u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                "__name": "Image::ExifTool::Set32u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::DoPackStd": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::DoPackStd",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "int64s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and ($val += 18446744073709551616.0));\n    (return Set64u($val, @_));\n}",
+                "__name": "Image::ExifTool::Set64s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set64u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = $_[0]);\n    (my($hi) = int(($val / 4294967296)));\n    (my($lo) = Set32u(($val - ($hi * 4294967296))));\n    ($hi = Set32u($hi));\n    ($val = ((GetByteOrder eq 'MM') ? ($hi . $lo) : ($lo . $hi)));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::Set64u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Set32u": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                        "__name": "Image::ExifTool::Set32u",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::DoPackStd": {
+                            "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                            "__name": "Image::ExifTool::DoPackStd",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "int64u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = $_[0]);\n    (my($hi) = int(($val / 4294967296)));\n    (my($lo) = Set32u(($val - ($hi * 4294967296))));\n    ($hi = Set32u($hi));\n    ($val = ((GetByteOrder eq 'MM') ? ($hi . $lo) : ($lo . $hi)));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::Set64u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Set32u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                    "__name": "Image::ExifTool::Set32u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "int8s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('c', @_));\n}",
+                "__name": "Image::ExifTool::Set8s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::DoPackStd": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::DoPackStd",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "int8u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('C', @_));\n}",
+                "__name": "Image::ExifTool::Set8u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::DoPackStd": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                    "__name": "Image::ExifTool::DoPackStd",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool.pm",
+                "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+              },
+              "rational32s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($numer, $denom) = Rationalize($_[0], 32767));\n    (my $val = Set16s($numer) . Set16u($denom));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::SetRational32s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Rationalize": {
+                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val eq 'inf') and (return 1, 0));\n    (($val eq 'undef') and (return 0, 0));\n    (($val =~ m[^([-+]?\\d+)/(\\d+)$]) and (return $1, $2));\n    (($val == 0) and (return 0, 1));\n    (my($sign) = (($val < 0) ? (($val = (-$val)), (-1)) : 1));\n    my($num, $denom, @fracs);\n    (my($frac) = $val);\n    (my($maxInt) = ((shift()) || 2147483647));\n    while (1) {\n        (my($n, $d) = AssembleRational(int(($frac + 0.5)), 1, @fracs));\n        if ((($n > $maxInt) or ($d > $maxInt))) {\n            (defined($num) and (last));\n            (($val < 1) and (return $sign, $maxInt));\n            (return ($sign * $maxInt), 1);\n        }\n        (($num, $denom) = ($n, $d));\n        (my($err) = ((($n / $d) - $val) / $val));\n        ((abs($err) < 1e-08) and (last));\n        (my($int) = int($frac));\n        unshift(@fracs, $int);\n        (($frac -= $int) or (last));\n        ($frac = (1 / $frac));\n    }\n    (return ($num * $sign), $denom);\n}",
+                    "__name": "Image::ExifTool::Rationalize",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::AssembleRational": {
+                        "__deparse": "($$@) {\n    package Image::ExifTool;\n    use strict;\n    ((@_ < 3) and (return @_));\n    (my($num, $denom, $frac) = splice(@_, 0, 3));\n    (return AssembleRational((($frac * $num) + $denom), $num, @_));\n}",
+                        "__name": "Image::ExifTool::AssembleRational",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::AssembleRational": {
+                            "__deparse": null,
+                            "__name": "Image::ExifTool::AssembleRational",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "reason": "dependency_cycle",
+                            "resolved": false,
+                            "source_file": null,
+                            "source_sha256": null
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Writer.pl",
+                        "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  },
+                  "Image::ExifTool::Set16s": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and ($val += 65536));\n    (return Set16u($val, @_));\n}",
+                    "__name": "Image::ExifTool::Set16s",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Set16u": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                        "__name": "Image::ExifTool::Set16u",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::DoPackStd": {
+                            "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                            "__name": "Image::ExifTool::DoPackStd",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  },
+                  "Image::ExifTool::Set16u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                    "__name": "Image::ExifTool::Set16u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "rational32u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($numer, $denom) = Rationalize($_[0], 65535));\n    (my $val = Set16u($numer) . Set16u($denom));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::SetRational32u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Rationalize": {
+                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val eq 'inf') and (return 1, 0));\n    (($val eq 'undef') and (return 0, 0));\n    (($val =~ m[^([-+]?\\d+)/(\\d+)$]) and (return $1, $2));\n    (($val == 0) and (return 0, 1));\n    (my($sign) = (($val < 0) ? (($val = (-$val)), (-1)) : 1));\n    my($num, $denom, @fracs);\n    (my($frac) = $val);\n    (my($maxInt) = ((shift()) || 2147483647));\n    while (1) {\n        (my($n, $d) = AssembleRational(int(($frac + 0.5)), 1, @fracs));\n        if ((($n > $maxInt) or ($d > $maxInt))) {\n            (defined($num) and (last));\n            (($val < 1) and (return $sign, $maxInt));\n            (return ($sign * $maxInt), 1);\n        }\n        (($num, $denom) = ($n, $d));\n        (my($err) = ((($n / $d) - $val) / $val));\n        ((abs($err) < 1e-08) and (last));\n        (my($int) = int($frac));\n        unshift(@fracs, $int);\n        (($frac -= $int) or (last));\n        ($frac = (1 / $frac));\n    }\n    (return ($num * $sign), $denom);\n}",
+                    "__name": "Image::ExifTool::Rationalize",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::AssembleRational": {
+                        "__deparse": "($$@) {\n    package Image::ExifTool;\n    use strict;\n    ((@_ < 3) and (return @_));\n    (my($num, $denom, $frac) = splice(@_, 0, 3));\n    (return AssembleRational((($frac * $num) + $denom), $num, @_));\n}",
+                        "__name": "Image::ExifTool::AssembleRational",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::AssembleRational": {
+                            "__deparse": null,
+                            "__name": "Image::ExifTool::AssembleRational",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "reason": "dependency_cycle",
+                            "resolved": false,
+                            "source_file": null,
+                            "source_sha256": null
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Writer.pl",
+                        "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  },
+                  "Image::ExifTool::Set16u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('S', @_));\n}",
+                    "__name": "Image::ExifTool::Set16u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "rational64s": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($numer, $denom) = Rationalize($_[0]));\n    (my $val = Set32s($numer) . Set32u($denom));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::SetRational64s",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Rationalize": {
+                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val eq 'inf') and (return 1, 0));\n    (($val eq 'undef') and (return 0, 0));\n    (($val =~ m[^([-+]?\\d+)/(\\d+)$]) and (return $1, $2));\n    (($val == 0) and (return 0, 1));\n    (my($sign) = (($val < 0) ? (($val = (-$val)), (-1)) : 1));\n    my($num, $denom, @fracs);\n    (my($frac) = $val);\n    (my($maxInt) = ((shift()) || 2147483647));\n    while (1) {\n        (my($n, $d) = AssembleRational(int(($frac + 0.5)), 1, @fracs));\n        if ((($n > $maxInt) or ($d > $maxInt))) {\n            (defined($num) and (last));\n            (($val < 1) and (return $sign, $maxInt));\n            (return ($sign * $maxInt), 1);\n        }\n        (($num, $denom) = ($n, $d));\n        (my($err) = ((($n / $d) - $val) / $val));\n        ((abs($err) < 1e-08) and (last));\n        (my($int) = int($frac));\n        unshift(@fracs, $int);\n        (($frac -= $int) or (last));\n        ($frac = (1 / $frac));\n    }\n    (return ($num * $sign), $denom);\n}",
+                    "__name": "Image::ExifTool::Rationalize",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::AssembleRational": {
+                        "__deparse": "($$@) {\n    package Image::ExifTool;\n    use strict;\n    ((@_ < 3) and (return @_));\n    (my($num, $denom, $frac) = splice(@_, 0, 3));\n    (return AssembleRational((($frac * $num) + $denom), $num, @_));\n}",
+                        "__name": "Image::ExifTool::AssembleRational",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::AssembleRational": {
+                            "__deparse": null,
+                            "__name": "Image::ExifTool::AssembleRational",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "reason": "dependency_cycle",
+                            "resolved": false,
+                            "source_file": null,
+                            "source_sha256": null
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Writer.pl",
+                        "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  },
+                  "Image::ExifTool::Set32s": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val < 0) and (($val += 4294967295), (++$val)));\n    (return Set32u($val, @_));\n}",
+                    "__name": "Image::ExifTool::Set32s",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::Set32u": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                        "__name": "Image::ExifTool::Set32u",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::DoPackStd": {
+                            "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                            "__name": "Image::ExifTool::DoPackStd",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "resolved": true,
+                            "source_file": "Image/ExifTool.pm",
+                            "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  },
+                  "Image::ExifTool::Set32u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                    "__name": "Image::ExifTool::Set32u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              },
+              "rational64u": {
+                "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($numer, $denom) = Rationalize($_[0], 4294967295));\n    (my $val = Set32u($numer) . Set32u($denom));\n    ($_[1] and substr(${$_[1];}, $_[2], length($val)) = $val);\n    (return $val);\n}",
+                "__name": "Image::ExifTool::SetRational64u",
+                "__opaque": true,
+                "__perl": "CODE",
+                "dependencies": {
+                  "Image::ExifTool::Rationalize": {
+                    "__deparse": "($;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = (shift()));\n    (($val eq 'inf') and (return 1, 0));\n    (($val eq 'undef') and (return 0, 0));\n    (($val =~ m[^([-+]?\\d+)/(\\d+)$]) and (return $1, $2));\n    (($val == 0) and (return 0, 1));\n    (my($sign) = (($val < 0) ? (($val = (-$val)), (-1)) : 1));\n    my($num, $denom, @fracs);\n    (my($frac) = $val);\n    (my($maxInt) = ((shift()) || 2147483647));\n    while (1) {\n        (my($n, $d) = AssembleRational(int(($frac + 0.5)), 1, @fracs));\n        if ((($n > $maxInt) or ($d > $maxInt))) {\n            (defined($num) and (last));\n            (($val < 1) and (return $sign, $maxInt));\n            (return ($sign * $maxInt), 1);\n        }\n        (($num, $denom) = ($n, $d));\n        (my($err) = ((($n / $d) - $val) / $val));\n        ((abs($err) < 1e-08) and (last));\n        (my($int) = int($frac));\n        unshift(@fracs, $int);\n        (($frac -= $int) or (last));\n        ($frac = (1 / $frac));\n    }\n    (return ($num * $sign), $denom);\n}",
+                    "__name": "Image::ExifTool::Rationalize",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::AssembleRational": {
+                        "__deparse": "($$@) {\n    package Image::ExifTool;\n    use strict;\n    ((@_ < 3) and (return @_));\n    (my($num, $denom, $frac) = splice(@_, 0, 3));\n    (return AssembleRational((($frac * $num) + $denom), $num, @_));\n}",
+                        "__name": "Image::ExifTool::AssembleRational",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "dependencies": {
+                          "Image::ExifTool::AssembleRational": {
+                            "__deparse": null,
+                            "__name": "Image::ExifTool::AssembleRational",
+                            "__opaque": true,
+                            "__perl": "CODE",
+                            "reason": "dependency_cycle",
+                            "resolved": false,
+                            "source_file": null,
+                            "source_sha256": null
+                          }
+                        },
+                        "resolved": true,
+                        "source_file": "Image/ExifTool/Writer.pl",
+                        "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool/Writer.pl",
+                    "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+                  },
+                  "Image::ExifTool::Set32u": {
+                    "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (return DoPackStd('L', @_));\n}",
+                    "__name": "Image::ExifTool::Set32u",
+                    "__opaque": true,
+                    "__perl": "CODE",
+                    "dependencies": {
+                      "Image::ExifTool::DoPackStd": {
+                        "__deparse": "(@) {\n    package Image::ExifTool;\n    use strict;\n    (my($val) = pack($Image::ExifTool::unpackStd{$_[0]}, $_[1]));\n    ($_[2] and substr(${$_[2];}, $_[3], length($val)) = $val);\n    (return $val);\n}",
+                        "__name": "Image::ExifTool::DoPackStd",
+                        "__opaque": true,
+                        "__perl": "CODE",
+                        "resolved": true,
+                        "source_file": "Image/ExifTool.pm",
+                        "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                      }
+                    },
+                    "resolved": true,
+                    "source_file": "Image/ExifTool.pm",
+                    "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+                  }
+                },
+                "resolved": true,
+                "source_file": "Image/ExifTool/Writer.pl",
+                "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+              }
+            },
+            "resolved": true
+          }
+        },
+        "resolved": true
+      },
+      "requested_binding": "Image::ExifTool::WriteValue",
+      "resolved": true,
+      "source_file": "Image/ExifTool/Writer.pl",
+      "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+    }
+  }
+}

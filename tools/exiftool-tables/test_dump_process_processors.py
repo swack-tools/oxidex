@@ -142,6 +142,43 @@ class ProcessProcessorFacts(unittest.TestCase):
         self.assertIsNone(fact["source_file"])
         self.assertIsNone(fact["source_sha256"])
 
+    def test_encrypted_subdirectory_processor_captures_decrypt_dependency(self):
+        nikon = self.lib / "Image/ExifTool/Nikon.pm"
+        nikon.write_text(textwrap.dedent("""\
+            package Image::ExifTool::Nikon;
+            my @xlat = ([map { $_ } 0 .. 255], [map { 255 - $_ } 0 .. 255]);
+            sub Decrypt { my ($data) = @_; return chr($xlat[0][$data & 0xff] ^ $xlat[1][$data & 0xff]) . $data; }
+            sub ProcessNikonEncrypted {
+                my ($et, $dir, $table) = @_;
+                return Decrypt($dir->{DataPt});
+            }
+            our %Child = ( FORMAT => 'int8u', 1 => { Name => 'ChildValue' } );
+            our %Main = (
+                145 => { Name => 'ShotInfo', SubDirectory => {
+                    TagTable => 'Image::ExifTool::Nikon::Child',
+                    ProcessProc => \\&ProcessNikonEncrypted,
+                    DecryptStart => 0,
+                } },
+            );
+            1;
+        """), encoding="utf-8")
+        result = subprocess.run(
+            [PERL, str(DUMP), str(self.lib), "Nikon"],
+            check=True, text=True, capture_output=True,
+        )
+        process = json.loads(result.stdout)["modules"]["Nikon"]["tables"]["Main"]["tags"]["145"]["SubDirectory"]["ProcessProc"]
+        self.assertTrue(process.get("resolved"))
+        self.assertEqual(process["__name"], "Image::ExifTool::Nikon::ProcessNikonEncrypted")
+        decrypt = process["dependencies"]["Image::ExifTool::Nikon::Decrypt"]
+        self.assertTrue(decrypt["resolved"])
+        self.assertEqual(decrypt["__name"], "Image::ExifTool::Nikon::Decrypt")
+        self.assertEqual(decrypt["source_sha256"], hashlib.sha256(nikon.read_bytes()).hexdigest())
+        xlat = decrypt["lexical_arrays"]
+        self.assertTrue(xlat["resolved"], xlat)
+        self.assertEqual(xlat["rows"][0], list(range(256)))
+        self.assertEqual(xlat["rows"][1], list(reversed(range(256))))
+        self.assertEqual(xlat["sha256"], hashlib.sha256(bytes(range(256)) + bytes(reversed(range(256)))).hexdigest())
+
 
 PINNED = Path(os.environ.get("OXIDEX_PINNED_EXIFTOOL", REPO_ROOT / "target/exiftool-src" / ("exiftool-" + (REPO_ROOT / ".exiftool-version").read_text().strip())))
 ORACLE = REPO_ROOT / "tools/exiftool-tables/oracle.pl"

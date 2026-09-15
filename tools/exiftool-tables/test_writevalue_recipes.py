@@ -157,8 +157,11 @@ print JSON::PP->new->canonical->utf8->encode({results=>\@results,source_sha256=>
         env = os.environ.copy()
         for name in ("PERL5LIB", "PERLLIB", "PERL5OPT"):
             env.pop(name, None)
+        native_root = Path(os.environ["OXIDEX_PINNED_EXIFTOOL"])
+        lib = native_root / "lib" if (native_root / "lib").is_dir() else native_root
+        self.assertTrue((lib / "Image/ExifTool/Writer.pl").is_file())
         result = subprocess.run([env.get("EXIFTOOL_PERL", "/usr/bin/perl"),
-                                 "-I" + str(Path(os.environ["OXIDEX_PINNED_EXIFTOOL"]) / "lib"), "-e", perl],
+                                 "-I" + str(lib), "-e", perl],
                                 input=json.dumps(cases, ensure_ascii=False).encode("utf8"), env=env,
                                 capture_output=True, timeout=30, check=True)
         native = json.loads(result.stdout)

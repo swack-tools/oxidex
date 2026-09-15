@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub(crate) mod generated_scalar_descriptor_fallback;
 pub mod generated_tags;
 pub mod tag_registry;
 
@@ -222,6 +223,20 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
 /// assert_eq!(lookup_tag_name(0xF999, "IFD0"), "IFD0:0xF999");
 /// ```
 pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
+    lookup_tag_name_with_generated(
+        tag_id,
+        ifd_name,
+        generated_scalar_descriptor_fallback::terminal_reverse,
+        generated_scalar_descriptor_fallback::reverse_name,
+    )
+}
+
+fn lookup_tag_name_with_generated(
+    tag_id: u16,
+    ifd_name: &str,
+    terminal_reverse: impl Fn(u16, FormatFamily, &str) -> bool,
+    reverse_name: impl Fn(u16, FormatFamily, &str) -> Option<&'static str>,
+) -> String {
     // Determine which format family to look in based on IFD name
     // GPS IFD uses GPS format family, all others use EXIF format family
     let format_family = if ifd_name == "GPS" {
@@ -241,6 +256,17 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         _ => tag_id,
     };
 
+    // A removed/unsupported generated public identity is terminal for its
+    // physical source group, unless a current descriptor has reused the
+    // numeric address in that group. Do not resurrect its old YAML/manual
+    // reverse spelling during a source upgrade.
+    if terminal_reverse(tag_id, format_family, ifd_name) {
+        if let Some(name) = reverse_name(tag_id, format_family, ifd_name) {
+            return format!("{ifd_name}:{name}");
+        }
+        return format!("{}:0x{:04X}", ifd_name, tag_id);
+    }
+
     // Look up the tag in the appropriate format family
     if let Some(tag_name) = TAG_ID_TO_NAME_INDEX.get(&(tag_id, format_family)) {
         // Found the tag, now we need to replace the prefix with the correct IFD name
@@ -258,12 +284,10 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
         }
     }
 
-    // The YAML index missed. Before giving up on a name, consult the manual
-    // registry's numeric view: the write path resolves through it, so a tag
-    // present only there would otherwise write correctly and read back as hex
-    // (the W8 write/read asymmetry). Consulted only after the generated index,
-    // so it can never override a generated name.
-    if let Some(name) = tag_registry::manual_only_name_for_id(tag_id, format_family, ifd_name) {
+    // The YAML index missed. Before giving up on a name, consult the generated
+    // final-scalar descriptor facts. They are scoped to the native physical
+    // group, so an IFD0 name can never leak to IFD1 or a MakerNote.
+    if let Some(name) = reverse_name(tag_id, format_family, ifd_name) {
         return format!("{ifd_name}:{name}");
     }
 
@@ -274,6 +298,54 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renamed_current_address_wins_retired_reverse_without_reviving_yaml() {
+        use crate::writers::generated_setnewvalue_public_migration_rules::PUBLIC_SET_NEW_VALUE_MIGRATIONS;
+        use generated_scalar_descriptor_fallback::tests::{
+            ReverseLookupFixture, reverse_lookup_fixture,
+        };
+
+        // Choose a real generated identity whose old spelling also exists in
+        // the legacy index. A YAML miss would not exercise the stale fallback.
+        let source = PUBLIC_SET_NEW_VALUE_MIGRATIONS
+            .iter()
+            .find(|migration| {
+                !migration.removed_or_unsupported
+                    && migration.write_group == "IFD0"
+                    && TAG_ID_TO_NAME_INDEX
+                        .get(&(migration.raw_tag_id, FormatFamily::EXIF))
+                        .is_some_and(|name| {
+                            name.split_once(':').map(|(_, name)| name) == Some(migration.name)
+                        })
+            })
+            .expect("a migrated source identity must have a real legacy YAML spelling");
+        let old_name = format!("{}:{}", source.write_group, source.name);
+        assert_eq!(
+            lookup_tag_name(source.raw_tag_id, source.write_group),
+            old_name
+        );
+        let lookup = |facts: &ReverseLookupFixture| {
+            lookup_tag_name_with_generated(
+                source.raw_tag_id,
+                source.write_group,
+                |id, family, group| facts.terminal(id, family, group),
+                |id, family, group| facts.name(id, family, group),
+            )
+        };
+        for retired_first in [false, true] {
+            let renamed =
+                reverse_lookup_fixture(source, Some("SourceRenamedCurrentTag"), retired_first);
+            assert_eq!(lookup(&renamed), "IFD0:SourceRenamedCurrentTag");
+            assert_ne!(lookup(&renamed), old_name);
+        }
+        let removed = reverse_lookup_fixture(source, None, false);
+        assert_eq!(
+            lookup(&removed),
+            format!("{}:0x{:04X}", source.write_group, source.raw_tag_id)
+        );
+        assert_ne!(lookup(&removed), old_name);
+    }
 
     /// `Uncompressed` is a genuine `Exif::Main` tag at 0xBC03 -- HD Photo's
     /// compression value -- but it was unreachable, because the enum-value
@@ -307,15 +379,10 @@ mod tests {
         assert_eq!(lookup_tag_name(0x920D, "ExifIFD"), "ExifIFD:Noise");
     }
 
-    /// `Exif.pm:1050-1054` declares 0x151 as TargetPrinter (`Writable =>
-    /// 'string'`, `WriteGroup => 'IFD0'`), and oxidex's manual write registry
-    /// carries it -- but the YAML-built read index does not, so it used to
-    /// write correctly and read back as `IFD0:0x0151`. That hex spelling was
-    /// invisible until Step 21 began stripping hex-fallback names from default
-    /// output, at which point the tag vanished from read-back entirely and the
-    /// jpeg-tag-matrix ratchet caught it (full 136 -> 135).
+    /// The scoped generated identity must retain read-back naming after the
+    /// manual write descriptor and reverse-name exception are removed.
     #[test]
-    fn manual_registry_ids_absent_from_the_yaml_index_still_resolve_by_name() {
+    fn generated_scalar_ids_absent_from_yaml_still_resolve_by_name() {
         assert_eq!(lookup_tag_name(0x0151, "IFD0"), "IFD0:TargetPrinter");
         // A genuinely unknown ID must still fall through to hex.
         assert_eq!(lookup_tag_name(0xF999, "IFD0"), "IFD0:0xF999");

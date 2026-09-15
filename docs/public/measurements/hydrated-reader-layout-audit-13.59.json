@@ -1,0 +1,763 @@
+{
+  "catalog_native_entries": 33487,
+  "catalog_native_legacy_unique_counter": 21437,
+  "dump_bytes": 102627904,
+  "dump_sha256": "933f0c6b585b2b6039d68c9ac1f553fb596ba33f4b889f589d2b19bba444f068",
+  "exiftool_version": "13.59",
+  "instrument_sha256": "187e9de886f70897d2f2ea2da225eb6e0654b7d5adda86241c9f8deb226a2ab6",
+  "raw_keys": 34897,
+  "reference_occurrences_by_kind": {
+    "ARRAY": 474,
+    "HASH": 47791,
+    "tag_table": 36151
+  },
+  "schema": "oxidex_hydrated_layout_audit_v1",
+  "scope": "source graph only; generated and observed read/write support unmeasured",
+  "shared_objects": 41818,
+  "shortcuts": 11,
+  "source_provenance": {
+    "perl_version": "v5.38.2",
+    "producer_sha256": "b9000a0be27e4d9bd350730234f5104deba0d2ac32b06b49edbd41b8228c76eb",
+    "sources": {
+      "Image/ExifTool.pm": {
+        "library_relative_path": "Image/ExifTool.pm",
+        "sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+      },
+      "Image/ExifTool/7Z.pm": {
+        "library_relative_path": "Image/ExifTool/7Z.pm",
+        "sha256": "241e0bae7f6f4122d1c4c5b5c47a8b698957834d50815a88308a9b0807bcf9c2"
+      },
+      "Image/ExifTool/AAC.pm": {
+        "library_relative_path": "Image/ExifTool/AAC.pm",
+        "sha256": "60f57e2183007936b709de6db1fbf7b77e0364988a3998b420299ca39a497150"
+      },
+      "Image/ExifTool/AES.pm": {
+        "library_relative_path": "Image/ExifTool/AES.pm",
+        "sha256": "c97dc2d7fccd8ae4049acb9248ad24ca9255687767bbee561a6bff4903dc3aa0"
+      },
+      "Image/ExifTool/AFCP.pm": {
+        "library_relative_path": "Image/ExifTool/AFCP.pm",
+        "sha256": "382ebbcb9d0de58c73e651e6c96c06fb49b1025f49a7725102f4674eb6803061"
+      },
+      "Image/ExifTool/AIFF.pm": {
+        "library_relative_path": "Image/ExifTool/AIFF.pm",
+        "sha256": "45f52c43e4a6c4dc353604ad11091bf401e5d03b21ab6c55c42274be441bc7ab"
+      },
+      "Image/ExifTool/APE.pm": {
+        "library_relative_path": "Image/ExifTool/APE.pm",
+        "sha256": "df6e5f04e5ec3e0b48384b29aec3ca69816be9681e8480824327b28abecdb417"
+      },
+      "Image/ExifTool/APP12.pm": {
+        "library_relative_path": "Image/ExifTool/APP12.pm",
+        "sha256": "8cf439b5db9d494b7f68f69b8d5ae98048cc681f462c96c27faa3952904318e3"
+      },
+      "Image/ExifTool/ASF.pm": {
+        "library_relative_path": "Image/ExifTool/ASF.pm",
+        "sha256": "7a1591338c13a8e03c40dfc78064711c5ef53ff152e3fa0ff11d462d5e2bbf1c"
+      },
+      "Image/ExifTool/Apple.pm": {
+        "library_relative_path": "Image/ExifTool/Apple.pm",
+        "sha256": "c4fc860e3216907e3fb2a063fcd64093410a70d18ecb1d30beeeccbfab15b0b7"
+      },
+      "Image/ExifTool/Audible.pm": {
+        "library_relative_path": "Image/ExifTool/Audible.pm",
+        "sha256": "c1a45afc5e02e8af8487099e8b98405b9bb9b152b297a85ba37eb4aeb06a0969"
+      },
+      "Image/ExifTool/BMP.pm": {
+        "library_relative_path": "Image/ExifTool/BMP.pm",
+        "sha256": "503698454e2edec457083e712b577108790e97b6c6e1a08a037faac9155c5e41"
+      },
+      "Image/ExifTool/BPG.pm": {
+        "library_relative_path": "Image/ExifTool/BPG.pm",
+        "sha256": "d600627e4c90dd5079d82ab09915a68a29ac640d0aea5f6991635948a7739ec3"
+      },
+      "Image/ExifTool/BZZ.pm": {
+        "library_relative_path": "Image/ExifTool/BZZ.pm",
+        "sha256": "02482621ff7e37bb53a4a5cf98950dd9767e4daed0b4e861f23a86549113b073"
+      },
+      "Image/ExifTool/BigTIFF.pm": {
+        "library_relative_path": "Image/ExifTool/BigTIFF.pm",
+        "sha256": "290b1cbd50238f83161ca3ee0c9a193516d810500574467c52e606d90024fe06"
+      },
+      "Image/ExifTool/BuildTagLookup.pm": {
+        "library_relative_path": "Image/ExifTool/BuildTagLookup.pm",
+        "sha256": "f831b4cc269152dcbfaf9019b0dde4c860b3ea64500dd84df5d700463be21163"
+      },
+      "Image/ExifTool/CBOR.pm": {
+        "library_relative_path": "Image/ExifTool/CBOR.pm",
+        "sha256": "4651c9d684e2b2b98ca4b691a941166a79dace75ebd8ea895f4614dfc4f25505"
+      },
+      "Image/ExifTool/Canon.pm": {
+        "library_relative_path": "Image/ExifTool/Canon.pm",
+        "sha256": "d22b110e7b2e1af2d6e59bb97db97a04ffc2bfd1ba7d078d380ae60fbc70bbba"
+      },
+      "Image/ExifTool/CanonCustom.pm": {
+        "library_relative_path": "Image/ExifTool/CanonCustom.pm",
+        "sha256": "e461b9b1e0d8f24565b36feb2032412814754c8f46094a44d3beef800d9ccbf9"
+      },
+      "Image/ExifTool/CanonRaw.pm": {
+        "library_relative_path": "Image/ExifTool/CanonRaw.pm",
+        "sha256": "30a326b19ce5ea502abe1632a9a999969b73dc33e7d8937fddee332d312a5440"
+      },
+      "Image/ExifTool/CanonVRD.pm": {
+        "library_relative_path": "Image/ExifTool/CanonVRD.pm",
+        "sha256": "307ca4500b39ac35a78a3463610b49ba49b862cc73d26e4e05314c3c3d6630e6"
+      },
+      "Image/ExifTool/CaptureOne.pm": {
+        "library_relative_path": "Image/ExifTool/CaptureOne.pm",
+        "sha256": "ffed00eab470b7e102ad28910744918b103081eb6a8686f3e82272c4643fbd59"
+      },
+      "Image/ExifTool/Casio.pm": {
+        "library_relative_path": "Image/ExifTool/Casio.pm",
+        "sha256": "3bfa03d6bef4f8e865a13a29154bf8c2a0c7b4eb7a76ce1a4d4b6bea05269eda"
+      },
+      "Image/ExifTool/Charset.pm": {
+        "library_relative_path": "Image/ExifTool/Charset.pm",
+        "sha256": "2017febff0262d7e0d7ea2325482ed62f9c9461e2331a36ef8fda7c723865e0e"
+      },
+      "Image/ExifTool/Charset/MacRoman.pm": {
+        "library_relative_path": "Image/ExifTool/Charset/MacRoman.pm",
+        "sha256": "243a84e50839abbcee96ce4b72c115fbf8d6f0fd755d2e7ff796da6dcf42c1be"
+      },
+      "Image/ExifTool/Charset/ShiftJIS.pm": {
+        "library_relative_path": "Image/ExifTool/Charset/ShiftJIS.pm",
+        "sha256": "757bc7e41b0b9f8db6ac31c4e9cb99964dda73a84ec9e10c9f63ac5990502001"
+      },
+      "Image/ExifTool/DICOM.pm": {
+        "library_relative_path": "Image/ExifTool/DICOM.pm",
+        "sha256": "b0fec72102220d05076a1d8557e1b1999d751e97e45bb87da66122131d64e9f4"
+      },
+      "Image/ExifTool/DJI.pm": {
+        "library_relative_path": "Image/ExifTool/DJI.pm",
+        "sha256": "2064e8df141f2ee20c6359a7581f9936b43535392dfeb10a827cc2ef8caa2520"
+      },
+      "Image/ExifTool/DNG.pm": {
+        "library_relative_path": "Image/ExifTool/DNG.pm",
+        "sha256": "b99cf06aa6706ccc18995a96b8730a1a8e1eefb37623d28cf4cdbf4627139e18"
+      },
+      "Image/ExifTool/DPX.pm": {
+        "library_relative_path": "Image/ExifTool/DPX.pm",
+        "sha256": "d857013002ccaa88dcd6d4d6df8fcd0db9c206e17817838b85670eea3dce8558"
+      },
+      "Image/ExifTool/DSF.pm": {
+        "library_relative_path": "Image/ExifTool/DSF.pm",
+        "sha256": "53c067df4be365dda84ff1f2689719b6211ff7e5b8e620ad56aaf70382f78156"
+      },
+      "Image/ExifTool/DV.pm": {
+        "library_relative_path": "Image/ExifTool/DV.pm",
+        "sha256": "d0fe561b190b1be282f89b7c914987d52066995d687ac8cf0eb388114973b916"
+      },
+      "Image/ExifTool/DarwinCore.pm": {
+        "library_relative_path": "Image/ExifTool/DarwinCore.pm",
+        "sha256": "b553eea2b25414cabd568bbb01b076940b99df582f62c91f06fbc97508c6d0a4"
+      },
+      "Image/ExifTool/DjVu.pm": {
+        "library_relative_path": "Image/ExifTool/DjVu.pm",
+        "sha256": "4cbf233e2fb0c13a54502802ddaa11340e5fd246f53f996a9d782024d5328598"
+      },
+      "Image/ExifTool/EXE.pm": {
+        "library_relative_path": "Image/ExifTool/EXE.pm",
+        "sha256": "d4bf95f93c0f91b74e2c38c191eef0e4babdc69fc1c7bb90ff25f928eb845621"
+      },
+      "Image/ExifTool/Exif.pm": {
+        "library_relative_path": "Image/ExifTool/Exif.pm",
+        "sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22"
+      },
+      "Image/ExifTool/FITS.pm": {
+        "library_relative_path": "Image/ExifTool/FITS.pm",
+        "sha256": "b953d116015912d44607ffe64cdd3c48d130cae0c800a4b59c1b4a52a18833bf"
+      },
+      "Image/ExifTool/FLAC.pm": {
+        "library_relative_path": "Image/ExifTool/FLAC.pm",
+        "sha256": "8763a5bfc129bdaaf8453be7e191f50eac0ac3eee771180d74a741cd60bf0802"
+      },
+      "Image/ExifTool/FLIF.pm": {
+        "library_relative_path": "Image/ExifTool/FLIF.pm",
+        "sha256": "623029af045d994956a3238c9e2e08f249fc132d828a3871dd8b9d9c5cfe39d2"
+      },
+      "Image/ExifTool/FLIR.pm": {
+        "library_relative_path": "Image/ExifTool/FLIR.pm",
+        "sha256": "2e6a323dc97dc77525fc16c08c8a533eb987f7dda7c746f424c1391723905e1c"
+      },
+      "Image/ExifTool/Fixup.pm": {
+        "library_relative_path": "Image/ExifTool/Fixup.pm",
+        "sha256": "05b45c0efa372cda6fd5f08919e54b3dec8929dec351d48d736775b4f67660a4"
+      },
+      "Image/ExifTool/Flash.pm": {
+        "library_relative_path": "Image/ExifTool/Flash.pm",
+        "sha256": "67a3c20a7d873ab34a1bbe3c35a68317126aa4b5fcb5c939b797d749287dcb13"
+      },
+      "Image/ExifTool/FlashPix.pm": {
+        "library_relative_path": "Image/ExifTool/FlashPix.pm",
+        "sha256": "a76b43f308d37e9c9567fdb1190f4f23cd9a0d7a0509ea440070491afbf55cb1"
+      },
+      "Image/ExifTool/Font.pm": {
+        "library_relative_path": "Image/ExifTool/Font.pm",
+        "sha256": "445331268b67afc3c3900917f9fd678c3cf7ecc515892128783543cd2d7c9f46"
+      },
+      "Image/ExifTool/FotoStation.pm": {
+        "library_relative_path": "Image/ExifTool/FotoStation.pm",
+        "sha256": "fed735cad126f0f788b783715a8c4c15db55a2ebd66d1d6efe7ec2a8c3694430"
+      },
+      "Image/ExifTool/FujiFilm.pm": {
+        "library_relative_path": "Image/ExifTool/FujiFilm.pm",
+        "sha256": "7734dbf033adb8969f737c03eefe02d7011be25f431fc4bf6aa84c698d86e16b"
+      },
+      "Image/ExifTool/GE.pm": {
+        "library_relative_path": "Image/ExifTool/GE.pm",
+        "sha256": "e11aab00a264e1ba421efb5c70b2667d442d81e6a1fbeea274ee8381915cab7a"
+      },
+      "Image/ExifTool/GIF.pm": {
+        "library_relative_path": "Image/ExifTool/GIF.pm",
+        "sha256": "b885564bbb0c7e9770a811b45ea12b1f5eea2f7160eec6b3f3e79e7894a4f24d"
+      },
+      "Image/ExifTool/GIMP.pm": {
+        "library_relative_path": "Image/ExifTool/GIMP.pm",
+        "sha256": "53b7c54241db8ae73818c82973ebdbe7e5bd54242acce5a5dcb2c6307f10db1a"
+      },
+      "Image/ExifTool/GM.pm": {
+        "library_relative_path": "Image/ExifTool/GM.pm",
+        "sha256": "1599e5530a3d0f90088049ccdcf1cc2def5e952607c0e8d9c3e5ac3d353cf777"
+      },
+      "Image/ExifTool/GPS.pm": {
+        "library_relative_path": "Image/ExifTool/GPS.pm",
+        "sha256": "f62c9576a405a636585340b9358202cdb0b2a926368609716764b2e05a337443"
+      },
+      "Image/ExifTool/Garmin.pm": {
+        "library_relative_path": "Image/ExifTool/Garmin.pm",
+        "sha256": "0550d3dd603bf9430879a0d880e61e37d78eeffeea0764b69f74e6563f9ce6e3"
+      },
+      "Image/ExifTool/GeoTiff.pm": {
+        "library_relative_path": "Image/ExifTool/GeoTiff.pm",
+        "sha256": "064b737a93d0df4721ca3ea077a2e11df7ac6283bdb996f45de1dc19c8c43047"
+      },
+      "Image/ExifTool/Geotag.pm": {
+        "library_relative_path": "Image/ExifTool/Geotag.pm",
+        "sha256": "e405d4bac1824001709d80270cc1feab96f034f0c89af85362ae4542a09d00e2"
+      },
+      "Image/ExifTool/GoPro.pm": {
+        "library_relative_path": "Image/ExifTool/GoPro.pm",
+        "sha256": "dbac3cf5e96bc768adae595ef43821216fe65fb4330ff8548a4c2a3dc81920d5"
+      },
+      "Image/ExifTool/Google.pm": {
+        "library_relative_path": "Image/ExifTool/Google.pm",
+        "sha256": "912f129d2f1db85cf114fc336f1a68a87c48bff8b90991add2f30b797b0ca8a7"
+      },
+      "Image/ExifTool/H264.pm": {
+        "library_relative_path": "Image/ExifTool/H264.pm",
+        "sha256": "4b014b83c67f3ae04a081cdc79ae0b1fc361084e971489559c8432756e8b47be"
+      },
+      "Image/ExifTool/HP.pm": {
+        "library_relative_path": "Image/ExifTool/HP.pm",
+        "sha256": "d51558abafdca4114aead896e889487fc0b5d494852dd41d72701ffbd2399d5c"
+      },
+      "Image/ExifTool/HTML.pm": {
+        "library_relative_path": "Image/ExifTool/HTML.pm",
+        "sha256": "8e1c4f875f14f37b899fd082efe7f5c77c0ec38f47be1761190d1e748dbb539d"
+      },
+      "Image/ExifTool/HtmlDump.pm": {
+        "library_relative_path": "Image/ExifTool/HtmlDump.pm",
+        "sha256": "a02dd96f159a4a96ee649efdb6a1a43bd289cd5912f7da150b08e488ff5a249a"
+      },
+      "Image/ExifTool/ICC_Profile.pm": {
+        "library_relative_path": "Image/ExifTool/ICC_Profile.pm",
+        "sha256": "d336975767bc1a64919b31a09ceaea40b0d424c5206277c52491dd2194ffcaed"
+      },
+      "Image/ExifTool/ICO.pm": {
+        "library_relative_path": "Image/ExifTool/ICO.pm",
+        "sha256": "3fadc07ebf61f8be31aa9ce568de785f0350e931ad8e5a4cb0c39977744c8986"
+      },
+      "Image/ExifTool/ID3.pm": {
+        "library_relative_path": "Image/ExifTool/ID3.pm",
+        "sha256": "92a3c9fa73094191c2000923bd07527504c1d8573a094556628d8de8e57ca43b"
+      },
+      "Image/ExifTool/IPTC.pm": {
+        "library_relative_path": "Image/ExifTool/IPTC.pm",
+        "sha256": "07508467219121f9552215f715439716fca94825c3e96eafe1363d8009072ffa"
+      },
+      "Image/ExifTool/ISO.pm": {
+        "library_relative_path": "Image/ExifTool/ISO.pm",
+        "sha256": "521fcdcb9e9577909905f541b4037342f846651453a80df0396ed9d8a95960f2"
+      },
+      "Image/ExifTool/ITC.pm": {
+        "library_relative_path": "Image/ExifTool/ITC.pm",
+        "sha256": "250205b73a64d599244f87f6f5b00daea99c175c2c3249d8550d772d6859403a"
+      },
+      "Image/ExifTool/Import.pm": {
+        "library_relative_path": "Image/ExifTool/Import.pm",
+        "sha256": "27eb74b4e3980afefa41025929fae1d96f63b42ecbb56804e8efb4769540bb78"
+      },
+      "Image/ExifTool/InDesign.pm": {
+        "library_relative_path": "Image/ExifTool/InDesign.pm",
+        "sha256": "5b6a2bcee1e325c0f3507d1eca9d53cc44f498c30066de720d4816c9ddc9eb42"
+      },
+      "Image/ExifTool/InfiRay.pm": {
+        "library_relative_path": "Image/ExifTool/InfiRay.pm",
+        "sha256": "086a19bb4439180500f5bd10aa2a45a078f197060cfc05126cd0762ed184ef4c"
+      },
+      "Image/ExifTool/JPEG.pm": {
+        "library_relative_path": "Image/ExifTool/JPEG.pm",
+        "sha256": "68e0c147af20bbb29be1a8816f415a8a013b961ec79feba7127627a1906272fa"
+      },
+      "Image/ExifTool/JPEGDigest.pm": {
+        "library_relative_path": "Image/ExifTool/JPEGDigest.pm",
+        "sha256": "6e8b756ff10154212d96bf6a9b19fd53c39309c02d096a8fe3d221d2f9496777"
+      },
+      "Image/ExifTool/JSON.pm": {
+        "library_relative_path": "Image/ExifTool/JSON.pm",
+        "sha256": "4e547461a178259822a6709b4ee33b897499a8e959a67cd95701192ae0349b26"
+      },
+      "Image/ExifTool/JVC.pm": {
+        "library_relative_path": "Image/ExifTool/JVC.pm",
+        "sha256": "1dce83261222d96b402e310c3854738972804fda8541063b6a5199ad61ec10b5"
+      },
+      "Image/ExifTool/Jpeg2000.pm": {
+        "library_relative_path": "Image/ExifTool/Jpeg2000.pm",
+        "sha256": "6d5647c841f5cb4c088d88ae9b0904bc62ab34d31f3f2b74819f5f846fb7b088"
+      },
+      "Image/ExifTool/Kandao.pm": {
+        "library_relative_path": "Image/ExifTool/Kandao.pm",
+        "sha256": "955b55680e6a45ee2cd7a99dc50c573df2c99ca219dd25c9290c500371251ad6"
+      },
+      "Image/ExifTool/Kodak.pm": {
+        "library_relative_path": "Image/ExifTool/Kodak.pm",
+        "sha256": "eb598c404be1f7d718e98cddeee2d45173d0caeaaf7f97a97a995e986ed47610"
+      },
+      "Image/ExifTool/KyoceraRaw.pm": {
+        "library_relative_path": "Image/ExifTool/KyoceraRaw.pm",
+        "sha256": "78ca03a23b477924c3ae5017bd70ca010e0206c9022325de6472067a3ca3f600"
+      },
+      "Image/ExifTool/LIF.pm": {
+        "library_relative_path": "Image/ExifTool/LIF.pm",
+        "sha256": "55a2c47ebd196f95c3c8d9c54c0e9fa482454dda29680c68298eb00d7e369439"
+      },
+      "Image/ExifTool/LNK.pm": {
+        "library_relative_path": "Image/ExifTool/LNK.pm",
+        "sha256": "effa4cc69018fdd8ea7541af1b5fa6156c51155c9a3af3925fe0fcc16412790c"
+      },
+      "Image/ExifTool/Leaf.pm": {
+        "library_relative_path": "Image/ExifTool/Leaf.pm",
+        "sha256": "e8893668613666ba22c289a9822ac44cdb616a1f884b1a9cc0657374b64971b9"
+      },
+      "Image/ExifTool/LigoGPS.pm": {
+        "library_relative_path": "Image/ExifTool/LigoGPS.pm",
+        "sha256": "8a4c46c580d2e1abc94894308a443c236a993f1c87f3a50caeea57a0c2f88ce2"
+      },
+      "Image/ExifTool/Lytro.pm": {
+        "library_relative_path": "Image/ExifTool/Lytro.pm",
+        "sha256": "950cf7528fd63f8b9ac9e599c34d78877e9aceb32e897b8fdb616ab9aebc3af8"
+      },
+      "Image/ExifTool/M2TS.pm": {
+        "library_relative_path": "Image/ExifTool/M2TS.pm",
+        "sha256": "0c1b8fc327bb09f83ad1ee65b5ee898af2152adb81527ccf0e3b3c9b3111cdda"
+      },
+      "Image/ExifTool/MIE.pm": {
+        "library_relative_path": "Image/ExifTool/MIE.pm",
+        "sha256": "14686ad47aca97b23cf9f10c9ac78a5b9f7e5ed52081a01a046511e18cb3b207"
+      },
+      "Image/ExifTool/MIFF.pm": {
+        "library_relative_path": "Image/ExifTool/MIFF.pm",
+        "sha256": "1556ef8924bd0ed1fd61e71905fb1a80347ca61f8665b800b11bb0eecc3f13c8"
+      },
+      "Image/ExifTool/MISB.pm": {
+        "library_relative_path": "Image/ExifTool/MISB.pm",
+        "sha256": "075955833bc239b75d716fd3e798d30cbe3757e3bcb56a494695f5675633fd7f"
+      },
+      "Image/ExifTool/MNG.pm": {
+        "library_relative_path": "Image/ExifTool/MNG.pm",
+        "sha256": "14c62cf5c2223743ec6b07f9983c0e6bd239ebc599e59b53824ff3a35fe90475"
+      },
+      "Image/ExifTool/MOI.pm": {
+        "library_relative_path": "Image/ExifTool/MOI.pm",
+        "sha256": "20308d81671e6abbe09832ba44d40dd0c9f81fbd037e1d5e1a336c957ab53b4a"
+      },
+      "Image/ExifTool/MPC.pm": {
+        "library_relative_path": "Image/ExifTool/MPC.pm",
+        "sha256": "a0c48140e931700f2e19441951f26d1d22a38e7e96e7bdfd55b79727df476a1f"
+      },
+      "Image/ExifTool/MPEG.pm": {
+        "library_relative_path": "Image/ExifTool/MPEG.pm",
+        "sha256": "0ee4aaa6ba891e43cf264dcd6d1de11e47461bf64e017d5bc7f17612143e3b7a"
+      },
+      "Image/ExifTool/MPF.pm": {
+        "library_relative_path": "Image/ExifTool/MPF.pm",
+        "sha256": "b5f7038b52f4b6a2e2934eb356385fab443a9f4a328bd0c9c178ca23ae7ca68e"
+      },
+      "Image/ExifTool/MRC.pm": {
+        "library_relative_path": "Image/ExifTool/MRC.pm",
+        "sha256": "a0266d5cf0b3265c9c88559c9cd8b461bfdc5bd7f6802f843aa2730cbb70613f"
+      },
+      "Image/ExifTool/MWG.pm": {
+        "library_relative_path": "Image/ExifTool/MWG.pm",
+        "sha256": "f46d2a5afb7d6cfa174ac28ef855809499630f7d32107e3babee3711f68be96c"
+      },
+      "Image/ExifTool/MXF.pm": {
+        "library_relative_path": "Image/ExifTool/MXF.pm",
+        "sha256": "ba1e605ec93a14cc60e4b519a072215ae639b11904ca3646c82a86a2271b6982"
+      },
+      "Image/ExifTool/MacOS.pm": {
+        "library_relative_path": "Image/ExifTool/MacOS.pm",
+        "sha256": "5acee1a0a387d2e3ac9f6304d5e6ac1c59b3155c54676f06af026a60373275c4"
+      },
+      "Image/ExifTool/MakerNotes.pm": {
+        "library_relative_path": "Image/ExifTool/MakerNotes.pm",
+        "sha256": "5c78d72ce8f07142ce4e9e400616725480495c3c85514b2861cadd18077c119c"
+      },
+      "Image/ExifTool/Matroska.pm": {
+        "library_relative_path": "Image/ExifTool/Matroska.pm",
+        "sha256": "279750340c26cf50ab9eed709863707770a900c3c7cc6111674d48a7077ef33e"
+      },
+      "Image/ExifTool/Microsoft.pm": {
+        "library_relative_path": "Image/ExifTool/Microsoft.pm",
+        "sha256": "53835d4afcd5292e21f04986fe57445ff825de72d855e548bfff90a87815f40b"
+      },
+      "Image/ExifTool/Minolta.pm": {
+        "library_relative_path": "Image/ExifTool/Minolta.pm",
+        "sha256": "e4f77a975e9465ea23c430125d12e53c54d68a4f042e10b23d6cae97758b0f4b"
+      },
+      "Image/ExifTool/MinoltaRaw.pm": {
+        "library_relative_path": "Image/ExifTool/MinoltaRaw.pm",
+        "sha256": "6033123d2c22995ff7dc27613b948ecb59c7a8356416d899444634ca07ef32ad"
+      },
+      "Image/ExifTool/Motorola.pm": {
+        "library_relative_path": "Image/ExifTool/Motorola.pm",
+        "sha256": "8bc6272ec47e64ed2784903d9524a8c3e618ab07f324c3f454b9230dadfc4974"
+      },
+      "Image/ExifTool/Nikon.pm": {
+        "library_relative_path": "Image/ExifTool/Nikon.pm",
+        "sha256": "9410b783cc5e591ec28d6bff66880adc8d9b056a545244bfd244d995a4422298"
+      },
+      "Image/ExifTool/NikonCapture.pm": {
+        "library_relative_path": "Image/ExifTool/NikonCapture.pm",
+        "sha256": "fdd137023f6eba06fdfce881331cd478abced2beab3b008802b7e142d45b52b5"
+      },
+      "Image/ExifTool/NikonCustom.pm": {
+        "library_relative_path": "Image/ExifTool/NikonCustom.pm",
+        "sha256": "d04722583fe379dd406880391a195f5e9c3ca04326d819924445755126f81ab3"
+      },
+      "Image/ExifTool/NikonSettings.pm": {
+        "library_relative_path": "Image/ExifTool/NikonSettings.pm",
+        "sha256": "1470761764101e233247064ab15897d2fd5d8f4d14719d227b37691c2ec2de11"
+      },
+      "Image/ExifTool/Nintendo.pm": {
+        "library_relative_path": "Image/ExifTool/Nintendo.pm",
+        "sha256": "6b424ebe1e2ea8bad888ff9c24800b0f115f8d2b6266c241a2e8759ce04d6982"
+      },
+      "Image/ExifTool/OOXML.pm": {
+        "library_relative_path": "Image/ExifTool/OOXML.pm",
+        "sha256": "444bd30f969adb4718e9c20a10785c6764b7ebd9977a1e3ff9a5c3e669bc594f"
+      },
+      "Image/ExifTool/Ogg.pm": {
+        "library_relative_path": "Image/ExifTool/Ogg.pm",
+        "sha256": "365e93cc445f0011ec8ac7a190a737d399feeaa8c21547fb3eb4b0b065065e91"
+      },
+      "Image/ExifTool/Olympus.pm": {
+        "library_relative_path": "Image/ExifTool/Olympus.pm",
+        "sha256": "f974dc7c82b5e187148e0defc8d733734445df2121175097f001fe551ae08651"
+      },
+      "Image/ExifTool/OpenEXR.pm": {
+        "library_relative_path": "Image/ExifTool/OpenEXR.pm",
+        "sha256": "7f17acad20a1d253647bd6f26716f439cabc1cab1606aa4e1dea6c3e57fca759"
+      },
+      "Image/ExifTool/Opus.pm": {
+        "library_relative_path": "Image/ExifTool/Opus.pm",
+        "sha256": "757d33def564acab6203501919a1e87f95df960c76506b0b4886cb4b040dab9e"
+      },
+      "Image/ExifTool/Other.pm": {
+        "library_relative_path": "Image/ExifTool/Other.pm",
+        "sha256": "f6b7c2ed3d99a0e4f79b0b953c46eff8b5f9c41d1bbcf7fd5a30fbeba31b579f"
+      },
+      "Image/ExifTool/PCAP.pm": {
+        "library_relative_path": "Image/ExifTool/PCAP.pm",
+        "sha256": "3cee781be73f99513280fe2b68341347bfb91a9b76dd567de9d62f2a0939e416"
+      },
+      "Image/ExifTool/PCX.pm": {
+        "library_relative_path": "Image/ExifTool/PCX.pm",
+        "sha256": "3d911e4f3412546ec25230156bde2f45a89dcb9e9fd96b099cb2e6825432d12c"
+      },
+      "Image/ExifTool/PDF.pm": {
+        "library_relative_path": "Image/ExifTool/PDF.pm",
+        "sha256": "6e7eb122e329227abcc931c7590563c760e3435251fec803eb8e21bdec6a9eb6"
+      },
+      "Image/ExifTool/PGF.pm": {
+        "library_relative_path": "Image/ExifTool/PGF.pm",
+        "sha256": "72c4cd5d4fd80ac0f45b88973eb2ef62123d5c51d6005828c8e85c9a3596f97d"
+      },
+      "Image/ExifTool/PICT.pm": {
+        "library_relative_path": "Image/ExifTool/PICT.pm",
+        "sha256": "71618f76baef30dd2e2b8b97e2db0a6e6a9135838c59ade01905918fbb0da382"
+      },
+      "Image/ExifTool/PLIST.pm": {
+        "library_relative_path": "Image/ExifTool/PLIST.pm",
+        "sha256": "10320b671694cba444c6d48911fc75ca37f19810ef7a2f49bd9c68e1e02875fa"
+      },
+      "Image/ExifTool/PLUS.pm": {
+        "library_relative_path": "Image/ExifTool/PLUS.pm",
+        "sha256": "674eb09aff7c187b15e8e43939473fbeb9212a29b5a2e50eb17d0268baaa7ad4"
+      },
+      "Image/ExifTool/PNG.pm": {
+        "library_relative_path": "Image/ExifTool/PNG.pm",
+        "sha256": "69a54cfc08cb67e210158c148ab439fbdd3f9a021e362b1379a1e080c2c7a0f5"
+      },
+      "Image/ExifTool/PPM.pm": {
+        "library_relative_path": "Image/ExifTool/PPM.pm",
+        "sha256": "873d7a83d8f9f0eeab831b203eb11ff6f856e701cab5626c2b8778489e96e571"
+      },
+      "Image/ExifTool/PSP.pm": {
+        "library_relative_path": "Image/ExifTool/PSP.pm",
+        "sha256": "c406c4336ac400e4cadea41f2002490581a358d7e3ec3cc9e9822bcc3285f42a"
+      },
+      "Image/ExifTool/Palm.pm": {
+        "library_relative_path": "Image/ExifTool/Palm.pm",
+        "sha256": "bc158f6d2bbb887c49e7b4ea5dde36c377f28cb0306f5f85e11bd0a11044cef4"
+      },
+      "Image/ExifTool/Panasonic.pm": {
+        "library_relative_path": "Image/ExifTool/Panasonic.pm",
+        "sha256": "b99cedc10429748d75330d85417b4993907204ab19da0f0b5f9110403e663be7"
+      },
+      "Image/ExifTool/PanasonicRaw.pm": {
+        "library_relative_path": "Image/ExifTool/PanasonicRaw.pm",
+        "sha256": "bd204b732aa68f0b099d798699f149a4579a815748e9ddde6236ac585b5747d7"
+      },
+      "Image/ExifTool/Parrot.pm": {
+        "library_relative_path": "Image/ExifTool/Parrot.pm",
+        "sha256": "e133e94265a94540ac893a8d3f9c4c9cf99343a21275761b0d0a01bfcdd15eff"
+      },
+      "Image/ExifTool/Pentax.pm": {
+        "library_relative_path": "Image/ExifTool/Pentax.pm",
+        "sha256": "fa766226626260a02d483fa1bf16c56200eac102b174d05f1d143abb45d04230"
+      },
+      "Image/ExifTool/PhaseOne.pm": {
+        "library_relative_path": "Image/ExifTool/PhaseOne.pm",
+        "sha256": "930c3c36b053937ad6db15c4f011532858377d78026d164d0fe1f481386874b2"
+      },
+      "Image/ExifTool/PhotoCD.pm": {
+        "library_relative_path": "Image/ExifTool/PhotoCD.pm",
+        "sha256": "960e187f7ccedca07f85cb5d33c59dc86a146437127c1a36a8da57cc6166e5ed"
+      },
+      "Image/ExifTool/PhotoMechanic.pm": {
+        "library_relative_path": "Image/ExifTool/PhotoMechanic.pm",
+        "sha256": "d1d12610e7cbfdf3a5839b5727a091e5fe6901bd9121901a0cc4ade45c01330c"
+      },
+      "Image/ExifTool/Photoshop.pm": {
+        "library_relative_path": "Image/ExifTool/Photoshop.pm",
+        "sha256": "637a47fce42b53c7177518cba25e9081848f21c95db529506f0dd1a149910786"
+      },
+      "Image/ExifTool/Plot.pm": {
+        "library_relative_path": "Image/ExifTool/Plot.pm",
+        "sha256": "96c85956b600156fdc2bd16caea992bec8d1c1c4a6c569123876fbbff439854c"
+      },
+      "Image/ExifTool/PostScript.pm": {
+        "library_relative_path": "Image/ExifTool/PostScript.pm",
+        "sha256": "f2c8104025c03f859723ff068dc55f3f5c73c0f8013c5f8d5f04f8c7190d5e27"
+      },
+      "Image/ExifTool/PrintIM.pm": {
+        "library_relative_path": "Image/ExifTool/PrintIM.pm",
+        "sha256": "c65e29ccb3bbabbcf8eda485bf7997853e610bc3296885b1b682d431695bfb0f"
+      },
+      "Image/ExifTool/Protobuf.pm": {
+        "library_relative_path": "Image/ExifTool/Protobuf.pm",
+        "sha256": "d7eeb82d764a3d728635cdfc9bfe4c83baba12530922d860b21857035f869aa9"
+      },
+      "Image/ExifTool/Qualcomm.pm": {
+        "library_relative_path": "Image/ExifTool/Qualcomm.pm",
+        "sha256": "9c92dc2ca6de9fd8943c2fd59300a813e13b6fac62fb74b5ec661a95db7fe320"
+      },
+      "Image/ExifTool/QuickTime.pm": {
+        "library_relative_path": "Image/ExifTool/QuickTime.pm",
+        "sha256": "329172a5558d8b75b535d5120d01ed5ce8aaa865b5d5de9ce1b81f3b09cdec5e"
+      },
+      "Image/ExifTool/QuickTimeStream.pl": {
+        "library_relative_path": "Image/ExifTool/QuickTimeStream.pl",
+        "sha256": "1f940a7fe3b11f53d729bc405370812e13129e4d533cafea4d3bdb57c72806ec"
+      },
+      "Image/ExifTool/RIFF.pm": {
+        "library_relative_path": "Image/ExifTool/RIFF.pm",
+        "sha256": "af3a9278fbf7078c61fe53113cc236c7edc43e4bbdd5da86c5d9a6aa2522214d"
+      },
+      "Image/ExifTool/RSRC.pm": {
+        "library_relative_path": "Image/ExifTool/RSRC.pm",
+        "sha256": "458fec455fb2345e8d3f815a3a1e73d48a3c2efdda9040d589865c4b1bd1c62f"
+      },
+      "Image/ExifTool/RTF.pm": {
+        "library_relative_path": "Image/ExifTool/RTF.pm",
+        "sha256": "36b2be702d896eb970a12c36de0d0740ab5d099aca465b609cb127bbd6c0fe7a"
+      },
+      "Image/ExifTool/Radiance.pm": {
+        "library_relative_path": "Image/ExifTool/Radiance.pm",
+        "sha256": "b2d49162144a1da988416dcdbe0c2aa3f64ac145d7073f23c6e9919e92e8506f"
+      },
+      "Image/ExifTool/Rawzor.pm": {
+        "library_relative_path": "Image/ExifTool/Rawzor.pm",
+        "sha256": "4e7892702e52f0e4ab00c2f43a43da00a9d1c59291b6fc56bb8d7a7884988ef9"
+      },
+      "Image/ExifTool/Real.pm": {
+        "library_relative_path": "Image/ExifTool/Real.pm",
+        "sha256": "a53c3014d5eaa0d5744aa4843f25658053d6dc47c1f5423980222bfbb9591780"
+      },
+      "Image/ExifTool/Reconyx.pm": {
+        "library_relative_path": "Image/ExifTool/Reconyx.pm",
+        "sha256": "e14afdcaaecfb4acad77aa970d533cc069ddda28b5d7a2b87611886fd5325b2a"
+      },
+      "Image/ExifTool/Red.pm": {
+        "library_relative_path": "Image/ExifTool/Red.pm",
+        "sha256": "439744cf113593522245084dec4e159e2bc8a5b78078aa96938be454bc8c815f"
+      },
+      "Image/ExifTool/Ricoh.pm": {
+        "library_relative_path": "Image/ExifTool/Ricoh.pm",
+        "sha256": "24d66890e5ac4ddaae0864f0386f524a19b54e9e289588a62345c686b3934049"
+      },
+      "Image/ExifTool/Samsung.pm": {
+        "library_relative_path": "Image/ExifTool/Samsung.pm",
+        "sha256": "06112be5b4a34e9706a4c31a0c401cdf6ed41a5caa87da9290ab6b3a8b275b00"
+      },
+      "Image/ExifTool/Sanyo.pm": {
+        "library_relative_path": "Image/ExifTool/Sanyo.pm",
+        "sha256": "1a335cda97fb0c414aa53bf8e44c1464650a8a330eb2fe16e09a5a746d870c58"
+      },
+      "Image/ExifTool/Scalado.pm": {
+        "library_relative_path": "Image/ExifTool/Scalado.pm",
+        "sha256": "87f61789be49ff02f901f16928790de5f8bd65c0df0d867952b100808c0d0786"
+      },
+      "Image/ExifTool/Shortcuts.pm": {
+        "library_relative_path": "Image/ExifTool/Shortcuts.pm",
+        "sha256": "ca795f420517162cd80b776795b50d5cf0317851530bda1cbca133a38ce8362d"
+      },
+      "Image/ExifTool/Sigma.pm": {
+        "library_relative_path": "Image/ExifTool/Sigma.pm",
+        "sha256": "e20ab05420ae05e87da7f61c5021412b1ea994bebf9e6666b731cc0189460ef6"
+      },
+      "Image/ExifTool/SigmaRaw.pm": {
+        "library_relative_path": "Image/ExifTool/SigmaRaw.pm",
+        "sha256": "3ad6c2fd920c9c82e785e43f651cb6dc5d42fde535539c58633f0984749c8d09"
+      },
+      "Image/ExifTool/Sony.pm": {
+        "library_relative_path": "Image/ExifTool/Sony.pm",
+        "sha256": "1db1f1905ec2b6abf4bbd90fa6d8bfa92d84c5a2399cc333c2b392f27d8d330f"
+      },
+      "Image/ExifTool/SonyIDC.pm": {
+        "library_relative_path": "Image/ExifTool/SonyIDC.pm",
+        "sha256": "3f6faf1b0273ca8456145a53ab80586033ae14e0741a2c9ec89a6de36f898bc4"
+      },
+      "Image/ExifTool/Stim.pm": {
+        "library_relative_path": "Image/ExifTool/Stim.pm",
+        "sha256": "06de73a1e6a4f72db5e809285ddffcac9b911ca6489cc1d0bacffba2cc9aaa72"
+      },
+      "Image/ExifTool/TNEF.pm": {
+        "library_relative_path": "Image/ExifTool/TNEF.pm",
+        "sha256": "4178a50bec9bebee20b62750ae18483d508c43a9185db71b6e03b7232d67c60e"
+      },
+      "Image/ExifTool/TagInfoXML.pm": {
+        "library_relative_path": "Image/ExifTool/TagInfoXML.pm",
+        "sha256": "8ac0396ffc87e69433aae543c785fb1893763688f07b42ef3912519a6b83a7e6"
+      },
+      "Image/ExifTool/TagLookup.pm": {
+        "library_relative_path": "Image/ExifTool/TagLookup.pm",
+        "sha256": "da70c92c00f9db1e72641ed04700e6e17c9cccbd323c5ebf95fc3de7b4a95a8d"
+      },
+      "Image/ExifTool/Text.pm": {
+        "library_relative_path": "Image/ExifTool/Text.pm",
+        "sha256": "b8eed4a87b452813c8e146812e48df5ee8a24f1d9713fa2e4137d7d929b7c57d"
+      },
+      "Image/ExifTool/Theora.pm": {
+        "library_relative_path": "Image/ExifTool/Theora.pm",
+        "sha256": "f611c33a96dca1be5c96dd6456fadf7b747c6e75ba4117f8055864b9e55683a9"
+      },
+      "Image/ExifTool/Torrent.pm": {
+        "library_relative_path": "Image/ExifTool/Torrent.pm",
+        "sha256": "0e4ca12e9ae1bc73f9d3e52d198af13703214321297aa9c426bf67b466b435ea"
+      },
+      "Image/ExifTool/Trailer.pm": {
+        "library_relative_path": "Image/ExifTool/Trailer.pm",
+        "sha256": "71dd33f64d2126a3e14e0354d5ca540ccb83d1b7ed833788fc92e54b6b4948e9"
+      },
+      "Image/ExifTool/Unknown.pm": {
+        "library_relative_path": "Image/ExifTool/Unknown.pm",
+        "sha256": "e28eca4bad26436e79201ea73a9cf7a24749648959a0c02e024cd9a20cb98aa8"
+      },
+      "Image/ExifTool/VCard.pm": {
+        "library_relative_path": "Image/ExifTool/VCard.pm",
+        "sha256": "47f4c57a2dde6b2650a7e88751f5cf75392a7591ceae2752e44937e0196083c5"
+      },
+      "Image/ExifTool/Validate.pm": {
+        "library_relative_path": "Image/ExifTool/Validate.pm",
+        "sha256": "74d649b10597f153c4553e9e697a69adde151e75628188169e4e49ac57298a41"
+      },
+      "Image/ExifTool/Vorbis.pm": {
+        "library_relative_path": "Image/ExifTool/Vorbis.pm",
+        "sha256": "39f27e7f564468da63f73e8e67af8c9568e18d39b804b6680f932dbd016c5e44"
+      },
+      "Image/ExifTool/WPG.pm": {
+        "library_relative_path": "Image/ExifTool/WPG.pm",
+        "sha256": "717a7bb129eca8e1897a695cd0860f237726fea55843d9ac19ce05876a55d48b"
+      },
+      "Image/ExifTool/WTV.pm": {
+        "library_relative_path": "Image/ExifTool/WTV.pm",
+        "sha256": "269940ac9be0d8b4b570d7d2daa046911a7c609f4f8a03916f768c7c07a49cc0"
+      },
+      "Image/ExifTool/WavPack.pm": {
+        "library_relative_path": "Image/ExifTool/WavPack.pm",
+        "sha256": "26df649e5db7f0111ae7673c848f204bef6ca4993e9e48f322e5a4ab6bc2455e"
+      },
+      "Image/ExifTool/WriteCanonRaw.pl": {
+        "library_relative_path": "Image/ExifTool/WriteCanonRaw.pl",
+        "sha256": "38f9a795ceae9d19740b111aef86c96ee70a25bdfd63708c69dad4614f924478"
+      },
+      "Image/ExifTool/WriteExif.pl": {
+        "library_relative_path": "Image/ExifTool/WriteExif.pl",
+        "sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+      },
+      "Image/ExifTool/WriteIPTC.pl": {
+        "library_relative_path": "Image/ExifTool/WriteIPTC.pl",
+        "sha256": "8e7cc493b07abf91ecdcab9270770e5eec18f9579f00b4ae223f6a2310cf5ea8"
+      },
+      "Image/ExifTool/WritePhotoshop.pl": {
+        "library_relative_path": "Image/ExifTool/WritePhotoshop.pl",
+        "sha256": "7299edfab3923f664ed3f190fab3df9190dd17e44ec20e8cf96f13eb06ca1f56"
+      },
+      "Image/ExifTool/WritePostScript.pl": {
+        "library_relative_path": "Image/ExifTool/WritePostScript.pl",
+        "sha256": "e0d822a9c49e9a3c2157198e3f4b1047e99411cfd21402051344d2c84e3dad64"
+      },
+      "Image/ExifTool/WriteQuickTime.pl": {
+        "library_relative_path": "Image/ExifTool/WriteQuickTime.pl",
+        "sha256": "93213228286b13115f90a6441d96b8a37f2f939e4c7520a61be32c081c634bc0"
+      },
+      "Image/ExifTool/WriteXMP.pl": {
+        "library_relative_path": "Image/ExifTool/WriteXMP.pl",
+        "sha256": "9258f4622ae7a20fc239f8a945e0aefc00998709537f547064154a5678047c2b"
+      },
+      "Image/ExifTool/Writer.pl": {
+        "library_relative_path": "Image/ExifTool/Writer.pl",
+        "sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+      },
+      "Image/ExifTool/XISF.pm": {
+        "library_relative_path": "Image/ExifTool/XISF.pm",
+        "sha256": "bcfa3345a66482bf280e899fe4e060e820867d08aa25022cbdba4034143360eb"
+      },
+      "Image/ExifTool/XMP.pm": {
+        "library_relative_path": "Image/ExifTool/XMP.pm",
+        "sha256": "1e3612f54b7dd3a08cb326b22fdaa72e09f5a78b3d819cb093174e7567a2508b"
+      },
+      "Image/ExifTool/XMP2.pl": {
+        "library_relative_path": "Image/ExifTool/XMP2.pl",
+        "sha256": "c499607ebedf902fb60610d0b7cbf901189067e109cc33b7fabb2dd035c0f92d"
+      },
+      "Image/ExifTool/ZIP.pm": {
+        "library_relative_path": "Image/ExifTool/ZIP.pm",
+        "sha256": "f59769721010311f055eefc91aa4deeb7adaf9ab13080254db0a1769afc2fe70"
+      },
+      "Image/ExifTool/ZISRAW.pm": {
+        "library_relative_path": "Image/ExifTool/ZISRAW.pm",
+        "sha256": "963c9cc07fa9e1daa066a07be318ea1fe435554e0d32536a762894d523161c9c"
+      },
+      "Image/ExifTool/iWork.pm": {
+        "library_relative_path": "Image/ExifTool/iWork.pm",
+        "sha256": "4d07ff283e4e9f98bf50ef09e66bf3e37dd384c3ebb54aa5b2b3641adb156ee1"
+      }
+    }
+  },
+  "tables": 1512,
+  "unresolved_references": 0,
+  "variants": 35886
+}

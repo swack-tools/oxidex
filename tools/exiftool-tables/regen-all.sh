@@ -101,19 +101,14 @@ if [[ "$LIB_VERSION" != "$PIN" ]]; then
     echo "refusing: $LIB is ExifTool '${LIB_VERSION:-<unreadable>}' but $PIN_FILE pins $PIN" >&2
     exit 1
 fi
-if [[ "$TIER1" == "1" ]]; then
-    JSON="$CACHE/tables-$PIN.json"
-    DUMP_ARGS=("$LIB")
-    echo ">> refreshing the full dump from $LIB with $PERL"
-else
-    # Tier 2 consumes only the detached read projection.  Full writer facts
-    # remain required and captured by regen.sh during an ordinary full run.
-    # Keep its cache separate: a tier-2-only run must never replace a complete
-    # writer-capable dump with the reduced reader schema.
-    JSON="$CACHE/tables-reader-$PIN.json"
-    DUMP_ARGS=(--reader-only "$LIB")
-    echo ">> refreshing the reader-only tier-2 dump from $LIB with $PERL"
-fi
+# Tier 2 consumes only the detached read projection in either invocation mode.
+# regen.sh already captured and validated all writer facts during tier 1. Do
+# not capture them a second time, or overwrite the complete dump whose hash
+# the writer ledgers record. Always refresh reader facts from the selected
+# native source; an existing cache is never sufficient identity evidence.
+JSON="$CACHE/tables-reader-$PIN.json"
+DUMP_ARGS=(--reader-only "$LIB")
+echo ">> refreshing the reader-only tier-2 dump from $LIB with $PERL"
 mkdir -p "$CACHE"
 "$PERL" "$HERE/dump_tables.pl" "${DUMP_ARGS[@]}" > "$JSON"
 
@@ -222,8 +217,8 @@ echo "=========================================================="
 # Rust DSL hand-matched against ExifTool's Condition/RawConv/ValueConv/
 # PrintConv text, closer in spirit to gen_canon_custom_functions2.pl's
 # hard-coded expression dictionary than to codegen_subdirs.py's general
-# ProcessBinaryData walk. Four now have producers; sony/enciphered_tables.rs
-# and nikon/encrypted_tables.rs remain unreconstructed.
+# ProcessBinaryData walk. Five now have producers; sony/enciphered_tables.rs
+# remains unreconstructed.
 # Nikon settings preserves the current table exactly and independently checks
 # its ordered variants against live Perl, including the named state projection.
 python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
@@ -232,6 +227,8 @@ python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
     -o "$(artifact_path minolta-a100)"
 python3 "$HERE/gen_nikon_settings_tables.py" "$JSON" \
     -o "$(artifact_path nikon-settings)"
+python3 "$HERE/gen_nikon_encrypted_tables.py" "$JSON" \
+    -o "$(artifact_path nikon-encrypted)"
 python3 "$HERE/gen_sony_plain_tables.py" "$JSON" \
     -o "$(artifact_path sony-plain)"
 

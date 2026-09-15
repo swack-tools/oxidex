@@ -84,6 +84,10 @@ export default defineConfig({
             { text: 'MakerNotes', link: '/reference/makernotes' },
             { text: 'ExifTool Coverage', link: '/reference/tag-coverage-analysis' },
             { text: 'Source Catalog Baseline', link: '/reference/catalog-baseline' },
+            { text: 'Hydrated Reader Source', link: '/reference/hydrated-reader-layout-baseline' },
+            { text: 'Catalog to Source Ledger', link: '/reference/catalog-hydrated-join' },
+            { text: 'Verified Read and Write Observations', link: '/reference/catalog-hydrated-observed' },
+            { text: 'Metadata Parity Resume Guide', link: '/reference/metadata-parity-resume' },
             { text: 'BinaryData Engine', link: '/reference/binary-data-engine' }
           ]
         },

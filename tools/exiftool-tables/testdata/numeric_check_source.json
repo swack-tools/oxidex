@@ -1,0 +1,86 @@
+{
+  "__deparse": "($$;$) {\n    package Image::ExifTool;\n    use strict;\n    (my($valPtr, $format, $count) = @_);\n    my(@vals, $val, $n);\n    if ((($format eq 'string') or ($format eq 'undef'))) {\n        (($count and ($count > 0)) or (return (undef)));\n        (my($len) = length($$valPtr));\n        if (($format eq 'string')) {\n            (($len >= $count) and (return 'String too long'));\n        } else {\n            (($len > $count) and (return 'Data too long'));\n        }\n        if (($len < $count)) {\n            ($$valPtr .= (\"\\000\" x ($count - $len)));\n        }\n        (return (undef));\n    }\n    if (($count and ($count != 1))) {\n        (@vals = split(' ', $$valPtr, 0));\n        (($count < 0) and (($count = @vals) || (return (undef))));\n    } else {\n        ($count = 1);\n        (@vals = $$valPtr);\n    }\n    if ((@vals != $count)) {\n        (my($str) = ((@vals > $count) ? 'Too many' : 'Not enough'));\n        (return (\"$str values specified ($count required)\"));\n    }\n    for (($n = 0); ($n < $count); (++$n)) {\n        ($val = shift(@vals));\n        if (($format =~ /^int/)) {\n            unless (IsInt($val)) {\n                if (IsHex($val)) {\n                    ($val = ($$valPtr = hex($val)));\n                } else {\n                    ((IsFloat($val) and ($count == 1)) or (return 'Not an integer'));\n                    ($val = ($$valPtr = int(($val + (($val < 0) ? (-0.5) : 0.5)))));\n                }\n            }\n            ((my $rng = $intRange{$format}) or (return (\"Bad int format: $format\")));\n            (($val < $rng->[0]) and (return (\"Value below $format minimum\")));\n            ((($val > $rng->[1]) and ($val != 4277010157)) and (return (\"Value above $format maximum\")));\n        } elsif (((($format =~ /^rational/) or ($format eq 'float')) or ($format eq 'double'))) {\n            unless (IsFloat($val)) {\n                if (($format =~ /^rational/)) {\n                    ((($val eq 'inf') || ($val eq 'undef')) and (next));\n                    if (($val =~ m[^([-+]?\\d+)/(\\d+)$])) {\n                        ((($1 < 0) and ($format =~ /u$/)) or (next));\n                        (return 'Must be an unsigned rational');\n                    }\n                }\n                (return 'Not a floating point number');\n            }\n            if ((($format =~ /^rational\\d+u$/) and ($val < 0))) {\n                (return 'Must be a positive number');\n            }\n        }\n    }\n    (return (undef));\n}",
+  "__name": "Image::ExifTool::CheckValue",
+  "__opaque": true,
+  "__perl": "CODE",
+  "callback_references": {},
+  "dependencies": {
+    "Image::ExifTool::IsFloat": {
+      "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (($_[0] =~ /^[+-]?(?=\\d|\\.\\d)\\d*(\\.\\d*)?([Ee]([+-]?\\d+))?$/) and (return 1));\n    (($_[0] =~ /^[+-]?(?=\\d|,\\d)\\d*(,\\d*)?([Ee]([+-]?\\d+))?$/) or (return 0));\n    ($_[0] =~ tr/,/./);\n    (return 1);\n}",
+      "__name": "Image::ExifTool::IsFloat",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool.pm",
+      "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+    },
+    "Image::ExifTool::IsHex": {
+      "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ /^(0x)?[0-9a-f]{1,8}$/i)));\n}",
+      "__name": "Image::ExifTool::IsHex",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool.pm",
+      "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+    },
+    "Image::ExifTool::IsInt": {
+      "__deparse": "($) {\n    package Image::ExifTool;\n    use strict;\n    (return scalar(($_[0] =~ /^[+-]?\\d+$/)));\n}",
+      "__name": "Image::ExifTool::IsInt",
+      "__opaque": true,
+      "__perl": "CODE",
+      "resolved": true,
+      "source_file": "Image/ExifTool.pm",
+      "source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508"
+    }
+  },
+  "lexical_hashes": {
+    "bindings": {
+      "%intRange": {
+        "entries": {
+          "int16s": [
+            "-32768",
+            "32767"
+          ],
+          "int16u": [
+            "0",
+            "65535"
+          ],
+          "int16uRev": [
+            "0",
+            "65535"
+          ],
+          "int32s": [
+            "-2147483648",
+            "2147483647"
+          ],
+          "int32u": [
+            "0",
+            "4294967295"
+          ],
+          "int64s": [
+            "-9223372036854775808",
+            "9223372036854775807"
+          ],
+          "int64u": [
+            "0",
+            "18446744073709551615"
+          ],
+          "int8s": [
+            "-128",
+            "127"
+          ],
+          "int8u": [
+            "0",
+            "255"
+          ]
+        },
+        "resolved": true
+      }
+    },
+    "resolved": true
+  },
+  "requested_binding": "Image::ExifTool::CheckValue",
+  "resolved": true,
+  "source_file": "Image/ExifTool/Writer.pl",
+  "source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44"
+}

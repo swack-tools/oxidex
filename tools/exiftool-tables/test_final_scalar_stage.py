@@ -11,15 +11,16 @@ from tempfile import TemporaryDirectory
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
+import final_scalar_stage
+from native_write_matrix import optional_native_configuration
 from final_scalar_stage import FinalStageRefused, compile_final_scalar_rows, compile_final_scalar_stage, generate, render_rust
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DUMP = ROOT / "tools/exiftool-tables/dump_tables.pl"
-PERL = Path(os.environ["EXIFTOOL_PERL"]) if os.environ.get("EXIFTOOL_PERL") else None
-_native_root = os.environ.get("OXIDEX_PINNED_EXIFTOOL")
-LIB = (Path(_native_root) / "lib") if _native_root and (Path(_native_root) / "lib").is_dir() else (Path(_native_root) if _native_root else None)
-NATIVE_READY = PERL is not None and LIB is not None and PERL.is_file() and LIB.is_dir()
+_NATIVE_CONFIGURATION = optional_native_configuration(os.environ.get("EXIFTOOL_PERL"), os.environ.get("OXIDEX_PINNED_EXIFTOOL"))
+PERL, LIB = _NATIVE_CONFIGURATION if _NATIVE_CONFIGURATION else (None, None)
+NATIVE_READY = PERL is not None
 
 
 def native_document(lib=None):
@@ -71,6 +72,28 @@ def native_final_scalar(lib=None):
         raise AssertionError("native WriteExif did not create HostComputer entry")
 
 
+def native_artist_storage(raw: str, lib=None):
+    """Return native raw storage and readback for the metadata-only Artist row."""
+    from native_write_matrix import inspect, make_tiff, run_native_batch
+    lib = lib or LIB
+    with TemporaryDirectory() as directory:
+        directory = Path(directory)
+        source, target = directory / "input.tif", directory / "output.tif"
+        make_tiff(source, "little")
+        call = run_native_batch(PERL, lib, source, target,
+                                [{"tag": "IFD0:Artist", "scalar": "utf8", "value": raw}])
+        if call["returncode"] or not call["result"] or call["result"].get("write_return") != 1:
+            raise AssertionError(f"native Artist write failed: {call}")
+        stored = inspect(target, "tiff")["tags"]["315"]
+        readback = r'''BEGIN { $Image::ExifTool::configFile = ''; }
+use strict; use warnings; use JSON::PP; use Image::ExifTool;
+my $info = Image::ExifTool->new->ImageInfo($ARGV[0]);
+print JSON::PP->new->canonical->encode({artist => $info->{Artist}});'''
+        result = subprocess.run([str(PERL), "-I" + str(lib), "-e", readback, str(target)],
+                                check=True, text=True, capture_output=True, timeout=30)
+        return stored, json.loads(result.stdout)["artist"]
+
+
 def execute_rendered_recipe(document, recipe, raw):
     from scalar_helper_codegen import generate as generate_scalar_helpers
     generated_scalar = ROOT / "src/writers/generated_scalar.rs"
@@ -95,12 +118,15 @@ mod writers {{
 }}
 use writers::generated_scalar::Scalar;
 use writers::tiff_scalar_final_stage::*;
-fn main() {{ let recipe=writers::generated_final::TIFF_SCALAR_FINAL_RECIPES.iter().find(|item| item.raw_tag_id == 0x013c).unwrap(); let registry=writers::generated_final::TIFF_SCALAR_FINAL_FORMAT_REGISTRY.as_ref().unwrap(); match resolve_tiff_scalar_final_stage(recipe, registry, Scalar::Bytes(vec!{list(raw)!r}), ScalarWriteOperation::Create, TiffByteOrder::BigEndian).unwrap() {{ ResolvedTiffScalarEdit::Write {{ wire_format, count, entry, .. }} => println!("{{wire_format}} {{count}} {{}}", entry[8..].iter().map(|v| format!("{{v:02x}}")).collect::<String>()), _ => panic!("expected write") }} }}
+fn main() {{ let recipe=writers::generated_final::TIFF_SCALAR_FINAL_RECIPES.iter().find(|item| item.raw_tag_id == 0x{recipe.raw_tag_id:04x}).unwrap(); let registry=writers::generated_final::TIFF_SCALAR_FINAL_FORMAT_REGISTRY.as_ref().unwrap(); match resolve_tiff_scalar_final_stage(recipe, registry, Scalar::Bytes(vec!{list(raw)!r}), ScalarWriteOperation::Create, TiffByteOrder::BigEndian).unwrap() {{ ResolvedTiffScalarEdit::Write {{ wire_format, count, entry, out_of_line_value, .. }} => println!("{{wire_format}} {{count}} {{}} {{}}", entry[8..].iter().map(|v| format!("{{v:02x}}")).collect::<String>(), out_of_line_value.map(|value| value.iter().map(|v| format!("{{v:02x}}")).collect::<String>()).unwrap_or_else(|| "-".to_string())), _ => panic!("expected write") }} }}
 ''', encoding="utf-8")
         binary = directory / "driver"
         subprocess.run(["rustc", "--edition=2021", str(driver), "-o", str(binary)], check=True, text=True, capture_output=True)
-        wire, count, inline = subprocess.run([str(binary)], check=True, text=True, capture_output=True).stdout.split()
-        return {"wire": int(wire), "count": int(count), "hex": inline}
+        wire, count, inline, out_of_line = subprocess.run([str(binary)], check=True, text=True, capture_output=True).stdout.split()
+        result = {"wire": int(wire), "count": int(count), "hex": inline}
+        if out_of_line != "-":
+            result["out_of_line_hex"] = out_of_line
+        return result
 
 
 @unittest.skipUnless(NATIVE_READY, "requires EXIFTOOL_PERL and OXIDEX_PINNED_EXIFTOOL")
@@ -112,6 +138,58 @@ class FinalScalarStageTests(unittest.TestCase):
     def host_recipe(self, document=None):
         recipes = compile_final_scalar_rows(document or self.document)
         return next(recipe for recipe in recipes if recipe.raw_tag_id == 0x013C)
+
+    def artist_row(self, document=None):
+        rows = (document or self.document)["native_write_tables"]["Exif"]["Main"]["rows"]
+        return rows["315"]
+
+    def test_metadata_only_groups_notes_and_data_member_inert_rawconv_admit_artist(self):
+        artist = next(recipe for recipe in compile_final_scalar_rows(self.document) if recipe.raw_tag_id == 0x013B)
+        self.assertEqual((artist.name, artist.conversion_format, artist.physical_write_group),
+                         ("Artist", "string", "IFD0"))
+        row = self.artist_row()
+        self.assertIn("Groups", row["properties"])
+        self.assertIn("Notes", row["properties"])
+        self.assertIn("RawConv", row["properties"])
+        self.assertNotIn("DataMember", row["properties"])
+
+    def test_artist_metadata_specialization_refuses_active_or_unknown_controls(self):
+        cases = []
+        changed = copy.deepcopy(self.document)
+        self.artist_row(changed)["properties"]["DataMember"] = {"present": True, "value": "Make"}
+        cases.append((changed, "DataMember"))
+        changed = copy.deepcopy(self.document)
+        self.artist_row(changed)["properties"]["UnsupportedControl"] = {"present": True, "value": "value"}
+        cases.append((changed, "unmodeled"))
+        changed = copy.deepcopy(self.document)
+        self.artist_row(changed)["write_controls"]["WriteHook"] = {"present": True, "value": "hook"}
+        cases.append((changed, "callback"))
+        for changed, reason in cases:
+            with self.subTest(reason=reason):
+                recipes, omissions, _ = compile_final_scalar_stage(changed)
+                self.assertFalse(any(recipe.raw_tag_id == 0x013B for recipe in recipes))
+                self.assertIn(reason, next(item["reason"] for item in omissions if item["raw_id"] == "315"))
+
+    def test_artist_rawconv_admission_depends_on_complete_writeexif_proof(self):
+        changed = copy.deepcopy(self.document)
+        body = changed["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["__deparse"]
+        needle = "(my($conv) = $newInfo->{'RawConv'});"
+        self.assertIn(needle, body)
+        changed["native_write_tables"]["Exif"]["Main"]["effective_write_proc"]["effective"]["__deparse"] = body.replace(
+            needle, needle + "\n                    rawconv_outside_data_member();", 1)
+        with self.assertRaises(FinalStageRefused):
+            compile_final_scalar_rows(changed)
+
+    def test_artist_rawconv_readback_does_not_change_generated_storage(self):
+        raw = "artist \n\t"
+        stored, readback = native_artist_storage(raw)
+        self.assertEqual((stored["type"], stored["count"], stored["value_hex"]),
+                         (2, 10, "617274697374200a0900"))
+        self.assertEqual(readback, "artist")
+        recipe = next(recipe for recipe in compile_final_scalar_rows(self.document) if recipe.raw_tag_id == 0x013B)
+        generated = execute_rendered_recipe(self.document, recipe, raw.encode("utf-8"))
+        self.assertEqual((generated["wire"], generated["count"], generated["out_of_line_hex"]),
+                         (stored["type"], stored["count"], stored["value_hex"]))
 
     def test_actual_final_loaded_source_emits_host_from_properties_not_tag_allowlist(self):
         recipe = self.host_recipe()
@@ -266,6 +344,52 @@ class FinalScalarStageTests(unittest.TestCase):
             self.assertEqual(generated, native | {"hex": native["hex"].ljust(8, "0")})
 
 
+class HistoricalFinalStageProfilesTests(unittest.TestCase):
+    """Portable checks for the preserved selected-release WriteExif bodies."""
+
+    def table(self, tokens):
+        return {"effective_write_proc": {"present": True, "effective": {
+            "resolved": True, "__perl": "CODE", "__name": "Image::ExifTool::Exif::WriteExif",
+            "source_file": "Image/ExifTool/WriteExif.pl", "source_sha256": "a" * 64,
+            # body_tokens is deliberately lexical. Whitespace is not source
+            # semantics, so this compact reconstruction exercises the exact
+            # committed token sequence without inventing a Perl interpreter.
+            "__deparse": " ".join(tokens),
+        }}}
+
+    def test_selected_11_78_profile_maps_charset_disabled_string_path(self):
+        old = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_11_78.json").read_text(encoding="utf-8"))
+        body = self.table(old)["effective_write_proc"]["effective"]["__deparse"]
+        _, _, control = final_scalar_stage._authenticate_write_exif(self.table(old))
+        self.assertEqual(control, "c11e22346f6d090aadfb1cc754556cc8c748f70240bfe666e4af423224955fe6")
+        final_scalar_stage._authenticate_operative_final_scalar_semantics(body, {"string"})
+
+    def test_selected_12_64_profile_maps_all_final_scalar_operands(self):
+        tokens = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_12_64.json").read_text(encoding="utf-8"))
+        body = self.table(tokens)["effective_write_proc"]["effective"]["__deparse"]
+        _, _, control = final_scalar_stage._authenticate_write_exif(self.table(tokens))
+        self.assertEqual(control, "01b5e22f902c21cd20917ea0db9f5168e56ebfc8e3ad35f81d074c3b5814718f")
+        final_scalar_stage._authenticate_operative_final_scalar_semantics(body, {"string"})
+
+    def test_operative_source_operand_extraction_refuses_missing_selected_utf8_wire_branch(self):
+        tokens = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_11_78.json").read_text(encoding="utf-8"))
+        body = self.table(tokens)["effective_write_proc"]["effective"]["__deparse"]
+        with self.assertRaisesRegex(FinalStageRefused, "UTF-8 wire-format encoding"):
+            final_scalar_stage._authenticate_operative_final_scalar_semantics(body, {"utf8"})
+
+    def test_historical_profile_insertions_and_profile_mixing_refuse(self):
+        old = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_11_78.json").read_text(encoding="utf-8"))
+        newer = json.loads((Path(__file__).parent / "final_scalar_writeexif_full_template_12_64.json").read_text(encoding="utf-8"))
+        changed = old + ["injected", "(", ")", ";"]
+        with self.assertRaisesRegex(FinalStageRefused, "complete final-stage token grammar"):
+            final_scalar_stage._authenticate_write_exif(self.table(changed))
+        # A partial source cannot borrow one historical branch from another:
+        # the complete 12.64 body is admitted, but a joined prefix/suffix is not.
+        mixed = old[:len(old) // 2] + newer[len(newer) // 2:]
+        with self.assertRaisesRegex(FinalStageRefused, "complete final-stage token grammar"):
+            final_scalar_stage._authenticate_write_exif(self.table(mixed))
+
+
 class StandaloneRustTests(unittest.TestCase):
     def test_final_executor_compiles_and_runs_without_cargo(self):
         generated = ROOT / "src/writers/generated_scalar.rs"
@@ -281,6 +405,7 @@ class StandaloneRustTests(unittest.TestCase):
 }}
 mod writers {{
     #[path = "{generated}"] pub mod generated_scalar;
+    mod generated_scalar_rules {{ pub(crate) const NUMERIC_SCALAR: Option<super::generated_scalar::NumericScalarRecipe> = None; }}
     #[path = "{final_stage}"] pub mod tiff_scalar_final_stage;
 }}
 fn main() {{}}

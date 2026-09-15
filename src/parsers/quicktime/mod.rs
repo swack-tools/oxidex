@@ -45,8 +45,14 @@
 use crate::core::{FileReader, MetadataMap};
 
 mod atom_parser;
+mod generated_itemlist_specs;
+mod generated_keys_specs;
+mod generated_userdata_specs;
+pub(crate) mod itemlist_reader;
+mod keys_reader;
 mod metadata_extractor;
 pub mod tag_mapping;
+mod userdata_reader;
 
 pub use atom_parser::{Atom, FourCC};
 
@@ -352,12 +358,18 @@ mod tests {
         assert!(result.is_ok());
 
         let metadata = result.unwrap();
-        assert!(metadata.contains_key("ItemList:Artist"));
+        assert!(metadata.contains_key("QuickTime:Artist"));
+        assert_eq!(
+            metadata.occurrences_for("QuickTime:Artist")[0]
+                .group1
+                .as_ref(),
+            "ItemList"
+        );
 
-        if let Some(artist) = metadata.get_string("ItemList:Artist") {
+        if let Some(artist) = metadata.get_string("QuickTime:Artist") {
             assert_eq!(artist, "Artist Name");
         } else {
-            panic!("Expected ItemList:Artist to be a string");
+            panic!("Expected QuickTime:Artist to be a string");
         }
     }
 

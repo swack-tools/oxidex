@@ -1,6 +1,8 @@
 import hashlib
+import copy
 import json
 from pathlib import Path
+import runtime_evidence_inputs as runtime_inputs
 import unittest
 import subprocess
 import tempfile
@@ -13,6 +15,19 @@ HERE = Path(__file__).resolve().parent
 
 
 class BaselineTests(unittest.TestCase):
+    def test_runtime_manifest_ignores_docs_and_binds_runtime_inputs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for path, body in {"Cargo.toml": "[package]", "Cargo.lock": "lock", ".exiftool-version": "13.59",
+                               "src/parser.rs": "parser", ".cargo/config.toml": "[build]", "oxidex-tags/src/lib.rs": "tags", "docs/report.md": "report"}.items():
+                target = root / path; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(body)
+            before = runtime_inputs.runtime_input_manifest(root)
+            (root / "docs/report.md").write_text("changed report")
+            self.assertEqual(before, runtime_inputs.runtime_input_manifest(root))
+            for path in ("src/parser.rs", "Cargo.lock", "oxidex-tags/src/lib.rs", ".exiftool-version", ".cargo/config.toml"):
+                target = root / path; target.write_text(target.read_text() + "!")
+                self.assertNotEqual(before, runtime_inputs.runtime_input_manifest(root))
+                target.write_text(target.read_text()[:-1])
     def test_source_fingerprint_detects_already_dirty_tracked_and_untracked_edits(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -86,6 +101,39 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             baseline.projection([{}, {}])
 
+    def test_hydrated_capture_uses_effective_rows_and_resolves_groups(self):
+        tables = {}
+        for name in selector.TABLES:
+            full = "Image::ExifTool::QuickTime::" + name
+            tables[full] = {"full_name": full, "meta": {"GROUPS": {"__ref": "HASH", "object_id": "groups"}},
+                            "tags": {}}
+        tables["Image::ExifTool::QuickTime::Keys"]["tags"]["artist"] = {
+            "TagID": "artist", "Table": {"__ref": "tag_table", "table_full_names": ["Image::ExifTool::QuickTime::Keys"]},
+            "Groups": {"__ref": "HASH", "object_id": "groups"}, "Name": "Artist",
+            "_extra_properties": {"GotGroups": "1"}}
+        document = {"hydrated_layouts": {"tables": tables,
+                    "shared_reference_objects": {"groups": {"kind": "HASH", "properties": {"0": "QuickTime", "1": "Keys"}}}}}
+        projected = capture.hydrated_tables(document)
+        self.assertEqual(projected["Keys"]["tags"]["artist"], {"Name": "Artist"})
+
+    def test_hydrated_projection_rejects_index_drift_and_preserves_extra_keys(self):
+        kwargs = {"table": "Image::ExifTool::QuickTime::Keys", "raw_key": "artist", "defaults": {}, "shared": {}}
+        row = {"_variants": [{"TagID": "artist", "Table": {"table_full_names": [kwargs["table"]]},
+                              "_extra_properties": {"Index": "1"}}]}
+        with self.assertRaisesRegex(ValueError, "index differs"):
+            capture.project_row(row, **kwargs)
+        row["_variants"][0]["_extra_properties"] = {"Index": "0", "NewProperty": "x"}
+        row["_variants"][0]["_extra_keys"] = ["OlderProperty"]
+        self.assertEqual(capture.project_row(row, **kwargs), {"_variants": [{"_extra_keys": ["NewProperty", "OlderProperty"]}]})
+
+    def test_hydrated_projection_refuses_cycles_and_variant_wrapper_loss(self):
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            capture.resolve_shared({"__ref": "HASH", "object_id": "loop"},
+                                   {"loop": {"kind": "HASH", "properties": {"again": {"__ref": "HASH", "object_id": "loop"}}}})
+        with self.assertRaisesRegex(ValueError, "wrapper fields"):
+            capture.project_row({"_variants": [], "Name": "lost"}, table="Image::ExifTool::QuickTime::Keys",
+                                raw_key="artist", defaults={}, shared={})
+
     def test_reading_check_detects_changed_values_and_pin(self):
         before = {"pin": "13.59", "fixtures": [{"actual": {"ItemList:AlbumID": 1}}]}
         baseline.check_reading_baseline(before, before)
@@ -100,13 +148,29 @@ class BaselineTests(unittest.TestCase):
         module = full["modules"]["QuickTime"]
         module["tables"]["Other"] = {"sentinel": True}
         module["table_count"] = len(module["tables"])
-        result = capture.extract(full, full_hash="0" * 64, source_commit="1" * 40,
-                                 perl_version="5.38.2", tool_hash="2" * 64)
-        self.assertEqual(result["capture_scope"]["source_module_table_count"], 4)
-        self.assertEqual(result["modules"]["QuickTime"]["table_count"], 3)
-        self.assertNotIn("Other", result["modules"]["QuickTime"]["tables"])
-        for name in selector.TABLES:
-            self.assertEqual(result["modules"]["QuickTime"]["tables"][name], module["tables"][name])
+        with self.assertRaisesRegex(ValueError, "hydrated QuickTime"):
+            capture.extract(full, full_hash="0" * 64, source_commit="1" * 40,
+                            perl_version="5.38.2", tool_hash="2" * 64)
+
+    def test_full_regeneration_uses_same_effective_rows_as_bounded_capture(self):
+        import quicktime_generated_specs as compiler
+        bounded = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())
+        full = copy.deepcopy(bounded)
+        layouts = {}
+        for name, table in bounded["modules"]["QuickTime"]["tables"].items():
+            fullname = "Image::ExifTool::QuickTime::" + name
+            def wrapped(row, key):
+                if "_variants" in row:
+                    return {"_variants": [wrapped(item, key) for item in row["_variants"]]}
+                return {**row, "TagID": key, "Table": {"__ref": "tag_table", "table_full_names": [fullname]}}
+            layouts[fullname] = {"full_name": fullname, "meta": table["meta"],
+                                 "tags": {key: wrapped(row, key) for key, row in table["tags"].items()}}
+            # The earlier detached projection must not win over effective rows.
+            full["modules"]["QuickTime"]["tables"][name]["tags"] = {}
+        full["hydrated_layouts"] = {"tables": layouts, "shared_reference_objects": {}}
+        replay = compiler.compile_document(full)
+        self.assertEqual(replay, compiler.compile_document(bounded))
+        self.assertGreater(replay["identity_counts"]["generated"], 0)
 
     def test_capture_provenance_cannot_be_removed_or_reassigned(self):
         document = json.loads((HERE / "fixtures/quicktime_source_13_59.json").read_text())

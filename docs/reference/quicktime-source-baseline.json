@@ -2,11 +2,10 @@
   "exiftool_version": "13.59",
   "families": [
     {
-      "declarative_candidates": 91,
+      "declarative_candidates": 92,
       "raw_rows": 105,
       "refusal_counts_nonexclusive": {
         "uncaptured_source_property:Deletable": 1,
-        "uncaptured_source_property:PrintConvColumns": 1,
         "uncaptured_source_property:Shift": 1,
         "unsupported_format:undef": 3,
         "unsupported_print_conversion": 4,
@@ -15,24 +14,24 @@
         "unsupported_source_property:Unknown": 3,
         "unsupported_source_property:ValueConv": 6
       },
-      "refused_records": 14,
-      "source_table_sha256": "cbf711d4902c540c30f958df3c25f9a98677e1454855ef0afb7d48180d746d77",
+      "refused_records": 13,
+      "source_table_sha256": "4a27ed4ec6b2f8ccac5f7dee94e75641b0608fefbf580f37f938cb15182f1fda",
       "table": "ItemList",
       "variant_records": 105
     },
     {
       "declarative_candidates": 0,
-      "raw_rows": 186,
+      "raw_rows": 189,
       "refusal_counts_nonexclusive": {
         "conditional_variant_selection": 29,
-        "protocol_userdata_language_records": 210,
+        "protocol_userdata_language_records": 213,
         "uncaptured_source_property:IText": 16,
         "uncaptured_source_property:NoDecode": 1,
         "uncaptured_source_property:RawConvInv": 2,
         "uncaptured_source_property:SetBase": 1,
         "uncaptured_source_property:Shift": 3,
         "uncaptured_source_property:WriteGroup": 2,
-        "unsupported_format:rational64s": 6,
+        "unsupported_format:rational64s": 9,
         "unsupported_format:undef": 4,
         "unsupported_print_conversion": 7,
         "unsupported_source_property:Binary": 10,
@@ -40,19 +39,18 @@
         "unsupported_source_property:Hidden": 7,
         "unsupported_source_property:RawConv": 11,
         "unsupported_source_property:SubDirectory": 57,
-        "unsupported_source_property:Unknown": 12,
+        "unsupported_source_property:Unknown": 14,
         "unsupported_source_property:ValueConv": 16
       },
-      "refused_records": 210,
-      "source_table_sha256": "8d6d85aefae27a60f52a5e87c9a49b5edd0cc122041671c77403b23833be97a8",
+      "refused_records": 213,
+      "source_table_sha256": "123b7ca6ce34b1979cf2dc707fef3e3938d326e1b3ecadc69796816d15efbd4e",
       "table": "UserData",
-      "variant_records": 210
+      "variant_records": 213
     },
     {
       "declarative_candidates": 0,
       "raw_rows": 81,
       "refusal_counts_nonexclusive": {
-        "missing_literal_name": 14,
         "protocol_keys_indexed_name_resolution": 81,
         "uncaptured_source_property:Shift": 3,
         "unsupported_print_conversion": 5,
@@ -60,7 +58,7 @@
         "unsupported_source_property:ValueConv": 6
       },
       "refused_records": 81,
-      "source_table_sha256": "aaee996cd5d419249f363097c97c58d75712868290510d02d5332a217aa3b912",
+      "source_table_sha256": "b1d4bd595657b7b352f40e8e6fb695ed804c80b138311516365ce6120f653adb",
       "table": "Keys",
       "variant_records": 81
     }
@@ -69,11 +67,12 @@
   "scope": "source capability candidates; no generated runtime or observed support claimed",
   "source": {
     "capture_scope": {
-      "dump_tool_sha256": "976d227873ed625baa3bafec03c486694246cae6eb4009ac32041559b82ff533",
-      "full_dump_sha256": "05c13f3ee804838a6d8db5b2f8d64156883dd98afe5a5b0983b6870a8a561556",
+      "dump_tool_sha256": "b9000a0be27e4d9bd350730234f5104deba0d2ac32b06b49edbd41b8228c76eb",
+      "full_dump_sha256": "933f0c6b585b2b6039d68c9ac1f553fb596ba33f4b889f589d2b19bba444f068",
       "kind": "verbatim selected tables from hydrated dump",
       "perl_version": "5.38.2",
-      "source_commit": "304d6339274d14f3a26cfeed85e2428855ea688a",
+      "projection": "effective hydrated rows with authenticated wrapper removal",
+      "source_commit": "6f34cff4a9771107edaf5a1198eabe7238c7594a",
       "source_module_table_count": 87,
       "tables": [
         "QuickTime::ItemList",
@@ -81,7 +80,7 @@
         "QuickTime::Keys"
       ]
     },
-    "dump_sha256": "e89388d385985db660fc084d409c25d4712678ff62c770e91e1aaa978ecd2e15",
-    "selector_sha256": "9019edae77672d45d20a78c612a028a21a91a99c1076576a93d0e937c2ad9bed"
+    "dump_sha256": "2430438fbc4245928ab2f2d1156349f97364ac5c36a8a066597a5964146daf29",
+    "selector_sha256": "4f05e7442beb4c4c9cd83d8b2f88d0bbfbe7572416d1ed3f3792e04ed998254a"
   }
 }

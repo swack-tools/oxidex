@@ -1,0 +1,204 @@
+{
+  "artifact_registration": "tier-1 mandatory sidecar captured and joined in regen.sh",
+  "native_identity": {
+    "exiftool_version": "13.59",
+    "perl_version": "v5.38.2"
+  },
+  "recipe": {
+    "cleanup": {
+      "all_mandatory": true,
+      "entry_count_shrinks_or_new": true,
+      "no_next_ifd": true,
+      "omit_empty_ifd1": true
+    },
+    "core_source_sha256": "95fa4ec3cc3603866dd6e37bfe52ad019ff50a23bbd5cc87ce40f949cf49a508",
+    "directories": [
+      {
+        "defaults": [
+          {
+            "kind": "Text",
+            "tag_id": 36864,
+            "value": "0232"
+          },
+          {
+            "kind": "Text",
+            "tag_id": 37121,
+            "value": "1 2 3 0"
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 40961,
+            "value": 65535
+          }
+        ],
+        "directory": "ExifIFD"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Text",
+            "tag_id": 0,
+            "value": "2 3 0 0"
+          }
+        ],
+        "directory": "GPS"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Integer",
+            "tag_id": 531,
+            "value": 1
+          }
+        ],
+        "directory": "IFD0"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Integer",
+            "tag_id": 259,
+            "value": 6
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 282,
+            "value": 72
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 283,
+            "value": 72
+          },
+          {
+            "kind": "Integer",
+            "tag_id": 296,
+            "value": 2
+          }
+        ],
+        "directory": "IFD1"
+      },
+      {
+        "defaults": [
+          {
+            "kind": "Text",
+            "tag_id": 2,
+            "value": "0100"
+          }
+        ],
+        "directory": "InteropIFD"
+      }
+    ],
+    "encodings": [
+      {
+        "format_name": "int16u",
+        "tag_id": 259,
+        "tiff_type": 3
+      },
+      {
+        "format_name": "rational64u",
+        "tag_id": 282,
+        "tiff_type": 5
+      },
+      {
+        "format_name": "rational64u",
+        "tag_id": 283,
+        "tiff_type": 5
+      },
+      {
+        "format_name": "int16u",
+        "tag_id": 296,
+        "tiff_type": 3
+      },
+      {
+        "format_name": "int16u",
+        "tag_id": 531,
+        "tiff_type": 3
+      }
+    ],
+    "exif_source_sha256": "8a0475c0ff67b2401db22df10c781f2f1e54276dd441affa1a8be3f42a5f7d22",
+    "jfif_override": {
+      "assignments": [
+        [
+          282,
+          "JFIFXResolution",
+          0
+        ],
+        [
+          283,
+          "JFIFYResolution",
+          0
+        ],
+        [
+          296,
+          "JFIFResolutionUnit",
+          1
+        ]
+      ],
+      "directory": "IFD0",
+      "probe": "JFIFYResolution"
+    },
+    "recipe_sha256": "505574f89e705b4792424c159b52c658f168676b2ec211eb4206b864a65f4db3",
+    "selection": {
+      "directory_operand": "dirName",
+      "disabled_when": "noMandatory",
+      "new_directory_when": "numEntries == 0"
+    },
+    "survivor_encodings": [
+      {
+        "format_name": "int8u",
+        "operation": "write_value_scalar",
+        "tiff_type": 1,
+        "width": 1
+      },
+      {
+        "format_name": "int8s",
+        "operation": "write_value_scalar",
+        "tiff_type": 6,
+        "width": 1
+      },
+      {
+        "format_name": "int16s",
+        "operation": "write_value_scalar",
+        "tiff_type": 8,
+        "width": 2
+      },
+      {
+        "format_name": "int16u",
+        "operation": "write_value_scalar",
+        "tiff_type": 3,
+        "width": 2
+      },
+      {
+        "format_name": "int32s",
+        "operation": "write_value_scalar",
+        "tiff_type": 9,
+        "width": 4
+      },
+      {
+        "format_name": "int32u",
+        "operation": "write_value_scalar",
+        "tiff_type": 4,
+        "width": 4
+      },
+      {
+        "format_name": "rational64u",
+        "operation": "write_value_scalar",
+        "tiff_type": 5,
+        "width": 8
+      }
+    ],
+    "unencoded_numeric_defaults": [
+      {
+        "directory": "ExifIFD",
+        "reason": "direct_write_group_unrepresented",
+        "tag_id": 40961
+      }
+    ],
+    "write_value_source_sha256": "cfe916df77f7b37a4fc62e22f0c03de93ca727f0fa22a155ad0eecf95c050d44",
+    "writer_source_file": "Image/ExifTool/WriteExif.pl",
+    "writer_source_sha256": "7ea2e8af8f17ebfef5979146bdc6b793392f39da9fc3ea15c6ba0326e1321533"
+  },
+  "status": "inactive source-derived defaults; no public writer",
+  "writer_tables_joined": true
+}

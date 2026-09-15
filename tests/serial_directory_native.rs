@@ -266,7 +266,7 @@ fn afinfo(
 ) -> Vec<u8> {
     assert_eq!(x.len(), usize::from(point_count));
     assert_eq!(y.len(), usize::from(point_count));
-    assert_eq!(focus.len(), (usize::from(point_count) + 15) / 16);
+    assert_eq!(focus.len(), usize::from(point_count).div_ceil(16));
     let mut out = Vec::new();
     for value in [point_count, 1, 1_000, 800, 200, 150, 40, 30] {
         u16(&mut out, order, value);
@@ -289,7 +289,7 @@ fn afinfo2(
     tail: &[u16],
 ) -> Vec<u8> {
     assert_eq!(area_words.len(), usize::from(point_count));
-    assert_eq!(focus.len(), (usize::from(point_count) + 15) / 16);
+    assert_eq!(focus.len(), usize::from(point_count).div_ceil(16));
     let mut out = Vec::new();
     for value in [99, 2, point_count, point_count, 1_000, 800, 200, 150] {
         u16(&mut out, order, value);

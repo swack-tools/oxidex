@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import gzip
-import importlib.util
 import io
 import json
 import sys
@@ -13,11 +12,10 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location("version_rehearsal_catalog", HERE / "version_rehearsal_catalog.py")
-assert spec and spec.loader
-catalog_stage = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = catalog_stage
-spec.loader.exec_module(catalog_stage)
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import version_rehearsal_catalog as catalog_stage
+
 rehearsal = catalog_stage.rehearsal
 
 OID_A = "a" * 40

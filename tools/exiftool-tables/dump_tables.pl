@@ -138,6 +138,62 @@ sub source_file_fact {
     return (File::Spec->abs2rel($abs, $lib_abs), sha256_hex($bytes), undef);
 }
 
+# Bind write-side source projections to the Perl executable, selected library,
+# release, and every Image::ExifTool file actually loaded in this process.
+# Consumers compare their native lookup probe to this envelope and separately
+# re-prove the relevant helper bodies.  A path outside $lib_abs is a refusal:
+# @INC ordering alone cannot authenticate an already loaded package.
+sub native_capture_context {
+    my ($lib_abs) = @_;
+    my @modules;
+    for my $inc (sort keys %INC) {
+        next unless $inc eq 'Image/ExifTool.pm' || $inc =~ m{^Image/ExifTool/};
+        my $path = $INC{$inc};
+        if (!defined($path) || !length($path)) {
+            # A failed require leaves an %INC key with an undefined value.
+            # Preserve it as unavailable instead of turning an intentionally
+            # unresolved writer helper into a dump-wide failure.
+            push @modules, { inc => $inc, source_file => undef, source_sha256 => undef };
+            next;
+        }
+        my $abs = abs_path($path);
+        $abs = File::Spec->rel2abs($path) unless defined $abs;
+        my $prefix = $lib_abs . '/';
+        # Keep the dump inspectable if a transitive require escaped the selected
+        # library.  The source-address compiler rejects this explicit malformed
+        # closure; dying here would hide the independent post-load writer
+        # refusal and turn a source mismatch into a capture failure.
+        if (index($abs, $prefix) != 0) {
+            push @modules, { inc => $inc, source_file => undef, source_sha256 => undef,
+                             reason => 'loaded_context_module_outside_selected_library' };
+            next;
+        }
+        my %module = (inc => $inc, source_file => File::Spec->abs2rel($abs, $lib_abs));
+        if (-f $abs) {
+            open(my $fh, '<:raw', $abs) or die "read $abs: $!\n";
+            local $/;
+            my $bytes = <$fh>;
+            close($fh) or die "close $abs: $!\n";
+            $module{source_sha256} = sha256_hex($bytes);
+        } else {
+            # A deliberately removed Writer.pl must still leave the sidecar
+            # inspectable with explicit unresolved helper facts.
+            $module{source_sha256} = undef;
+        }
+        push @modules, \%module;
+    }
+    die "selected ExifTool closure is empty\n" unless @modules;
+    my $closure = JSON::PP->new->canonical->utf8->encode(\@modules);
+    return {
+        schema => 'native_exiftool_capture_context_v1',
+        selected_library => $lib_abs,
+        perl_path => abs_path($^X) // $^X,
+        perl_version => "$]",
+        exiftool_version => "$Image::ExifTool::VERSION",
+        loaded_closure => { sha256 => sha256_hex($closure), modules => \@modules },
+    };
+}
+
 sub unresolved_code_fact {
     my ($name, $reason) = @_;
     return {
@@ -239,6 +295,13 @@ sub code_ref_fact {
         }
     }
     $fact{dependencies} = \%dependencies if %dependencies;
+    # Nikon's Decrypt indexes a lexical two-row byte table.  Its deparsed body
+    # names only @xlat, so a body and source digest alone cannot establish the
+    # bytes the loaded callback will consume.  Capture the final pad value,
+    # not a source initializer: this is the same closure data Perl executes.
+    if ($resolved_name eq 'Image::ExifTool::Nikon::Decrypt') {
+        $fact{lexical_arrays} = native_nikon_decrypt_xlat($cv);
+    }
     return \%fact;
 }
 
@@ -260,6 +323,146 @@ sub code_source_fact {
 sub validate_function_fact {
     my ($name, $lib_abs) = @_;
     return code_source_fact($name, $lib_abs);
+}
+
+# ItemList `data` atom interpretation is a deliberately small protocol, not
+# just ProcessMOV's body: the processor selects QuickTimeFormat and ReadValue,
+# direct text flags read this package's stringEncoding lookup, and Decode
+# delegates character-set conversion to Charset.  Capture each effective
+# binding and the loaded conversion data after hydration so a generator can
+# refuse a changed helper or map without treating an unrelated edit anywhere
+# in QuickTime.pm as eligibility.
+sub quicktime_charset_map_fact {
+    my ($charset, $lib_abs) = @_;
+    no strict 'refs';
+    my $map = eval { Image::ExifTool::Charset::LoadCharset($charset) };
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'load_charset_failed' }
+        unless ref($map) eq 'HASH';
+
+    my $inc_key = 'Image/ExifTool/Charset/' . $charset . '.pm';
+    my $file = $INC{$inc_key};
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_module_not_loaded' }
+        unless defined $file && length $file;
+    my $abs = abs_path($file);
+    my $prefix = $lib_abs . '/';
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_source_outside_selected_lib' }
+        unless defined $abs && -f $abs && index($abs, $prefix) == 0;
+    open(my $fh, '<:raw', $abs) or return {
+        charset => $charset, resolved => JSON::PP::false,
+        reason => 'charset_source_unreadable',
+    };
+    local $/;
+    my $bytes = <$fh>;
+    close($fh) or return { charset => $charset, resolved => JSON::PP::false,
+                            reason => 'charset_source_unreadable' };
+    my $canonical = eval { JSON::PP->new->canonical->utf8->encode($map) };
+    return { charset => $charset, resolved => JSON::PP::false,
+             reason => 'charset_map_not_canonicalizable' }
+        unless defined $canonical;
+    return {
+        charset => $charset,
+        resolved => JSON::PP::true,
+        source_file => File::Spec->abs2rel($abs, $lib_abs),
+        source_sha256 => sha256_hex($bytes),
+        map_sha256 => sha256_hex($canonical),
+    };
+}
+
+sub quicktime_itemlist_reader_protocol_fact {
+    my ($lib_abs) = @_;
+    no strict 'refs';
+    my %string_encoding = map {
+        to_text($_) => to_text($Image::ExifTool::QuickTime::stringEncoding{$_})
+    } sort keys %Image::ExifTool::QuickTime::stringEncoding;
+
+    # Decode loads Charset only on a character-set conversion path.  Its
+    # helper bodies are nevertheless part of the behavior ItemList delegates
+    # to, so hydrate this narrow dependency before recording final bindings.
+    my $charset_loaded = eval { require Image::ExifTool::Charset; 1 } ? JSON::PP::true : JSON::PP::false;
+    my %charset_types;
+    my %charset_maps;
+    if ($charset_loaded) {
+        my %reachable = map { $_ => 1 } values %string_encoding;
+        # Decode converts into ExifTool's UTF8-facing string representation;
+        # retain it even if a future source map no longer mentions it directly.
+        $reachable{UTF8} = 1;
+        for my $charset (sort keys %reachable) {
+            $charset_types{$charset} = $Image::ExifTool::Charset::csType{$charset};
+            if (defined($charset_types{$charset}) && ($charset_types{$charset} & 1)) {
+                $charset_maps{$charset} = quicktime_charset_map_fact($charset, $lib_abs);
+            }
+        }
+    }
+    return {
+        kind => 'quicktime_itemlist_reader_protocol_v2',
+        string_encoding => \%string_encoding,
+        charset_loaded => $charset_loaded,
+        charset_types => \%charset_types,
+        charset_maps => \%charset_maps,
+        dependencies => {
+            quicktime_format => code_source_fact(
+                'Image::ExifTool::QuickTime::QuickTimeFormat', $lib_abs, undef, undef, 0),
+            read_value => code_source_fact(
+                'Image::ExifTool::ReadValue', $lib_abs, undef, undef, 0),
+            decode => code_source_fact(
+                'Image::ExifTool::Decode', $lib_abs, undef, undef, 0),
+            charset_decompose => code_source_fact(
+                'Image::ExifTool::Charset::Decompose', $lib_abs, undef, undef, 0),
+            charset_load => code_source_fact(
+                'Image::ExifTool::Charset::LoadCharset', $lib_abs, undef, undef, 0),
+            charset_recompose => code_source_fact(
+                'Image::ExifTool::Charset::Recompose', $lib_abs, undef, undef, 0),
+        },
+    };
+}
+
+# Direct movie-level UserData atoms have no `data` header. Capture their
+# effective caller, option default, helpers and single-byte map separately.
+sub quicktime_userdata_reader_protocol_fact {
+    my ($lib_abs) = @_;
+    require Image::ExifTool::Charset;
+    require Image::ExifTool::XMP;
+    my $et = Image::ExifTool->new;
+    my $charset = $et->Options('CharsetQuickTime');
+    my $map_fact = quicktime_charset_map_fact($charset, $lib_abs);
+    my $map = Image::ExifTool::Charset::LoadCharset($charset);
+    $map_fact->{operands} = $map if ref($map) eq 'HASH';
+    no strict 'refs';
+    my %dependencies;
+    for my $name (qw(Image::ExifTool::ReadValue Image::ExifTool::IsUTF8
+                    Image::ExifTool::Decode Image::ExifTool::FoundTag
+                    Image::ExifTool::Charset::Decompose
+                    Image::ExifTool::Charset::LoadCharset
+                    Image::ExifTool::Charset::Recompose
+                    Image::ExifTool::XMP::FixUTF8)) {
+        $dependencies{$name} = code_source_fact($name, $lib_abs, undef, undef, 0);
+    }
+    return {
+        kind => 'quicktime_userdata_reader_protocol_v1',
+        caller_processors => {
+            Main => code_ref_fact($Image::ExifTool::QuickTime::Main{PROCESS_PROC},
+                'Image::ExifTool::QuickTime::ProcessMOV', $lib_abs, undef, undef, 0),
+            Movie => code_ref_fact($Image::ExifTool::QuickTime::Movie{PROCESS_PROC},
+                'Image::ExifTool::QuickTime::ProcessMOV', $lib_abs, undef, undef, 0),
+        },
+        caller_meta => {
+            Main => { map { $_ => scrub($Image::ExifTool::QuickTime::Main{$_}, 0) }
+                grep { /^[A-Z_]+$/ && (length($_) != 4 || $_ eq 'VARS') && $_ ne 'PROCESS_PROC' && $_ ne 'WRITE_PROC' }
+                keys %Image::ExifTool::QuickTime::Main },
+            Movie => { map { $_ => scrub($Image::ExifTool::QuickTime::Movie{$_}, 0) }
+                grep { /^[A-Z_]+$/ && (length($_) != 4 || $_ eq 'VARS') && $_ ne 'PROCESS_PROC' && $_ ne 'WRITE_PROC' }
+                keys %Image::ExifTool::QuickTime::Movie },
+        },
+        default_charset => $charset,
+        charset_type => $Image::ExifTool::Charset::csType{$charset},
+        charset_map => $map_fact,
+        movie_userdata_edge => scrub($Image::ExifTool::QuickTime::Movie{udta}, 0),
+        main_movie_edge => scrub($Image::ExifTool::QuickTime::Main{moov}, 0),
+        dependencies => \%dependencies,
+    };
 }
 
 sub collect_subdirectory_validate_function_names {
@@ -301,16 +504,29 @@ sub to_text {
 # omitting the write sidecar there keeps the ordinary full dump available to
 # the writer codegens without making an unused writer graph a CI requirement.
 my $READER_ONLY = 0;
+my $HYDRATED_LAYOUTS = 0;
+my @HYDRATED_LAYOUT_FILTERS;
 while (@ARGV && $ARGV[0] =~ /^--/) {
     my $option = shift @ARGV;
     if ($option eq '--reader-only' && !$READER_ONLY) {
         $READER_ONLY = 1;
         next;
     }
+    if ($option eq '--hydrated-layouts' && !$HYDRATED_LAYOUTS) {
+        $HYDRATED_LAYOUTS = 1;
+        next;
+    }
+    if ($option eq '--hydrated-layout-table' && $HYDRATED_LAYOUTS) {
+        my $full_name = shift @ARGV;
+        die "--hydrated-layout-table requires a full table name\n"
+            unless defined $full_name && $full_name =~ /^Image::ExifTool::/;
+        push @HYDRATED_LAYOUT_FILTERS, $full_name;
+        next;
+    }
     die "unknown dump_tables.pl option: $option\n";
 }
 my $EXIFTOOL_LIB = shift @ARGV
-    or die "usage: $0 [--reader-only] <exiftool-lib-dir> [module...]\n";
+    or die "usage: $0 [--reader-only] [--hydrated-layouts [--hydrated-layout-table <full-name>]...] <exiftool-lib-dir> [module...]\n";
 unshift @INC, $EXIFTOOL_LIB;
 
 my $EXIFTOOL_LIB_ABS = abs_path($EXIFTOOL_LIB) or die "invalid exiftool lib: $EXIFTOOL_LIB\n";
@@ -366,7 +582,8 @@ my @TAG_KEYS = qw(
     Name Description Format Writable Count Groups Notes Mask BitShift Condition
     PrintConv ValueConv RawConv PrintConvInv ValueConvInv Hook
     SubDirectory Flags Unknown Hidden Avoid Binary Protected List
-    Priority ByteOrder DataMember RelatedTag SeparateTable PrintHex
+    Priority ByteOrder DataMember RelatedTag SeparateTable PrintHex PrintConvColumns
+    DelValue AlwaysDecrypt Prinonv
     Base Offset ChangeBase
     Require Desire Inhibit
     BitsPerWord BitsTotal
@@ -972,11 +1189,11 @@ sub effective_write_code_fact {
     };
 }
 
-# These helpers supply the first UTF-8 scalar writer's value validation and
-# serialization path.  Capture their *final loaded* bindings separately from
-# table WRITE_PROC/CHECK_PROC provenance: a later mechanism compiler must
-# recognize their bodies before it can execute them.  code_source_fact keeps
-# the established depth/cycle limits and makes a missing helper explicit.
+# These helpers supply source-selected writer composition facts. Capture their
+# *final loaded* bindings separately from table WRITE_PROC/CHECK_PROC
+# provenance: a later mechanism compiler must recognize their bodies before it
+# can execute them. code_source_fact keeps the established depth/cycle limits
+# and makes a missing helper explicit.
 sub hydrate_write_helpers {
     # Writer.pl defines the shared WriteValue/CheckValue helpers but is not
     # necessarily loaded by a table's WriteExif implementation.  This is a
@@ -1030,13 +1247,63 @@ sub native_helper_lexical_hashes {
     return { resolved => JSON::PP::true, bindings => \%hashes };
 }
 
+# Decrypt closes over `my @xlat = ([...], [...])` in Nikon.pm.  The generator
+# joins these exact live bytes to encrypted.rs, so reject any pad shape that
+# does not prove the two 256-byte lookup rows.  This deliberately remains
+# narrow: arbitrary lexical arrays are not a supported input language.
+sub native_nikon_decrypt_xlat {
+    my ($cv) = @_;
+    my (@names, @values);
+    my $loaded = eval {
+        my @pad = B::svref_2object($cv)->PADLIST->ARRAY;
+        die "missing pad" unless @pad >= 2;
+        @names = $pad[0]->ARRAY;
+        @values = $pad[1]->ARRAY;
+        1;
+    };
+    return { resolved => JSON::PP::false, reason => 'lexical_pad_unavailable' } unless $loaded;
+    my @matches = grep {
+        my $name = eval { $names[$_]->PV };
+        defined($name) && $name eq '@xlat';
+    } 0 .. $#names;
+    return { resolved => JSON::PP::false, reason => 'missing_xlat_pad' } unless @matches == 1;
+    my $xlat = eval {
+        $values[$matches[0]]->isa('B::AV') ? $values[$matches[0]]->object_2svref : undef;
+    };
+    return { resolved => JSON::PP::false, reason => 'xlat_pad_unavailable' } unless ref($xlat) eq 'ARRAY' && @$xlat == 2;
+    my @rows;
+    for my $row (@$xlat) {
+        return { resolved => JSON::PP::false, reason => 'xlat_row_unavailable' }
+            unless ref($row) eq 'ARRAY' && @$row == 256;
+        my @bytes;
+        for my $value (@$row) {
+            return { resolved => JSON::PP::false, reason => 'xlat_byte_invalid' }
+                unless defined($value) && !ref($value) && $value =~ /\A(?:0|[1-9][0-9]*)\z/
+                    && $value <= 255;
+            push @bytes, 0 + $value;
+        }
+        push @rows, \@bytes;
+    }
+    my $bytes = pack('C*', map { @$_ } @rows);
+    return {
+        resolved => JSON::PP::true,
+        rows => \@rows,
+        sha256 => Digest::SHA::sha256_hex($bytes),
+    };
+}
+
 sub native_write_helper_facts {
     my ($lib_abs, $status) = @_;
     my %bindings = (
         write_value => 'Image::ExifTool::WriteValue',
+        # Numeric WriteValue's DoPackStd reads the map selected by this
+        # helper. Capture its final CV and lexical endian maps together.
+        set_byte_order => 'Image::ExifTool::SetByteOrder',
         check_value => 'Image::ExifTool::CheckValue',
         sanitize => 'Image::ExifTool::Sanitize',
         conv_inv => 'Image::ExifTool::ConvInv',
+        set_new_value => 'Image::ExifTool::SetNewValue',
+        find_tag_info => 'Image::ExifTool::TagLookup::FindTagInfo',
     );
     if (!$status->{loaded}) {
         my $reason = $status->{reason} // 'write_helper_load_failed';
@@ -1182,8 +1449,38 @@ sub final_native_write_format_registry {
     };
 }
 
+# FindTagInfo lazily loads parts of TagLookup's registry for queried names.
+# Seal the capture closure only after exercising the exact, source-derived
+# Exif/Main ownership spelling set that the addressing probe will query.  This
+# does not touch the detached read projection and has no name allowlist: names
+# come from the already captured native row facts.
+sub warm_find_tag_info_closure {
+    my ($tables, $helpers) = @_;
+    my $find = $helpers->{find_tag_info};
+    return { warmed => JSON::PP::false, reason => 'find_tag_info_unavailable' }
+        unless ref($find) eq 'HASH' && $find->{resolved};
+    my $main = eval { $tables->{Exif}{Main} };
+    return { warmed => JSON::PP::false, reason => 'exif_main_unavailable' }
+        unless ref($main) eq 'HASH' && ref($main->{rows}) eq 'HASH';
+    my %names;
+    for my $row (values %{$main->{rows}}) {
+        next unless ref($row) eq 'HASH';
+        my $properties = $row->{effective_properties} // $row->{properties};
+        next unless ref($properties) eq 'HASH' && ref($properties->{Name}) eq 'HASH';
+        my $name = $properties->{Name};
+        next unless $name->{present} && defined($name->{value}) && !ref($name->{value});
+        next unless $name->{value} =~ /^[A-Za-z0-9_]+$/;
+        $names{lc($name->{value})} = 1;
+    }
+    for my $name (sort keys %names) {
+        Image::ExifTool::TagLookup::FindTagInfo($name);
+    }
+    return { warmed => JSON::PP::true, query_name_count => scalar(keys %names),
+             query_names_sha256 => sha256_hex(JSON::PP->new->canonical->utf8->encode([ sort keys %names ])) };
+}
+
 sub dump_tag_entry {
-    my ($entry) = @_;
+    my ($entry, $subdirectory_processors) = @_;
     my $r = ref $entry;
 
     # Bare string: shorthand for { Name => '...' }
@@ -1193,7 +1490,7 @@ sub dump_tag_entry {
     # models model-dependent layouts (Canon CameraInfo's 33 alternatives).
     if ($r eq 'ARRAY') {
         return {
-            _variants => [ map { dump_tag_entry($_) } @$entry ],
+            _variants => [ map { dump_tag_entry($_, $subdirectory_processors) } @$entry ],
         };
     }
     return { _unhandled => $r } unless $r eq 'HASH';
@@ -1208,6 +1505,19 @@ sub dump_tag_entry {
             my $sd = scrub($v);
             # TagTable is the edge in the table graph -- what makes whole-table
             # extraction possible instead of tag-at-a-time guessing.
+            # `ProcessNikonEncrypted` is the sole SubDirectory callback whose
+            # helper closure is implemented by the Nikon encrypted runtime.
+            # Preserve its stored CV now and replace this shallow scrub with a
+            # final, provenance-bearing fact after every module has loaded.
+            # Resolving the package name later would authenticate a rebind, not
+            # the callback the table actually holds.
+            if (ref($v->{ProcessProc}) eq 'CODE'
+                    && (code_name($v->{ProcessProc}) // '') eq 'Image::ExifTool::Nikon::ProcessNikonEncrypted') {
+                push @$subdirectory_processors, {
+                    cv => $v->{ProcessProc}, output => $sd,
+                    fallback_name => 'Image::ExifTool::Nikon::ProcessNikonEncrypted',
+                };
+            }
             $out{SubDirectory} = $sd;
         } else {
             $out{$k} = scrub($v);
@@ -1222,7 +1532,7 @@ sub dump_tag_entry {
 }
 
 sub dump_module {
-    my ($module, $validate_function_names, $processor_tables, $write_tables) = @_;
+    my ($module, $validate_function_names, $processor_tables, $subdirectory_processors, $write_tables) = @_;
     my $pkg = "Image::ExifTool::$module";
     eval "require $pkg; 1" or do {
         return { module => $module, error => "$@" };
@@ -1254,7 +1564,7 @@ sub dump_module {
         for my $k (@tagkeys) {
             collect_subdirectory_validate_function_names(
                 $hash->{$k}, $validate_function_names, {}, 0);
-            $tags{$k} = dump_tag_entry($hash->{$k});
+            $tags{$k} = dump_tag_entry($hash->{$k}, $subdirectory_processors);
         }
         my %meta;
         for my $k (grep { $TABLE_META{$_} } @keys) {
@@ -1309,7 +1619,7 @@ sub dump_module {
 
         collect_subdirectory_validate_function_names(
             $aref, $validate_function_names, {}, 0);
-        my @rows = map { dump_tag_entry($_) } @$aref;
+        my @rows = map { dump_tag_entry($_, $subdirectory_processors) } @$aref;
         $arrays{$sym} = {
             full_name => "${pkg}::${sym}",
             rows      => \@rows,
@@ -1324,6 +1634,268 @@ sub dump_module {
         table_count => scalar(keys %tables),
         arrays      => \%arrays,
         array_count => scalar(keys %arrays),
+    };
+}
+
+# The ordinary ``modules`` projection intentionally remains a walk of the
+# requested package stashes.  It is a long-standing, module/table-keyed input
+# contract for existing generators.  Hydrated layouts are a separate opt-in
+# projection: LoadAllTables is the native authority for tables assembled in
+# nested packages, inheritance copies, and runtime aggregates, while
+# GetTagTable supplies their native effective table hash.
+sub hydrated_layout_kind {
+    my ($full_name) = @_;
+    return 'extra_generated' if $full_name eq 'Image::ExifTool::Extra';
+    return 'composite_aggregate' if $full_name eq 'Image::ExifTool::Composite';
+    return 'hydrated_table';
+}
+
+# GetTagTable returns an effective runtime graph. Unlike the legacy shallow
+# module projection, hydrated rows can contain Table/TagTable back-references
+# and shared structures. The opt-in projection interns every non-CODE runtime
+# reference. Catalog-table references use their stable full Perl name(s), and
+# other structures have deterministic object IDs with definitions in the
+# projection's shared object table. This retains the binding without expanding
+# a cyclic graph, while leaving the legacy ``scrub`` contract unchanged.
+sub hydrated_reference {
+    my ($value, $context) = @_;
+    my $kind = ref($value);
+    my $address = refaddr($value);
+    if (defined $address && exists $context->{table_names_by_ref}{$address}) {
+        return {
+            __ref => 'tag_table',
+            table_full_names => $context->{table_names_by_ref}{$address},
+        };
+    }
+    my $object_id = $context->{object_id_by_ref}{$address};
+    if (!defined $object_id) {
+        $object_id = sprintf('structure_%06d', ++$context->{next_object_id});
+        $context->{object_id_by_ref}{$address} = $object_id;
+        # Register before expansion so an immediate cycle has a target.
+        $context->{objects}{$object_id} = { kind => $kind };
+        if ($kind eq 'SCALAR') {
+            $context->{objects}{$object_id}{value} = hydrated_scrub($$value, $context);
+        } elsif ($kind eq 'ARRAY') {
+            $context->{objects}{$object_id}{items} = [ map { hydrated_scrub($_, $context) } @$value ];
+        } elsif ($kind eq 'HASH') {
+            my %properties;
+            for my $key (sort keys %$value) {
+                $properties{to_text($key)} = hydrated_scrub($value->{$key}, $context);
+            }
+            $context->{objects}{$object_id}{properties} = \%properties;
+        }
+    }
+    return { __ref => $kind, object_id => $object_id };
+}
+
+sub hydrated_scrub {
+    my ($value, $context) = @_;
+    return undef unless defined $value;
+    my $kind = ref($value);
+    return to_text($value) unless $kind;
+    if ($kind eq 'CODE') {
+        my $name = code_name($value);
+        my $source = deparse($value);
+        return {
+            __perl => 'CODE', __opaque => JSON::PP::true,
+            (defined $name ? (__name => $name) : ()),
+            (defined $source ? (__deparse => $source) : ()),
+        };
+    }
+    return hydrated_reference($value, $context);
+}
+
+sub hydrated_classify_conv {
+    my ($value, $context) = @_;
+    return undef unless defined $value;
+    my $kind = ref($value);
+    if ($kind eq 'HASH') {
+        my (%map, %directive);
+        for my $key (keys %$value) {
+            if ($key =~ /^(BITMASK|OTHER|Notes|PrintHex|SeparateTable)$/) {
+                $directive{$key} = hydrated_scrub($value->{$key}, $context);
+                next;
+            }
+            my $item = $value->{$key};
+            if (ref($item)) { $directive{$key} = hydrated_scrub($item, $context); next }
+            $map{to_text($key)} = to_text($item);
+        }
+        return { kind => (%directive ? 'enum_partial' : 'enum'), map => \%map,
+            directives => (%directive ? \%directive : undef) };
+    }
+    return { kind => 'code', expr => undef, deparse => deparse($value) } if $kind eq 'CODE';
+    return { kind => 'list', items => hydrated_scrub($value, $context) } if $kind eq 'ARRAY';
+    return { kind => 'expr', expr => to_text($value) } unless $kind;
+    return { kind => 'other', dump => hydrated_scrub($value, $context) };
+}
+
+sub dump_hydrated_tag_entry {
+    my ($entry, $context) = @_;
+    my $kind = ref($entry);
+    return { Name => to_text($entry), _shorthand => JSON::PP::true } if !$kind;
+    if ($kind eq 'ARRAY') {
+        return { _variants => [ map { dump_hydrated_tag_entry($_, $context) } @$entry ] };
+    }
+    return { _unhandled => $kind } unless $kind eq 'HASH';
+    my %out;
+    for my $key (@TAG_KEYS, qw(Table TagID)) {
+        next unless exists $entry->{$key};
+        my $value = $entry->{$key};
+        if ($key =~ /^(PrintConv|ValueConv|RawConv|PrintConvInv|ValueConvInv)$/) {
+            $out{$key} = hydrated_classify_conv($value, $context);
+        } else {
+            $out{$key} = hydrated_scrub($value, $context);
+        }
+    }
+    # Hydration installs runtime fields beyond the declarative reader grammar.
+    # Keep their values as a separate closed set: names alone would silently
+    # discard bindings such as Table/TagID and make later consumers guess.
+    my %extra;
+    for my $key (sort keys %$entry) {
+        next if exists $out{$key} || $TABLE_META{$key};
+        $extra{to_text($key)} = hydrated_scrub($entry->{$key}, $context);
+    }
+    $out{_extra_properties} = \%extra if %extra;
+    return \%out;
+}
+
+sub dump_hydrated_layout_table {
+    my ($full_name, $validate_function_names, $processor_tables, $context) = @_;
+    my $hash = Image::ExifTool::GetTagTable($full_name);
+    die "hydrated table $full_name did not resolve to a hash\n"
+        unless ref($hash) eq 'HASH' && keys %$hash;
+
+    my %meta;
+    for my $key (sort grep { $TABLE_META{$_} } keys %$hash) {
+        $meta{$key} = hydrated_scrub($hash->{$key}, $context);
+    }
+    my %tags;
+    for my $key (sort grep { !is_table_property($_) } keys %$hash) {
+        collect_subdirectory_validate_function_names(
+            $hash->{$key}, $validate_function_names, {}, 0);
+        $tags{to_text($key)} = dump_hydrated_tag_entry($hash->{$key}, $context);
+    }
+    if (ref($hash->{PROCESS_PROC}) eq 'CODE') {
+        $processor_tables->{$full_name} = { cv => $hash->{PROCESS_PROC} };
+    }
+    return {
+        full_name => $full_name,
+        kind => hydrated_layout_kind($full_name),
+        meta => \%meta,
+        tags => \%tags,
+        tag_count => scalar(keys %tags),
+    };
+}
+
+# Bind the hydrated data to the loaded pinned library, not just its version.
+sub hydrated_source_files {
+    my %sources;
+    for my $file (sort keys %INC) {
+        next unless $file eq 'Image/ExifTool.pm' || index($file, 'Image/ExifTool/') == 0;
+        my $selected = abs_path(File::Spec->catfile($EXIFTOOL_LIB_ABS, $file));
+        my $actual = abs_path($INC{$file});
+        die "hydrated source outside selected library: $file\n"
+            unless defined($selected) && defined($actual) && $actual eq $selected
+                && index($actual, "$EXIFTOOL_LIB_ABS/") == 0;
+        open(my $fh, '<:raw', $actual) or die "cannot read hydrated source: $file\n";
+        local $/;
+        $sources{$file} = { library_relative_path => $file, sha256 => sha256_hex(<$fh>) };
+        close($fh) or die "cannot close hydrated source: $file\n";
+    }
+    return \%sources;
+}
+
+sub dump_hydrated_layout_projection {
+    my %validate_function_names;
+    my %processor_tables;
+    my %layouts;
+
+    # BuildTagLookup owns the Shortcuts pseudo-table.  It is deliberately not
+    # an allTables row and therefore remains a separately-marked helper rather
+    # than a fabricated tag-table layout.
+    require Image::ExifTool::BuildTagLookup;
+    Image::ExifTool::LoadAllTables();
+    my $builder = Image::ExifTool::BuildTagLookup->new;
+    no warnings 'once';
+    my $source_before = hydrated_source_files();
+    my @available = sort keys %Image::ExifTool::allTables;
+    die "hydrated table registry is empty\n" unless @available;
+    my %available = map { $_ => 1 } @available;
+    my %table_names_by_ref;
+    for my $full_name (@available) {
+        my $hash = Image::ExifTool::GetTagTable($full_name);
+        next unless ref($hash) eq 'HASH';
+        push @{$table_names_by_ref{refaddr($hash)}}, $full_name;
+    }
+    $_ = [ sort @$_ ] for values %table_names_by_ref;
+    my $reference_context = {
+        table_names_by_ref => \%table_names_by_ref,
+        object_id_by_ref => {},
+        objects => {},
+        next_object_id => 0,
+    };
+
+    my @selected = @HYDRATED_LAYOUT_FILTERS ? sort @HYDRATED_LAYOUT_FILTERS : @available;
+    my %selected;
+    for my $full_name (@selected) {
+        die "hydrated layout filter is not a catalog identity: $full_name\n"
+            unless $available{$full_name};
+        die "duplicate hydrated layout filter: $full_name\n" if $selected{$full_name}++;
+        $layouts{$full_name} = dump_hydrated_layout_table(
+            $full_name, \%validate_function_names, \%processor_tables, $reference_context);
+    }
+    for my $name (sort keys %validate_function_names) {
+        $validate_function_names{$name} = validate_function_fact(
+            $name, $EXIFTOOL_LIB_ABS);
+    }
+    for my $full_name (sort keys %processor_tables) {
+        $layouts{$full_name}{meta}{PROCESS_PROC} = code_ref_fact(
+            $processor_tables{$full_name}{cv}, "${full_name}::PROCESS_PROC",
+            $EXIFTOOL_LIB_ABS, undef, undef, 0);
+    }
+
+    die "hydrated layout serialization did not conserve requested identities\n"
+        unless scalar(keys %layouts) == scalar(@selected);
+    die "full hydrated layout serialization did not conserve the catalog\n"
+        if !@HYDRATED_LAYOUT_FILTERS && scalar(keys %layouts) != scalar(@available);
+    my %kind_counts;
+    ++$kind_counts{$layouts{$_}{kind}} for keys %layouts;
+    my $shortcut_count = scalar keys %Image::ExifTool::Shortcuts::Main;
+    die "hydrated shortcut catalog was not loaded\n" unless $shortcut_count;
+    my $source_after = hydrated_source_files();
+    for my $file (keys %$source_before) {
+        die "hydrated source changed during capture: $file\n"
+            unless exists $source_after->{$file}
+                && $source_before->{$file}{sha256} eq $source_after->{$file}{sha256};
+    }
+    open(my $producer_fh, '<:raw', __FILE__) or die "cannot read hydrated producer\n";
+    my $producer_sha = do { local $/; sha256_hex(<$producer_fh>) };
+    close($producer_fh) or die "cannot close hydrated producer\n";
+    return {
+        source_provenance => {
+            perl_version => "$^V", producer_sha256 => $producer_sha, sources => $source_after,
+        },
+        schema => 'oxidex_hydrated_layout_projection_v1',
+        identity_source => 'Image::ExifTool::allTables_after_LoadAllTables',
+        selection => @HYDRATED_LAYOUT_FILTERS ? 'explicit_full_name_subset' : 'full_hydrated_catalog',
+        available_table_count => scalar(@available),
+        requested_table_count => scalar(@selected),
+        table_count => scalar(keys %layouts),
+        table_kinds => \%kind_counts,
+        tables => \%layouts,
+        subdirectory_validate_functions => \%validate_function_names,
+        shared_reference_objects => $reference_context->{objects},
+        helpers => {
+            shortcuts => {
+                full_name => 'Image::ExifTool::Shortcuts::Main',
+                kind => 'shortcut_macro_table',
+                entry_count => $shortcut_count,
+            },
+        },
+        catalog_counts => {
+            unique_tag_names => 0 + $builder->{COUNT}{'unique tag names'},
+            total_tag_entries => 0 + $builder->{COUNT}{'total tags'},
+        },
     };
 }
 
@@ -1346,11 +1918,12 @@ my %out;
 my %subdirectory_validate_function_names;
 my %subdirectory_validate_functions;
 my %processor_tables;
+my @subdirectory_processors;
 my %write_tables;
 my %native_write_tables;
 my ($ok, $failed) = (0, 0);
 for my $m (@modules) {
-    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables,
+    my $r = dump_module($m, \%subdirectory_validate_function_names, \%processor_tables, \@subdirectory_processors,
         $READER_ONLY ? undef : \%write_tables);
     if ($r->{error}) {
         $failed++;
@@ -1380,8 +1953,44 @@ for my $full_name (sort keys %processor_tables) {
     $out{$entry->{module}}{tables}{$entry->{table}}{meta}{PROCESS_PROC} = $fact;
 }
 
+# A SubDirectory callback is normally a shallow, serializable table operand.
+# This one callback's direct helper closure drives Rust's decryption route, so
+# hydrate its stored CV with the same post-load source/provenance contract used
+# by table-level PROCESS_PROC facts.  Any unresolved helper remains explicit
+# and lets the Nikon generator refuse rather than retaining stale semantics.
+for my $entry (@subdirectory_processors) {
+    ${$entry->{output}}{ProcessProc} = code_ref_fact(
+        $entry->{cv}, $entry->{fallback_name}, $EXIFTOOL_LIB_ABS,
+        undef, undef, 1);
+}
+
+# The legacy read projection above is now detached: all requested modules have
+# been walked and their late-bound reader facts have been resolved.  Capture
+# QuickTime's source edges while that detached state still holds.  GetTagTable
+# installs live `Table` back-pointers; those are runtime links, not operands of
+# the bounded ProcessMOV contract, and recursively walking them would turn this
+# small source fact into a cyclic catalog traversal.
+my ($quicktime_itemlist_reader_protocol, $quicktime_userdata_reader_protocol);
+if (exists $out{QuickTime}
+    && exists $out{QuickTime}{tables}{ItemList}) {
+    $quicktime_itemlist_reader_protocol = quicktime_itemlist_reader_protocol_fact(
+        $EXIFTOOL_LIB_ABS);
+}
+
+if (exists $out{QuickTime} && exists $out{QuickTime}{tables}{UserData}) {
+    $quicktime_userdata_reader_protocol = quicktime_userdata_reader_protocol_fact($EXIFTOOL_LIB_ABS);
+}
+
+# Hydration deliberately follows every detached reader contract.  It may load
+# the catalog and attach native back-pointers, but must not change the source
+# facts already recorded above.
+my $hydrated_layouts = $HYDRATED_LAYOUTS
+    ? dump_hydrated_layout_projection()
+    : undef;
+
 my ($write_autoload_router_status, $native_write_capture_context,
-    $native_write_helpers, $native_write_format_registry);
+    $native_write_helpers, $native_write_format_registry,
+    $find_tag_info_warmup, $native_capture_context);
 unless ($READER_ONLY) {
     # Resolve prototype-only writer declarations after every selected module is
     # loaded.  This is intentionally after the read dump was built: writer module
@@ -1418,8 +2027,9 @@ unless ($READER_ONLY) {
     }
 
     # Capture helper facts in the same settled state as the table callbacks above.
-    # This does not alter the read projection or route a native writer.
     $native_write_helpers = native_write_helper_facts($EXIFTOOL_LIB_ABS, $write_helper_status);
+    $find_tag_info_warmup = warm_find_tag_info_closure(\%native_write_tables, $native_write_helpers);
+    $native_capture_context = native_capture_context($EXIFTOOL_LIB_ABS);
 
     # The registry is intentionally captured after the writer helpers have settled
     # and before JSON emission.  It has no effect on the detached read projection.
@@ -1451,7 +2061,12 @@ my %document = (
     native_runtime_contracts => { utf8 => {
         kind => 'utf8_primitive_join_v1', pristine => $pristine_utf8, final => $final_utf8,
     } },
+    (defined $quicktime_userdata_reader_protocol
+        ? (quicktime_userdata_reader_protocol => $quicktime_userdata_reader_protocol) : ()),
+    (defined $quicktime_itemlist_reader_protocol
+        ? (quicktime_itemlist_reader_protocol => $quicktime_itemlist_reader_protocol) : ()),
 );
+$document{hydrated_layouts} = $hydrated_layouts if $HYDRATED_LAYOUTS;
 unless ($READER_ONLY) {
     # Facts only: no reader or writer consumes this sidecar yet.  Keeping it
     # separate prevents write-only properties from becoming accidental read
@@ -1461,5 +2076,7 @@ unless ($READER_ONLY) {
     $document{native_write_tables} = \%native_write_tables;
     $document{native_write_helpers} = $native_write_helpers;
     $document{native_write_format_registry} = $native_write_format_registry;
+    $document{native_capture_context} = $native_capture_context;
+    $document{native_find_tag_info_warmup} = $find_tag_info_warmup;
 }
 print $json->encode(\%document);

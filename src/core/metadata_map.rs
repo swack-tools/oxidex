@@ -22,6 +22,22 @@ use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
 use std::collections::HashMap;
 
+/// Uninterpreted metadata retained without inventing a public tag name or value.
+///
+/// `context` identifies the source container/table, `identifier` retains its raw
+/// key, and `payload` holds the bytes after that container entry's outer header.
+/// These blocks are not readable-tag evidence and are excluded from tag JSON.
+/// They do not by themselves promise byte-identical file rewriting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawMetadataBlock {
+    /// Parser/table context, for example `QuickTime::ItemList`.
+    pub context: String,
+    /// Raw entry identifier; no text decoding or alias substitution.
+    pub identifier: Vec<u8>,
+    /// Uninterpreted entry payload, including any nested headers.
+    pub payload: Vec<u8>,
+}
+
 /// A collection of metadata tags extracted from a file.
 ///
 /// MetadataMap stores key-value pairs where keys are tag names (e.g., "EXIF:Make")
@@ -51,6 +67,7 @@ pub struct MetadataMap {
     /// `Serialize for MetadataMap` below) rather than a field the old
     /// sidecar had to be deliberately excluded from.
     sink: TagSink,
+    raw_blocks: Vec<RawMetadataBlock>,
 }
 
 // Hand-rolled rather than `#[derive(Serialize, Deserialize)]` +
@@ -89,6 +106,7 @@ impl MetadataMap {
     pub fn new() -> Self {
         Self {
             sink: TagSink::new(),
+            raw_blocks: Vec::new(),
         }
     }
 
@@ -99,7 +117,18 @@ impl MetadataMap {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             sink: TagSink::with_capacity(capacity),
+            raw_blocks: Vec::new(),
         }
+    }
+
+    /// Uninterpreted blocks in parser encounter order, separate from named tags.
+    pub fn raw_blocks(&self) -> &[RawMetadataBlock] {
+        &self.raw_blocks
+    }
+
+    /// Preserve an unrecognized entry without guessing its tag identity or value.
+    pub(crate) fn retain_raw_block(&mut self, block: RawMetadataBlock) {
+        self.raw_blocks.push(block);
     }
 
     /// Inserts a tag into the metadata map
@@ -414,6 +443,7 @@ impl MetadataMap {
     /// ValueConv form across the boundary automatically -- no separate
     /// `value_forms` pass is needed anymore.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
+        self.raw_blocks.extend(other.raw_blocks);
         for occurrence in other.sink.into_occurrences() {
             self.sink.record_carrying_over(occurrence);
         }
@@ -462,6 +492,7 @@ impl MetadataMap {
     /// Clears all tags from the map
     pub fn clear(&mut self) {
         self.sink.clear();
+        self.raw_blocks.clear();
     }
 
     /// Returns an iterator over tag names and values
@@ -515,6 +546,7 @@ impl MetadataMap {
     /// behaves consistently whether or not a tag filter is given.
     pub fn without_print_conv(&self) -> MetadataMap {
         let mut out = MetadataMap::with_capacity(self.len());
+        out.raw_blocks.clone_from(&self.raw_blocks);
         for (key, occurrence) in self.winner_occurrences() {
             let value = occurrence.value_conv();
             out.insert(key.clone(), value);

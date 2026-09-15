@@ -1584,6 +1584,48 @@ fn jpeg_write_preserves_scan_data_and_eoi() {
     // The segment parser cannot represent entropy-coded scan data; the writer
     // must copy everything after the SOS header verbatim or the image body is
     // silently amputated.
+    // Walk segment lengths so marker-like bytes inside APP payloads cannot
+    // masquerade as SOS. Preserve the entire first scan and any later scans.
+    fn scan_tail(bytes: &[u8]) -> &[u8] {
+        assert_eq!(bytes.get(..2), Some(b"\xff\xd8".as_slice()));
+        let mut offset = 2;
+        loop {
+            let marker_start = offset;
+            assert_eq!(bytes.get(offset), Some(&0xff), "expected JPEG marker");
+            while bytes.get(offset) == Some(&0xff) {
+                offset += 1;
+            }
+            let marker = *bytes.get(offset).expect("complete JPEG marker");
+            offset += 1;
+            assert!(
+                !matches!(marker, 0x00 | 0xd8 | 0xd9),
+                "SOS must precede EOI"
+            );
+            if matches!(marker, 0x01 | 0xd0..=0xd7) {
+                continue; // Standalone markers have no length field.
+            }
+            let length = u16::from_be_bytes(
+                bytes
+                    .get(offset..offset + 2)
+                    .expect("segment length")
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            assert!(
+                length >= 2 && offset + length <= bytes.len(),
+                "complete JPEG segment"
+            );
+            if marker == 0xda {
+                assert!(
+                    offset + length < bytes.len() - 2,
+                    "fixture must contain scan data"
+                );
+                return &bytes[marker_start..];
+            }
+            offset += length;
+        }
+    }
+
     let jpeg = copy_fixture_to_temp("tests/fixtures/jpeg/simple/synthetic_010.jpg", ".jpg");
     let before = fs::read(jpeg.path()).expect("read jpeg before write");
     assert_eq!(
@@ -1592,7 +1634,14 @@ fn jpeg_write_preserves_scan_data_and_eoi() {
         "fixture must end with EOI"
     );
 
-    let mut metadata = MetadataMap::new();
+    // write_metadata accepts the desired full map: omitting existing EXIF
+    // entries requests their removal. This test changes only Make.
+    let mut metadata = read_metadata(jpeg.path()).expect("read existing jpeg metadata");
+    let original_model = metadata
+        .get("IFD0:Model")
+        .cloned()
+        .expect("fixture has Model");
+    let original_scan = scan_tail(&before);
     metadata.insert("IFD0:Make", TagValue::new_string("OxiDex QA"));
     write_metadata(jpeg.path(), &metadata).expect("write jpeg through high-level API");
 
@@ -1602,14 +1651,18 @@ fn jpeg_write_preserves_scan_data_and_eoi() {
         b"\xff\xd9",
         "EOI marker must survive a metadata write"
     );
-    assert!(
-        after.len() > before.len() / 2,
-        "scan data must survive a metadata write: {} -> {} bytes",
-        before.len(),
-        after.len()
+    assert_eq!(
+        scan_tail(&after),
+        original_scan,
+        "SOS header, entropy-coded scans and EOI must survive byte-for-byte"
     );
 
     let reread = read_metadata(jpeg.path()).expect("re-read jpeg after write");
+    assert_eq!(
+        reread.get("IFD0:Model"),
+        Some(&original_model),
+        "unrelated existing metadata must survive"
+    );
     assert_eq!(
         reread.get("IFD0:Make"),
         Some(&TagValue::String("OxiDex QA".to_string())),

@@ -14,7 +14,7 @@ automatic upgrade path is not finished.
 | Source facts and shared writer helpers | PRs #761–#766 merged; #766 is `82f97ae6`, with all five required checks passing at `d505d179` | Integrate and validate the next complete writer operation |
 | Internal generated TIFF/JPEG scalar writes | All nine final recipes passed 432/432 native file comparisons under `generated_tiff_write_matrix.py` at the September 14 frozen source checkpoint | Public operations, new EXIF blocks and additional native-writable rule classes |
 | Full-library final writer compilation | Official 44-artifact regeneration passed; all 153 decoded reader modules identical to control; Python, Rust workspace and Clippy passed | Expand unsupported writer semantics without changing reader behavior |
-| Public generated writing and manual lookup removal | Internal path implemented; public path not migrated | Route public operations, test new EXIF-block defaults and remove replaced manual rules |
+| Public generated writing and manual lookup removal | Nine scalar identities use generated descriptors; three manual descriptors and one reverse-name exception removed in `58c0bdcf`. Existing, fresh and mixed public gates passed in the named run below | Close 90 IFD1 directory gaps and 72 resolution override/deletion failures; complete expanded regeneration, review and merge |
 | Release upgrades | Random pair 11.78/12.64 selected and sources verified | Generate/build both versions and test each against its own native reader and writer |
 
 The first September 14 regeneration revealed that creating the native writer
@@ -46,6 +46,263 @@ an unknown rule prevents a stale implementation from silently winning, but is
 not completion of automatic adoption. The upgrade ledger must retain that gap.
 
 Later sections preserve earlier checkpoints; this table is the current status.
+
+## Current integration checkpoint, September 14
+
+PR #768 is merged as `4498ae67`. Its complete native writer capture,
+reader regeneration, build/test, release, lint and docs checks passed at the
+reviewed head. The final review-thread audit found no unresolved threads.
+
+The development branch now registers 55 generated artifacts (33 tier 1 and
+22 tier 2), including raw JFIF properties captured from executable native
+writer dispatch and table definitions. This does not mean 55 tag families or
+55 percent coverage. Official `full-55-regen-r4` at `e145f517` completed both
+tiers and the artifact write-set checks. All four reader Rust outputs are
+byte-identical to that source checkpoint. Seven writer/ledger artifacts changed;
+their static review and compiled acceptance remain separate requirements.
+
+Fresh JPEG creation now consumes raw JFIF properties only before the creation
+boundary selected by the native writer. Native fixtures cover multiple APP0
+segments, intervening APP2 segments, existing empty EXIF, zero values and
+partial JFIF records. The public API performs the generated and legacy edits
+in memory before one atomic file commit.
+
+At commit `58c0bdcf`, the three remaining manual scalar descriptors
+(DocumentName, PageName and TargetPrinter) and the handwritten TargetPrinter
+reverse-name exception were removed. The nine migrated scalar identities now
+obtain writable descriptors from joined generated address, final-writer and
+public-migration facts. Existing YAML definitions cannot override these facts.
+Removal or unsupported source changes remain terminal for migrated identities;
+they must not reactivate stale manual behavior.
+
+The named `manual-retirement-gate-r2` completed 4,861 library tests (four explicit
+instrument drivers ignored), 432 existing-file public cases, 135 mixed batches,
+270 fresh/empty JPEG cases, 216 JFIF timing cases, 49 instrument tests and
+workspace all-feature Clippy. The 135 mixed cases include intentional atomic
+refusals, so they are not all successful native writes. The combined gate was
+not green: the fresh mandatory-default batch instrument stopped while checking
+a native operand before comparing generated output. The subsequent repaired instrument ran to completion and exposed the public
+writer gaps described below; this migration is not ready to merge.
+
+The repaired `mandatory-batch-gate-r3` ran all 135 native-backed rows and
+passed 45. The other 90 expose missing IFD1 output in mixed public batches:
+OxiDex reports success, but its child directories differ from native ExifTool.
+This is a real remaining gap, not an accepted baseline. Static tracing and a
+separate baseline proof must determine whether it predates the migration.
+The test now also includes 72 IFD0 JFIF-adjusted override/deletion rows, for
+207 declared rows. Candidate selection depends on source defaults and native
+operand acceptance, never on OxiDex passing.
+
+`ifd1-carrier-gate-r1` at `4874cf2d` executed all 207 rows: 45 passed,
+90 retained the IFD1 child-directory mismatch, 36 IFD0 resolution overrides
+failed public Integer-to-Rational validation, and 36 IFD0 resolution deletions
+were rejected by the legacy writer. All native operations were accepted. The
+new generic IFD1 entry carrier is implemented and structurally tested in both
+byte orders, but public generated directory and numeric admission are still
+needed. Adding a carrier alone did not close these failures.
+
+The same gate passed 4,866 library tests (four explicit drivers ignored),
+432 existing-file public comparisons, 135 mixed cases including intentional
+refusals, 270 fresh cases, 216 JFIF timing cases, 51 instrument tests and
+workspace all-feature Clippy. Overall gate status remains failed because of
+the expanded batch results.
+
+A separate numeric draft adds six source-derived numeric identities to the
+nine string identities. Its first public matrix (`numeric-public-gate-r2`)
+matched all 432 original string cases and 216 of 252 numeric cases; all 36
+numeric deletions failed. Six library regressions also remain in that tested
+draft, including generated descriptor types and preferred-directory lookup.
+Its 684 cases cover EXIF/IFD0 aliases, not the new explicit IFD1 route.
+The next revision must fix those failures, authenticate the directory operand,
+and add actual selected-IFD1 byte-placement comparisons. These draft counts
+are not merged coverage or an overall generated-tag percentage.
+
+After collision handling was strengthened, the same source build passed
+4,863 library tests (four ignored), 32 instrument tests with canonical native
+environment, and workspace all-feature Clippy. Ambiguous current physical or
+public-name identities now refuse in both generator and runtime composition.
+
+Official `full-55-regen-r1` at `8f3266f4` failed during source admission.
+Loading XMP changes B::Deparse spelling of one `FindTagInfo` call; the compiler
+now accepts exactly the two verified full-body spellings, while other changes
+remain refusals. The failed run and its 13 changed generated artifacts are
+preserved. The first retry stopped before regeneration because its controller supplied
+the checkout root where native tests require the library directory. After
+correcting that environment value, `full-55-regen-r3` at `89ce5020` passed
+32 canonical native/source-compiler tests, then failed in the independent
+SetNewValue probe: `FindTagInfo identity differs from supplied dump capture`.
+The compiler accepts both observed deparse spellings, but the native probe
+still needs to replay the recorded load context. The probe now replays and verifies the entire recorded selected-library
+module closure before deparsing. The focused saved-capture path passed from
+address input through native lookup and Rust codegen: 191 rows, 561 query
+names, 1,261 lookup candidates and 179 authenticated modules. Six native and
+21 portable tests passed. The subsequent complete `full-55-regen-r4` passed
+on September 14 at 12:41:48 UTC. Including its source tests, the run took
+22 minutes 37 seconds. Compiled acceptance first stopped on an existing
+module-order formatting error in `src/writers/mod.rs`; that formatting is
+corrected for the retry. No build or public-parity result came from that
+failed formatting stage.
+
+Tier 2 was needlessly repeating the complete writer capture after tier 1.
+The revised shell uses its existing reader-only capture mode for tier 2 in
+both invocation modes, retaining a fresh native reader capture and preserving
+the complete writer dump. Ten shell-control tests passed. A real canonical
+13.59 comparison found all 153 modules and every other reader-projection field
+identical to the completed full dump; reader capture took 13.62 seconds.
+This is capture equivalence, not a newly measured corpus conformance result.
+
+Source-derived numeric mandatory encoding now includes representable IFD1
+defaults. Unrepresented numeric defaults, including ExifIFD ColorSpace, remain
+explicit omissions; they do not get a guessed encoder. Public numeric writing
+is a separate remaining task. `mandatory-encoder-gate-r1` at `89ce5020`
+passed all library tests and Clippy. The two generated mandatory outputs
+from the completed producer stage of the failed full run were integrated
+separately. `mandatory-native-acceptance-r2` passed 17 native-backed tests,
+including all four source-derived IFD1 defaults in both byte orders (eight
+exact native/Rust byte comparisons), and workspace Clippy. This selective recovery does not turn the failed full run green.
+
+The separate version-rehearsal integration at `81f59e97` has historical raw-JFIF
+profiles for 11.78 and 12.64: eight native tests include 44 raw-value/endian
+cases; 13.59 generated output remained byte-identical. It also admits the
+historical final WriteExif string paths from complete source profiles. All 19
+final-stage tests passed with the canonical 13.59 native environment; this
+does not prove public file writing with either historical release.
+
+The adapter now implements actual selected-version writes and records both CLI
+and library-test executables. Its 41 offline contract tests verify exact source
+cohorts, generated operands, native and binary identities, immutable fixtures,
+and failure propagation. Native 11.78/12.64 execution remains pending; their
+fresh-JPEG byte-order compiler profiles are the next source-compatibility task.
+Broader writer rules and the persisted 11.78/12.64 read/write upgrade
+rehearsal remain open. No new overall
+generated-output percentage is claimed by this work.
+
+Global generated-source validation failure is now terminal for the retained
+migration identities as well. `descriptor-terminal-gate-r2` passed all 4,862
+library tests (four ignored) and workspace all-feature Clippy after integrating
+the failure-path fix. Unrelated legacy identities remain available.
+
+The sections below are historical checkpoints, not current open-work status.
+Their gate results retain their original scope; the table and integration
+checkpoint above supersede their pending-work statements.
+
+## Address-to-file checkpoint, September 14
+
+The generated address resolver now joins a complete captured row identity to
+its generated scalar writer. Dispatch takes source hashes only from the selected
+generated capture and verifies every row identity field against that capture
+before the TIFF/JPEG writer checks the final recipe. The native
+`generated_tiff_write_matrix.py --route resolved-address` run passed **432/432**
+cases: nine emitted identities, eight operations, two group spellings and three
+carriers. This covers existing EXIF blocks through internal entry points; it
+still does not prove public API admission or new JPEG EXIF creation.
+
+The same source checkpoint passed 193 Rust writer tests (two explicitly ignored
+instrument drivers). Combined manifest, regeneration-shell and ownership
+controls passed 31 Python tests. Workspace Clippy with all features and warnings
+denied passed. The broader all-targets lint attempt failed on pre-existing
+test-only unused-import and duplicate-module findings; that attempt is not green.
+The official manifest now contains 49 artifacts,
+including generated address operands, their report/history and source-derived
+mandatory defaults. A full real regeneration of all 49 is still required; the
+previous complete regeneration covered 44 artifacts.
+
+The integrated public-migration ledger passed 11 tests with selected native
+Perl/ExifTool, including a copied-source rename and a mismatched final Writer
+source refusal. The public transaction planner and official artifact registration are now
+implemented. Registration totals 51 artifacts (29 tier 1, 22 tier 2), with
+27 manifest and regeneration-shell tests passing. The planner joins the
+migration ledger to current final controls, partitions generated and legacy
+edits, retains aliases, and refuses removed or unsupported migrated rules.
+The writer test instrument passed 200 tests (two explicit fixture drivers
+ignored); workspace/all-features Clippy with warnings denied passed. File
+execution is not yet connected, so these are planning checks, not public
+write conformance. Full real regeneration of all 51 remains outstanding.
+
+Public migration must use the generated intersection of complete address and
+final-writer identities, with retained history for previously migrated entries.
+The broader 561-name source inventory is not the public migration set. Tags
+never migrated retain their existing route; migrated tags whose newer native
+rules are removed or unsupported must not silently use old manual rules.
+
+Mandatory default encoding and an internal minimal-IFD0 carrier are integrated
+but inactive. Eleven focused tests pass, including per-field JFIF presence and
+source-binding refusals. Review found that the relevant numeric WriteValue
+executable grammar still needs compilation; a source hash and nonempty body
+are not proof of automatic behavior adoption. New JPEG EXIF creation stays
+unfinished until this is repaired and tested through native file operations.
+
+At this historical checkpoint, PR #768 was open at `7ff727aa` (it subsequently merged as recorded above). Earlier table-check attempts ended in
+runner shutdown during the tier-2 dump. The explicit reader-only tier-2
+capture now passes regeneration and drift checks in 40 seconds; its separate
+cache leaves normal writer-complete capture intact. A later verification
+step failed in hosted job `103929195894` and is being diagnosed. All review threads must be addressed and resolved, alongside passing
+required checks on the exact head, before merge.
+
+The persisted 11.78/12.64 rehearsal has not passed. Its first 11.78 dump succeeded,
+but the following expression verifier rejected the deliberately changed version
+pin as a dirty tree. The adapter correction allows that change only during the
+sanctioned generation stage. The failed journal is retained; both-version
+build/read/write results remain outstanding. Do not select a different pair to
+avoid this failure.
+
+
+
+## Public API file checkpoint, September 14
+
+The development branch now routes the nine composed scalar identities through
+public `modify_tag` and `remove_tag` operations. Generated changes are masked
+from the legacy planner; both phases work in memory, and only the successful
+complete transaction reaches the atomic file commit.
+
+`generated_tiff_write_matrix.py --route public-api` passed **432/432** native
+comparisons against selected ExifTool 13.59: nine identities, eight operations,
+two spellings, and little-endian TIFF, big-endian TIFF and JPEG carriers with
+existing EXIF. This is new public API evidence, distinct from the earlier
+internal dispatch run. The exact source build passed 200 writer tests, then the
+complete library test executable passed **4,852 tests, four ignored**.
+Workspace/all-features Clippy with warnings denied passed.
+
+This development checkpoint is not ready to merge: creating fresh or empty
+JPEG EXIF currently refuses while mandatory numeric and byte-order executable
+source checks are repaired. These refusals can reject writes supported by the
+old route, so they must be closed before public migration lands. The 432-case
+matrix does not cover fresh/empty EXIF or mixed generated/legacy batches;
+whole-map mixed-batch native tests and atomic failure controls remain required.
+Manual rule removal is still pending. Unsupported or removed migrated source
+identities must remain explicit refusals instead of silently reverting to old
+handwritten semantics.
+
+PR #768 is separate from this public wiring. At that checkpoint its head `8b8be088` kept
+the full module-complete writer capture and moves table verification to the
+existing larger runner after SIGTERM on the previous runner. That hosted
+run was then pending; the termination cause has not been established.
+
+## Integrated source contracts after the public checkpoint
+
+Numeric mandatory packing now admits a complete, finite executable grammar
+for count-one u16/u32 integer inputs. Its validation and packing dependencies,
+byte-order maps and native TIFF format registry must join the selected source.
+Copied-native statement and helper mutations must refuse when unsupported;
+boundary values are compared with actual native and rendered Rust results.
+The integrated compiler/capture suite passed **53 tests without skips**, and
+workspace/all-features Clippy passed after regenerating the mandatory operand.
+
+Fresh JPEG byte-order generation now checks the complete recognized caller
+body, its reachable byte-order helpers and their common source identity. A
+supported native fallback change can change the generated order; unsupported
+caller/helper executable changes refuse. These are finite recognized-body
+contracts, not general Perl translation. Byte-order, manifest and selected
+regeneration-shell tests passed **14 tests without skips**; workspace Clippy
+passed. The merged development inventory is **53 artifacts: 31 tier 1 and
+22 tier 2**. A real full regeneration of this expanded inventory is outstanding.
+
+These helpers still await fresh-JPEG activation. Raw JFIF inputs must come from
+the actual native binary table and writer path, including undefined versus zero,
+not display values or newly handwritten offsets. The next parallel work items
+are source-derived raw JFIF operands, fresh/empty-JPEG native fixtures and mixed
+public whole-map transaction fixtures. Public creation and manual-rule removal
+remain explicit acceptance requirements before landing the migration.
 
 ## Finish line
 

@@ -37,10 +37,8 @@ use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::tag_registry::{get_tag_descriptor, has_reliable_value_type};
 use crate::writers::atomic_writer::write_atomic;
-use crate::writers::jpeg_writer::write_exif_to_jpeg_with_removals;
 use crate::writers::pdf_writer::write_pdf_file;
 use crate::writers::png_writer::{write_png_metadata, write_png_metadata_with_baseline};
-use crate::writers::tiff_surgical::rewrite_tiff_file_with_removals;
 use std::path::Path;
 
 // ============================================================================
@@ -933,7 +931,7 @@ pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()> {
 /// for, whose key a `-TAG=` could not take out of the map (see
 /// `exif_surgical::removal_names_rowless_entry`); every other writer judges
 /// removals by the map alone.
-fn write_metadata_with_removals(
+pub(crate) fn write_metadata_with_removals(
     path: &Path,
     metadata: &MetadataMap,
     removed: &[String],
@@ -957,7 +955,12 @@ fn write_metadata_with_removals(
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
-        let out = rewrite_tiff_file_with_removals(file_bytes, &original, metadata, removed)?;
+        let plan = crate::writers::generated_public_write::plan_public_write(
+            &original, metadata, removed,
+        )?;
+        let out = crate::writers::generated_public_write::rewrite_tiff_transaction(
+            file_bytes, &original, plan,
+        )?;
         write_atomic(path, &out)?;
         return Ok(());
     }
@@ -965,7 +968,13 @@ fn write_metadata_with_removals(
     match format {
         FileFormat::JPEG => {
             // Use JPEG writer to serialize metadata
-            let serialized_bytes = write_exif_to_jpeg_with_removals(&reader, metadata, removed)?;
+            let original = baseline.unwrap_or_default();
+            let plan = crate::writers::generated_public_write::plan_public_write(
+                &original, metadata, removed,
+            )?;
+            let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
+                &reader, &original, plan,
+            )?;
             write_atomic(path, &serialized_bytes)?;
         }
         FileFormat::PNG => {

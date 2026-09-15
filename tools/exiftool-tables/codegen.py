@@ -24,7 +24,10 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import tempfile
 from collections import Counter
+from pathlib import Path
 
 import conds
 import directory_validation
@@ -2051,35 +2054,35 @@ def ifd_flags_literal(unknown, binary, list_, protected, avoid, priority):
     )
 
 
-def ifd_omitted_for(tag, stats, condition_resolved, value_conv_modeled,
-                    print_conv_refused, raw_conv_modeled):
-    """`omitted_for`'s rules with one more exemption: a `RawConv` the walk
-    carries as `RawConvEffect::SetMember` is reproduced, not omitted.
-    `subdirectory` is set for ANY `SubDirectory`, modeled edge or not, exactly
-    as for binary tables (`compile_subdir`'s doc): the entry's bytes are a
-    pointer, never this tag's reported value, and the binary engine already
-    descends the edge before it consults `omitted` (engine.rs `walk`)."""
+def ifd_omitted_members(tag, condition_resolved, value_conv_modeled,
+                        print_conv_refused, raw_conv_modeled):
+    """Return runtime semantics the IFD compiler emits but deliberately withholds."""
     flags = []
     for key, member in (
-        ("ValueConv", "value_conv"),
-        ("RawConv", "raw_conv"),
-        ("Condition", "condition"),
-        ("Hook", "hook"),
-        ("SubDirectory", "subdirectory"),
+        ("ValueConv", "value_conv"), ("RawConv", "raw_conv"),
+        ("Condition", "condition"), ("Hook", "hook"), ("SubDirectory", "subdirectory"),
     ):
-        if member == "condition" and condition_resolved:
-            continue
-        if member == "value_conv" and value_conv_modeled:
-            continue
-        if member == "raw_conv" and raw_conv_modeled:
+        if ((member == "condition" and condition_resolved)
+                or (member == "value_conv" and value_conv_modeled)
+                or (member == "raw_conv" and raw_conv_modeled)):
             continue
         if tag.get(key) is not None:
             flags.append(member)
-            stats[f"omitted_{member}"] += 1
     if print_conv_refused:
         flags.append("print_conv")
-    return _omitted_literal(flags)
+    return flags
 
+
+def ifd_omitted_for(tag, stats, condition_resolved, value_conv_modeled,
+                    print_conv_refused, raw_conv_modeled):
+    """Render and count the semantics `ifd_omitted_members` reports."""
+    flags = ifd_omitted_members(
+        tag, condition_resolved, value_conv_modeled, print_conv_refused, raw_conv_modeled
+    )
+    for member in flags:
+        if member != "print_conv":
+            stats[f"omitted_{member}"] += 1
+    return _omitted_literal(flags)
 
 # The SubDirectory keys ProcessExif's SubDirectory branch reads and this
 # schema carries (Exif.pm:6929 MaxSubdirs, :6940 TagTable, :6950 Start,
@@ -2450,7 +2453,7 @@ def compile_ifd_subdir(tag, stats, ctx, enclosing=None):
 
 
 def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
-                        condition_resolved=False, enclosing=None):
+                        condition_resolved=False, enclosing=None, omission_collector=None):
     """One `IfdTag { ... }` literal for `tag` at `tag_id`, as `(src, None)`,
     or `(None, reason)` when the tag is refused -- `reason` is the name of
     the one counter that says why, for `compile_ifd_variant_group`'s report.
@@ -2588,6 +2591,17 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
         if compiled_condition is not None:
             condition_src = f"Some({compiled_condition})"
             condition_modeled = True
+    omission_members = ifd_omitted_members(
+        tag, condition_resolved or condition_modeled, value_conv_modeled, pc_refused,
+        member is not None,
+    )
+    if tag.get("SubDirectory") is not None:
+        if subdir_src == "None":
+            omission_members.append("subdirectory_refused")
+        elif _subdir_is_unwalkable(tag.get("SubDirectory")):
+            omission_members.append("subdirectory_unwalkable")
+    if omission_collector is not None:
+        omission_collector.extend(omission_members)
     omitted_src = ifd_omitted_for(
         tag, stats, condition_resolved or condition_modeled, value_conv_modeled, pc_refused,
         member is not None
@@ -2678,7 +2692,7 @@ def new_ifd_stats():
 
 
 def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_meta,
-                              enclosing=None):
+                              enclosing=None, variant_omissions=None):
     """A `_variants` array at `tag_id` as `IfdVariantGroup {...}` source, or
     `None` -- atomically, for `compile_variant_group`'s reason: dropping one
     alternative changes first-match order (`GetTagInfo`), and the wrong
@@ -2715,7 +2729,7 @@ def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_met
         return IFD_VARIANT_UNREPORTED
     trial = new_ifd_stats()
     alt_srcs = []
-    for v in variants:
+    for index, v in enumerate(variants):
         if not isinstance(v, dict) or "_variants" in v:
             stats["tag_variant_cond_unsupported"] += 1
             stats["ifd_variant_cond_texts"]["<nested _variants>"] += 1
@@ -2727,15 +2741,18 @@ def compile_ifd_variant_group(tag, tag_id, stats, verified_exprs, ctx, table_met
             text = exprs.normalize(condition) if isinstance(condition, str) else repr(condition)
             stats["ifd_variant_cond_texts"][text] += 1
             return None
+        omissions = []
         tag_src, reason = gen_ifd_tag_literal(
             v, tag_id, trial, verified_exprs, ctx, table_meta, condition_resolved=True,
-            enclosing=enclosing,
+            enclosing=enclosing, omission_collector=omissions,
         )
         if tag_src is None:
             stats["tag_variant_field_unsupported"] += 1
             stats["ifd_variant_field_reasons"][reason] += 1
             return None
         alt_srcs.append(f"({cond_src}, {tag_src})")
+        if variant_omissions is not None:
+            variant_omissions[index] = omissions
 
     _merge_stats(stats, trial)
     stats["tag_variant_emitted"] += 1
@@ -2749,7 +2766,37 @@ def ifd_table_ident(mod_name, tbl_name):
     return "IFD_" + re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
 
 
-def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
+def _canonical_ifd_rust_sha256(source):
+    """Hash the same rustfmt-normalized IFD artifact regen.sh commits.
+
+    The ledger must survive the formatting stage that follows codegen.py in
+    regeneration. Using rustfmt on an isolated temporary copy keeps the
+    emitted Rust bytes untouched while binding replay to its final artifact.
+    """
+    with tempfile.TemporaryDirectory(prefix="oxidex-ifd-ledger-") as directory:
+        candidate = Path(directory) / "ifd_tables.rs"
+        candidate.write_text(source, encoding="utf-8")
+        subprocess.run(
+            ["rustfmt", "--edition", "2024", "--config-path", str(Path(__file__).resolve().parents[2] / "rustfmt.toml"), str(candidate)],
+            check=True, capture_output=True, text=True,
+        )
+        return hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+
+def _ifd_identity_source_sha256(source):
+    """Digest one captured IFD source row using JSON's canonical wire form.
+
+    The dumper has already reduced Perl values to JSON. Hashing that exact
+    value (rather than a rendered Rust literal or a tag name) binds a ledger
+    identity to the source fact that the compiler considered.
+    """
+    return hashlib.sha256(json.dumps(
+        source, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")).hexdigest()
+
+
+def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx,
+                  *, include_identity_ledger=False):
     """Emit one `IfdTable` literal for a table `is_ifd_table` selected.
 
     Every selected table is emitted, including one whose every key is refused
@@ -2761,38 +2808,86 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
     meta = tbl.get("meta") or {}
     stats = new_ifd_stats()
 
-    entries = []
+    entries, identity_ledger = [], []
+
+    def record(raw_key, variant_path, value, artifact_state, reasons=(), omissions=()):
+        omitted = sorted(set(omissions))
+        identity_ledger.append({
+            "raw_key": str(raw_key), "variant_path": list(variant_path),
+            "name": value.get("Name") if isinstance(value, dict) else None,
+            "source_sha256": _ifd_identity_source_sha256(value),
+            # `state` remains the Rust artifact result for old consumers.
+            "state": artifact_state, "artifact_state": artifact_state,
+            "reader_state": ("refused" if artifact_state == "refused"
+                             else "omitted" if omitted else "eligible"),
+            "reasons": list(reasons), "omissions": omitted,
+        })
+
     seen = set()
     for key, tag in tbl["tags"].items():
         tag_id = parse_ifd_tag_id(key)
         if tag_id is None:
             stats["ifd_tag_id_unrepresentable"] += 1
+            variants = tag.get("_variants") if isinstance(tag, dict) else None
+            if isinstance(variants, list):
+                for index, value in enumerate(variants):
+                    record(key, (index,), value, "refused", ("raw_key_unrepresentable",))
+            else:
+                record(key, (), tag, "refused", ("raw_key_unrepresentable",))
             continue
         # Distinct dump keys parse to distinct ids (decimal, no leading
         # zeros), so a repeat here is a generator bug, not a table fact.
         assert tag_id not in seen, f"{mod_name}::{tbl_name}: duplicate tag id {tag_id} from key {key!r}"
         seen.add(tag_id)
-        entries.append((tag_id, tag))
+        entries.append((tag_id, str(key), tag))
 
     rows, variant_rows = [], []
-    for tag_id, tag in sorted(entries, key=lambda e: e[0]):
+    for tag_id, raw_key, tag in sorted(entries, key=lambda e: e[0]):
         if "_variants" in tag:
+            before_variant_reasons = {
+                key: stats[key]
+                for key in (
+                    "ifd_variant_makernotes_dispatch", "ifd_variant_unreported_skipped",
+                    "tag_variant_cond_unsupported", "tag_variant_field_unsupported",
+                )
+            }
+            variant_omissions = {}
             group_src = compile_ifd_variant_group(
-                tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name)
+                tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name),
+                variant_omissions=variant_omissions,
             )
             if group_src is IFD_VARIANT_UNREPORTED:
+                reason = next(
+                    key for key in ("ifd_variant_makernotes_dispatch", "ifd_variant_unreported_skipped")
+                    if stats[key] > before_variant_reasons[key]
+                ).removeprefix("ifd_")
+
+                for index, value in enumerate(tag["_variants"]):
+                    record(raw_key, (index,), value, "refused", (reason,))
                 continue
             if group_src is None:
                 stats["tag_variant_skipped"] += 1
+                reason = next(
+                    key for key in ("tag_variant_cond_unsupported", "tag_variant_field_unsupported")
+                    if stats[key] > before_variant_reasons[key]
+                )
+                for index, value in enumerate(tag["_variants"]):
+                    record(raw_key, (index,), value, "refused", (reason,))
                 continue
             variant_rows.append(f"    {group_src},")
+            for index, value in enumerate(tag["_variants"]):
+                record(raw_key, (index,), value, "emitted", omissions=variant_omissions.get(index, ()))
             continue
+        omissions = []
         tag_src, _reason = gen_ifd_tag_literal(
-            tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name)
+            tag, tag_id, stats, verified_exprs, ctx, meta, enclosing=(mod_name, tbl_name),
+            omission_collector=omissions,
         )
         if tag_src is None:
+            record(raw_key, (), tag, "refused", (_reason or "tag_refused",))
             continue
         rows.append(f"    {tag_src},")
+        record(raw_key, (), tag, "emitted", omissions=omissions)
         stats["ifd_tag_emitted"] += 1
 
     # Effective groups after GetTagTable's defaulting -- see gen_table.
@@ -2842,7 +2937,7 @@ def gen_ifd_table(mod_name, tbl_name, tbl, run_stats, verified_exprs, ctx):
     )
     tags_src = "&[]" if not rows else "&[\n" + "\n".join(rows) + "\n    ]"
     variants_src = "&[]" if not variant_rows else "&[\n" + "\n".join(variant_rows) + "\n    ]"
-    return f"""
+    source = f"""
 /// `Image::ExifTool::{mod_name}::{tbl_name}` -- {len(rows)} tags,
 /// {len(variant_rows)} `_variants` groups (IFD-style: {kind}).{set_group1_doc}
 /// Generated from ExifTool's in-memory tag table. Do not edit by hand.
@@ -2859,15 +2954,16 @@ pub static {ifd_table_ident(mod_name, tbl_name)}: IfdTable = IfdTable {{
     variants: {variants_src},
 }};
 """
+    return (source, identity_ledger) if include_identity_ledger else source
 
 
 def gen_ifd_tables(doc, module_names, verified_exprs):
     """Every IFD-style table of `doc`, in `(module, table)` order (the order
     `ALL_IFD_TABLES` is declared in, which `find_ifd_table` relies on).
-    Returns `(chunks, index_rows, ifd_stats)`."""
+    Returns `(chunks, index_rows, ifd_stats, identity_ledger)`."""
     ctx = IfdGenContext.from_doc(doc)
     ifd_stats = new_ifd_stats()
-    chunks, index_rows, idents = [], [], set()
+    chunks, index_rows, idents, ledger = [], [], set(), []
     mods = doc["modules"]
     for mod_name in module_names:
         mod = mods.get(mod_name)
@@ -2877,7 +2973,12 @@ def gen_ifd_tables(doc, module_names, verified_exprs):
             tbl = mod["tables"][tbl_name]
             if not is_ifd_table(tbl.get("meta") or {}):
                 continue
-            chunks.append(gen_ifd_table(mod_name, tbl_name, tbl, ifd_stats, verified_exprs, ctx))
+            source, rows = gen_ifd_table(
+                mod_name, tbl_name, tbl, ifd_stats, verified_exprs, ctx,
+                include_identity_ledger=True,
+            )
+            chunks.append(source)
+            ledger.extend({"module": mod_name, "table": tbl_name, "full_name": f"Image::ExifTool::{mod_name}::{tbl_name}", **row} for row in rows)
             ident = ifd_table_ident(mod_name, tbl_name)
             if ident in idents:
                 raise SystemExit(
@@ -2886,7 +2987,7 @@ def gen_ifd_tables(doc, module_names, verified_exprs):
                 )
             idents.add(ident)
             index_rows.append(f"    &{ident},")
-    return chunks, index_rows, ifd_stats
+    return chunks, index_rows, ifd_stats, ledger
 
 
 IFD_PRELUDE = '''//! ExifTool IFD-style tag tables -- the `Exif::ProcessExif` tables --
@@ -3041,6 +3142,18 @@ IFD_REPORT = (
         ("MaxSubdirs/DirName unreadable", "ifd_subdir_refused_unreadable"),
     )),
 )
+
+
+def render_ifd_file(version, chunks, index_rows):
+    """Render the complete IFD Rust artifact from one compiler result."""
+    ifd_index = (
+        "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
+        "/// `find_ifd_table`'s binary search.\n"
+        "pub static ALL_IFD_TABLES: &[&IfdTable] = &[\n"
+        + "\n".join(index_rows)
+        + "\n];\n"
+    )
+    return IFD_PRELUDE.replace("__VERSION__", version) + "".join(chunks) + ifd_index
 
 
 def print_ifd_report(ifd_stats):
@@ -4084,6 +4197,10 @@ def main():
         "either way, so the shared ExprId enum in -o does not depend on this flag",
     )
     ap.add_argument(
+        "--ifd-identity-ledger-out",
+        help="write per-source-row IFD compiler identity and refusal ledger (requires --ifd-out)",
+    )
+    ap.add_argument(
         "--keyed-out",
         help="write source facts for native keyed directories (schema/inventory only; no reader activation)",
     )
@@ -4144,7 +4261,11 @@ def main():
     # --ifd-out asks for the file: the ExprId enum written into -o below must
     # carry every conversion EITHER file references, so which variants it has
     # cannot be allowed to depend on a flag.
-    ifd_chunks, ifd_index_rows, ifd_stats = gen_ifd_tables(doc, names, verified_exprs)
+    if args.ifd_identity_ledger_out and not args.ifd_out:
+        raise SystemExit("--ifd-identity-ledger-out requires --ifd-out to bind the emitted Rust artifact")
+    ifd_chunks, ifd_index_rows, ifd_stats, ifd_identity_ledger = gen_ifd_tables(
+        doc, names, verified_exprs
+    )
     ifd_joined = "".join(ifd_chunks)
 
     # Like IFD source, keyed source must be compiled before the shared ExprId
@@ -4234,19 +4355,41 @@ def main():
         fh.write(index)
         fh.write(omissions)
 
+    ifd_output = None
     if args.ifd_out:
-        ifd_index = (
-            "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
-            "/// `find_ifd_table`'s binary search.\n"
-            "pub static ALL_IFD_TABLES: &[&IfdTable] = &[\n"
-            + "\n".join(ifd_index_rows)
-            + "\n];\n"
-        )
+        ifd_output = render_ifd_file(version, ifd_chunks, ifd_index_rows)
         with open(args.ifd_out, "w", encoding="utf-8") as fh:
-            fh.write(IFD_PRELUDE.replace("__VERSION__", version))
-            fh.write(ifd_joined)
-            fh.write(ifd_index)
+            fh.write(ifd_output)
         print(f"wrote IFD tables     {args.ifd_out}")
+
+    if args.ifd_identity_ledger_out:
+        source_bytes = Path(args.tables_json).read_bytes()
+        emitted = sum(row["artifact_state"] == "emitted" for row in ifd_identity_ledger)
+        refused = len(ifd_identity_ledger) - emitted
+        eligible = sum(row["reader_state"] == "eligible" for row in ifd_identity_ledger)
+        omitted = sum(row["reader_state"] == "omitted" for row in ifd_identity_ledger)
+        ifd_identity_document = {
+            "schema": "oxidex_ifd_identity_ledger_v1",
+            "instrument": "tools/exiftool-tables/codegen.py --ifd-out --ifd-identity-ledger-out",
+            "exiftool_version": version,
+            "source": {
+                "tables_json_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                "expr_ledger_sha256": (hashlib.sha256(Path(args.expr_ledger).read_bytes()).hexdigest()
+                                       if args.expr_ledger is not None else None),
+                "ifd_rust_sha256": _canonical_ifd_rust_sha256(ifd_output),
+                "ifd_rust_hash_format": "rustfmt-2024",
+            },
+            "counts": {"rows": len(ifd_identity_ledger), "emitted": emitted, "refused": refused,
+                       "reader_eligible": eligible, "reader_omitted": omitted},
+            "rows": sorted(
+                ifd_identity_ledger,
+                key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"])),
+            ),
+        }
+        with open(args.ifd_identity_ledger_out, "w", encoding="utf-8") as fh:
+            json.dump(ifd_identity_document, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print(f"wrote IFD identity ledger {args.ifd_identity_ledger_out}")
 
     if args.write_out:
         # This artifact is deliberately optional and inactive.  The source was

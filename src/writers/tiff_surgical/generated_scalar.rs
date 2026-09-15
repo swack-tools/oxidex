@@ -123,7 +123,7 @@ fn final_rule<'a>(
 }
 
 fn physical_ifd(group: &str) -> Result<IfdKind> {
-    [IfdKind::Ifd0, IfdKind::ExifIfd, IfdKind::Gps]
+    [IfdKind::Ifd0, IfdKind::Ifd1, IfdKind::ExifIfd, IfdKind::Gps]
         .into_iter()
         .find(|ifd| ifd.prefix() == group)
         .ok_or_else(|| refused("physical directory is unsupported by the TIFF carrier"))
@@ -136,6 +136,112 @@ pub(crate) fn rewrite_generated_scalars(
     requests: Vec<ScalarWriteRequest<'_>>,
     rules: &ScalarWriteRules<'_>,
 ) -> Result<ScalarWriteOutput> {
+    let selected = requests
+        .into_iter()
+        .map(|request| {
+            let rule = final_rule(request.key, rules.finals)?;
+            Ok((rule, rule.physical_write_group, request.value))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    plan_selected_scalars(file, selected, rules)?.apply(file)
+}
+
+/// A public-name resolver must pass the complete selected identity and native
+/// source hashes. An identically named field from another table or release
+/// cannot silently inherit a final serialization rule.
+pub(crate) struct ResolvedScalarWriteRequest<'a> {
+    pub module: &'a str,
+    pub table: &'a str,
+    pub full_name: &'a str,
+    pub raw_id: &'a str,
+    pub name: &'a str,
+    pub write_group: &'a str,
+    pub selected_group: &'a str,
+    pub write_proc_source_sha256: &'a str,
+    pub registry_source_sha256: &'a str,
+    pub writer_source_sha256: &'a str,
+    pub main_source_sha256: &'a str,
+    pub value: Scalar,
+}
+
+/// Compiled mutations can be applied after source-derived mandatory defaults
+/// are inserted. No tag-name resolution or scalar conversion is repeated.
+pub(crate) struct ScalarWritePlan {
+    pub edits: Vec<ScopedEntryEdit>,
+    pub warnings: Vec<String>,
+    byte_order: ByteOrder,
+}
+
+impl ScalarWritePlan {
+    pub fn has_set(&self) -> bool {
+        self.edits
+            .iter()
+            .any(|edit| matches!(edit.mutation, EntryMutation::Set { .. }))
+    }
+
+    pub fn apply(self, file: &[u8]) -> Result<ScalarWriteOutput> {
+        if scan_tiff(file)?.byte_order != self.byte_order {
+            return Err(refused("planned bytes and destination byte order differ"));
+        }
+        Ok(ScalarWriteOutput {
+            bytes: apply_entry_edits(file, &self.edits)?,
+            warnings: self.warnings,
+        })
+    }
+}
+
+pub(crate) fn rewrite_resolved_generated_scalars(
+    file: &[u8],
+    requests: Vec<ResolvedScalarWriteRequest<'_>>,
+    rules: &ScalarWriteRules<'_>,
+) -> Result<ScalarWriteOutput> {
+    plan_resolved_generated_scalars(file, requests, rules)?.apply(file)
+}
+
+pub(crate) fn plan_resolved_generated_scalars(
+    file: &[u8],
+    requests: Vec<ResolvedScalarWriteRequest<'_>>,
+    rules: &ScalarWriteRules<'_>,
+) -> Result<ScalarWritePlan> {
+    let mut selected = Vec::new();
+    for request in requests {
+        let mut matches = rules.finals.iter().filter(|rule| {
+            rule.module == request.module
+                && rule.table == request.table
+                && rule.full_name == request.full_name
+                && Some(rule.raw_tag_id) == raw_id(request.raw_id)
+                && rule.tag_name == request.name
+                && rule.physical_write_group == request.write_group
+                && rule.write_proc_source_sha256 == request.write_proc_source_sha256
+                && rule.registry_source_sha256 == request.registry_source_sha256
+                && rule.writer_source_sha256 == request.writer_source_sha256
+                && rule.main_source_sha256 == request.main_source_sha256
+        });
+        let rule = matches
+            .next()
+            .ok_or_else(|| refused("resolved address has no matching final source identity"))?;
+        if matches.next().is_some() {
+            return Err(refused("resolved address has ambiguous final rules"));
+        }
+        if request.selected_group != request.write_group
+            && !crate::writers::generated_write_address::authenticated_explicit_directories()
+                .map_err(refused)?
+                .contains(&request.selected_group)
+        {
+            return Err(refused(
+                "resolved directory has no source selection operand",
+            ));
+        }
+        selected.push((rule, request.selected_group, request.value));
+    }
+    plan_selected_scalars(file, selected, rules)
+}
+
+fn plan_selected_scalars(
+    file: &[u8],
+    selected: Vec<(&TiffScalarFinalStageRecipe, &str, Scalar)>,
+    rules: &ScalarWriteRules<'_>,
+) -> Result<ScalarWritePlan> {
     let scan = scan_tiff(file)?;
     let byte_order = match scan.byte_order {
         ByteOrder::LittleEndian => TiffByteOrder::LittleEndian,
@@ -153,10 +259,9 @@ pub(crate) fn rewrite_generated_scalars(
     let mut addressed = Vec::new();
     let mut edits = Vec::new();
     let mut warnings = Vec::new();
-    for request in requests {
-        let final_rule = final_rule(request.key, rules.finals)?;
+    for (final_rule, selected_group, requested_value) in selected {
         let row = conversion_row(final_rule, rules.rows)?;
-        let ifd = physical_ifd(final_rule.physical_write_group)?;
+        let ifd = physical_ifd(selected_group)?;
         let identity = (ifd, final_rule.raw_tag_id);
         if addressed.contains(&identity) {
             return Err(refused("multiple requests address the same physical tag"));
@@ -177,13 +282,20 @@ pub(crate) fn rewrite_generated_scalars(
         };
         let value = sanitize(
             sanitize_rule,
-            SanitizeInput::Direct(request.value),
+            SanitizeInput::Direct(requested_value),
             SanitizeOptions {
                 encode_hangs: false,
                 escape: EscapeOption::Disabled,
             },
         )?;
-        let converted = conv_inv_static(conv_rule, value, row, rules.checks, None, None)?;
+        let converted = if matches!(value, Scalar::Undefined)
+            && crate::writers::generated_write_address::undefined_value_bypasses_conversion()
+                .map_err(refused)?
+        {
+            crate::writers::generated_convinv::ConvInvResult { value, error: None }
+        } else {
+            conv_inv_static(conv_rule, value, row, rules.checks, None, None)?
+        };
         if let Some(error) = converted.error {
             // Native SetNewValue checks definedness first: false defined
             // errors go to WriteAlso without setting this value. They must
@@ -200,7 +312,6 @@ pub(crate) fn rewrite_generated_scalars(
             operation,
             byte_order,
         )? {
-            ResolvedTiffScalarEdit::NoEdit => {}
             ResolvedTiffScalarEdit::NoOverwrite { native_warning } => warnings.push(native_warning),
             ResolvedTiffScalarEdit::Delete { raw_tag_id } => edits.push(ScopedEntryEdit {
                 ifd,
@@ -248,9 +359,15 @@ pub(crate) fn rewrite_generated_scalars(
             }
         }
     }
-    Ok(ScalarWriteOutput {
-        bytes: apply_entry_edits(file, &edits)?,
+    // The carrier's source-derived directory operation removes an emptied
+    // IFD1 and lets the JPEG boundary elide an empty IFD0 payload.  A delete
+    // therefore remains a delete even when it was the last non-default entry;
+    // mandatory default creation is applied by the public transaction before
+    // this plan is committed.
+    Ok(ScalarWritePlan {
+        edits,
         warnings,
+        byte_order: scan.byte_order,
     })
 }
 
@@ -269,14 +386,26 @@ mod tests {
             input: std::path::PathBuf,
             output: std::path::PathBuf,
             carrier: Option<String>,
+            route: Option<String>,
+            key: Option<String>,
+            scalar: Option<String>,
+            value: Option<String>,
+            batch: Option<Vec<BatchItem>>,
+            fault: Option<String>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct BatchItem {
             key: String,
             scalar: String,
             value: Option<String>,
         }
-        fn apply(request: &Request) -> std::result::Result<Vec<String>, String> {
-            let value = match (request.scalar.as_str(), request.value.as_deref()) {
+        fn scalar(scalar: &str, value: Option<&str>) -> std::result::Result<Scalar, String> {
+            Ok(match (scalar, value) {
                 ("undefined", None) => Scalar::Undefined,
-                ("utf8", Some(value)) => Scalar::Utf8(value.to_owned()),
+                ("utf8" | "integer" | "rational" | "float", Some(value)) => {
+                    Scalar::Utf8(value.to_owned())
+                }
                 ("bytes", Some(hex)) if hex.is_ascii() && hex.len().is_multiple_of(2) => {
                     Scalar::Bytes(
                         (0..hex.len())
@@ -287,22 +416,219 @@ mod tests {
                     )
                 }
                 _ => return Err("invalid typed scalar request".into()),
-            };
-            let input = std::fs::read(&request.input).map_err(|error| error.to_string())?;
-            let requests = vec![ScalarWriteRequest {
-                key: &request.key,
-                value,
-            }];
-            let result = match request.carrier.as_deref() {
-                None | Some("tiff_little" | "tiff_big") => {
-                    rewrite_generated_scalars(&input, requests, &generated_rules())
+            })
+        }
+        fn apply(request: &Request) -> std::result::Result<Vec<String>, String> {
+            if request.route.as_deref() == Some("public-batch") {
+                use crate::core::{operations, tag_value::TagValue};
+                let batch = request
+                    .batch
+                    .as_deref()
+                    .filter(|items| !items.is_empty())
+                    .ok_or("public batch request is empty")?;
+                if request.key.is_some() || request.scalar.is_some() || request.value.is_some() {
+                    return Err("public batch request carries a single-operation field".into());
                 }
-                Some("jpeg") => crate::writers::jpeg_writer::rewrite_generated_exif_scalars(
-                    &crate::test_support::TestReader::new(input),
-                    requests,
-                    &generated_rules(),
-                ),
-                _ => return Err("unsupported test carrier".into()),
+                std::fs::copy(&request.input, &request.output)
+                    .map_err(|error| error.to_string())?;
+                let baseline = operations::read_metadata(&request.output)
+                    .map_err(|error| error.to_string())?;
+                let mut desired = baseline.clone();
+                let mut removed = Vec::new();
+                for item in batch {
+                    match (item.scalar.as_str(), item.value.as_deref()) {
+                        ("undefined", None) => {
+                            desired.remove(&item.key);
+                            removed.push(item.key.clone());
+                        }
+                        // Omit a reader key from the desired whole map without
+                        // turning it into an explicit rowless deletion. This
+                        // models an alias replacement: the address planner
+                        // observes the other spelling of the same physical
+                        // field and retains it as an update.
+                        ("omitted", None) => {
+                            desired.remove(&item.key);
+                        }
+                        ("utf8", Some(value)) => {
+                            desired.insert(&item.key, TagValue::String(value.to_owned()));
+                        }
+                        ("bytes", Some(hex)) if hex.is_ascii() && hex.len().is_multiple_of(2) => {
+                            let bytes = (0..hex.len())
+                                .step_by(2)
+                                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16))
+                                .collect::<std::result::Result<Vec<_>, _>>()
+                                .map_err(|error| error.to_string())?;
+                            desired.insert(&item.key, TagValue::Binary(bytes));
+                        }
+                        ("rational", Some(value)) => {
+                            let (numerator, denominator) = value
+                                .split_once('/')
+                                .ok_or("rational fixture lacks separator")?;
+                            desired.insert(
+                                &item.key,
+                                TagValue::Rational {
+                                    numerator: numerator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                    denominator: denominator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                },
+                            );
+                        }
+                        ("integer", Some(value)) => {
+                            let integer =
+                                value.parse::<i64>().map_err(|error| error.to_string())?;
+                            desired.insert(&item.key, TagValue::Integer(integer));
+                        }
+                        _ => return Err("invalid public batch item".into()),
+                    }
+                }
+                match request.fault.as_deref() {
+                    None => operations::write_metadata_with_removals(
+                        &request.output,
+                        &desired,
+                        &removed,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    Some("forged-final-identity-after-legacy") => {
+                        // This is a test-only lower-stage provenance fault. The whole-map
+                        // planner is real, then the production transaction performs the
+                        // legacy rewrite in memory before its generated identity refusal.
+                        // No bytes are committed on that error.
+                        let mut plan = crate::writers::generated_public_write::plan_public_write(
+                            &baseline, &desired, &removed,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let generated_request = plan
+                            .generated
+                            .first_mut()
+                            .ok_or("post-legacy fault has no generated request")?;
+                        generated_request.writer_source_sha256 = "fixture-forged-final-identity";
+                        let input =
+                            std::fs::read(&request.output).map_err(|error| error.to_string())?;
+                        match request.carrier.as_deref() {
+                            Some("jpeg") => {
+                                crate::writers::jpeg_writer::write_public_exif_transaction(
+                                    &crate::test_support::TestReader::new(input),
+                                    &baseline,
+                                    plan,
+                                )
+                            }
+                            _ => crate::writers::generated_public_write::rewrite_tiff_transaction(
+                                &input, &baseline, plan,
+                            ),
+                        }
+                        .map_err(|error| error.to_string())?;
+                        return Err("post-legacy forged identity unexpectedly succeeded".into());
+                    }
+                    Some(_) => return Err("unsupported public batch fault".into()),
+                }
+                return Ok(Vec::new());
+            }
+            let key = request
+                .key
+                .as_deref()
+                .ok_or("single-operation key is absent")?;
+            let scalar_name = request
+                .scalar
+                .as_deref()
+                .ok_or("single-operation scalar is absent")?;
+            if request.batch.is_some() || request.fault.is_some() {
+                return Err("single-operation request carries batch fields".into());
+            }
+            let value = scalar(scalar_name, request.value.as_deref())?;
+            if request.route.as_deref() == Some("public-api") {
+                // Fixture copy is preparation; the public operation itself must
+                // make exactly one atomic commit after the complete plan passes.
+                std::fs::copy(&request.input, &request.output).map_err(|e| e.to_string())?;
+                use crate::core::{operations, tag_value::TagValue};
+                match value {
+                    Scalar::Undefined => operations::remove_tag(&request.output, key),
+                    Scalar::Utf8(text) => {
+                        let value = match scalar_name {
+                            "float" => {
+                                TagValue::Float(text.parse().map_err(
+                                    |error: std::num::ParseFloatError| error.to_string(),
+                                )?)
+                            }
+                            "integer" => TagValue::Integer(
+                                text.parse()
+                                    .map_err(|error: std::num::ParseIntError| error.to_string())?,
+                            ),
+                            "rational" => {
+                                let (numerator, denominator) = text
+                                    .split_once('/')
+                                    .ok_or("rational fixture lacks separator")?;
+                                TagValue::Rational {
+                                    numerator: numerator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                    denominator: denominator.parse().map_err(
+                                        |error: std::num::ParseIntError| error.to_string(),
+                                    )?,
+                                }
+                            }
+                            _ => TagValue::String(text),
+                        };
+                        operations::modify_tag(&request.output, key, value)
+                    }
+                    Scalar::Bytes(bytes) => {
+                        operations::modify_tag(&request.output, key, TagValue::Binary(bytes))
+                    }
+                }
+                .map_err(|e| e.to_string())?;
+                return Ok(Vec::new());
+            }
+            let input = std::fs::read(&request.input).map_err(|error| error.to_string())?;
+            let result = if request.route.as_deref() == Some("resolved-address") {
+                use crate::writers::generated_write_address::{self, Resolution};
+                let address_rules = generated_write_address::generated_rules();
+                let row = match generated_write_address::resolve(key, &address_rules) {
+                    Resolution::Resolved(row) => row,
+                    Resolution::OutsideMigratedScope => {
+                        return Err("outside generated address scope".into());
+                    }
+                    Resolution::Unsupported(reason) => return Err(reason.into()),
+                };
+                let resolved =
+                    crate::writers::generated_write_dispatch::resolved_scalar_request_at(
+                        row.row,
+                        value,
+                        row.selected_group,
+                    )
+                    .map_err(|error| error.to_string())?;
+                match request.carrier.as_deref() {
+                    None | Some("tiff_little" | "tiff_big") => rewrite_resolved_generated_scalars(
+                        &input,
+                        vec![resolved],
+                        &generated_rules(),
+                    ),
+                    Some("jpeg") => {
+                        crate::writers::jpeg_writer::rewrite_resolved_generated_exif_scalars(
+                            &crate::test_support::TestReader::new(input),
+                            vec![resolved],
+                            &generated_rules(),
+                        )
+                    }
+                    _ => return Err("unsupported test carrier".into()),
+                }
+            } else {
+                if !matches!(request.route.as_deref(), None | Some("final-key")) {
+                    return Err("unsupported test route".into());
+                }
+                let requests = vec![ScalarWriteRequest { key, value }];
+                match request.carrier.as_deref() {
+                    None | Some("tiff_little" | "tiff_big") => {
+                        rewrite_generated_scalars(&input, requests, &generated_rules())
+                    }
+                    Some("jpeg") => crate::writers::jpeg_writer::rewrite_generated_exif_scalars(
+                        &crate::test_support::TestReader::new(input),
+                        requests,
+                        &generated_rules(),
+                    ),
+                    _ => return Err("unsupported test carrier".into()),
+                }
             }
             .map_err(|error| error.to_string())?;
             std::fs::write(&request.output, result.bytes).map_err(|error| error.to_string())?;
@@ -331,6 +657,89 @@ mod tests {
 
     fn host() -> TiffScalarFinalStageRecipe {
         *final_rule("IFD0:HostComputer", generated_rules().finals).unwrap()
+    }
+
+    #[test]
+    fn resolved_public_identity_joins_sources_before_editing() {
+        let rules = generated_rules();
+        let rule = host();
+        let id = rule.raw_tag_id.to_string();
+        let request = || ResolvedScalarWriteRequest {
+            module: rule.module,
+            table: rule.table,
+            full_name: rule.full_name,
+            raw_id: &id,
+            name: rule.tag_name,
+            write_group: rule.physical_write_group,
+            selected_group: rule.physical_write_group,
+            write_proc_source_sha256: rule.write_proc_source_sha256,
+            registry_source_sha256: rule.registry_source_sha256,
+            writer_source_sha256: rule.writer_source_sha256,
+            main_source_sha256: rule.main_source_sha256,
+            value: Scalar::Bytes(b"resolved".to_vec()),
+        };
+        let empty = b"II\x2a\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let resolved = rewrite_resolved_generated_scalars(empty, vec![request()], &rules).unwrap();
+        let named = rewrite_generated_scalars(
+            empty,
+            vec![ScalarWriteRequest {
+                key: rule.tag_name,
+                value: Scalar::Bytes(b"resolved".to_vec()),
+            }],
+            &rules,
+        )
+        .unwrap();
+        assert_eq!(resolved.bytes, named.bytes);
+        for changed in [
+            ResolvedScalarWriteRequest {
+                module: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                table: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                full_name: "Other::Main",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                raw_id: "0",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                name: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                write_group: "Other",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                write_proc_source_sha256: "different",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                registry_source_sha256: "different",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                writer_source_sha256: "different",
+                ..request()
+            },
+            ResolvedScalarWriteRequest {
+                main_source_sha256: "different",
+                ..request()
+            },
+        ] {
+            // Invalid carrier deliberately proves identity refusal precedes byte editing.
+            let err = rewrite_resolved_generated_scalars(&[], vec![changed], &rules).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("no matching final source identity"),
+                "{err}"
+            );
+        }
     }
 
     #[test]

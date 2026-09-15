@@ -39,14 +39,25 @@ def artifact(producer):
     items=artifacts.select(producer=producer)
     assert len(items)==1
     return root/items[0].path
+def artifact_path(key):
+    items=[item for item in artifacts.ARTIFACTS if item.key==key]
+    assert len(items)==1
+    return root/items[0].path
 if mode=='rustfmt':
     paths={str(pathlib.Path(x).resolve()) for x in args if x.endswith('.rs')}
     assert paths in [{str(root/a.path) for a in artifacts.select(tier,kind='rust')} for tier in (1,2)]
 elif mode=='chosen-perl':
-    if name in ('dump_tables.pl','dump_filetypes.pl'):
-        reader_only=args.pop(0)=='--reader-only' if args[0]=='--reader-only' else False
+    if name in ('capture_exif_mandatory_fact.pl', 'capture_raw_jfif_fact.pl'):
         assert pathlib.Path(args[0]).resolve()==lib
-        print(json.dumps({'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}))
+        print(json.dumps({'marker':'explicit-A'}))
+    elif name in ('dump_tables.pl','dump_filetypes.pl'):
+        reader_only=args.pop(0)=='--reader-only' if args[0]=='--reader-only' else False
+        hydrated=args.pop(0)=='--hydrated-layouts' if args[0]=='--hydrated-layouts' else False
+        assert pathlib.Path(args[0]).resolve()==lib
+        captured={'exiftool_version':(root/'.exiftool-version').read_text().strip(),'marker':'explicit-A'}
+        if reader_only: captured['reader_only']=True
+        if hydrated: captured['hydrated_layouts']={'selection':'full_hydrated_catalog'}
+        print(json.dumps(captured))
     elif name=='dump_af_points.pl':
         assert pathlib.Path(args[0]).resolve()==lib/'Image/ExifTool/Nikon.pm'
         pathlib.Path(args[1]).write_text(json.dumps({'marker':'explicit-A'}))
@@ -57,6 +68,10 @@ elif mode=='chosen-perl':
         if '--check' in args:
             assert path.read_text()=='generated explicit-A '+name+'\n'
         else: output(path,name)
+    elif name=='setnewvalue_address_probe.pl':
+        assert pathlib.Path(args[0]).resolve()==lib
+        assert json.loads(pathlib.Path(args[1]).read_text())['marker']=='explicit-A'
+        print(json.dumps({'marker':'explicit-A'}))
     else:
         assert name.startswith('gen_'),name
         print('generated explicit-A '+name)
@@ -69,25 +84,77 @@ else:
         output(flag('--ledger-out'),'expr-ledger')
     elif name=='codegen.py':
         dump(args[0]);output(flag('-o'),'binary');output(flag('--ifd-out'),'ifd')
+        output(flag('--ifd-identity-ledger-out'),'ifd-identity-ledger')
         output(flag('--keyed-out'),'keyed')
         output(flag('--value-conv-ledger-out'),'value-ledger')
     elif name=='serial_directory.py':
         dump(args[0]);output(flag('--rust-output'),'serial')
         assert flag('--rust-output')==artifact('serial_directory')
         output(flag('--output'),'serial-report')
-    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py'):
+    elif name in ('scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'mandatory_defaults_codegen.py', 'raw_jfif_codegen.py'):
         dump(args[0])
         selected={root/item.path for item in artifacts.select(producer=name.removesuffix('.py'))}
         assert {flag('--output'),flag('--report')}==selected
+        if name=='mandatory_defaults_codegen.py':
+            assert json.loads(flag('--writer-tables').read_text())['marker']=='explicit-A'
+            assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        if name=='raw_jfif_codegen.py':
+            assert flag('--selected-perl') == pathlib.Path(os.environ['EXIFTOOL_PERL'])
         output(flag('--output'),name);output(flag('--report'),name+'-ledger')
+    elif name=='setnewvalue_addressing.py':
+        assert 'hydrated_layouts' not in json.loads(pathlib.Path(args[0]).read_text())
+        assert 'reader_only' not in json.loads(pathlib.Path(args[0]).read_text())
+        dump(args[0]); flag('--rows').write_text(json.dumps({'marker':'explicit-A'})); output(flag('--report'),name+'-report')
+    elif name=='setnewvalue_address_rust_codegen.py':
+        dump(args[0]); assert json.loads(pathlib.Path(args[1]).read_text())['marker']=='explicit-A'
+        selected={root/item.path for item in artifacts.select(producer='setnewvalue_address_rust_codegen')}
+        assert {flag('--output'),flag('--report'),flag('--write-ownership-ledger')}==selected
+        if '--ownership-ledger' in args:
+            assert flag('--ownership-ledger')==artifact_path('setnewvalue-ownership-ledger')
+        else:
+            assert '--bootstrap-ownership-ledger' in args
+        output(flag('--output'),name); output(flag('--report'),name+'-report'); output(flag('--write-ownership-ledger'),name+'-ownership')
+    elif name=='setnewvalue_public_migration_ledger.py':
+        dump(args[0])
+        selected={root/item.path for item in artifacts.select(producer='setnewvalue_public_migration_ledger')}
+        assert {flag('--output'),flag('--write-ledger')}==selected
+        if '--prior-ledger' in args:
+            assert flag('--prior-ledger')==artifact_path('setnewvalue-public-migration-ledger')
+        else:
+            assert '--bootstrap' in args
+        output(flag('--output'),name); output(flag('--report'),name+'-report'); output(flag('--write-ledger'),name+'-ledger')
+    elif name=='fresh_jpeg_byte_order_native.py':
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        assert flag('--exiftool-dir')==lib
+        flag('--output').write_text(json.dumps({'marker':'explicit-A'}))
+    elif name=='fresh_jpeg_byte_order_codegen.py':
+        assert json.loads(pathlib.Path(args[0]).read_text())['marker']=='explicit-A'
+        dump(flag('--writer-tables'))
+        selected={root/item.path for item in artifacts.select(producer='fresh_jpeg_byte_order_codegen')}
+        assert {flag('--output'),flag('--report')}==selected
+        output(flag('--output'),name); output(flag('--report'),name+'-ledger')
     elif name=='verify_serial_directory.py':
         assert pathlib.Path(args[0]).resolve()==artifact('serial_directory')
         assert pathlib.Path(args[0]).read_text()=='generated explicit-A serial\n'
         dump(args[1])
+    elif name=='gen_nikon_encrypted_tables.py':
+        dump(args[0]);assert flag('-o')==artifact('gen_nikon_encrypted_tables')
+        output(flag('-o'),name)
     elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_nikon_settings_tables.py','gen_sony_plain_tables.py'):
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
         dump(args[0]);output(flag('-o'),'composite');output(flag('--generated-out'),'composite-compute')
+    elif name in ('quicktime_generated_specs.py', 'quicktime_keys_specs.py', 'quicktime_userdata_specs.py'):
+        # This producer intentionally owns fixed manifest paths rather than
+        # accepting output flags.  Its fresh dump is still part of the tier-1
+        # source-selection contract, and both artifacts must be declared.
+        assert args == ['--dump', str(pathlib.Path(args[1]).resolve()), '--replace']
+        dump(flag('--dump'))
+        assert json.loads(flag('--dump').read_text())['hydrated_layouts']['selection']=='full_hydrated_catalog'
+        assert json.loads(flag('--dump').read_text())['reader_only'] is True
+        assert flag('--dump').name.startswith('tables-hydrated-reader-')
+        for item in artifacts.select(producer=name.removesuffix('.py')):
+            output(root/item.path,name)
     elif name=='codegen_subdirs.py':
         dump(args[0]);output(flag('-o'),name)
         if 'Pentax' in args: flag('-o').write_text('const PENTAX_CONV6: &[(i64, &str)] = &[\n];\n')
@@ -236,6 +303,7 @@ class RegenerationShellTests(unittest.TestCase):
                 'dump_lens_alternatives.pl', 'verify_geotiff.py',
                 'verify_dicom_dict.py', 'verify_lens_alternatives.py',
                 'gen_nikon_settings_tables.py', 'verify_nikon_settings.py',
+                'gen_nikon_encrypted_tables.py',
                 'gen_sony_plain_tables.py', 'verify_sony_plain.py']
 
     def test_both_tiers_and_tier2_use_selected_source_and_complete_checks(self):
@@ -246,6 +314,12 @@ class RegenerationShellTests(unittest.TestCase):
                 names = [c['tool'] for c in calls]
                 for name in self.extra_leaves():
                     self.assertEqual(names.count(name), 1, names)
+                # QuickTime owns fixed manifest paths, so it runs only with
+                # tier 1's dedicated hydrated reader dump and not in the
+                # tier-2 refresh.
+                self.assertEqual(names.count('quicktime_generated_specs.py'), int(full), names)
+                self.assertEqual(names.count('quicktime_keys_specs.py'), int(full), names)
+                self.assertEqual(names.count('quicktime_userdata_specs.py'), int(full), names)
                 self.assertEqual(names.count('verify_exprs.py'), int(full))
                 self.assertEqual(names.count('serial_directory.py'), int(full))
                 self.assertEqual(names.count('scalar_helper_codegen.py'), int(full))
@@ -254,11 +328,24 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertEqual(names.count('convinv_rust_codegen.py'), int(full))
                 self.assertEqual(names.count('convinv_row_codegen.py'), int(full))
                 self.assertEqual(names.count('final_scalar_stage.py'), int(full))
+                self.assertEqual(names.count('capture_exif_mandatory_fact.pl'), int(full))
+                self.assertEqual(names.count('mandatory_defaults_codegen.py'), int(full))
+                self.assertEqual(names.count('capture_raw_jfif_fact.pl'), int(full))
+                self.assertEqual(names.count('raw_jfif_codegen.py'), int(full))
+                self.assertEqual(names.count('setnewvalue_addressing.py'), int(full))
+                self.assertEqual(names.count('setnewvalue_address_probe.pl'), int(full))
+                self.assertEqual(names.count('setnewvalue_address_rust_codegen.py'), int(full))
+                self.assertEqual(names.count('setnewvalue_public_migration_ledger.py'), int(full))
+                self.assertEqual(names.count('fresh_jpeg_byte_order_native.py'), int(full))
+                self.assertEqual(names.count('fresh_jpeg_byte_order_codegen.py'), int(full))
                 self.assertEqual(names.count('verify_serial_directory.py'), int(full))
                 dump_calls = [c for c in calls if c['tool'] == 'dump_tables.pl']
                 if full:
-                    self.assertTrue(dump_calls)
-                    self.assertTrue(all(c['argv'][0] != '--reader-only' for c in dump_calls))
+                    self.assertEqual(len(dump_calls), 3)
+                    self.assertEqual(dump_calls[0]['argv'], [str(self.source / 'lib')])
+                    self.assertEqual(dump_calls[1]['argv'],
+                                     ['--reader-only', '--hydrated-layouts', str(self.source / 'lib')])
+                    self.assertEqual(dump_calls[2]['argv'], ['--reader-only', str(self.source / 'lib')])
                 else:
                     self.assertEqual(len(dump_calls), 1)
                     self.assertEqual(dump_calls[0]['argv'][0], '--reader-only')
@@ -269,7 +356,20 @@ class RegenerationShellTests(unittest.TestCase):
                     self.assertLess(names.index('sanitize_rust_codegen.py'), names.index('rustfmt'))
                     self.assertLess(names.index('convinv_rust_codegen.py'), names.index('convinv_row_codegen.py'))
                     self.assertLess(names.index('convinv_row_codegen.py'), names.index('final_scalar_stage.py'))
-                    self.assertLess(names.index('final_scalar_stage.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('final_scalar_stage.py'), names.index('capture_exif_mandatory_fact.pl'))
+                    self.assertLess(names.index('capture_exif_mandatory_fact.pl'), names.index('mandatory_defaults_codegen.py'))
+                    self.assertLess(names.index('mandatory_defaults_codegen.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('capture_raw_jfif_fact.pl'), names.index('raw_jfif_codegen.py'))
+                    self.assertLess(names.index('raw_jfif_codegen.py'), names.index('rustfmt'))
+                    # Address operands are a source-only prebuild for the
+                    # expression oracle and must precede conversion stages.
+                    self.assertLess(names.index('setnewvalue_addressing.py'), names.index('setnewvalue_address_probe.pl'))
+                    self.assertLess(names.index('setnewvalue_address_probe.pl'), names.index('setnewvalue_address_rust_codegen.py'))
+                    self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('final_scalar_stage.py'))
+                    self.assertLess(names.index('setnewvalue_address_rust_codegen.py'), names.index('setnewvalue_public_migration_ledger.py'))
+                    self.assertLess(names.index('setnewvalue_public_migration_ledger.py'), names.index('rustfmt'))
+                    self.assertLess(names.index('fresh_jpeg_byte_order_native.py'), names.index('fresh_jpeg_byte_order_codegen.py'))
+                    self.assertLess(names.index('fresh_jpeg_byte_order_codegen.py'), names.index('rustfmt'))
                     self.assertGreater(names.index('verify_serial_directory.py'), names.index('rustfmt'))
                 self.assertEqual(names.count('rustfmt'), 2 if full else 1)
                 format_calls = [c for c in calls if c['tool'] == 'rustfmt']
@@ -281,10 +381,51 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertTrue(all(c['target'] == str(self.base / 'oracle-target') for c in calls))
                 for name in (n for n in self.extra_leaves() if n.startswith('verify_')):
                     self.assertGreater(names.index(name), max(i for i, n in enumerate(names) if n == 'rustfmt'))
-                dump_cache = self.cache / (f'tables-{self.pin}.json' if full else f'tables-reader-{self.pin}.json')
+                dump_cache = self.cache / f'tables-reader-{self.pin}.json'
                 self.assertEqual(json.loads(dump_cache.read_text())['marker'], 'explicit-A')
+                self.assertIs(json.loads(dump_cache.read_text())['reader_only'], True)
+                if full:
+                    full_cache = self.cache / f'tables-{self.pin}.json'
+                    self.assertEqual(json.loads(full_cache.read_text())['marker'], 'explicit-A')
+                    self.assertNotIn('reader_only', json.loads(full_cache.read_text()))
                 self.assertIn('regeneration write-set PASS', result.stdout)
                 self.assertEqual('unexpected PATH Perl' in result.stderr, False)
+
+    def test_missing_address_ownership_uses_only_explicit_bootstrap(self):
+        ownership = next(item for item in self.manifest.ARTIFACTS
+                         if item.key == 'setnewvalue-ownership-ledger')
+        (self.root / ownership.path).unlink()
+        result, calls = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = next(call for call in calls if call['tool'] == 'setnewvalue_address_rust_codegen.py')
+        self.assertIn('--bootstrap-ownership-ledger', call['argv'])
+        self.assertNotIn('--ownership-ledger', call['argv'])
+        self.assertTrue((self.root / ownership.path).is_file())
+
+    def test_missing_public_migration_ledger_uses_only_explicit_bootstrap(self):
+        ledger = next(item for item in self.manifest.ARTIFACTS
+                      if item.key == 'setnewvalue-public-migration-ledger')
+        (self.root / ledger.path).unlink()
+        result, calls = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = next(call for call in calls if call['tool'] == 'setnewvalue_public_migration_ledger.py')
+        self.assertIn('--bootstrap', call['argv'])
+        self.assertNotIn('--prior-ledger', call['argv'])
+        self.assertTrue((self.root / ledger.path).is_file())
+
+    def test_public_migration_regeneration_is_stable_with_valid_prior(self):
+        result, _ = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rules = next(item for item in self.manifest.ARTIFACTS
+                     if item.key == 'setnewvalue-public-migration-rules')
+        ledger = next(item for item in self.manifest.ARTIFACTS
+                      if item.key == 'setnewvalue-public-migration-ledger')
+        before = ((self.root / rules.path).read_bytes(), (self.root / ledger.path).read_bytes())
+        result, calls = self.run_regeneration(full=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        call = next(call for call in calls if call['tool'] == 'setnewvalue_public_migration_ledger.py')
+        self.assertIn('--prior-ledger', call['argv'])
+        self.assertEqual(before, ((self.root / rules.path).read_bytes(), (self.root / ledger.path).read_bytes()))
 
     def test_each_new_producer_or_verifier_failure_survives_exit_guard(self):
         for leaf in self.extra_leaves():
@@ -297,13 +438,22 @@ class RegenerationShellTests(unittest.TestCase):
                 self.assertNotIn('>> done:', result.stdout)
 
     def test_tier_one_producer_and_verifier_failures_survive_exit_guard(self):
-        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'verify_serial_directory.py'):
+        for leaf in ('serial_directory.py', 'scalar_helper_codegen.py', 'checkexif_rust_codegen.py', 'sanitize_rust_codegen.py', 'convinv_rust_codegen.py', 'convinv_row_codegen.py', 'final_scalar_stage.py', 'capture_exif_mandatory_fact.pl', 'mandatory_defaults_codegen.py', 'capture_raw_jfif_fact.pl', 'raw_jfif_codegen.py', 'setnewvalue_addressing.py', 'setnewvalue_address_probe.pl', 'setnewvalue_address_rust_codegen.py', 'setnewvalue_public_migration_ledger.py', 'verify_serial_directory.py'):
             with self.subTest(leaf=leaf):
                 result, calls = self.run_regeneration(full=True, env={'CONTROL_FAIL': leaf})
                 self.assertEqual(result.returncode, 47, result.stdout + result.stderr)
                 self.assertEqual(calls[-1]['tool'], leaf)
                 self.assertIn('injected leaf failure: ' + leaf, result.stderr)
                 self.assertNotIn('>> done:', result.stdout)
+
+    def test_quicktime_fixed_path_producer_failure_survives_exit_guard(self):
+        result, calls = self.run_regeneration(
+            full=True, env={'CONTROL_FAIL': 'quicktime_generated_specs.py'}
+        )
+        self.assertEqual(result.returncode, 47, result.stdout + result.stderr)
+        self.assertEqual(calls[-1]['tool'], 'quicktime_generated_specs.py')
+        self.assertIn('injected leaf failure: quicktime_generated_specs.py', result.stderr)
+        self.assertNotIn('>> done:', result.stdout)
 
     def test_undeclared_writes_refuse_on_success_and_on_leaf_failure(self):
         for fail in (False, True):

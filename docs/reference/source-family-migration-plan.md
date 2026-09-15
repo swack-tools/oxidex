@@ -1,11 +1,12 @@
 # Source-family baseline and generic readers
 
-Status: active under the renewed full-parity objective on 2026-09-14.
-PR #775 is the first reproducible QuickTime baseline milestone; #776 repairs
-the broader source/artifact inventory. The earlier checkpoint pause is superseded.
+Status: active and incomplete, 2026-09-14. PR #779 is the single consolidated
+integration PR. Earlier writer PRs #771–#774 and follow-ups #780/#781 are
+preserved in its history. Only #779, #682 and #683 remain open; #682/#683 are
+outside this rollup. Further fixes and evidence belong in #779.
 
-This goal starts at `304d6339`, using the repository pin, ExifTool 13.59.
-The earlier writer checkpoints (#771–#774) are unfinished and remain separate.
+The integration base is `b027ce0b`, using the repository pin, ExifTool 13.59.
+The full goal includes every catalog family and both reading and writing.
 
 ## What we are measuring
 
@@ -71,8 +72,9 @@ without adding Rust names or tag lists. Preserve unknown atoms as unknown.
 - Formatting, lint and relevant native/parser tests; all actionable review
   comments addressed before merge.
 
-Land small complete milestones as they pass. Four to six milestones per day is
-a preferred working cadence, not a reason to skip gates or inflate coverage.
+Keep implementation milestones separately reviewable as commits in #779. The
+maintainer requested one consolidated PR to avoid a growing queue. Merge only
+after the combined checks and all actionable review comments are resolved.
 
 ## Full-goal completion criteria
 
@@ -97,3 +99,104 @@ Progress measures, recorded at each milestone: source identities inventoried;
 accepted and refused rows with reasons; verified runtime connections; observed
 read matches/missing/value errors; observed write create/replace/delete results;
 and committed/merged state. Keep every denominator and fixture/corpus scope visible.
+
+
+## Current measured checkpoint
+
+- PR #775 merged as `996665ef`: reproducible historical QuickTime baseline.
+- PR #776 merged as `4a460cac`: corrected source/artifact inventory, conserving
+  1,512 tables. Static definitions and enablement are separate from observed reads.
+- PR #777 merged as `f6101205`: hydrated catalog identity reconciliation. The
+  equal-sized old dump and catalog differ by 67 missing catalog tables and 66
+  extra legacy identities plus one shortcut helper.
+- PR #778 merged as `b027ce0b`: complete catalog-entry snapshot, denominator definitions,
+  downloadable JSON, Pages report and native regeneration check. It preserves
+  33,487 ordinary entries, 21,373 actual case-insensitive entry names, and the
+  distinct native legacy counter of 21,437. Container rows remain separate.
+- Full hydrated source capture now succeeds with canonical Perl 5.38.2 and
+  pinned ExifTool 13.59: 1,512 tables, 34,897 raw keys, 35,886 variants,
+  41,818 interned objects and zero unresolved references. The checked-in audit
+  and source join conserve all 33,487 ordinary catalog entries. This proves
+  source accounting, not runtime support.
+- ItemList's generated reader is in #779: 92 accepted declarations and 307
+  refusals across the 399 selected ItemList/UserData/Keys source records.
+  The recorded behavior suite has 25 fixtures and 50/50 native comparisons;
+  this is bounded evidence, not full-catalog reading parity. The 11-file paired
+  corpus comparison changed matched occurrences from 622 to 620, VALUE from
+  2 to 1, MISSING from 234 to 240, and EXTRA from 114 to 86. Those results are
+  not an aggregate conformance pass.
+- The permanent source join now authenticates QuickTime ledger, capabilities
+  and emitted Rust by complete generator replay, retaining all four input hashes.
+  Of 330 catalog entries in ItemList/UserData/Keys, 92 join generated reader
+  declarations and 238 join explicit refusals; all 330 now have an implementation
+  classification. Across the full catalog, 33,157 entries remain unconsumed by
+  this implementation join. Every read/write observation remains explicitly
+  unobserved until fixture evidence is attached. These counts measure accounting,
+  not an increase in parsing coverage.
+- Writing fixes, numeric directory selection, Nikon generation and upgrade
+  rehearsal corrections are consolidated in #779. Canonical tier-2 regeneration
+  and all-feature lint pass. The broad Rust run passed 4,894 library tests and
+  found one Pentax AF-info regression; its generator repair is now integrated
+  and awaits the combined rerun. Source-generated address/helper rows increased
+  from 191 to 193, while public final recipes remain 19. These are implementation
+  counts, not observed-write counts.
+- The broad Python run exercised 1,314 tests and ended with 33 failures, 23 errors
+  and seven skips. Prepared fixes address missing standalone proof dependencies,
+  stale regeneration mocks and historical writer cohort inflation. Several native
+  errors came from the run supplying a library directory instead of a checkout
+  root. The corrected historical cohort is 15 and remains identical on recapture;
+  regenerated source facts cannot silently enlarge that comparison denominator.
+  The late-child timeout regression remains under investigation. No combined
+  all-green gate or full parity is claimed.
+
+## Next steps and measurable exit checks
+
+1. **Make regeneration reliable.** Verify the integrated generator and cohort fixes, then run
+   the sanctioned full regeneration using the recorded Perl and pinned library.
+   Require both generation tiers, their independent native verifiers, and the
+   declared-write-set check to pass. Inspect lost/added rows and refusals before
+   committing generated artifacts; a successful command that emits an empty
+   writer registry is not success.
+2. **Validate the consolidated runtime.** Run the writer, registry and native
+   mandatory-default checks, then the combined workspace and relevant native
+   read/write gates. Record skipped tests separately. Reconcile all 14 carried
+   review threads with their actual fixes and evidence; keep #779 unmerged
+   until the required checks pass.
+3. **Finish the useful baseline.** Join catalog table/key/variant identities to
+   authenticated generated reader/writer artifacts and exact refusal reasons.
+   Publish family counts and remaining shared capability, with explicit input
+   hashes. Require all 33,487 current catalog entries to be classified without
+   treating declarations as observations. Regenerate this denominator on upgrades.
+4. **Connect observations and Pages.** Attach pinned, group-qualified fixture
+   evidence separately for reading and real write/read-back operations. Publish
+   JSON and the human-readable family report, and make CI reject stale artifacts,
+   missing identities or unclassified rows.
+5. **Convert the next whole protocol.** Use the family report's refusal counts to
+   choose shared UserData, Keys or conversion support. Prove that ordinary source
+   row additions enter the generic path after regeneration. Repeat across the
+   full catalog; no per-tag handwritten mappings and no claim of full parity
+   while required protocols or behaviors remain unimplemented.
+
+## Permanent catalog accounting requirement
+
+The expanded goal requires a per-entry join, not just table totals. Preserve the
+full BuildTagLookup table/key/variant identity and case-insensitive name. Join it
+with hydrated runtime source, generated reader and writer artifacts, exact
+omission reasons, and observed read/write evidence. Every entry must have an
+explicit classification, including unresolved joins and unobserved behavior.
+
+The first complete baseline must publish JSON and a human-readable Pages report,
+state the denominators, and fail CI if regeneration leaves entries unclassified.
+PR #778 establishes the source snapshot and checks its conservation; it does
+not yet satisfy the joined implementation/observation ledger requirement.
+
+Measure these axes independently:
+
+1. Catalog entries and distinct names accounted for, preserving table context.
+2. Source rows accepted by generated readers and writers, with exact refusals.
+3. Observed Group1:TagName identities and occurrences read correctly; identities
+   and operations actually written and verified by pinned read-back.
+
+A fixture is required per distinct on-disk format/conversion behavior, not per
+catalog name. Generated verification identifies rows sharing that behavior;
+only tags actually exercised receive an observed-read or observed-write claim.

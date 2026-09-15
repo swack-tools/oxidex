@@ -92,7 +92,12 @@ pub(crate) struct TiffScalarFinalStageRecipe {
     /// Translation of the source's final `$newCount = length(...) / size`
     /// statement.  This is not inferred from a registry size.
     pub count_rule: NativeCountRule,
+    pub undefined_rule: NativeUndefinedRule,
     pub source_control_sha256: &'static str,
+    pub write_proc_source_sha256: &'static str,
+    pub registry_source_sha256: &'static str,
+    pub writer_source_sha256: &'static str,
+    pub main_source_sha256: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,11 +107,16 @@ pub(crate) enum NativeCountRule {
     CeilDivision,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NativeUndefinedRule {
+    /// WriteExif skips undefined new entries and drops existing entries. Keep
+    /// the request until defaults have been applied so it cannot be re-created.
+    DeleteEntry,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResolvedTiffScalarEdit {
-    /// Native does not create an entry for an undefined requested value.
-    NoEdit,
-    /// Native deletion is only meaningful once the row already exists.
+    /// Preserve explicit absence through later default insertion as well as removal.
     Delete { raw_tag_id: u16 },
     /// Native keeps an existing entry after the `NoOverwrite` fall-through.
     NoOverwrite { native_warning: String },
@@ -164,7 +174,7 @@ pub(crate) fn resolve_tiff_scalar_final_stage(
     recipe: &TiffScalarFinalStageRecipe,
     registry: &NativeTiffFormatRegistry,
     scalar: Scalar,
-    operation: ScalarWriteOperation,
+    _operation: ScalarWriteOperation,
     byte_order: TiffByteOrder,
 ) -> Result<ResolvedTiffScalarEdit> {
     if recipe.table_group0 != "EXIF" || recipe.conversion_format != recipe.wire_format {
@@ -176,9 +186,8 @@ pub(crate) fn resolve_tiff_scalar_final_stage(
         return Err(refused("final-stage source control sequence is unresolved"));
     }
     if matches!(scalar, Scalar::Undefined) {
-        return Ok(match operation {
-            ScalarWriteOperation::Create => ResolvedTiffScalarEdit::NoEdit,
-            ScalarWriteOperation::Update => ResolvedTiffScalarEdit::Delete {
+        return Ok(match recipe.undefined_rule {
+            NativeUndefinedRule::DeleteEntry => ResolvedTiffScalarEdit::Delete {
                 raw_tag_id: recipe.raw_tag_id,
             },
         });
@@ -190,8 +199,25 @@ pub(crate) fn resolve_tiff_scalar_final_stage(
     let write_value = recipe
         .write_value
         .ok_or_else(|| refused("source-derived WriteValue helper is unresolved"))?;
-    let serialized = serialize_scalar(write_value, scalar, recipe.conversion_format, None)?;
-    let bytes = final_bytes(serialized.value)?;
+    let bytes = if write_value.formats.contains(&recipe.conversion_format) {
+        let serialized = serialize_scalar(write_value, scalar, recipe.conversion_format, None)?;
+        final_bytes(serialized.value)?
+    } else {
+        let numeric = super::generated_scalar_rules::NUMERIC_SCALAR
+            .as_ref()
+            .ok_or_else(|| refused("numeric WriteValue source is unsupported"))?;
+        if numeric.writer_source_sha256 != recipe.writer_source_sha256
+            || numeric.main_source_sha256 != recipe.main_source_sha256
+        {
+            return Err(refused("numeric helper and final source captures differ"));
+        }
+        super::generated_scalar::serialize_numeric(
+            numeric,
+            &scalar,
+            recipe.conversion_format,
+            byte_order == TiffByteOrder::LittleEndian,
+        )?
+    };
     if bytes.is_empty() {
         return Ok(ResolvedTiffScalarEdit::NoOverwrite {
             native_warning: format!(
@@ -277,7 +303,12 @@ mod tests {
         wire_format: "string",
         write_value: Some(&WRITE),
         count_rule: NativeCountRule::CeilDivision,
+        undefined_rule: NativeUndefinedRule::DeleteEntry,
         source_control_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        write_proc_source_sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        registry_source_sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        writer_source_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        main_source_sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     };
 
     #[test]
@@ -330,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn undefined_deletes_only_existing_rows() {
+    fn undefined_preserves_absence_intent_for_existing_and_new_rows() {
         assert_eq!(
             resolve_tiff_scalar_final_stage(
                 &RECIPE,
@@ -340,7 +371,7 @@ mod tests {
                 TiffByteOrder::LittleEndian
             )
             .unwrap(),
-            ResolvedTiffScalarEdit::NoEdit
+            ResolvedTiffScalarEdit::Delete { raw_tag_id: 0x013c }
         );
         assert_eq!(
             resolve_tiff_scalar_final_stage(
