@@ -1,6 +1,6 @@
 # Resume metadata parity work
 
-Feature expansion is paused by the maintainer. The existing tranche is consolidated in PR [#779](https://github.com/swack-tools/oxidex/pull/779), which records the final gate and merge receipts. Do not open additional PRs for this tranche. PRs #682 and #683 remain separate. Resume only when requested.
+Resumed by the maintainer on 2026-09-15 after the tranche consolidated in PR [#779](https://github.com/swack-tools/oxidex/pull/779). The first resumed milestone is the generated Garmin FIT reader ([source review](garmin-fit-source-review.md)). PRs #682 and #683 remain separate.
 
 ## Read first
 

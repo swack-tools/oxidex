@@ -4,8 +4,9 @@ Status: source review for the first resumed parity milestone, 2026-09-15.
 Everything below was read from the pinned `Image/ExifTool/Garmin.pm`
 (`ProcessFIT`, lines 6293-6592) and the hydrated table dump. Line numbers
 refer to that pinned file. Nothing here is an observation of OxiDex output;
-see [the reader document](../../tools/exiftool-tables/GARMIN_FIT_READER.md)
-for generated acceptance and the native comparison.
+see `tools/exiftool-tables/GARMIN_FIT_READER.md` for the generated
+acceptance, and [Observed reading](#observed-reading) below for the native
+comparison.
 
 ## What the source tables are, and are not
 
@@ -98,3 +99,39 @@ This replaces the handwritten Session matches while keeping their output, and
 it avoids special cases for individual tags or field IDs. Rows needing Unknown
 mode, ExtractEmbedded mode, list-domain conversions or the one uncompiled
 ValueConv remain refused, each with its own reason.
+
+## Observed reading
+
+Instrument: `verify_garmin_fit_reader.py` (native and OxiDex `-j -a -G1`, in
+print and `-n` modes, projected onto FIT groups), local M5, clean source
+`ed5bf195`, OxiDex release binary built by the instrument, explicit Perl
+5.38.2, pinned ExifTool 13.59 (DOCX capability probe passed), 18 fixtures
+(17 synthetic behaviors plus `t/images/Garmin.fit`):
+
+- 36 of 36 comparisons passed: no value difference, no OxiDex-only identity,
+  and no missing identity except the declared list-domain refusal.
+- 125 distinct group-qualified FIT identities matched (plus
+  `ExifTool:Warning`), 220 matched occurrences in print mode.
+- They resolve to 117 distinct catalog coordinates: Session 57, Lap 45,
+  Record 10, GPS 2, Common 2 and the FIT header row. `Record:GPSAltitude` and
+  `Record:GPSSpeed` each name two Record rows, so no coordinate is credited
+  for them.
+- The real `Garmin.fit`: all 121 projected native identities matched in both
+  modes. The replaced handwritten reader reported 8 Session tags under the
+  family-0 key with no family-1 group, so none matched under this instrument.
+
+Corpus check, same host and source: `conformance.py` over the 194 files of
+the pinned `t/images` (family-0 view; OxiDex default `-j`, oracle
+`-G0:1:4 -a`). Base `b52e73ed` versus `ed5bf195`: FIT match 11 to 78, missing
+114 to 47; totals match 10,081 to 10,148 and missing 1,467 to 1,400, with
+VALUE (30), RENAME (8) and EXTRA (668) unchanged and every non-FIT format row
+identical. The 47 FIT rows still missing in that view are second occurrences
+of names reported by several messages (Session and Lap both report
+`AvgHeartRate`): OxiDex's default JSON prints one value per family-0 key.
+Under the group-qualified instrument above, every occurrence matches.
+
+Evidence (durable, outside the repository):
+`~/oxidex-ops/evidence/20260915-claude-parity-resume/` —
+`native-read-ed5bf195/comparison.json`, `conformance-timages-{base,new}.json`,
+`regen-2/` (canonical `regen-all.sh`, zero net delta) and `gate-1/`.
+No observed writing is claimed.
