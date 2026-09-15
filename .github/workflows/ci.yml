@@ -524,11 +524,25 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_join_catalog_hydrated.py'
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_replay_ifd_catalog_inputs.py'
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_catalog_userdata.py'
           # One post-load full dump binds writer declarations to this runner's
           # pinned native closure.  The hydrated reader dump remains the
           # catalog source coordinate authority.
           perl tools/exiftool-tables/dump_tables.pl "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/catalog-writer-source.json"
+          # Expression proofs and IFD identity ledgers bind the entire capture,
+          # including interpreter-specific envelopes. Re-prove on this runner;
+          # never relabel the committed oracle as a fresh native observation.
+          python3 tools/exiftool-tables/verify_exprs.py "$RUNNER_TEMP/catalog-writer-source.json" \
+            --perl perl --et-lib "$EXIFTOOL_SOURCE/lib" \
+            --ledger-out "$RUNNER_TEMP/catalog-expr-oracle.json"
+          python3 tools/exiftool-tables/replay_ifd_catalog_inputs.py \
+            --source "$RUNNER_TEMP/catalog-writer-source.json" \
+            --committed-ledger tools/exiftool-tables/ifd_identity_ledger.json \
+            --committed-rust src/exiftool_tables/ifd_tables.rs \
+            --committed-expr-ledger tools/exiftool-tables/expr_oracle_ledger.json \
+            --fresh-expr-ledger "$RUNNER_TEMP/catalog-expr-oracle.json" \
+            --output "$RUNNER_TEMP/catalog-ifd-identity.json"
           python3 tools/exiftool-tables/join_catalog_hydrated.py \
             --catalog "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" \
             --hydrated "$RUNNER_TEMP/hydrated-reader.json" \
@@ -541,9 +555,9 @@ jobs:
             --quicktime-userdata-ledger "tools/exiftool-tables/quicktime_generated_userdata_ledger.json" \
             --quicktime-userdata-rust "src/parsers/quicktime/generated_userdata_specs.rs" \
             --ifd-source "$RUNNER_TEMP/catalog-writer-source.json" \
-            --ifd-identity-ledger "tools/exiftool-tables/ifd_identity_ledger.json" \
+            --ifd-identity-ledger "$RUNNER_TEMP/catalog-ifd-identity.json" \
             --ifd-rust "src/exiftool_tables/ifd_tables.rs" \
-            --ifd-expr-ledger "tools/exiftool-tables/expr_oracle_ledger.json" \
+            --ifd-expr-ledger "$RUNNER_TEMP/catalog-expr-oracle.json" \
             --writer-source "$RUNNER_TEMP/catalog-writer-source.json" \
             --writer-final-ledger "tools/exiftool-tables/tiff_scalar_final_ledger.json" \
             --writer-final-rust "src/writers/generated_tiff_scalar_final_rules.rs" \
@@ -562,6 +576,12 @@ jobs:
               # Full native captures include runner-specific capture identity;
               # compare the replayed rows/artifact digests, not that envelope.
               document['inputs'].get('writer', {}).pop('source_sha256', None)
+              # The replay step already proved exact IFD Rust, complete rows,
+              # classifications, counts and expression approval inventory.
+              # Retain the actual bindings in each output receipt; only this
+              # cross-runner comparison excludes their differing envelopes.
+              for field in ('source_sha256', 'ledger_sha256', 'expr_ledger_sha256'):
+                  document['inputs'].get('ifd', {}).pop(field, None)
           if actual != expected:
               raise SystemExit('catalog/source ledger drift: regenerate and review')
           print('=== instrument: catalog/source ledger semantic check ===')
@@ -647,11 +667,11 @@ jobs:
           # runner).
           ROOT="$EXIFTOOL_SOURCE"
           LIB="$ROOT/lib"
-          DUMP="$RUNNER_TEMP/tables-${ET_VERSION}.json"
+          DUMP="$RUNNER_TEMP/catalog-writer-source.json"
           PROCESSORS="$RUNNER_TEMP/native-processors-${ET_VERSION}.tsv"
           unset PERL5LIB PERLLIB PERL5OPT
           export EXIFTOOL_PERL=perl LENS_TEST_PERL=perl
-          "$EXIFTOOL_PERL" tools/exiftool-tables/dump_tables.pl "$LIB" > "$DUMP"
+          # Reuse the complete capture already independently replayed above.
           "$EXIFTOOL_PERL" tools/exiftool-tables/oracle.pl "$LIB" > "$PROCESSORS"
           test -s "$DUMP"
           test -s "$PROCESSORS"
