@@ -328,20 +328,28 @@ fn should_cleanup_mandatory_ifd1(
 
 /// Apply only the generated WriteExif mandatory-only predicate after a scalar
 /// deletion has shrunk IFD1. Tag IDs and encodings come from the capture.
-fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
-    use crate::writers::{
-        generated_mandatory_defaults::MANDATORY_DEFAULTS, mandatory_defaults_runtime as mandatory,
-    };
-    mandatory_cleanup_capture_joins(&MANDATORY_DEFAULTS)?;
-    mandatory::require_ifd1_mandatory_cleanup(&MANDATORY_DEFAULTS)
-        .map_err(ExifToolError::unsupported_format)?;
+pub(crate) fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
+    use crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
     let defaults = MANDATORY_DEFAULTS
         .directories
         .iter()
         .find(|d| d.directory == "IFD1")
         .ok_or_else(|| refused("captured mandatory IFD1 defaults missing"))?;
+    cleanup_source_mandatory_ifd1_with_defaults(bytes, &MANDATORY_DEFAULTS, defaults.defaults)
+}
+
+/// Apply the captured mandatory-only predicate with the effective defaults for
+/// this carrier. JPEG obtains these after source-derived JFIF substitutions;
+/// ordinary TIFF uses the capture's immutable IFD1 defaults.
+pub(crate) fn cleanup_source_mandatory_ifd1_with_defaults(
+    bytes: &[u8],
+    recipe: &crate::writers::mandatory_defaults_runtime::MandatoryRecipe,
+    defaults: &[crate::writers::mandatory_defaults_runtime::MandatoryDefault],
+) -> Result<Vec<u8>> {
+    use crate::writers::mandatory_defaults_runtime as mandatory;
+    mandatory_cleanup_capture_joins(recipe)?;
+    mandatory::require_ifd1_mandatory_cleanup(recipe).map_err(ExifToolError::unsupported_format)?;
     let tag_ids = defaults
-        .defaults
         .iter()
         .map(|default| default.tag_id)
         .collect::<Vec<_>>();
@@ -351,7 +359,6 @@ fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
         true,
         |tag_id, field_type, count, value, actual_order| {
             let default = defaults
-                .defaults
                 .iter()
                 .find(|default| default.tag_id == tag_id)
                 .ok_or_else(|| {
@@ -366,12 +373,7 @@ fn cleanup_source_mandatory_ifd1(bytes: &[u8]) -> Result<Vec<u8>> {
                 }
             };
             mandatory::matches_existing_mandatory_value(
-                &MANDATORY_DEFAULTS,
-                *default,
-                field_type,
-                count,
-                value,
-                order,
+                recipe, *default, field_type, count, value, order,
             )
             .map_err(ExifToolError::unsupported_format)
         },

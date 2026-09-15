@@ -363,12 +363,24 @@ pub(crate) fn write_public_exif_transaction(
         let ifd1_entries_after = entry_edits::ifd1_entry_count(&output)?;
         let ifd1_shrank =
             has_ifd1_delete && ifd1_entries_after.unwrap_or(0) < ifd1_entries_before.unwrap_or(0);
-        let cleanup_triggered = needs_ifd1_defaults || ifd1_shrank;
-        let output = if cleanup_triggered && ifd1_mandatory.is_some() {
+        let output = if ifd1_shrank {
+            // Existing IFD1 cleanup must compare the survivor's physical
+            // type/count/value exactly as WriteExif does. Reuse the guarded
+            // generated predicate used for TIFF rather than the creation
+            // operands, which describe only new-directory encodings.
+            let properties = source_raw_properties(head)?;
+            let recipe = &crate::writers::generated_mandatory_defaults::MANDATORY_DEFAULTS;
+            let defaults =
+                mandatory::defaults_with_properties(recipe, "IFD1", false, 0, &properties)
+                    .map_err(ExifToolError::unsupported_format)?;
+            super::generated_public_write::cleanup_source_mandatory_ifd1_with_defaults(
+                &output, recipe, &defaults,
+            )?
+        } else if needs_ifd1_defaults && ifd1_mandatory.is_some() {
             entry_edits::remove_ifd1_if_only_mandatory(
                 &output,
                 ifd1_mandatory.as_ref().unwrap(),
-                cleanup_triggered,
+                true,
             )?
         } else {
             output
@@ -866,6 +878,7 @@ mod tests {
         include_artist: bool,
         include_generated_document_name: bool,
         include_nondefault_mandatory: bool,
+        include_native_fixed_width_mandatory: bool,
     ) -> Vec<u8> {
         let mut entries = Vec::new();
         if include_artist {
@@ -882,6 +895,25 @@ mod tests {
                 1,
                 [300_u32.to_le_bytes(), 1_u32.to_le_bytes()].concat(),
             ));
+        }
+        if include_native_fixed_width_mandatory {
+            // Compression uses its existing native byte carrier (BYTE), while
+            // the remaining entries retain their source defaults. This is the
+            // physical-survivor case that WriteExif prunes after Artist delete.
+            entries.push((0x0103, 1, 1, vec![6]));
+            entries.push((
+                0x011a,
+                5,
+                1,
+                [72_u32.to_le_bytes(), 1_u32.to_le_bytes()].concat(),
+            ));
+            entries.push((
+                0x011b,
+                5,
+                1,
+                [72_u32.to_le_bytes(), 1_u32.to_le_bytes()].concat(),
+            ));
+            entries.push((0x0128, 3, 1, vec![2, 0]));
         }
         entries.sort_by_key(|(tag_id, _, _, _)| *tag_id);
 
@@ -961,7 +993,7 @@ mod tests {
 
     #[test]
     fn public_ifd1_delete_preserves_existing_nondefault_mandatory_entries() {
-        let input = create_jpeg_with_existing_ifd1(true, true, true);
+        let input = create_jpeg_with_existing_ifd1(true, true, true, false);
         let mut baseline = MetadataMap::new();
         baseline.insert("IFD1:Artist", TagValue::new_string("artist"));
         baseline.insert("IFD1:DocumentName", TagValue::new_string("doc"));
@@ -1015,7 +1047,7 @@ mod tests {
 
     #[test]
     fn public_generated_only_ifd1_delete_omits_the_empty_directory() {
-        let input = create_jpeg_with_existing_ifd1(false, true, false);
+        let input = create_jpeg_with_existing_ifd1(false, true, false, false);
         let mut baseline = MetadataMap::new();
         baseline.insert("IFD1:DocumentName", TagValue::new_string("doc"));
         let plan = crate::writers::generated_public_write::plan_public_write(
@@ -1038,8 +1070,30 @@ mod tests {
     }
 
     #[test]
+    fn public_artist_delete_prunes_native_fixed_width_mandatory_ifd1() {
+        let input = create_jpeg_with_existing_ifd1(true, false, false, true);
+        let mut baseline = MetadataMap::new();
+        baseline.insert("IFD1:Artist", TagValue::new_string("artist"));
+        let plan = crate::writers::generated_public_write::plan_public_write(
+            &baseline,
+            &MetadataMap::new(),
+            &["IFD1:Artist".into()],
+        )
+        .unwrap();
+        let output =
+            write_public_exif_transaction(&TestReader::new(input.clone()), &baseline, plan)
+                .unwrap();
+        assert!(
+            !output
+                .windows(EXIF_IDENTIFIER.len())
+                .any(|window| window == EXIF_IDENTIFIER)
+        );
+        assert_eq!(output, without_exif_segment(&input));
+    }
+
+    #[test]
     fn public_artist_only_ifd1_delete_omits_the_empty_directory() {
-        let input = create_jpeg_with_existing_ifd1(true, false, false);
+        let input = create_jpeg_with_existing_ifd1(true, false, false, false);
         let mut baseline = MetadataMap::new();
         baseline.insert("IFD1:Artist", TagValue::new_string("artist"));
         let plan = crate::writers::generated_public_write::plan_public_write(
