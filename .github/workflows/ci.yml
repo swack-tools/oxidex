@@ -450,10 +450,11 @@ jobs:
     # termination pattern does not establish its cause. Try the already
     # supported 4x class while retaining the full source inventory.
     runs-on: warp-ubuntu-latest-x64-4x
-    # PR #761 at 149387d2 used 5m47s for setup/tier verification, then hit the
-    # former 20m job cap during native inventory mutations (679 tests reached).
-    # No check is removed; retain a finite bound with room for the full suite.
-    timeout-minutes: 35
+    # PR #779 run 34914682473 reached the 35m cap after source-bound replay,
+    # table verification and tier-2 regeneration, while the full tool suite
+    # was still exercising native source mutations. Keep all checks and allow
+    # a finite hour for the complete capture, verification and mutation suite.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The release comes from .exiftool-version, the repo-wide pin. This job
