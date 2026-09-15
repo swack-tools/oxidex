@@ -1,6 +1,6 @@
 # Generated metadata parity checkpoint
 
-Status: active and incomplete, 2026-09-14. All current work is consolidated in PR #779; #682 and #683 remain separate. The goal remains full source-derived read/write parity across the pinned ExifTool catalog.
+Status: feature expansion paused at the maintainer's request, 2026-09-14. Existing work is being finished and landed through PR #779; #682 and #683 remain separate. The full source-derived read/write parity objective remains incomplete. See [resume instructions](metadata-parity-resume.md).
 
 ## What is now accounted for
 
@@ -34,14 +34,19 @@ These are distinct immutable checkpoints, not a combined current coverage percen
 - Canonical regeneration at `6f34cff4` passed both selected tiers and the declared write-set check using Perl 5.38.2 and ExifTool 13.59. All-feature Clippy passed. All-feature Rust reported 6,093 passed, zero failed and 126 ignored, aggregated from completed test-result lines.
 - At `be0ffe0c`, the corrected Python gate completed 425 tests in 400.693 seconds, exit zero, with six skipped. The persisted controller verified unchanged HEAD and tracked files before and after the run. This clears the stale regeneration mock and capture failures; it does not validate subsequent writer changes.
 
-The published source snapshot deliberately has no observed credits attached. The historical observation publisher is implemented and requires live receipt validation; a fresh common-runtime snapshot still needs publication. Its integrity check preserves historical evidence when later source changes, while explicitly reporting that it is historical.
+The source-only snapshot deliberately has no observed credits. A separate [authenticated historical snapshot](catalog-hydrated-observed.md) is now published for the common runtime `be0ffe0c`. It contains observed reads for 26 catalog entries and observed writes for 19 catalog entries. All 1,530 native/public TIFF/JPEG cases matched; 1,353 positive write/readback operations span 38 Group1 names. UserData passed 126 comparisons across 63 fixtures. Those different denominators must not be conflated.
+
+Snapshot import replayed the live receipt validators with the original clean runtime preserved. The reviewed publisher repair aligned non-ASCII receipt hashing with the join producer. Current-source applicability is reported separately from historical runtime evidence; the snapshot does not validate later writer changes.
+
+The combined checkpoint at `bc4f617e` passed formatting, workspace/all-feature Clippy, 6,120 Rust tests (zero failed, 126 ignored), and 105 focused Python tests. Final generator review repairs authenticate byte packing maps and keep the public two-format scalar ABI separate from seven private cleanup formats. Both repairs passed independent review. Final `regen-all.sh` at `980d5efe` passed both tiers with zero net generated changes; native writer checks follow those repairs.
+
+Linux rehearsal teardown passed 41 executor/adapter tests, zero skips, at `be0ffe0c`. Recorded descendants were absent after teardown and the shared lock was released. The relevant source files are unchanged in the later integration. Exact historical mandatory-default source profiles for ExifTool 11.78 and 12.64 are now integrated and independently reviewed.
 
 ## Work remaining and how progress is measured
 
-1. Validate the integrated writer cleanup against actual native writes/readback. Its combined local gate passed standard all-feature Clippy, 6,120 Rust tests (zero failed, 126 ignored) and 35 focused Python tests; the validated patch is committed in `b3ac4316` and integrated in `cdb4ff51`. The broader all-target Clippy probe still reports pre-existing integration-test lint failures. Unmodeled physical formats remain an explicit parity gap.
-2. Publish the common-runtime observation snapshot from `be0ffe0c`. All M4 native reader/write stages passed; the 1,530-case matrix matched, including 1,353 positive writes/readback across 38 Group1 names. Publication found inconsistent non-ASCII receipt hashing; `97a4ab72` fixes the encoding contract and a regression test reproduces the original refusal. The 37-test catalog suite passes, and receipt import is being replayed. These historical observations do not validate the later writer cleanup. Count catalog entries, Group1 names, fixture occurrences and write operations separately.
-3. Resolve all 14 carried review findings with matching evidence before squash-merging #779. Linux descendant cleanup and an actual 11.78/12.64 generation/read/write rehearsal remain required. The current mandatory-default compiler deliberately refuses those older full WriteExif bodies; exact source-authenticated profiles must be added and validated before the rehearsal can pass. Keep further changes in this PR.
-4. Use the per-table omission ledger to choose the next shared protocol or conversion capability. Each milestone must reduce an identified refusal block, regenerate all affected rows and verify the relevant on-disk behaviors against the pin.
-5. Continue until the full catalog-wide goal is verified. The 179 reader declarations, 19 writer declarations and IFD schema counts are intermediate implementation evidence, not completion or an autogenerated-output percentage.
+1. Finish current writer/native checks, the materialized 11.78/12.64 rehearsal and four remaining carried review items. Merge the existing PR after its checks pass; do not expand feature scope during this pause.
+2. On resumption, use the per-table omission ledger to select the next shared protocol or conversion capability. Each milestone must reduce an identified refusal block, regenerate affected rows and verify the relevant on-disk behaviors against the pin.
+3. Grow observed read/write evidence separately from implementation declarations. Record catalog coordinates, Group1 names, fixture occurrences and positive write operations independently.
+4. Continue toward full catalog-wide parity when the maintainer resumes the work. The 179 reader declarations, 19 writer declarations and IFD schema counts are intermediate evidence, not completion or an autogenerated-output percentage.
 
-The original five-fixture pre-migration result remains in `docs/reference/quicktime-reading-baseline.json`. The full migration objective is in `docs/reference/source-family-migration-plan.md`; carried review evidence is in `docs/reference/parity-rollup-review-20260914.md`.
+The original five-fixture pre-migration result remains in `quicktime-reading-baseline.json`. The migration objective is in [the source-family plan](source-family-migration-plan.md); review evidence is in [the consolidated review record](parity-rollup-review-20260914.md).
