@@ -37,6 +37,7 @@ ARTIFACTS = (
     Artifact("keyed", 1, "codegen", "src/exiftool_tables/keyed_tables.rs"),
     Artifact("garmin-fit", 1, "codegen", "src/exiftool_tables/fit_tables.rs"),
     Artifact("garmin-fit-ledger", 1, "codegen", "tools/exiftool-tables/garmin_fit_ledger.json"),
+    Artifact("garmin-fit-source", 1, "garmin_fit_specs", "tools/exiftool-tables/fixtures/garmin_fit_source.json"),
     Artifact("serial", 1, "serial_directory", "src/exiftool_tables/serial_tables.rs"),
     Artifact("expr-ledger", 1, "verify_exprs", "tools/exiftool-tables/expr_oracle_ledger.json"),
     Artifact("value-ledger", 1, "codegen", "tools/exiftool-tables/value_conv_ledger.json"),

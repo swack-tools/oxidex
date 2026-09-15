@@ -13,7 +13,9 @@ for generated acceptance and the native comparison.
 `SubDirectory => { TagTable => ... }` edge with no other SubDirectory key, plus
 the non-numeric keys `vers` (header `ProtocolVersion`) and `Common` (a hidden
 edge to the three fields shared by every message). 160 of the 171 message
-edges carry `Unknown => 1`. The 172 target tables hold 1,898 field rows.
+edges carry `Unknown => 1`; one of them, `Pad` (105), has no table at all.
+The 170 message tables plus `Common` and `Dev` hold 1,725 field rows; with the
+173 rows of the map itself the family has 1,898 source rows.
 
 These tables have no `PROCESS_PROC`, so the IFD compiler emits them as
 `IfdTable` schemas. That is an accident of the dump's processor
@@ -78,10 +80,12 @@ Unknown-mode and ExtractEmbedded-mode behavior stay explicitly refused as
 
 A generated FIT message executor with runtime-typed conversion domains:
 
-1. `dump_tables.pl` captures the protocol facts that are missing today: the
-   `ProcessFIT` body digest, the live `%baseType` pad, format sizes, the
-   `IsTimeStamp` values, integer width, and the digests of the value readers
-   it depends on.
+1. A sidecar, `capture_garmin_fit_fact.pl` (in the style of
+   `capture_raw_jfif_fact.pl`), captures the protocol facts that are missing
+   today: the `ProcessFIT` body, the live `%baseType` pad, format sizes, the
+   `IsTimeStamp` values, integer width, and the bodies of the value readers
+   it depends on, including the `Get64u`/`Get64s` bodies ReadValue autoloads
+   from Writer.pl. The table dump itself is unchanged.
 2. A generator builds the message map, every field row and its conversions
    from the dump. Expressions compile through the shared compiler and must
    carry a PASS in the oracle ledger. Each carries its compiled domain;

@@ -322,12 +322,15 @@ pub enum Typed<T> {
 /// string-domain programs are verified against converted Perl strings, and a
 /// fixed-count list needs the separate list compiler, so both refuse.
 fn runtime_domain(value: &DecodedValue) -> Option<ConvDomain> {
-    /// 2^53: past this an `i64` has no exact `f64`, while Perl keeps a 64-bit
-    /// IV exact through interpolation and integer arithmetic. The compiled
-    /// numeric programs take `f64`, so such a value is outside their domain.
-    const EXACT_F64_INTEGER: i64 = 1 << 53;
+    /// Perl interpolates a 64-bit IV as its exact digits, while the compiled
+    /// numeric programs take `f64` and print through `%.15g`, which turns to
+    /// exponent notation at 1e15 (below 2^53, so smaller values are also
+    /// exact in `f64`). Larger integers are outside the numeric domain.
+    const PERL_EXACT_INTEGER_BOUND: u64 = 1_000_000_000_000_000;
     match value {
-        DecodedValue::Integer(integer) if integer.unsigned_abs() > EXACT_F64_INTEGER as u64 => None,
+        DecodedValue::Integer(integer) if integer.unsigned_abs() >= PERL_EXACT_INTEGER_BOUND => {
+            None
+        }
         DecodedValue::Integer(_) | DecodedValue::Float(_) => Some(ConvDomain::Num),
         DecodedValue::String(_) => Some(ConvDomain::Str),
         DecodedValue::Undefined(_) => Some(ConvDomain::Bytes),
@@ -1400,6 +1403,59 @@ mod tests {
     use super::*;
     use crate::exiftool_tables::TagGroups;
     use crate::exiftool_tables::{ALL_BINARY_TABLES, ExprId, Mask, Omitted, OtherId, find_table};
+
+    // --- run-time typed conversions (Garmin FIT) --------------------------
+
+    const BPM: TypedConv = TypedConv {
+        expr: ExprId::ValBpm49633A,
+        domain: ConvDomain::Num,
+    };
+    const DATE: TypedConv = TypedConv {
+        expr: ExprId::SelfConvertDateTimeVal7455B8,
+        domain: ConvDomain::Str,
+    };
+
+    #[test]
+    fn typed_conversion_runs_only_in_its_compiled_domain() {
+        assert_eq!(
+            render_typed(BPM, &DecodedValue::Integer(87)),
+            Typed::Value("87 bpm".to_string())
+        );
+        // Perl would interpolate the joined list; the list domain is a
+        // separate compiler, so the numeric program must not run here.
+        let list = DecodedValue::Array(vec![DecodedValue::Integer(87), DecodedValue::Integer(88)]);
+        assert_eq!(render_typed(BPM, &list), Typed::DomainMismatch);
+        assert_eq!(
+            render_typed(BPM, &DecodedValue::StringBytes(b"87".to_vec())),
+            Typed::DomainMismatch
+        );
+        assert_eq!(
+            render_typed(
+                DATE,
+                &DecodedValue::String("2024:11:08 03:33:20".to_string())
+            ),
+            Typed::Value("2024:11:08 03:33:20".to_string())
+        );
+        assert_eq!(
+            render_typed(DATE, &DecodedValue::Integer(1)),
+            Typed::DomainMismatch
+        );
+    }
+
+    #[test]
+    fn typed_conversion_refuses_integers_perl_prints_differently() {
+        // Perl interpolates a 64-bit IV as its exact digits; the compiled
+        // numeric programs take f64 and print through %.15g, which switches
+        // to exponent notation at 1e15. Below that bound both agree.
+        let largest = DecodedValue::Integer(999_999_999_999_999);
+        let first_divergent = DecodedValue::Integer(1_000_000_000_000_000);
+        assert_eq!(
+            render_typed(BPM, &largest),
+            Typed::Value("999999999999999 bpm".to_string())
+        );
+        assert_eq!(render_typed(BPM, &first_divergent), Typed::DomainMismatch);
+        assert_eq!(apply_typed(BPM, &first_divergent), Typed::DomainMismatch);
+    }
 
     #[test]
     fn generated_pentax_layout_decodes_offsets_types_and_conversions() {

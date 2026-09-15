@@ -4214,6 +4214,10 @@ def main():
         "compiled either way so the shared ExprId enum does not depend on this flag",
     )
     ap.add_argument(
+        "--fit-protocol-fact",
+        help="capture_garmin_fit_fact.pl output; without it the FIT protocol is refused",
+    )
+    ap.add_argument(
         "--fit-ledger-out",
         help="write the Garmin FIT acceptance/refusal ledger (requires --fit-out)",
     )
@@ -4289,8 +4293,12 @@ def main():
     # the ExprId enum is frozen for the same reason as keyed source: a
     # FIT-only approved conversion must not dangle.
     import garmin_fit_specs
+    fit_protocol = None
+    if args.fit_protocol_fact:
+        with open(args.fit_protocol_fact, encoding="utf-8") as fh:
+            fit_protocol = json.load(fh)
     fit_src, fit_ledger = (
-        garmin_fit_specs.generate(doc, verified_exprs)
+        garmin_fit_specs.generate(doc, verified_exprs, fit_protocol)
         if garmin_fit_specs.MODULE in (doc.get("modules") or {})
         and (names is None or garmin_fit_specs.MODULE in names)
         else ("", None)

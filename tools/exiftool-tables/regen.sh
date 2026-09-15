@@ -118,11 +118,21 @@ python3 "$HERE/verify_exprs.py" "$JSON" \
     --perl "$PERL" --et-lib "$LIB" --ledger-out "$EXPR_LEDGER"
 
 echo
+echo ">> capturing the Garmin FIT reader protocol"
+FIT_FACT="$CACHE/garmin-fit-protocol-$VERSION.json"
+"$PERL" "$HERE/capture_garmin_fit_fact.pl" "$LIB" > "$FIT_FACT"
+
+echo
 echo ">> generating Rust"
 python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --ifd-identity-ledger-out "$IFD_IDENTITY_LEDGER" --keyed-out "$KEYED_OUT" \
-    --fit-out "$FIT_OUT" --fit-ledger-out "$FIT_LEDGER" \
+    --fit-out "$FIT_OUT" --fit-ledger-out "$FIT_LEDGER" --fit-protocol-fact "$FIT_FACT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
+
+echo
+echo ">> writing the bounded Garmin FIT source the FIT spec tests replay"
+python3 "$HERE/garmin_fit_specs.py" "$JSON" --expr-ledger "$EXPR_LEDGER" \
+    --protocol-fact "$FIT_FACT" --write-bounded "$(artifact_path garmin-fit-source)" > /dev/null
 
 echo
 echo ">> generating QuickTime ItemList declarations from the fresh hydrated dump"

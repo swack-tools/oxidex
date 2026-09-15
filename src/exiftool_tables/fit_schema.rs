@@ -132,7 +132,10 @@ pub struct FitProtocol {
     /// Sorted by `num`.
     pub messages: &'static [FitMessage],
     pub common: &'static FitTable,
-    /// Groups of the `Garmin::FIT` table, which `ProtocolVersion` reports under.
+    /// The name of the FIT table's `vers` row (the header's protocol
+    /// version byte, Garmin.pm 6311); `None` if the generator refused it.
+    pub header_name: Option<&'static str>,
+    /// Groups of the `Garmin::FIT` table, which the header row reports under.
     pub header_group0: &'static str,
     pub header_group1: &'static str,
     pub header_group2: &'static str,

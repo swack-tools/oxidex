@@ -49,10 +49,18 @@ REVIEW = "docs/reference/garmin-fit-source-review.md"
 REVIEWED_PROCESS_FIT_DEPARSE_SHA256 = frozenset({
     "0bc600c4c1907a98068ec5983437b5edb6ca7d3bb0f2713342a91d84bb3663a8",
 })
-# Value readers ProcessFIT reaches through ReadValue. The same two reviewed
-# ReadValue deparse forms the QuickTime reader accepts (bounded and hydrated
-# captures differ only in declaration spelling).
+# Value readers ProcessFIT reaches through ReadValue, as captured by
+# capture_garmin_fit_fact.pl. ReadValue keeps both reviewed deparse forms the
+# QuickTime reader accepts (they differ only in declaration spelling).
 REVIEWED_DEPENDENCIES = {
+    # Writer.pl bodies ReadValue autoloads for int64u/int64s:
+    # `$hi * 4294967296 + $lo`, exact only with 64-bit Perl integers.
+    "Image::ExifTool::Get64u": frozenset({
+        "da066c5a2ec2110df52ae1e27ceb3d4fde6eb0d63ef35cf62514f5dbe34801c1",
+    }),
+    "Image::ExifTool::Get64s": frozenset({
+        "831a5eb32220dd5297798561ec68776b03f5d87429bcd8fd041d7aac98535f3c",
+    }),
     "Image::ExifTool::ReadValue": frozenset({
         "91213f64302774d00eb5fadd4835ca3fbcad3607c70eec98afd89d3423f0ad29",
         "226a9d703536d68c9b036bb4f122398d5a6ac95ef6a146fcaaa3420ccf65eedc",
@@ -216,7 +224,7 @@ def table_groups(meta, module_default):
             groups.get("2") or "Other")
 
 
-def compile_document(document, verified_exprs):
+def compile_document(document, verified_exprs, protocol=None):
     pin = (ROOT / ".exiftool-version").read_text().strip()
     if str(document.get("exiftool_version")) != pin:
         raise ValueError("source dump differs from repository pin")
@@ -224,7 +232,8 @@ def compile_document(document, verified_exprs):
     if not isinstance(module, dict) or FIT_TABLE not in (module.get("tables") or {}):
         raise ValueError("source dump has no Garmin::FIT table")
     tables = module["tables"]
-    protocol = document.get("garmin_fit_reader_protocol")
+    if protocol is None:
+        protocol = document.get("garmin_fit_reader_protocol")
     blocked = protocol_reasons(protocol)
     # Every declared base type enters ProcessFIT's field list and record
     # size, so one the executor cannot size makes every field list wrong.
@@ -236,6 +245,7 @@ def compile_document(document, verified_exprs):
 
     fit = tables[FIT_TABLE]
     header_groups = list(table_groups(fit.get("meta") or {}, MODULE))
+    header_name = None
     rows, messages = [], []
     edges = {}
     for key, edge in fit.get("tags", {}).items():
@@ -246,6 +256,8 @@ def compile_document(document, verified_exprs):
                     and set(edge) <= {"Name", "Notes"}):
                 reasons.append("changed_header_row")
             connection = "protocol_header"
+            if not reasons:
+                header_name = edge["Name"]
         elif key == COMMON_TABLE:
             sub = edge.get("SubDirectory") if isinstance(edge, dict) else None
             if not (isinstance(sub, dict) and sub == {"TagTable": f"Image::ExifTool::{MODULE}::{COMMON_TABLE}"}):
@@ -363,6 +375,7 @@ def compile_document(document, verified_exprs):
             "options": {"Unknown": "not_exposed", "ExtractEmbedded": "not_exposed",
                         "reachable_mode": "default"},
             "header_groups": header_groups,
+            "header_name": header_name,
         },
         "base_types": base_types,
         "messages": messages,
@@ -492,6 +505,7 @@ def render_rust(result) -> str:
         "    base_types: FIT_BASE_TYPES,",
         "    messages: FIT_MESSAGES,",
         f"    common: &{rust_ident(COMMON_TABLE)},",
+        "    header_name: " + ("None" if protocol["header_name"] is None else f"Some({rust_str(protocol['header_name'])})") + ",",
         f"    header_group0: {rust_str(protocol['header_groups'][0])},",
         f"    header_group1: {rust_str(protocol['header_groups'][1])},",
         f"    header_group2: {rust_str(protocol['header_groups'][2])},",
@@ -505,10 +519,23 @@ def serialized(result) -> str:
     return json.dumps(result, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
-def generate(document, verified_exprs):
-    """-> (rust_source, ledger_document) for codegen.py's ExprId census."""
-    result = compile_document(document, verified_exprs)
+def generate(document, verified_exprs, protocol=None):
+    """-> (rust_source, ledger_document) for codegen.py's ExprId census.
+
+    `protocol` is capture_garmin_fit_fact.pl's output; a bounded fixture
+    carries it inline as `garmin_fit_reader_protocol`."""
+    result = compile_document(document, verified_exprs, protocol)
     return render_rust(result), result
+
+
+def bounded_projection(document, protocol) -> dict:
+    """The Garmin module of a full dump plus the protocol fact: everything
+    `generate` reads, so the committed ledger and Rust replay from it."""
+    return {
+        "exiftool_version": document.get("exiftool_version"),
+        "modules": {MODULE: document["modules"][MODULE]},
+        "garmin_fit_reader_protocol": protocol,
+    }
 
 
 def load_verified(path: Path) -> set[str]:
@@ -519,12 +546,23 @@ def load_verified(path: Path) -> set[str]:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dump", type=Path, help="dump_tables.pl output containing the Garmin module")
+    parser.add_argument("--protocol-fact", type=Path,
+                        help="capture_garmin_fit_fact.pl output (default: the dump's inline fact)")
     parser.add_argument("--expr-ledger", type=Path,
                         default=ROOT / "tools/exiftool-tables/expr_oracle_ledger.json")
     parser.add_argument("--ledger-out", type=Path)
     parser.add_argument("--rust-out", type=Path)
+    parser.add_argument("--write-bounded", type=Path,
+                        help="write the bounded source fixture the unit tests replay")
     args = parser.parse_args()
-    rust, result = generate(json.loads(args.dump.read_text()), load_verified(args.expr_ledger))
+    document = json.loads(args.dump.read_text())
+    protocol = json.loads(args.protocol_fact.read_text()) if args.protocol_fact else None
+    if args.write_bounded:
+        if protocol is None:
+            parser.error("--write-bounded requires --protocol-fact")
+        args.write_bounded.write_text(json.dumps(bounded_projection(document, protocol), sort_keys=True,
+                                                 indent=1, ensure_ascii=False) + "\n")
+    rust, result = generate(document, load_verified(args.expr_ledger), protocol)
     if args.ledger_out:
         args.ledger_out.write_text(serialized(result))
     if args.rust_out:
