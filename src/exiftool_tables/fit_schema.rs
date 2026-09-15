@@ -119,6 +119,10 @@ pub struct FitMessage {
     /// `None` for an edge with no `SubDirectory`, for which ProcessFIT builds
     /// an empty table named after the message (Garmin.pm 6364-6375).
     pub table: Option<&'static FitTable>,
+    /// `Some(reason)` when the generator refused the edge. It stays in the map
+    /// so its records are never read as an unlisted `Unknown<num>` message;
+    /// the executor stops the walk at its definition.
+    pub withheld: Option<&'static str>,
 }
 
 /// The whole generated FIT protocol.

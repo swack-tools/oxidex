@@ -181,1027 +181,1198 @@
       "name": "FileID",
       "num": 0,
       "table": "FileID",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Capabilities",
       "num": 1,
       "table": "Capabilities",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DeviceSettings",
       "num": 2,
       "table": "DeviceSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "UserProfile",
       "num": 3,
       "table": "UserProfile",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HRMProfile",
       "num": 4,
       "table": "HRMProfile",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SDMProfile",
       "num": 5,
       "table": "SDMProfile",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "BikeProfile",
       "num": 6,
       "table": "BikeProfile",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ZonesTarget",
       "num": 7,
       "table": "ZonesTarget",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HRZone",
       "num": 8,
       "table": "HRZone",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "PowerZone",
       "num": 9,
       "table": "PowerZone",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MetZone",
       "num": 10,
       "table": "MetZone",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Sport",
       "num": 12,
       "table": "Sport",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TrainingSettings",
       "num": 13,
       "table": "TrainingSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DataScreen",
       "num": 14,
       "table": "DataScreen",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Goal",
       "num": 15,
       "table": "Goal",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Alert",
       "num": 16,
       "table": "Alert",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "RangeAlert",
       "num": 17,
       "table": "RangeAlert",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Session",
       "num": 18,
       "table": "Session",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "Lap",
       "num": 19,
       "table": "Lap",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "Record",
       "num": 20,
       "table": "Record",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "Event",
       "num": 21,
       "table": "Event",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DeviceUsed",
       "num": 22,
       "table": "DeviceUsed",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DeviceInfo",
       "num": 23,
       "table": "DeviceInfo",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Workout",
       "num": 26,
       "table": "Workout",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WorkoutStep",
       "num": 27,
       "table": "WorkoutStep",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Schedule",
       "num": 28,
       "table": "Schedule",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Location",
       "num": 29,
       "table": "Location",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WeightScale",
       "num": 30,
       "table": "WeightScale",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Course",
       "num": 31,
       "table": "Course",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "CoursePoint",
       "num": 32,
       "table": "CoursePoint",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "Totals",
       "num": 33,
       "table": "Totals",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Activity",
       "num": 34,
       "table": "Activity",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Software",
       "num": 35,
       "table": "Software",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "FileCapabilities",
       "num": 37,
       "table": "FileCapabilities",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MesgCapabilities",
       "num": 38,
       "table": "MesgCapabilities",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "FieldCapabilities",
       "num": 39,
       "table": "FieldCapabilities",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "FileCreator",
       "num": 49,
       "table": "FileCreator",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "BloodPressure",
       "num": 51,
       "table": "BloodPressure",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SpeedZone",
       "num": 53,
       "table": "SpeedZone",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Monitoring",
       "num": 55,
       "table": "Monitoring",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MapLayer",
       "num": 70,
       "table": "MapLayer",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Routing",
       "num": 71,
       "table": "Routing",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TrainingFile",
       "num": 72,
       "table": "TrainingFile",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HRV",
       "num": 78,
       "table": "HRV",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "UserMetrics",
       "num": 79,
       "table": "UserMetrics",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "AntRx",
       "num": 80,
       "table": "AntRx",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "AntTx",
       "num": 81,
       "table": "AntTx",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "AntChannelID",
       "num": 82,
       "table": "AntChannelID",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "OpenWaterEvent",
       "num": 89,
       "table": "OpenWaterEvent",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Length",
       "num": 101,
       "table": "Length",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MonitoringInfo",
       "num": 103,
       "table": "MonitoringInfo",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DeviceStatus",
       "num": 104,
       "table": "DeviceStatus",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Pad",
       "num": 105,
       "table": null,
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SlaveDevice",
       "num": 106,
       "table": "SlaveDevice",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "BestEffort",
       "num": 113,
       "table": "BestEffort",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "PersonalRecord",
       "num": 114,
       "table": "PersonalRecord",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Connectivity",
       "num": 127,
       "table": "Connectivity",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WeatherConditions",
       "num": 128,
       "table": "WeatherConditions",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "WeatherAlert",
       "num": 129,
       "table": "WeatherAlert",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "CadenceZone",
       "num": 131,
       "table": "CadenceZone",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HR",
       "num": 132,
       "table": "HR",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ActivityMetrics",
       "num": 140,
       "table": "ActivityMetrics",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "EPOStatus",
       "num": 141,
       "table": "EPOStatus",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SegmentLap",
       "num": 142,
       "table": "SegmentLap",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "MultisportSettings",
       "num": 143,
       "table": "MultisportSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MultisportActivity",
       "num": 144,
       "table": "MultisportActivity",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MemoGlob",
       "num": 145,
       "table": "MemoGlob",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SensorSettings",
       "num": 147,
       "table": "SensorSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SegmentID",
       "num": 148,
       "table": "SegmentID",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SegmentLeaderboardEntry",
       "num": 149,
       "table": "SegmentLeaderboardEntry",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SegmentPoint",
       "num": 150,
       "table": "SegmentPoint",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "SegmentFile",
       "num": 151,
       "table": "SegmentFile",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Metronome",
       "num": 152,
       "table": "Metronome",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WorkoutSession",
       "num": 158,
       "table": "WorkoutSession",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WatchfaceSettings",
       "num": 159,
       "table": "WatchfaceSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "GPS",
       "num": 160,
       "table": "GPS",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "CameraEvent",
       "num": 161,
       "table": "CameraEvent",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TimeStampCorrelation",
       "num": 162,
       "table": "TimeStampCorrelation",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "GyroscopeData",
       "num": 164,
       "table": "GyroscopeData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "AccelerometerData",
       "num": 165,
       "table": "AccelerometerData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ThreeDSensorCalibration",
       "num": 167,
       "table": "ThreeDSensorCalibration",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "VideoFrame",
       "num": 169,
       "table": "VideoFrame",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ConnectIQField",
       "num": 170,
       "table": "ConnectIQField",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Clubs",
       "num": 173,
       "table": "Clubs",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "OBDIIData",
       "num": 174,
       "table": "OBDIIData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "NMEASentence",
       "num": 177,
       "table": "NMEASentence",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "AviationAttitude",
       "num": 178,
       "table": "AviationAttitude",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Video",
       "num": 184,
       "table": "Video",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "VideoTitle",
       "num": 185,
       "table": "VideoTitle",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "VideoDescription",
       "num": 186,
       "table": "VideoDescription",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "VideoClip",
       "num": 187,
       "table": "VideoClip",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "OHRSettings",
       "num": 188,
       "table": "OHRSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WaypointHandling",
       "num": 189,
       "table": "WaypointHandling",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "GolfCourse",
       "num": 190,
       "table": "GolfCourse",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "GolfStats",
       "num": 191,
       "table": "GolfStats",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Score",
       "num": 192,
       "table": "Score",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Hole",
       "num": 193,
       "table": "Hole",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Shot",
       "num": 194,
       "table": "Shot",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ExdScreenConfiguration",
       "num": 200,
       "table": "ExdScreenConfiguration",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ExdDataFieldConfiguration",
       "num": 201,
       "table": "ExdDataFieldConfiguration",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ExdDataConceptConfiguration",
       "num": 202,
       "table": "ExdDataConceptConfiguration",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "FieldDescription",
       "num": 206,
       "table": "FieldDescription",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DeveloperDataID",
       "num": 207,
       "table": "DeveloperDataID",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MagnetometerData",
       "num": 208,
       "table": "MagnetometerData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "BarometerData",
       "num": 209,
       "table": "BarometerData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "OneDSensorCalibration",
       "num": 210,
       "table": "OneDSensorCalibration",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MonitoringHRData",
       "num": 211,
       "table": "MonitoringHRData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TimeInZone",
       "num": 216,
       "table": "TimeInZone",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "AlarmSettings",
       "num": 222,
       "table": "AlarmSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Set",
       "num": 225,
       "table": "Set",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "StressLevel",
       "num": 227,
       "table": "StressLevel",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MaxMetData",
       "num": 229,
       "table": "MaxMetData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MusicInfo",
       "num": 243,
       "table": "MusicInfo",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DiveSettings",
       "num": 258,
       "table": "DiveSettings",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DiveGas",
       "num": 259,
       "table": "DiveGas",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DiveAlarm",
       "num": 262,
       "table": "DiveAlarm",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ExerciseTitle",
       "num": 264,
       "table": "ExerciseTitle",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DiveSummary",
       "num": 268,
       "table": "DiveSummary",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SPO2Data",
       "num": 269,
       "table": "SPO2Data",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepDataInfo",
       "num": 273,
       "table": "SleepDataInfo",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepLevel",
       "num": 275,
       "table": "SleepLevel",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Jump",
       "num": 285,
       "table": "Jump",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "AADAccelFeatures",
       "num": 289,
       "table": "AADAccelFeatures",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "BeatIntervals",
       "num": 290,
       "table": "BeatIntervals",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "RespirationRate",
       "num": 297,
       "table": "RespirationRate",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAAccelerometerData",
       "num": 302,
       "table": "HSAAccelerometerData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAStepData",
       "num": 304,
       "table": "HSAStepData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSA_SPO2Data",
       "num": 305,
       "table": "HSA_SPO2Data",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAStressData",
       "num": 306,
       "table": "HSAStressData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSARespirationData",
       "num": 307,
       "table": "HSARespirationData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAHeartRateData",
       "num": 308,
       "table": "HSAHeartRateData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "MtbCx",
       "num": 309,
       "table": "MtbCx",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Race",
       "num": 310,
       "table": "Race",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SplitTime",
       "num": 311,
       "table": "SplitTime",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "Split",
       "num": 312,
       "table": "Split",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "SplitSummary",
       "num": 313,
       "table": "SplitSummary",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSABodyBatteryData",
       "num": 314,
       "table": "HSABodyBatteryData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAEvent",
       "num": 315,
       "table": "HSAEvent",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ClimbPro",
       "num": 317,
       "table": "ClimbPro",
-      "unknown": false
+      "unknown": false,
+      "withheld": []
     },
     {
       "name": "TankUpdate",
       "num": 319,
       "table": "TankUpdate",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "PowerMode",
       "num": 321,
       "table": "PowerMode",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TankSummary",
       "num": 323,
       "table": "TankSummary",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "GPSEvent",
       "num": 326,
       "table": "GPSEvent",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ECGSummary",
       "num": 336,
       "table": "ECGSummary",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ECGRawSample",
       "num": 337,
       "table": "ECGRawSample",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ECGSmoothSample",
       "num": 338,
       "table": "ECGSmoothSample",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepAssessment",
       "num": 346,
       "table": "SleepAssessment",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "FunctionalMetrics",
       "num": 356,
       "table": "FunctionalMetrics",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "RaceEvent",
       "num": 358,
       "table": "RaceEvent",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TrainingReadiness",
       "num": 369,
       "table": "TrainingReadiness",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HRVStatusSummary",
       "num": 370,
       "table": "HRVStatusSummary",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HRVValue",
       "num": 371,
       "table": "HRVValue",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "RawBBI",
       "num": 372,
       "table": "RawBBI",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DeviceAuxBatteryInfo",
       "num": 375,
       "table": "DeviceAuxBatteryInfo",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAGyroscopeData",
       "num": 376,
       "table": "HSAGyroscopeData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "TrainingLoad",
       "num": 378,
       "table": "TrainingLoad",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepSchedule",
       "num": 379,
       "table": "SleepSchedule",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepRestlessMoments",
       "num": 382,
       "table": "SleepRestlessMoments",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ChronoShotSession",
       "num": 387,
       "table": "ChronoShotSession",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "ChronoShotData",
       "num": 388,
       "table": "ChronoShotData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAConfigurationData",
       "num": 389,
       "table": "HSAConfigurationData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "DiveApneaAlarm",
       "num": 393,
       "table": "DiveApneaAlarm",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "CPEStatus",
       "num": 394,
       "table": "CPEStatus",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SkinTempOvernight",
       "num": 398,
       "table": "SkinTempOvernight",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HillScore",
       "num": 402,
       "table": "HillScore",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "EnduranceScore",
       "num": 403,
       "table": "EnduranceScore",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "HSAWristTemperatureData",
       "num": 409,
       "table": "HSAWristTemperatureData",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "NapEvent",
       "num": 412,
       "table": "NapEvent",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "WorkoutSchedule",
       "num": 428,
       "table": "WorkoutSchedule",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepDisruptionSeverityPeriod",
       "num": 470,
       "table": "SleepDisruptionSeverityPeriod",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     },
     {
       "name": "SleepDisruptionOvernightSeverity",
       "num": 471,
       "table": "SleepDisruptionOvernightSeverity",
-      "unknown": true
+      "unknown": true,
+      "withheld": []
     }
   ],
   "protocol": {

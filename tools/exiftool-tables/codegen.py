@@ -4211,11 +4211,12 @@ def main():
     ap.add_argument(
         "--fit-out",
         help="write Garmin FIT message/field specs (src/exiftool_tables/fit_tables.rs); "
-        "compiled either way so the shared ExprId enum does not depend on this flag",
+        "requires --fit-protocol-fact",
     )
     ap.add_argument(
         "--fit-protocol-fact",
-        help="capture_garmin_fit_fact.pl output; without it the FIT protocol is refused",
+        help="capture_garmin_fit_fact.pl output. Without it every FIT row is refused, so the "
+        "FIT conversions (and their ExprId variants) are absent from the shared enum",
     )
     ap.add_argument(
         "--fit-ledger-out",
@@ -4439,6 +4440,13 @@ def main():
     if args.fit_out:
         if fit_ledger is None:
             raise SystemExit("--fit-out requested but the dump has no Garmin module in scope")
+        if not args.fit_protocol_fact:
+            raise SystemExit("--fit-out requires --fit-protocol-fact (capture_garmin_fit_fact.pl)")
+        if not fit_ledger["protocol"]["admitted"]:
+            # Recorded, not fatal: an upgrade that changes ProcessFIT must
+            # regenerate to a fully withheld FIT table (and a failing
+            # `fit::tests::generated_protocol_is_admitted`) until reviewed.
+            print("WARNING: FIT protocol REFUSED: " + "; ".join(fit_ledger["protocol"]["reasons"]))
         with open(args.fit_out, "w", encoding="utf-8") as fh:
             fh.write(fit_src)
         print(f"wrote FIT specs      {args.fit_out}")

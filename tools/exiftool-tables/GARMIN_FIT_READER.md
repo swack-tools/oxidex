@@ -54,7 +54,11 @@ Run-time refusals, not visible in the ledger: a conversion whose compiled
 domain differs from the value's (notably a numeric conversion on a
 multi-element value, which Perl interpolates as a joined list), an integer
 of 16 or more digits under a numeric conversion, a hash PrintConv on a
-string value, a non-finite float, and a PrintConv returning `undef`.
+string value, any conversion of a value exact only as Perl text (an
+unsigned value above `i64::MAX`, a non-finite float; without a conversion
+these print as that text), and a PrintConv returning `undef`. The walk stops,
+keeping what it read, at a message edge the generator withheld, a compressed
+header with no definition, and a timestamp that is not an `i64` integer.
 
 Three different measurements, not to be combined:
 
@@ -111,8 +115,14 @@ onto the FIT message groups, `File:ProtocolVersion` and `ExifTool:Warning`:
 | `byte-field.fit` | `byte` values as binary placeholders |
 | `position-conversions.fit` | RawConv, ValueConv and `ToDMS` PrintConv chain |
 | `truncated.fit`, `missing-definition.fit` | Stream errors end the walk with the native warning |
+| `developer-descriptions.fit` | `DeveloperDataID`/`FieldDescription` records are Unknown-flagged, so no developer tag appears |
+| `text-only-values.fit` | Unsigned 64-bit above `i64::MAX`, `Inf`, and a list with `-Inf`, as Perl text |
+| `negative-timestamp.fit` | Negative running timestamp through the compressed-header arithmetic |
 | `list-domain-refusal.fit` | Declared refusal: a numeric conversion on a list value is withheld |
 
 A MISSING identity fails the run unless it is declared for that fixture; a
-value difference or an OxiDex-only identity always fails. Results for the
+value difference, an OxiDex-only identity (including one under an unexpected
+group), a warning-multiset difference, or a fixture with no FIT identity
+matched always fails. Warnings are compared as texts because ExifTool's JSON
+writer keeps one entry per key (its text output lists every occurrence). Results for the
 landed commit are in [the review record](../../docs/reference/garmin-fit-source-review.md#observed-reading).

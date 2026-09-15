@@ -6,8 +6,9 @@ pinned tree's real `t/images/Garmin.fit`), not one per tag. Each fixture is
 read by the source-pinned ExifTool and by a freshly built OxiDex, both with
 `-j -a -G1`, in print and no-print-conversion modes, and projected onto the
 groups the FIT protocol reports (every generated FIT family-1 group, the
-synthesized `Unknown<num>` groups, `File:ProtocolVersion` and
-`ExifTool:Warning`).
+synthesized `Unknown<num>` groups, `File:ProtocolVersion` and `ExifTool:*`).
+Warnings are compared as a multiset of texts: ExifTool's JSON writer keeps
+one entry per key, so its text output supplies every native occurrence.
 
 A projected identity is credited as observed only when both sides report it
 with the same value. A native identity OxiDex does not report is MISSING and
@@ -21,6 +22,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -175,6 +177,28 @@ def cases():
     fixtures["list-domain-refusal.fit"] = (
         Fit().define(0, 18, [(253, 4, UINT32), (16, 2, UINT8), (17, 1, UINT8)])
         .data(0, pack([(UINT32, TS), (UINT8, [87, 88]), (UINT8, 120)])).build())
+    # DeveloperDataID (207) and FieldDescription (206) are Unknown-flagged,
+    # so without -u their values are never captured and a developer field on
+    # a later Session record is skipped silently by both tools.
+    fixtures["developer-descriptions.fit"] = (
+        Fit().define(0, 207, [(1, 4, BYTE), (3, 1, UINT8)])
+        .data(0, pack([(BYTE, b"\xde\xad\xbe\xef"), (UINT8, 0)]))
+        .define(1, 206, [(0, 1, UINT8), (1, 1, UINT8), (2, 1, UINT8), (3, 6, STRING), (8, 4, STRING)])
+        .data(1, pack([(UINT8, 0), (UINT8, 0), (UINT8, UINT8), (STRING, b"speed\0"), (STRING, b"km/h")]))
+        .define(2, 18, [(253, 4, UINT32), (16, 1, UINT8)], dev=[(0, 1, 0)])
+        .data(2, pack([(UINT32, TS), (UINT8, 83)]) + b"\x2a").build())
+    # Values with no exact numeric carrier: an unsigned 64-bit value above
+    # i64::MAX and non-finite floats print as Perl text where no conversion
+    # reads them.
+    fixtures["text-only-values.fit"] = (
+        Fit().define(0, 18, [(253, 4, UINT32), (254, 8, UINT64), (25, 4, FLOAT32), (116, 8, FLOAT32)])
+        .data(0, pack([(UINT32, TS), (UINT64, 2**64 - 2), (FLOAT32, float("inf")),
+                       (FLOAT32, [float("-inf"), 1.5])])).build())
+    # A negative running timestamp: Perl masks its two's-complement value in
+    # the compressed-header arithmetic.
+    fixtures["negative-timestamp.fit"] = (
+        Fit().define(0, 34, [(253, 4, SINT32)]).data(0, pack([(SINT32, -5)]))
+        .define(1, 20, [(3, 1, UINT8)]).data(1, pack([(UINT8, 71)]), compressed_offset=7).build())
     return fixtures
 
 
@@ -190,17 +214,47 @@ def load_pairs(text):
     return json.loads(text, object_pairs_hook=lambda pairs: [pairs])[0][0]
 
 
+IDENTITY_GROUPS = {"System", "File", "Composite", "ExifTool"}
+WARNING_KEY = re.compile(r"ExifTool:Warning(?: \(\d+\))?")
+
+
+def fit_owned(key, groups):
+    group = key.split(":", 1)[0]
+    if WARNING_KEY.fullmatch(key):
+        return False  # compared separately, as a multiset (see warnings_of)
+    return (group in groups or (group.startswith("Unknown") and group[7:].isdigit())
+            or key == "File:ProtocolVersion"
+            or (group == "ExifTool" and key != "ExifTool:ExifToolVersion"))
+
+
+def native_warnings(oracle, path):
+    """Every native warning. ExifTool's JSON writer keeps one entry per key,
+    so `-j -a` shows only the first; the text form lists each occurrence."""
+    run = subprocess.run(oracle.command(["-config", "", "-a", "-G1", "-s", "-ExifTool:Warning", str(path)]),
+                         text=True, capture_output=True, check=True)
+    return sorted(line.split(":", 1)[1].strip() for line in run.stdout.splitlines()
+                  if line.startswith("[ExifTool]") and ":" in line)
+
+
+def oxidex_warnings(text):
+    return sorted(value for key, value in load_pairs(text) if WARNING_KEY.fullmatch(key))
+
+
 def project(text, groups):
-    pairs = load_pairs(text)
     out = {}
-    for key, value in pairs:
-        if ":" not in key:
-            continue
-        group = key.split(":", 1)[0]
-        if group in groups or (group.startswith("Unknown") and group[7:].isdigit()) \
-                or key in ("File:ProtocolVersion", "ExifTool:Warning"):
+    for key, value in load_pairs(text):
+        if ":" in key and fit_owned(key, groups):
             out.setdefault(key, []).append(value)
     return {key: sorted(json.dumps(v, sort_keys=True) for v in values) for key, values in out.items()}
+
+
+def stray_groups(text, native_text, groups):
+    """OxiDex keys under a group neither FIT-owned, an identity group, nor
+    reported natively (e.g. a family-0 `Garmin:` leak): EXTRA, not ignored."""
+    native = {key.split(":", 1)[0] for key, _ in load_pairs(native_text) if ":" in key}
+    return sorted(key for key, _ in load_pairs(text)
+                  if ":" in key and not fit_owned(key, groups)
+                  and key.split(":", 1)[0] not in IDENTITY_GROUPS | native)
 
 
 def main():
@@ -217,11 +271,12 @@ def main():
     if not oracle.verified or oracle.version != (ROOT / ".exiftool-version").read_text().strip():
         raise SystemExit("native oracle capability/version does not match the pin")
     ledger = json.loads(LEDGER.read_text())
-    # Message tables' family-1 groups (Common's own group never reports:
-    # ProcessFIT always overrides it with the message's), and the tables
-    # ProcessFIT synthesizes for edges without one.
-    groups = {ledger["tables"][message["table"]]["groups"][1] if message["table"] else message["name"]
-              for message in ledger["messages"]}
+    # Every family-1 group a FIT message can report under, withheld edges
+    # included, so a refused message still counts native tags as MISSING:
+    # each message table's group (Common's own never reports -- ProcessFIT
+    # overrides it with the message's), and the message names themselves.
+    groups = {table["groups"][1] for name, table in ledger["tables"].items() if name not in ("Common", "Dev")}
+    groups |= {message["name"] for message in ledger["messages"]}
     args.out.mkdir(parents=True)
     if args.oxidex:
         binary = instrument.resolve_binary(str(args.oxidex))
@@ -258,17 +313,26 @@ def main():
             matched = sorted(key for key in expected if got.get(key) == expected[key])
             missing = sorted(key for key in expected if key not in got)
             value = sorted(key for key in expected if key in got and got[key] != expected[key])
-            extra = sorted(key for key in got if key not in expected)
+            extra = sorted(set(key for key in got if key not in expected)
+                           | set(stray_groups(actual.stdout, native.stdout, groups)))
             allowed = EXPECTED_MISSING.get(name, {})
             unexplained = [key for key in missing if key not in allowed]
-            if value or extra or unexplained:
+            # A fixture neither tool parses would pass vacuously.
+            substantive = [key for key in matched
+                           if key != "File:ProtocolVersion" and not key.startswith("ExifTool:")]
+            warnings = {"native": native_warnings(oracle, path), "oxidex": oxidex_warnings(actual.stdout)}
+            if warnings["native"] == warnings["oxidex"] and warnings["native"]:
+                matched = sorted(matched + ["ExifTool:Warning"])
+            if value or extra or unexplained or not substantive or warnings["native"] != warnings["oxidex"]:
                 failures.append({"fixture": name, "mode": mode, "value": value, "extra": extra,
-                                 "missing_unexplained": unexplained})
+                                 "missing_unexplained": unexplained,
+                                 "no_substantive_match": not substantive, "warnings": warnings})
             rows.append({"fixture": name, "mode": mode,
                          "fixture_sha256": hashlib.sha256(contents).hexdigest(),
                          "native_sha256": hashlib.sha256(native.stdout.encode()).hexdigest(),
                          "oxidex_sha256": hashlib.sha256(actual.stdout.encode()).hexdigest(),
                          "matched": matched, "missing": missing, "value_mismatch": value, "extra": extra,
+                         "warnings": warnings,
                          "expected": expected, "actual": got})
     identities = sorted({key for row in rows for key in row["matched"]})
     occurrences = sum(len(row["matched"]) for row in rows if row["mode"] == "print")

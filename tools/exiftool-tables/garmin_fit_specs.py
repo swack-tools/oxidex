@@ -292,10 +292,14 @@ def compile_document(document, verified_exprs, protocol=None):
                     reasons.append("message_table_missing")
                 connection = "message_edge"
             unknown = isinstance(edge, dict) and str(edge.get("Unknown", "")) not in ("", "0")
-            if not reasons:
-                if table is not None:
-                    edges[table] = {"num": int(key), "unknown": unknown}
-                messages.append({"num": int(key), "name": name, "table": table, "unknown": unknown})
+            if not reasons and table is not None:
+                edges[table] = {"num": int(key), "unknown": unknown}
+            if key.isdigit() and int(key) <= 0xFFFF:
+                # A refused edge stays in the map, withheld, so the executor
+                # never mistakes its records for an unlisted `Unknown<num>`.
+                messages.append({"num": int(key), "name": name if isinstance(name, str) else "",
+                                 "table": None if reasons else table, "unknown": unknown,
+                                 "withheld": sorted(set(reasons))})
         rows.append({"identity": identity, "name": edge.get("Name") if isinstance(edge, dict) else None,
                      "generated": not reasons, "reasons": sorted(set(reasons)),
                      "runtime_connection": connection})
@@ -482,8 +486,9 @@ def render_rust(result) -> str:
     lines.append("static FIT_MESSAGES: &[FitMessage] = &[")
     for message in result["messages"]:
         table = "None" if message["table"] is None else f"Some(&{rust_ident(message['table'])})"
+        withheld = "None" if not message["withheld"] else f"Some({rust_str('; '.join(message['withheld']))})"
         lines.append(f"    FitMessage {{ num: {message['num']}, name: {rust_str(message['name'])}, "
-                     f"unknown: {str(message['unknown']).lower()}, table: {table} }},")
+                     f"unknown: {str(message['unknown']).lower()}, table: {table}, withheld: {withheld} }},")
     lines.append("];")
     lines.append("")
     lines.append("#[rustfmt::skip]")
@@ -538,9 +543,17 @@ def bounded_projection(document, protocol) -> dict:
     }
 
 
-def load_verified(path: Path) -> set[str]:
+def unbound_verified_expressions(path: Path) -> set[str]:
+    """The PASS set of an oracle ledger WITHOUT its dump binding. Only for the
+    unit tests, which replay the committed artifacts from the bounded fixture
+    (whose digest is not the full dump's). Generation uses
+    `codegen.load_oracle_ledger`, which also checks schema, pin, probe
+    failures and the dump digest."""
     ledger = json.loads(path.read_text())
-    return set(ledger.get("verified_expressions") or [])
+    verified = ledger.get("verified_expressions")
+    if not isinstance(verified, list) or not verified:
+        raise ValueError(f"{path}: no verified_expressions")
+    return set(verified)
 
 
 def main():
@@ -562,7 +575,10 @@ def main():
             parser.error("--write-bounded requires --protocol-fact")
         args.write_bounded.write_text(json.dumps(bounded_projection(document, protocol), sort_keys=True,
                                                  indent=1, ensure_ascii=False) + "\n")
-    rust, result = generate(document, load_verified(args.expr_ledger), protocol)
+    import codegen
+    verified = codegen.load_oracle_ledger(str(args.expr_ledger), str(args.dump),
+                                          str(document.get("exiftool_version") or ""))
+    rust, result = generate(document, verified, protocol)
     if args.ledger_out:
         args.ledger_out.write_text(serialized(result))
     if args.rust_out:

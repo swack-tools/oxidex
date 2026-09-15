@@ -26,7 +26,7 @@ RUST = ROOT / "src" / "exiftool_tables" / "fit_tables.rs"
 
 
 def verified():
-    return specs.load_verified(HERE / "expr_oracle_ledger.json")
+    return specs.unbound_verified_expressions(HERE / "expr_oracle_ledger.json")
 
 
 class BoundedReplayTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class BoundedReplayTests(unittest.TestCase):
         self.assertEqual(self.result["tables"]["Session"]["connection"], "default_mode_field_list")
         self.assertEqual(self.result["tables"]["FileID"]["connection"], "unknown_option_not_exposed")
         pad = [message for message in self.result["messages"] if message["name"] == "Pad"]
-        self.assertEqual(pad, [{"num": 105, "name": "Pad", "table": None, "unknown": True}])
+        self.assertEqual(pad, [{"num": 105, "name": "Pad", "table": None, "unknown": True, "withheld": []}])
 
     def test_conversions_carry_their_compiled_domain(self):
         session = {field["num"]: field["spec"] for field in self.result["tables"]["Session"]["fields"]}
@@ -94,6 +94,16 @@ class RegenerationTests(unittest.TestCase):
         self.assertIn('FitField { num: 240, name: "SourceAddedHeartRate", group2: None, raw_conv: None, '
                       'value_conv: None, print_conv: FitPrintConv::Typed(TypedConv { expr: ExprId::ValBpm49633A, '
                       'domain: ConvDomain::Num }), withheld: None }', rust)
+
+    def test_refused_edge_stays_in_the_map_withheld(self):
+        edges = self.document["modules"]["Garmin"]["tables"]["FIT"]["tags"]
+        edges["18"]["Condition"] = {"kind": "expr", "expr": "1"}
+        rust, result = specs.generate(self.document, verified())
+        session = next(message for message in result["messages"] if message["num"] == 18)
+        self.assertEqual(session["withheld"], ["unsupported_edge_property:Condition"])
+        self.assertIsNone(session["table"])
+        self.assertIn('FitMessage { num: 18, name: "Session", unknown: false, table: None, '
+                      'withheld: Some("unsupported_edge_property:Condition") }', rust)
 
     def test_unverified_expression_is_refused(self):
         self.session["240"] = {"Name": "Novel", "PrintConv": {"kind": "expr", "expr": '"$val novel-unit"'}}
@@ -137,18 +147,27 @@ class RegenerationTests(unittest.TestCase):
         self.assertTrue(result["protocol"]["admitted"])
 
 
-@unittest.skipUnless(os.environ.get("OXIDEX_TABLES_JSON") and os.environ.get("OXIDEX_PINNED_EXIFTOOL")
-                     and os.environ.get("EXIFTOOL_PERL"),
-                     "set OXIDEX_TABLES_JSON, OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_PERL for the pinned source")
+FRESH_INPUTS = ("OXIDEX_TABLES_JSON", "OXIDEX_PINNED_EXIFTOOL", "EXIFTOOL_PERL")
+
+
 class FreshSourceTests(unittest.TestCase):
     """The bounded fixture is exactly the fresh pinned source, so the replay
-    tests above prove the committed ledger and Rust are current."""
+    tests above prove the committed ledger and Rust are current. Skipped
+    locally without the inputs; in CI a missing input is a failure, so a
+    dropped export cannot silently turn this check off."""
 
     def test_bounded_fixture_is_the_fresh_projection(self):
-        fact = subprocess.run(
+        missing = [name for name in FRESH_INPUTS if not os.environ.get(name)]
+        if missing:
+            if os.environ.get("GITHUB_ACTIONS"):
+                self.fail(f"fresh pinned-source inputs missing in CI: {missing}")
+            self.skipTest(f"set {', '.join(FRESH_INPUTS)} for the pinned source")
+        capture = subprocess.run(
             [os.environ["EXIFTOOL_PERL"], str(HERE / "capture_garmin_fit_fact.pl"),
              str(Path(os.environ["OXIDEX_PINNED_EXIFTOOL"]) / "lib")],
-            check=True, capture_output=True, text=True).stdout
+            capture_output=True, text=True)
+        self.assertEqual(capture.returncode, 0, capture.stderr)
+        fact = capture.stdout
         fresh = json.loads(Path(os.environ["OXIDEX_TABLES_JSON"]).read_text())
         self.assertEqual(json.loads(BOUNDED.read_text()), specs.bounded_projection(fresh, json.loads(fact)))
 

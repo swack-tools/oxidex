@@ -10,13 +10,16 @@
 //! OxiDex exposes neither ExifTool's `Unknown` nor its `ExtractEmbedded`
 //! option, so this reproduces the default mode only: messages flagged
 //! `Unknown` get no field list, only the first record of each message number
-//! is read, and developer fields -- decodable only from the Unknown-flagged
-//! `DeveloperDataID`/`FieldDescription` messages -- are skipped by size.
+//! is read, and developer fields are skipped by size. (ProcessFIT decodes a
+//! developer field from values it captures out of `DeveloperDataID` (207)
+//! and `FieldDescription` (206) records; both edges carry `Unknown => 1`,
+//! Garmin.pm 3299-3308, so without `-u` nothing is captured.)
 //!
 //! Where the reviewed control flow reaches a state it does not model (a
 //! compressed header that would autovivify a missing definition, a timestamp
-//! field that is not an integer), the walk stops and keeps what it already
-//! extracted: an omission, never a guess.
+//! that is not an integer representable in `i64`, a message edge the
+//! generator withheld), the walk stops and keeps what it already extracted:
+//! an omission, never a guess.
 
 use std::collections::HashSet;
 
@@ -60,7 +63,7 @@ enum TimeStampSlot {
         base: &'static FitBaseType,
     },
     /// The value a compressed header computed (`[253, $ts]`).
-    Compressed(u64),
+    Compressed(i64),
 }
 
 /// The message a definition names, resolved against the generated map.
@@ -79,8 +82,11 @@ struct Definition {
     ts: Option<TimeStampSlot>,
 }
 
-fn resolve_message(num: u16) -> (Message, bool) {
-    match FIT_PROTOCOL.message(num) {
+/// The message a global number names, and whether it is flagged `Unknown`.
+/// `None` for an edge the generator withheld.
+fn resolve_message(num: u16) -> Option<(Message, bool)> {
+    Some(match FIT_PROTOCOL.message(num) {
+        Some(message) if message.withheld.is_some() => return None,
         Some(message) => (
             Message {
                 name: message.name.to_string(),
@@ -105,13 +111,15 @@ fn resolve_message(num: u16) -> (Message, bool) {
                 true,
             )
         }
-    }
+    })
 }
 
 /// A decoded field value and the Perl text ProcessFIT compares against the
-/// base type's invalid value.
+/// base type's invalid value. `value` is `None` when the executor cannot
+/// carry the number exactly (an unsigned value above `i64::MAX`, a non-finite
+/// float): such a field reports its Perl text only when no conversion applies.
 struct Decoded {
-    value: DecodedValue,
+    value: Option<DecodedValue>,
     text: String,
 }
 
@@ -135,40 +143,43 @@ fn perl_float_text(value: f64) -> String {
     }
 }
 
-/// One element as `ReadValue` would produce it. `None` for a value this
-/// executor cannot carry exactly (an unsigned 64-bit value above `i64::MAX`,
-/// a non-finite float inside an array).
+/// One numeric element as `ReadValue` returns it: its Perl text, and the
+/// value when it can be carried exactly. `Get64u` keeps an unsigned 64-bit
+/// value exact on a 64-bit Perl, so a value above `i64::MAX` is text only;
+/// so is a non-finite float (Perl prints `Inf`/`-Inf`/`NaN`).
 fn read_element(
     format: FitFormat,
     bytes: &[u8],
     big_endian: bool,
-) -> Option<(DecodedValue, String)> {
+) -> (Option<DecodedValue>, String) {
     let raw = read_unsigned(bytes, big_endian);
     let width = bytes.len() * 8;
     let signed = |raw: u64| ((raw << (64 - width)) as i64) >> (64 - width);
-    Some(match format {
-        FitFormat::Int8u | FitFormat::Int16u | FitFormat::Int32u | FitFormat::Int64u => {
-            let value = i64::try_from(raw).ok()?;
-            (DecodedValue::Integer(value), value.to_string())
-        }
+    let float = |value: f64| {
+        (
+            value.is_finite().then_some(DecodedValue::Float(value)),
+            perl_float_text(value),
+        )
+    };
+    match format {
+        FitFormat::Int8u | FitFormat::Int16u | FitFormat::Int32u | FitFormat::Int64u => (
+            i64::try_from(raw).ok().map(DecodedValue::Integer),
+            raw.to_string(),
+        ),
         FitFormat::Int8s | FitFormat::Int16s | FitFormat::Int32s | FitFormat::Int64s => {
             let value = signed(raw);
-            (DecodedValue::Integer(value), value.to_string())
+            (Some(DecodedValue::Integer(value)), value.to_string())
         }
-        FitFormat::Float => {
-            let value = f64::from(f32::from_bits(raw as u32));
-            (DecodedValue::Float(value), perl_float_text(value))
+        FitFormat::Float => float(f64::from(f32::from_bits(raw as u32))),
+        FitFormat::Double => float(f64::from_bits(raw)),
+        FitFormat::String | FitFormat::Undef => {
+            unreachable!("byte formats are not numeric elements")
         }
-        FitFormat::Double => {
-            let value = f64::from_bits(raw);
-            (DecodedValue::Float(value), perl_float_text(value))
-        }
-        FitFormat::String | FitFormat::Undef => return None,
-    })
+    }
 }
 
 /// `ReadValue(\$buff, $pos, $fmt, $count, $size)` for one field.
-fn decode(format: FitFormat, bytes: &[u8], big_endian: bool) -> Option<Decoded> {
+fn decode(format: FitFormat, bytes: &[u8], big_endian: bool) -> Decoded {
     match format {
         FitFormat::String => {
             // ExifTool.pm ReadValue: `s/\0.*//s` for `string`.
@@ -177,35 +188,32 @@ fn decode(format: FitFormat, bytes: &[u8], big_endian: bool) -> Option<Decoded> 
                 .position(|&byte| byte == 0)
                 .unwrap_or(bytes.len());
             let text = String::from_utf8_lossy(&bytes[..end]).into_owned();
-            Some(Decoded {
-                value: DecodedValue::StringBytes(bytes[..end].to_vec()),
+            Decoded {
+                value: Some(DecodedValue::StringBytes(bytes[..end].to_vec())),
                 text,
-            })
+            }
         }
-        FitFormat::Undef => Some(Decoded {
-            value: DecodedValue::Undefined(bytes.to_vec()),
+        FitFormat::Undef => Decoded {
+            value: Some(DecodedValue::Undefined(bytes.to_vec())),
             text: String::from_utf8_lossy(bytes).into_owned(),
-        }),
+        },
         _ => {
             let size = format.size();
             if bytes.len() == size {
-                let (value, text) = read_element(format, bytes, big_endian)?;
-                return Some(Decoded { value, text });
+                let (value, text) = read_element(format, bytes, big_endian);
+                return Decoded { value, text };
             }
-            let mut values = Vec::with_capacity(bytes.len() / size);
-            let mut texts = Vec::with_capacity(bytes.len() / size);
-            for chunk in bytes.chunks_exact(size) {
-                let (value, text) = read_element(format, chunk, big_endian)?;
-                if matches!(value, DecodedValue::Float(number) if !number.is_finite()) {
-                    return None;
-                }
-                values.push(value);
-                texts.push(text);
-            }
-            Some(Decoded {
-                value: DecodedValue::Array(values),
+            let (values, texts): (Vec<_>, Vec<_>) = bytes
+                .chunks_exact(size)
+                .map(|chunk| read_element(format, chunk, big_endian))
+                .unzip();
+            Decoded {
+                value: values
+                    .into_iter()
+                    .collect::<Option<Vec<_>>>()
+                    .map(DecodedValue::Array),
                 text: texts.join(" "),
-            })
+            }
         }
     }
 }
@@ -231,7 +239,8 @@ fn perl_lc(text: &str) -> String {
 struct Walk<'a> {
     metadata: &'a mut MetadataMap,
     warned: HashSet<String>,
-    timestamp: u64,
+    /// ProcessFIT's running `$timestamp` (a Perl integer; starts at 0).
+    timestamp: i64,
     doc_count: u32,
     doc_num: Option<u32>,
 }
@@ -278,7 +287,7 @@ impl Walk<'_> {
             if field.raw_conv.is_some() {
                 return;
             }
-            let DecodedValue::Undefined(bytes) = &decoded.value else {
+            let Some(DecodedValue::Undefined(bytes)) = &decoded.value else {
                 return;
             };
             let placeholder = TagValue::String(format!(
@@ -296,10 +305,28 @@ impl Walk<'_> {
             );
             return;
         }
-        let mut value = decoded.value;
-        if matches!(value, DecodedValue::Float(number) if !number.is_finite()) {
-            return; // Perl prints `Inf`/`-Inf`; not carried exactly here
-        }
+        let Some(mut value) = decoded.value else {
+            // Exact only as Perl text (an unsigned value above i64::MAX, a
+            // non-finite float): reported as that text when no conversion
+            // would read it, withheld otherwise.
+            if field.raw_conv.is_some()
+                || field.value_conv.is_some()
+                || !matches!(field.print_conv, FitPrintConv::None)
+            {
+                return;
+            }
+            let text = TagValue::String(decoded.text);
+            self.metadata.insert_occurrence_with_forms(
+                key,
+                text.clone(),
+                text,
+                None,
+                SHIM_DEFAULT_PRIORITY,
+                group1,
+                instance,
+            );
+            return;
+        };
         if let Some(conv) = field.raw_conv {
             match runtime::apply_typed(conv, &value) {
                 Typed::Value(converted) => value = converted,
@@ -398,13 +425,13 @@ fn parse_records(file: &[u8], metadata: &mut MetadataMap) {
         if flags & 0x80 != 0 {
             // Garmin.pm 6323-6336: compressed timestamp header.
             local = usize::from((flags >> 5) & 0x03);
-            let offset = u64::from(flags & 0x1f);
+            let offset = i64::from(flags & 0x1f);
             if offset != 0 {
-                if walk.timestamp > u64::from(u32::MAX) {
-                    break; // bit arithmetic on a non-u32 running timestamp: not modeled
-                }
-                let low = walk.timestamp & 0x1f;
-                let mut ts = (walk.timestamp & 0xffff_ffe0) + offset;
+                // Perl's `&` converts a negative IV to its two's-complement UV,
+                // so the masked value always fits: `0xffffffe0 + 0x3f` at most.
+                let running = walk.timestamp as u64;
+                let low = (running & 0x1f) as i64;
+                let mut ts = (running & 0xffff_ffe0) as i64 + offset;
                 if offset < low {
                     ts += 0x20;
                 }
@@ -435,7 +462,9 @@ fn parse_records(file: &[u8], metadata: &mut MetadataMap) {
                     u16::from_le_bytes([fixed[2], fixed[3]])
                 };
                 let field_count = usize::from(fixed[4]);
-                let (message, unknown) = resolve_message(message_num);
+                let Some((message, unknown)) = resolve_message(message_num) else {
+                    break; // an edge the generator withheld: its semantics are unreviewed
+                };
                 let Some(fields) = file.get(pos..pos + field_count * 3) else {
                     error = Some("Truncated definition message".to_string());
                     break;
@@ -526,9 +555,7 @@ fn parse_records(file: &[u8], metadata: &mut MetadataMap) {
                     match record.get(offset..offset + width) {
                         Some(bytes) if integer && size >= width => {
                             match read_element(base.format, bytes, definition.big_endian) {
-                                Some((DecodedValue::Integer(value), _)) => {
-                                    u64::try_from(value).ok()
-                                }
+                                (Some(DecodedValue::Integer(value)), _) => Some(value),
                                 _ => None,
                             }
                         }
@@ -537,7 +564,7 @@ fn parse_records(file: &[u8], metadata: &mut MetadataMap) {
                 }
             };
             let Some(value) = value else {
-                break; // a timestamp ProcessFIT would compare as a non-integer: not modeled
+                break; // not an i64 integer (a float, a short read, >= 2^63): not modeled
             };
             if walk.timestamp != value {
                 walk.timestamp = value;
@@ -547,7 +574,7 @@ fn parse_records(file: &[u8], metadata: &mut MetadataMap) {
                 if !(definition.field_info.is_some() && from_field) {
                     if let Some(field) = FIT_PROTOCOL.common.field(253) {
                         let decoded = Decoded {
-                            value: DecodedValue::Integer(value as i64),
+                            value: Some(DecodedValue::Integer(value)),
                             text: value.to_string(),
                         };
                         let group0 = FIT_PROTOCOL.common.group0;
@@ -595,7 +622,7 @@ fn parse_records(file: &[u8], metadata: &mut MetadataMap) {
             if let Some((table, field)) = target {
                 let decoded = record
                     .get(offset..offset + size)
-                    .and_then(|bytes| decode(base.format, bytes, definition.big_endian));
+                    .map(|bytes| decode(base.format, bytes, definition.big_endian));
                 // Garmin.pm 6557: drop the value whose text is the invalid value.
                 if let Some(decoded) =
                     decoded.filter(|decoded| perl_lc(&decoded.text) != base.invalid)
@@ -864,6 +891,19 @@ mod tests {
                 .iter()
                 .any(|occurrence| text(&occurrence.raw)
                     == "Missing definition for local message 3")
+        );
+    }
+
+    #[test]
+    fn generated_protocol_is_admitted() {
+        // A regeneration that refuses the protocol (a changed ProcessFIT or
+        // value reader) must fail loudly here, not ship a silent FIT reader.
+        assert_eq!(FIT_PROTOCOL.refusal, None);
+        assert!(
+            FIT_PROTOCOL
+                .messages
+                .iter()
+                .all(|message| message.withheld.is_none())
         );
     }
 
