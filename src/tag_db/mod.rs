@@ -223,6 +223,20 @@ static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = La
 /// assert_eq!(lookup_tag_name(0xF999, "IFD0"), "IFD0:0xF999");
 /// ```
 pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
+    lookup_tag_name_with_generated(
+        tag_id,
+        ifd_name,
+        generated_scalar_descriptor_fallback::terminal_reverse,
+        generated_scalar_descriptor_fallback::reverse_name,
+    )
+}
+
+fn lookup_tag_name_with_generated(
+    tag_id: u16,
+    ifd_name: &str,
+    terminal_reverse: impl Fn(u16, FormatFamily, &str) -> bool,
+    reverse_name: impl Fn(u16, FormatFamily, &str) -> Option<&'static str>,
+) -> String {
     // Determine which format family to look in based on IFD name
     // GPS IFD uses GPS format family, all others use EXIF format family
     let format_family = if ifd_name == "GPS" {
@@ -246,10 +260,8 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
     // physical source group, unless a current descriptor has reused the
     // numeric address in that group. Do not resurrect its old YAML/manual
     // reverse spelling during a source upgrade.
-    if generated_scalar_descriptor_fallback::terminal_reverse(tag_id, format_family, ifd_name) {
-        if let Some(name) =
-            generated_scalar_descriptor_fallback::reverse_name(tag_id, format_family, ifd_name)
-        {
+    if terminal_reverse(tag_id, format_family, ifd_name) {
+        if let Some(name) = reverse_name(tag_id, format_family, ifd_name) {
             return format!("{ifd_name}:{name}");
         }
         return format!("{}:0x{:04X}", ifd_name, tag_id);
@@ -275,9 +287,7 @@ pub fn lookup_tag_name(tag_id: u16, ifd_name: &str) -> String {
     // The YAML index missed. Before giving up on a name, consult the generated
     // final-scalar descriptor facts. They are scoped to the native physical
     // group, so an IFD0 name can never leak to IFD1 or a MakerNote.
-    if let Some(name) =
-        generated_scalar_descriptor_fallback::reverse_name(tag_id, format_family, ifd_name)
-    {
+    if let Some(name) = reverse_name(tag_id, format_family, ifd_name) {
         return format!("{ifd_name}:{name}");
     }
 

@@ -345,7 +345,15 @@ pub(crate) fn reverse_name(
     physical_group: &str,
 ) -> Option<&'static str> {
     (family == FormatFamily::EXIF).then_some(())?;
-    facts()?.iter().find_map(|fact| {
+    reverse_name_in(CURRENT.as_ref()?, raw_tag_id, physical_group)
+}
+
+fn reverse_name_in(
+    facts: &ComposedFacts,
+    raw_tag_id: u16,
+    physical_group: &str,
+) -> Option<&'static str> {
+    facts.current.iter().find_map(|fact| {
         (fact.raw_tag_id == raw_tag_id && fact.physical_group == physical_group)
             .then_some(fact.name)
     })
@@ -503,6 +511,82 @@ mod tests {
             )
             .is_some_and(|facts| facts.current.is_empty() && facts.terminal.len() == 1)
         );
+    }
+
+    #[test]
+    fn renamed_current_address_wins_retired_reverse_without_reviving_yaml() {
+        // Choose a real generated identity whose old spelling also exists in
+        // the legacy index. A YAML miss would not exercise the stale fallback.
+        let source = PUBLIC_SET_NEW_VALUE_MIGRATIONS
+            .iter()
+            .find(|migration| {
+                !migration.removed_or_unsupported
+                    && migration.write_group == "IFD0"
+                    && super::super::TAG_ID_TO_NAME_INDEX
+                        .get(&(migration.raw_tag_id, FormatFamily::EXIF))
+                        .is_some_and(|name| {
+                            name.split_once(':').map(|(_, name)| name) == Some(migration.name)
+                        })
+            })
+            .expect("a migrated source identity must have a real legacy YAML spelling");
+        let old_name = format!("{}:{}", source.write_group, source.name);
+        assert_eq!(
+            super::super::lookup_tag_name(source.raw_tag_id, source.write_group),
+            old_name
+        );
+        let lookup = |facts: &ComposedFacts| {
+            super::super::lookup_tag_name_with_generated(
+                source.raw_tag_id,
+                source.write_group,
+                |id, family, group| {
+                    family == FormatFamily::EXIF && terminal_reverse_in(facts, id, group)
+                },
+                |id, family, group| {
+                    (family == FormatFamily::EXIF)
+                        .then(|| reverse_name_in(facts, id, group))
+                        .flatten()
+                },
+            )
+        };
+        for retired_first in [false, true] {
+            let renamed = with_name(source, "SourceRenamedCurrentTag");
+            let addresses = [address_for(&renamed)];
+            let recipes = [final_for(&renamed)];
+            let retired = with_state(source, true);
+            let migrations = if retired_first {
+                [retired, renamed]
+            } else {
+                [renamed, retired]
+            };
+            let composed = compose(
+                Some(&addresses),
+                &migrations,
+                &recipes,
+                TIFF_SCALAR_FINAL_FORMAT_REGISTRY,
+            )
+            .expect("renamed operands retain the actual generated capture join");
+            assert_eq!(composed.current.len(), 1);
+            assert_eq!(composed.terminal.len(), 1);
+            assert!(terminal_descriptor_name_in(
+                &composed,
+                &format!("{}:{}", source.group0, source.name)
+            ));
+            assert_eq!(lookup(&composed), "IFD0:SourceRenamedCurrentTag");
+            assert_ne!(lookup(&composed), old_name);
+        }
+        let removed = compose(
+            Some(&[]),
+            &[with_state(source, true)],
+            &[],
+            TIFF_SCALAR_FINAL_FORMAT_REGISTRY,
+        )
+        .expect("removed ownership remains terminal without replacement operands");
+        assert!(removed.current.is_empty());
+        assert_eq!(
+            lookup(&removed),
+            format!("{}:0x{:04X}", source.write_group, source.raw_tag_id)
+        );
+        assert_ne!(lookup(&removed), old_name);
     }
 
     #[test]
