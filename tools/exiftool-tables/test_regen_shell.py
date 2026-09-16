@@ -47,7 +47,7 @@ if mode=='rustfmt':
     paths={str(pathlib.Path(x).resolve()) for x in args if x.endswith('.rs')}
     assert paths in [{str(root/a.path) for a in artifacts.select(tier,kind='rust')} for tier in (1,2)]
 elif mode=='chosen-perl':
-    if name in ('capture_exif_mandatory_fact.pl', 'capture_raw_jfif_fact.pl'):
+    if name in ('capture_exif_mandatory_fact.pl', 'capture_raw_jfif_fact.pl', 'capture_garmin_fit_fact.pl'):
         assert pathlib.Path(args[0]).resolve()==lib
         print(json.dumps({'marker':'explicit-A'}))
     elif name in ('dump_tables.pl','dump_filetypes.pl'):
@@ -86,6 +86,10 @@ else:
         dump(args[0]);output(flag('-o'),'binary');output(flag('--ifd-out'),'ifd')
         output(flag('--ifd-identity-ledger-out'),'ifd-identity-ledger')
         output(flag('--keyed-out'),'keyed')
+        assert flag('--fit-out')==artifact_path('garmin-fit')
+        assert flag('--fit-ledger-out')==artifact_path('garmin-fit-ledger')
+        assert json.loads(flag('--fit-protocol-fact').read_text())['marker']=='explicit-A'
+        output(flag('--fit-out'),'garmin-fit');output(flag('--fit-ledger-out'),'garmin-fit-ledger')
         output(flag('--value-conv-ledger-out'),'value-ledger')
     elif name=='serial_directory.py':
         dump(args[0]);output(flag('--rust-output'),'serial')
@@ -155,6 +159,13 @@ else:
         assert flag('--dump').name.startswith('tables-hydrated-reader-')
         for item in artifacts.select(producer=name.removesuffix('.py')):
             output(root/item.path,name)
+    elif name=='garmin_fit_specs.py':
+        # Writes only the bounded source fixture; the FIT specs themselves
+        # come from codegen.py, before the shared ExprId enum is frozen.
+        dump(args[0]);assert flag('--expr-ledger')==artifact_path('expr-ledger')
+        assert json.loads(flag('--protocol-fact').read_text())['marker']=='explicit-A'
+        assert flag('--write-bounded')==artifact('garmin_fit_specs')
+        output(flag('--write-bounded'),name)
     elif name=='codegen_subdirs.py':
         dump(args[0]);output(flag('-o'),name)
         if 'Pentax' in args: flag('-o').write_text('const PENTAX_CONV6: &[(i64, &str)] = &[\n];\n')

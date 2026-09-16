@@ -1,6 +1,6 @@
 # Generated metadata parity checkpoint
 
-Status: feature expansion paused at the maintainer's request, 2026-09-14. Existing work is consolidated in PR #779; its merge and final CI receipts are recorded on GitHub. PRs #682 and #683 remain separate. The full source-derived read/write parity objective remains incomplete. See [resume instructions](metadata-parity-resume.md).
+Status: historical checkpoint of 2026-09-14. Work consolidated in PR #779 and resumed on 2026-09-15 ([resume instructions](metadata-parity-resume.md)); the first resumed milestone is the [generated Garmin FIT reader](garmin-fit-source-review.md). PRs #682 and #683 remain separate. The full source-derived read/write parity objective remains incomplete.
 
 ## What is now accounted for
 

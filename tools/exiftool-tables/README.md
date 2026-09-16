@@ -110,6 +110,15 @@ and variant repetition. Shared byte offsets are reported separately from tag
 identity. See the [runtime repair report](../../docs/reference/sony-raw-id-runtime.md)
 for the restored field, bounded validation and remaining real-file acceptance.
 
+## Garmin FIT specs
+
+`codegen.py` also emits the Garmin FIT message/field specs
+(`src/exiftool_tables/fit_tables.rs`) and their ledger
+(`garmin_fit_ledger.json`) from the same dump plus the protocol sidecar
+captured by `capture_garmin_fit_fact.pl`. FIT conversions carry the domain
+they were compiled for, because a FIT field's format arrives in the file.
+See [GARMIN_FIT_READER.md](GARMIN_FIT_READER.md).
+
 ## Generated-output inventory and write checks
 
 ```sh
