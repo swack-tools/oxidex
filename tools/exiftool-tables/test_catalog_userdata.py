@@ -1,3 +1,4 @@
+import collections
 import copy
 import hashlib
 import json
@@ -92,6 +93,13 @@ class CatalogUserDataTests(unittest.TestCase):
         catalog["counts"] = {"catalog_total_tag_entries": len(catalog["entries"]),
                              "distinct_case_insensitive_entry_names": len(names),
                              "catalog_unique_tag_names": len(names)}
+        # A table subset carries its own native Writable aggregates.
+        facts = [row["native_writable"] for row in catalog["entries"]]
+        catalog["counts"].update(
+            catalog_native_writable_classes=dict(collections.Counter(fact["class"] for fact in facts)),
+            catalog_native_writable_states=dict(collections.Counter(fact["state"] for fact in facts)),
+            distinct_case_insensitive_writable_names=len({row["normalized_name"] for row in catalog["entries"]
+                                                          if row["native_writable"]["class"] == "writable"}))
         table = copy.deepcopy(self.document["modules"]["QuickTime"]["tables"]["UserData"])
         table["full_name"] = table_name
         hydrated = {"exiftool_version": catalog["exiftool_version"], "hydrated_layouts": {
