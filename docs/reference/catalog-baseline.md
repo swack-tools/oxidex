@@ -17,6 +17,12 @@ read or write every entry.
 | Hydrated table identities | 1,512 | Fully qualified native table names |
 | Container/navigation rows outside the entry denominator | 2,219 | Preserved separately, not counted as additional ordinary tags |
 | Shortcut helper entries | 11 | Macro helpers, not fabricated file layouts |
+| Entries writable by ExifTool | 14,169 | Native Writable column is anything but `no` and not Protected; the write-parity denominator |
+| Entries ExifTool writes only indirectly | 55 | Protected (`*`): written automatically, never directly |
+| Entries not writable by ExifTool | 19,262 | Native Writable column is `no` |
+| Entries omitted from TagNames | 1 | Counted by BuildTagLookup but not documented, so no Writable column |
+| Entries whose exact write format is ambiguous | 3 | Collapsed native columns; writability is still determined |
+| Distinct case-insensitive writable names | 7,068 | Distinct `lc(Name)` over writable entries |
 <!-- catalog-counts:end -->
 
 [Download the generated catalog snapshot](/measurements/catalog-source-13.59.json).
@@ -40,6 +46,32 @@ counter eligibility also contributes to the net difference. Both figures are
 preserved explicitly. They must not be substituted for one another in a coverage
 percentage. The catalog validator checks row and name conservation and refuses
 missing, duplicate, or malformed identities.
+
+## Native writability
+
+Each entry and container row also carries `native_writable`, taken from the
+**Writable** column that `BuildTagLookup` renders on the TagNames pages. The
+producer reads the column from the native builder's `TAG_NAME_INFO` rows; it
+does not recompute ExifTool's writability rules. Those rows collapse
+consecutive variants with the same name, write group and column, so the
+producer aligns each variant to its row by tag ID and name and refuses any row
+it cannot account for exactly.
+
+- `state`: `determined` (one column value), `format_ambiguous` (collapsed
+  variants with different columns; `candidates` lists them), or `not_listed`
+  (counted by `BuildTagLookup` but omitted from TagNames).
+- `class`, following the TagNames column legend: `not_writable` (`no`),
+  `writable_protected` (trailing `*` flag, written only indirectly),
+  `writable` (anything else), or `not_listed`. An ambiguous format must still
+  resolve to one class, or capture refuses.
+- `in_write_lookup`, set only for `=struct` columns. Natively `=struct`
+  replaces the whole column, including a `no`, so a struct entry is `writable`
+  only when `BuildTagLookup`'s own writable-tag lookup (`TAG_LOOKUP`) contains
+  it. In 13.59 that excludes one entry, `GM::mrld` `Channel01`, whose table has
+  no write procedure.
+
+Only `writable` entries are write-parity work. The class is a source fact, not
+a claim that OxiDex writes the tag.
 
 ## What is established, and what remains
 

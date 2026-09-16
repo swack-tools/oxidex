@@ -17,7 +17,9 @@ from pathlib import Path
 import re
 
 SCHEMA = "oxidex_catalog_observed_snapshot_v2"
-JOIN_SCHEMA = "oxidex_catalog_hydrated_join_v2"
+JOIN_SCHEMA = "oxidex_catalog_hydrated_join_v3"
+# Historical receipts keep the join schema they were produced with.
+JOIN_SCHEMAS = {"oxidex_catalog_hydrated_join_v2", JOIN_SCHEMA}
 OBSERVATION_FIELDS = {"observed_read", "observed_write", "observed_write_group1_names", "alternate_context_write_group1_names"}
 COMMIT = re.compile(r"[0-9a-f]{40}")
 
@@ -37,7 +39,7 @@ def read(path: Path) -> dict:
 
 
 def entries_by_identity(join: dict, label: str) -> dict[tuple[str, str, int], dict]:
-    if join.get("schema") != JOIN_SCHEMA:
+    if join.get("schema") not in JOIN_SCHEMAS:
         raise ValueError(f"{label} has an unsupported join schema")
     rows, counts = join.get("entries"), join.get("counts")
     if not isinstance(rows, list) or not isinstance(counts, dict):
@@ -79,6 +81,8 @@ def source_table_observations(observed: dict) -> dict:
 def validate_pair(source: dict, observed: dict) -> None:
     source_rows = entries_by_identity(source, "source join")
     observed_rows = entries_by_identity(observed, "observed join")
+    if source.get("schema") != observed.get("schema"):
+        raise ValueError("observed receipt join schema differs from its source join")
     if source.get("inputs", {}).get("exiftool_version") != observed.get("inputs", {}).get("exiftool_version"):
         raise ValueError("observed receipt ExifTool version differs from its source join")
     if set(source_rows) != set(observed_rows):

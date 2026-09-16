@@ -27,9 +27,17 @@ import final_scalar_stage
 import codegen
 import setnewvalue_public_migration_ledger as public_migration
 import quicktime_baseline as baseline
+from catalog_snapshot import validate_native_writable
 
-SCHEMA = "oxidex_catalog_hydrated_join_v2"
-CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
+SCHEMA = "oxidex_catalog_hydrated_join_v3"
+CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v2"
+# Writer states for rows whose native TagNames Writable class excludes them
+# from the direct-write denominator.
+NATIVE_WRITER_STATES = {
+    "not_writable": "native_not_writable",
+    "writable_protected": "native_writable_protected_indirect",
+    "not_listed": "native_not_listed",
+}
 QUICKTIME_READ_EVIDENCE_SCHEMA = "oxidex_quicktime_generated_read_evidence_v1"
 
 
@@ -145,6 +153,7 @@ def validate_catalog(catalog: dict) -> dict[tuple[str, str, int], dict]:
             raise ValueError("catalog entry identity is malformed")
         if set(require_mapping(entry.get("groups"), "catalog entry groups")) != {"0", "1", "2"}:
             raise ValueError("catalog entry is missing group identity")
+        validate_native_writable(entry.get("native_writable"))
         identity = (table, raw_key, variant)
         if identity in identities:
             raise ValueError(f"duplicate catalog identity: {identity!r}")
@@ -550,6 +559,15 @@ def quicktime_keys_observed_reads(evidence: dict | None, source: bytes | None, l
     return {(row["source_identity"]["raw_key"], tuple(row["source_identity"]["variant_path"]), row["tag_name"]) for row in credited}
 
 
+def write_parity(records: list[dict]) -> dict:
+    """Direct-write denominator: entries ExifTool's TagNames column marks writable."""
+    writable = [row for row in records if row["catalog"]["native_writable"] == "writable"]
+    return {"native_writable_entries": len(writable),
+            "generated_writer_declarations": sum(row["writer_implementation"].startswith("generated_") for row in writable),
+            "observed_matched_write": sum(row["observed_write"] == "observed_matched_write" for row in writable),
+            "native_writable_unique_case_insensitive_names": len({row["catalog"]["normalized_name"] for row in writable})}
+
+
 def table_coverage(records: list[dict], source_rows: dict, table_identities=()) -> dict:
     """Aggregate already-authenticated row classifications by source table.
 
@@ -574,6 +592,7 @@ def table_coverage(records: list[dict], source_rows: dict, table_identities=()) 
             "reader_refusal_reasons": dict(sorted(reasons.items())),
             "observed_read_catalog_entries": sum(row["observed_read"] == "observed_matched_read" for row in rows),
             "observed_write_catalog_entries": sum(row["observed_write"] == "observed_matched_write" for row in rows),
+            "native_writable_catalog_entries": sum(row["catalog"].get("native_writable") == "writable" for row in rows),
         }
     if sum(row["catalog_entries"] for row in result.values()) != len(records):
         raise ValueError("source-table catalog conservation failed")
@@ -764,11 +783,17 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                 raise ValueError("IFD ledger/catalog name identity differs")
             implementation = reader_implementation = "ifd_schema_declaration_" + ifd_candidate["reader_state"] + "_unobserved"
             refusal = (ifd_candidate["reasons"] + ifd_candidate["omissions"]) or None
+        native_writable = entry["native_writable"]["class"]
         writer_candidate = writer.get(identity)
         if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
+            if native_writable != "writable":
+                raise ValueError(f"generated writer declares a row ExifTool does not write directly: {identity!r}")
             writer_state = "generated_writer_declaration_unobserved"
             if implementation == "source_row_not_yet_consumed":
                 implementation = writer_state
+        elif native_writable != "writable":
+            # Only rows ExifTool writes directly are write-parity work.
+            writer_state = NATIVE_WRITER_STATES[native_writable]
         catalog_write_name = entry["groups"]["1"] + ":" + entry["name"]
         matching_write = (writer_state == "generated_writer_declaration_unobserved"
                           and catalog_write_name in write_names.get(identity, ()))
@@ -779,7 +804,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         writer_counts[writer_state] += 1
         observed_counts[observed_read] += 1
         records.append({"identity": {"table": identity[0], "raw_key": identity[1], "variant_index": identity[2]},
-                        "catalog": {"name": entry["name"], "normalized_name": entry["normalized_name"], "groups": entry["groups"]},
+                        "catalog": {"name": entry["name"], "normalized_name": entry["normalized_name"], "groups": entry["groups"],
+                                    "native_writable": native_writable},
                         "source": {"state": state, "name": source_name, "row_sha256": row_hash, "selector_row_sha256": selector_hash, "table_sha256": table_hash},
                         "source_layout_status": status, "source_derived_implementation": implementation,
                         "reader_implementation": reader_implementation, "writer_implementation": writer_state,
@@ -818,7 +844,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     result = {"schema": SCHEMA, "inputs": inputs, "counts": {"catalog_ordinary_entries": len(catalog_by_id),
             "hydrated_source_rows": len(hydrated_by_id), "joined_records": len(records), "status": dict(sorted(status_counts.items())),
             "implementation": dict(sorted(implementation_counts.items())), "reader_implementation": dict(sorted(reader_counts.items())),
-            "writer_implementation": dict(sorted(writer_counts.items())), "observed_read": dict(sorted(observed_counts.items()))},
+            "writer_implementation": dict(sorted(writer_counts.items())), "observed_read": dict(sorted(observed_counts.items())),
+            "native_writable": dict(sorted(Counter(row["catalog"]["native_writable"] for row in records).items())),
+            "write_parity": write_parity(records)},
             "families": {key: dict(sorted(value.items())) for key, value in sorted(family_counts.items())}, "entries": records}
     if writer_read_evidence is not None:
         from write_readback_evidence import summarize
@@ -845,6 +873,18 @@ def report(join: dict) -> str:
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["status"].items())
     lines += ["", "## Source-derived implementation", "", "| Classification | Count |", "| --- | ---: |"]
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["implementation"].items())
+    parity = counts["write_parity"]
+    lines += ["", "## Native writability", "",
+              "ExifTool's TagNames **Writable** column decides which entries are write-parity work. Only `writable` entries count toward the write denominator; `native_not_writable`, `native_writable_protected_indirect` (Protected, written only indirectly) and `native_not_listed` are not missing writers.", "",
+              "| Native Writable class | Count |", "| --- | ---: |"]
+    lines.extend(f"| `{key}` | {value} |" for key, value in counts["native_writable"].items())
+    lines += ["", "| Write parity (writable entries only) | Count |", "| --- | ---: |",
+              f"| Entries ExifTool writes directly | {parity['native_writable_entries']} |",
+              f"| Distinct case-insensitive writable names | {parity['native_writable_unique_case_insensitive_names']} |",
+              f"| With a generated writer declaration | {parity['generated_writer_declarations']} |",
+              f"| Observed write matching pinned ExifTool read-back | {parity['observed_matched_write']} |",
+              "", "## Writer implementation", "", "| Classification | Count |", "| --- | ---: |"]
+    lines.extend(f"| `{key}` | {value} |" for key, value in counts["writer_implementation"].items())
     lines += ["", "## Observed reads", "", "| Classification | Count |", "| --- | ---: |"]
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["observed_read"].items())
     if "write_readback" in counts:
@@ -855,14 +895,14 @@ def report(join: dict) -> str:
     lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved. Published historical receipts are linked at [authenticated catalog observations](catalog-hydrated-observed.md); they remain historical if this source ledger changes.", "",
               "## Source-table progress", "",
               "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations replay their exact source and, when bound, the expression-oracle ledger. Eligible, omitted and refused schema rows remain separate; schema eligibility does not establish a runtime route. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
-              "| Source table | Source variants | Catalog entries | Reader declarations | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
-              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+              "| Source table | Source variants | Catalog entries | Reader declarations | Natively writable entries | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for table, value in join.get("source_tables", {}).items():
         reader = sum(count for state, count in value["reader_implementation"].items()
                      if state.startswith("generated_") or state.startswith("ifd_schema_declaration_eligible"))
         writer = sum(count for state, count in value["writer_implementation"].items() if state.startswith("generated_"))
         reasons = "; ".join(f"{reason}: {count}" for reason, count in value["reader_refusal_reasons"].items()) or "—"
-        lines.append(f"| {table} | {value['source_variant_rows']} | {value['catalog_entries']} | {reader} | {writer} | {value['observed_read_catalog_entries']} | {value['observed_write_catalog_entries']} | {reasons} |")
+        lines.append(f"| {table} | {value['source_variant_rows']} | {value['catalog_entries']} | {reader} | {value['native_writable_catalog_entries']} | {writer} | {value['observed_read_catalog_entries']} | {value['observed_write_catalog_entries']} | {reasons} |")
     lines += ["",
               "## Families", "", "| Family | Status counts |", "| --- | --- |"]
     lines.extend(f"| {key} | " + ", ".join(f"{name}: {count}" for name, count in value.items()) + " |" for key, value in join["families"].items())

@@ -19,14 +19,21 @@ ARTIFACT = HERE.parents[1] / 'docs/public/measurements/catalog-source-13.59.json
 def fixture():
     table = 'Image::ExifTool::Example::Main'
     entries = [dict(table=table, raw_key=str(i), variant_index=0, name=name,
-                    normalized_name=name.lower(), groups={'0':'Example','1':'Example','2':'Other'})
-               for i, name in enumerate(('Sample', 'SAMPLE'))]
-    return dict(schema='oxidex_hydrated_catalog_universe_v1', exiftool_version='13.59',
+                    normalized_name=name.lower(), groups={'0':'Example','1':'Example','2':'Other'},
+                    native_writable=dict(state='determined', column=column, candidates=[], class_=None, in_write_lookup=None))
+               for i, (name, column) in enumerate((('Sample', 'int16u'), ('SAMPLE', 'no')))]
+    for entry in entries:
+        fact = entry['native_writable']
+        fact['class'] = snapshot.writable_class(fact.pop('class_') or fact['column'])
+    return dict(schema='oxidex_hydrated_catalog_universe_v2', exiftool_version='13.59',
                 entries=entries, unique_names=['sample'], container_rows_outside_total=[],
                 capture_environment={'perl_version':'v5.38.2','perl_executable_basename':'perl'},
                 counts=dict(catalog_total_tag_entries=2, catalog_unique_tag_names=1,
                             distinct_case_insensitive_entry_names=1, hydrated_tables=1,
-                            catalog_container_rows_outside_total=0),
+                            catalog_container_rows_outside_total=0,
+                            catalog_native_writable_classes={'writable': 1, 'not_writable': 1},
+                            catalog_native_writable_states={'determined': 2},
+                            distinct_case_insensitive_writable_names=1),
                 families={'hydrated_tables':[{'full_name':table}]},
                 producer={'sources':{'Image/ExifTool.pm':{},'Image/ExifTool/BuildTagLookup.pm':{}}})
 
@@ -52,6 +59,48 @@ class CatalogSnapshot(unittest.TestCase):
         ):
             doc = fixture(); mutate(doc)
             with self.assertRaises(ValueError): snapshot.validate(doc, '13.59')
+
+    def test_writable_class_follows_tagnames_column_semantics(self):
+        for column, expected in (('no', 'not_writable'), ('no+', 'not_writable'), ('-', 'not_writable'),
+                                 ('-no', 'not_writable'), ('int16u', 'writable'), ('string_+', 'writable'),
+                                 ('undef:', 'writable'), ('yes!', 'writable'),
+                                 ('-int32u', 'writable'), ('int16u[2]~', 'writable'),
+                                 ('string*', 'writable_protected'), ('int32u*!', 'writable_protected'),
+                                 ('undef[$size*2]', 'writable')):
+            with self.subTest(column=column):
+                self.assertEqual(snapshot.writable_class(column), expected)
+        # "=struct" overwrites a native "no"; the write lookup decides.
+        self.assertEqual(snapshot.writable_class('=struct+', True), 'writable')
+        self.assertEqual(snapshot.writable_class('=struct', False), 'not_writable')
+        with self.assertRaises(ValueError):
+            snapshot.writable_class('=struct')
+
+    def test_every_row_needs_a_consistent_native_writable_fact(self):
+        mutations = (
+            lambda d: d['entries'][0].pop('native_writable'),
+            lambda d: d['entries'][0]['native_writable'].update({'class': 'not_writable'}),
+            lambda d: d['entries'][0]['native_writable'].update({'state': 'guessed'}),
+            lambda d: d['entries'][0]['native_writable'].update(
+                {'state': 'format_ambiguous', 'column': None, 'candidates': ['int16u', 'no']}),
+            lambda d: d['entries'][1]['native_writable'].update(
+                {'state': 'not_listed', 'column': None, 'class': 'not_writable'}),
+            lambda d: d['counts']['catalog_native_writable_classes'].update({'writable': 2}),
+            lambda d: d['counts'].update(distinct_case_insensitive_writable_names=0),
+            lambda d: d['entries'][0]['native_writable'].update({'in_write_lookup': True}),
+            lambda d: d['entries'][0]['native_writable'].update({'column': '=struct'}),
+        )
+        for index, mutate in enumerate(mutations):
+            doc = fixture(); mutate(doc)
+            with self.subTest(mutation=index), self.assertRaises((ValueError, KeyError)):
+                snapshot.validate(doc, '13.59')
+
+    def test_ambiguous_format_keeps_candidates_when_writability_is_determined(self):
+        doc = fixture()
+        doc['entries'][0]['native_writable'] = {'state': 'format_ambiguous', 'column': None,
+                                                'candidates': ['int32s', 'int32s[2]'], 'class': 'writable',
+                                                'in_write_lookup': None}
+        doc['counts']['catalog_native_writable_states'] = {'determined': 1, 'format_ambiguous': 1}
+        snapshot.validate(doc, '13.59')
 
     def test_native_counter_is_not_assumed_to_be_set_cardinality(self):
         doc = fixture(); doc['counts']['catalog_unique_tag_names'] = 3
@@ -114,6 +163,11 @@ class CatalogSnapshot(unittest.TestCase):
     def test_checked_in_snapshot_conserves_all_entries(self):
         doc = json.loads(ARTIFACT.read_text())
         snapshot.validate(doc, (HERE.parents[1] / '.exiftool-version').read_text().strip())
+        # GM::mrld has no WRITE_PROC; natively its "no" column is replaced by
+        # "=struct", so it must not enter the write denominator.
+        channel = [e for e in doc['entries'] if e['table'] == 'Image::ExifTool::GM::mrld' and e['name'] == 'Channel01']
+        self.assertEqual([e['native_writable'] for e in channel], [
+            {'state': 'determined', 'column': '=struct', 'candidates': [], 'class': 'not_writable', 'in_write_lookup': False}])
         # Availability of a name is explicitly not a read/write capability.
         self.assertNotIn('observed_read', doc)
         self.assertNotIn('observed_write', doc)
