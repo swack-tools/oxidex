@@ -27,7 +27,7 @@ import final_scalar_stage
 import codegen
 import setnewvalue_public_migration_ledger as public_migration
 import quicktime_baseline as baseline
-from catalog_snapshot import validate_native_writable
+from catalog_snapshot import validate_native_writable, validate_native_writable_counts
 
 SCHEMA = "oxidex_catalog_hydrated_join_v3"
 CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v2"
@@ -158,6 +158,7 @@ def validate_catalog(catalog: dict) -> dict[tuple[str, str, int], dict]:
         if identity in identities:
             raise ValueError(f"duplicate catalog identity: {identity!r}")
         identities[identity] = entry
+    validate_native_writable_counts(entries, counts)
     return identities
 
 
@@ -785,9 +786,11 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             refusal = (ifd_candidate["reasons"] + ifd_candidate["omissions"]) or None
         native_writable = entry["native_writable"]["class"]
         writer_candidate = writer.get(identity)
+        # Refuse before source-row matching: an absent or conflicting row must
+        # not hide a writer declared for a row ExifTool does not write directly.
+        if writer_candidate is not None and native_writable != "writable":
+            raise ValueError(f"generated writer declares a row ExifTool does not write directly: {identity!r}")
         if writer_candidate is not None and state == "joined" and writer_candidate["name"] == entry["name"]:
-            if native_writable != "writable":
-                raise ValueError(f"generated writer declares a row ExifTool does not write directly: {identity!r}")
             writer_state = "generated_writer_declaration_unobserved"
             if implementation == "source_row_not_yet_consumed":
                 implementation = writer_state

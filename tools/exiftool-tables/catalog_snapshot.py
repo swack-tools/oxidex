@@ -59,18 +59,9 @@ def validate(document: dict, pin: str) -> None:
         if set(entry['groups']) != {'0', '1', '2'} or any(not isinstance(g, str) for g in entry['groups'].values()):
             raise ValueError('catalog row is missing group identity')
         validate_native_writable(entry.get('native_writable'))
-    classes, states, writable_names = {}, {}, set()
     for entry in entries:
         names.add(entry['normalized_name'])
-        fact = entry['native_writable']
-        classes[fact['class']] = classes.get(fact['class'], 0) + 1
-        states[fact['state']] = states.get(fact['state'], 0) + 1
-        if fact['class'] == 'writable':
-            writable_names.add(entry['normalized_name'])
-    if (counts.get('catalog_native_writable_classes') != classes
-            or counts.get('catalog_native_writable_states') != states
-            or counts.get('distinct_case_insensitive_writable_names') != len(writable_names)):
-        raise ValueError('native Writable classes are unaccounted')
+    validate_native_writable_counts(entries, counts)
     if sorted(names) != document['unique_names'] or len(names) != counts['distinct_case_insensitive_entry_names']:
         raise ValueError('unique public names are duplicated or unaccounted')
     if len(document['container_rows_outside_total']) != counts['catalog_container_rows_outside_total']:
@@ -128,6 +119,21 @@ def validate_native_writable(fact: object) -> None:
             raise ValueError('unlisted native Writable fact is malformed')
     else:
         raise ValueError('native Writable state is unknown')
+
+
+def validate_native_writable_counts(entries: list, counts: dict) -> None:
+    """Recompute the native Writable aggregates from already-validated rows."""
+    classes, states, writable_names = {}, {}, set()
+    for entry in entries:
+        fact = entry['native_writable']
+        classes[fact['class']] = classes.get(fact['class'], 0) + 1
+        states[fact['state']] = states.get(fact['state'], 0) + 1
+        if fact['class'] == 'writable':
+            writable_names.add(entry['normalized_name'])
+    if (counts.get('catalog_native_writable_classes') != classes
+            or counts.get('catalog_native_writable_states') != states
+            or counts.get('distinct_case_insensitive_writable_names') != len(writable_names)):
+        raise ValueError('native Writable classes are unaccounted')
 
 
 def source_fingerprint(library: Path) -> dict[str, str]:

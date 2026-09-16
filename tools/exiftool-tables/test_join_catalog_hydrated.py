@@ -32,10 +32,22 @@ def entry(name="Title", raw="titl", variant=0):
 
 def catalog(entries):
     names = sorted({item["normalized_name"] for item in entries})
+    counts = {"catalog_total_tag_entries": len(entries),
+              "distinct_case_insensitive_entry_names": len(names), "catalog_unique_tag_names": len(names)}
+    counts.update(writable_counts(entries))
     return {"schema": join.CATALOG_SCHEMA, "exiftool_version": "13.59", "entries": entries,
-            "unique_names": names, "producer": {"sources": copy.deepcopy(SOURCE)},
-            "counts": {"catalog_total_tag_entries": len(entries),
-                       "distinct_case_insensitive_entry_names": len(names), "catalog_unique_tag_names": len(names)}}
+            "unique_names": names, "producer": {"sources": copy.deepcopy(SOURCE)}, "counts": counts}
+
+
+def writable_counts(entries):
+    facts = [item.get("native_writable") or {} for item in entries]
+    classes, states = {}, {}
+    for fact in facts:
+        classes[fact.get("class")] = classes.get(fact.get("class"), 0) + 1
+        states[fact.get("state")] = states.get(fact.get("state"), 0) + 1
+    return {"catalog_native_writable_classes": classes, "catalog_native_writable_states": states,
+            "distinct_case_insensitive_writable_names": len({item["normalized_name"] for item, fact in zip(entries, facts)
+                                                             if fact.get("class") == "writable"})}
 
 
 def hydrated(tags, sources=SOURCE, total=1):
@@ -435,6 +447,15 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertIn("| Entries ExifTool writes directly | 1 |", report)
         self.assertIn("| `native_not_writable` | 1 |", report)
 
+    def test_catalog_native_writable_aggregates_are_recomputed(self):
+        for mutate in (lambda c: c["counts"]["catalog_native_writable_classes"].update(writable=5),
+                       lambda c: c["counts"]["catalog_native_writable_states"].update(determined=0),
+                       lambda c: c["counts"].update(distinct_case_insensitive_writable_names=9),
+                       lambda c: c["counts"].pop("catalog_native_writable_classes")):
+            cat = catalog([entry()]); mutate(cat)
+            with self.subTest(), self.assertRaisesRegex(ValueError, "native Writable classes"):
+                join.build(cat, hydrated({"titl": {"Name": "Title"}}), "c", "h")
+
     def test_catalog_without_native_writable_fact_refuses(self):
         row = entry()
         del row["native_writable"]
@@ -461,11 +482,15 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         digests = {key: "b" * 64 for key in ("source_sha256", "final_ledger_sha256", "final_rust_sha256",
                                              "public_ledger_sha256", "public_rust_sha256")}
         source = json.dumps({"native_write_capture_context": {"loaded_modules": loaded}}).encode()
-        with patch.object(join, "writer_implementation", return_value=writer), \
-                self.assertRaisesRegex(ValueError, "does not write directly"):
-            join.build(cat, hyd, "c", "h", writer_source=source, writer_final_ledger={}, writer_final_rust="final",
-                       writer_public_ledger={"source": {"capture": capture}}, writer_public_rust="public",
-                       writer_input_digests=digests)
+        args = dict(writer_source=source, writer_final_ledger={}, writer_final_rust="final",
+                    writer_public_ledger={"source": {"capture": capture}}, writer_public_rust="public",
+                    writer_input_digests=digests)
+        # Joined, name-conflicting and absent source rows all refuse.
+        for tags in ({"315": {"Name": "Artist"}}, {"315": {"Name": "Different"}}, {}):
+            hyd["hydrated_layouts"]["tables"][table]["tags"] = tags
+            with self.subTest(tags=tags), patch.object(join, "writer_implementation", return_value=writer), \
+                    self.assertRaisesRegex(ValueError, "does not write directly"):
+                join.build(cat, hyd, "c", "h", **args)
 
     def test_name_conflict_and_absence_are_truthful(self):
         result = join.build(catalog([entry("Title"), entry("Missing", "miss")]),
