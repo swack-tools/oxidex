@@ -17,7 +17,7 @@ import sys
 from typing import Any
 
 
-CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v1"
+CATALOG_SCHEMA = "oxidex_hydrated_catalog_universe_v2"
 REPORT_SCHEMA = "oxidex_hydrated_catalog_reconciliation_v1"
 
 

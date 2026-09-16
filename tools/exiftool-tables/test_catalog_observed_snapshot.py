@@ -42,6 +42,18 @@ def join(rows, evidence=None):
 
 
 class CatalogObservedSnapshotTests(unittest.TestCase):
+    def test_historical_join_schema_is_retained_but_not_mixed(self):
+        evidence = receipt()
+        for schema in sorted(publication.JOIN_SCHEMAS):
+            source, observed = join([entry("315")]), join([entry("315")], evidence)
+            source["schema"] = observed["schema"] = schema
+            publication.validate_snapshot(publication.make_authenticated_snapshot(
+                source, observed, {"quicktime_read_evidence": evidence}))
+        source, observed = join([entry("315")]), join([entry("315")], evidence)
+        source["schema"] = "oxidex_catalog_hydrated_join_v2"
+        with self.assertRaisesRegex(ValueError, "schema differs"):
+            publication.validate_pair(source, observed)
+
     def test_non_ascii_receipt_uses_catalog_join_hash_contract(self):
         sys.path.insert(0, str(PATH.parent))
         try:

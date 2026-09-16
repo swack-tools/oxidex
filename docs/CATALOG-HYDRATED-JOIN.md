@@ -81,6 +81,24 @@ declaration accounting part of the deterministic source denominator; it remains
 an unobserved declaration until an independent dispatch and fixture instrument
 is available.
 
+## Native writability and the write denominator
+
+Every record carries `catalog.native_writable`, copied from the catalog
+snapshot's native TagNames Writable class. It decides `writer_implementation`
+for rows without a generated writer:
+
+| Native class | `writer_implementation` | Write-parity work |
+| --- | --- | --- |
+| `writable` | `writer_not_declared` or `generated_writer_declaration_unobserved` | yes |
+| `not_writable` | `native_not_writable` | no |
+| `writable_protected` | `native_writable_protected_indirect` | no (ExifTool writes it only indirectly) |
+| `not_listed` | `native_not_listed` | no |
+
+A generated writer declaration on a row that is not natively `writable` is
+refused. `counts.write_parity` reports the direct-write denominator, generated
+declarations and matched write observations over `writable` entries only, and
+each source table reports `native_writable_catalog_entries`.
+
 ## Historical native observations
 
 `docs/public/measurements/catalog-hydrated-observed-13.59.json` is a separate

@@ -20,13 +20,14 @@ join = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(join)
 
 TABLE = "Image::ExifTool::QuickTime::ItemList"
+WRITABLE = {"state": "determined", "column": "string", "candidates": [], "class": "writable", "in_write_lookup": None}
 SOURCE = {"Image/ExifTool.pm": {"library_relative_path": "Image/ExifTool.pm", "sha256": "a"}}
 
 
 def entry(name="Title", raw="titl", variant=0):
     return {"table": TABLE, "raw_key": raw, "variant_index": variant, "name": name,
             "normalized_name": name.lower(), "groups": {"0": "QuickTime", "1": "ItemList", "2": "Audio"},
-            "no_lookup": False, "unknown": False}
+            "no_lookup": False, "unknown": False, "native_writable": WRITABLE}
 
 
 def catalog(entries):
@@ -98,9 +99,9 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertEqual(rows[("Image::ExifTool::Exif::Main", "316", 0)]["reader_state"], "omitted")
         entries = [
             {"table": "Image::ExifTool::Exif::Main", "raw_key": "315", "variant_index": 0,
-             "name": "Artist", "normalized_name": "artist", "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}, "no_lookup": False, "unknown": False},
+             "name": "Artist", "normalized_name": "artist", "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}, "no_lookup": False, "unknown": False, "native_writable": WRITABLE},
             {"table": "Image::ExifTool::Exif::Main", "raw_key": "316", "variant_index": 0,
-             "name": "Omitted", "normalized_name": "omitted", "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}, "no_lookup": False, "unknown": False},
+             "name": "Omitted", "normalized_name": "omitted", "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"}, "no_lookup": False, "unknown": False, "native_writable": WRITABLE},
         ]
         cat = catalog(entries)
         hyd = {"exiftool_version": "13.59", "hydrated_layouts": {
@@ -405,6 +406,66 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         self.assertEqual(result["counts"]["status"], {"source_row_joined": 2})
         self.assertEqual(result["entries"][0]["source"]["state"], "joined")
         self.assertRegex(result["entries"][0]["source"]["row_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_native_writability_decides_the_write_denominator(self):
+        facts = {
+            "Title": WRITABLE,
+            "Locked": {"state": "determined", "column": "no", "candidates": [], "class": "not_writable", "in_write_lookup": None},
+            "Derived": {"state": "determined", "column": "string*", "candidates": [], "class": "writable_protected", "in_write_lookup": None},
+            "Hidden": {"state": "not_listed", "column": None, "candidates": [], "class": "not_listed", "in_write_lookup": None},
+        }
+        rows = []
+        for raw, name in (("titl", "Title"), ("lock", "Locked"), ("derv", "Derived"), ("hide", "Hidden")):
+            rows.append({**entry(name, raw), "native_writable": facts[name]})
+        result = join.build(catalog(rows), hydrated({raw: {"Name": row["name"]} for raw, row in
+                                                     zip(("titl", "lock", "derv", "hide"), rows)}, total=4), "c", "h")
+        states = {row["catalog"]["name"]: (row["catalog"]["native_writable"], row["writer_implementation"])
+                  for row in result["entries"]}
+        self.assertEqual(states, {
+            "Title": ("writable", "writer_not_declared"),
+            "Locked": ("not_writable", "native_not_writable"),
+            "Derived": ("writable_protected", "native_writable_protected_indirect"),
+            "Hidden": ("not_listed", "native_not_listed"),
+        })
+        self.assertEqual(result["counts"]["write_parity"], {
+            "native_writable_entries": 1, "generated_writer_declarations": 0,
+            "observed_matched_write": 0, "native_writable_unique_case_insensitive_names": 1})
+        self.assertEqual(result["source_tables"][TABLE]["native_writable_catalog_entries"], 1)
+        report = join.report(result)
+        self.assertIn("| Entries ExifTool writes directly | 1 |", report)
+        self.assertIn("| `native_not_writable` | 1 |", report)
+
+    def test_catalog_without_native_writable_fact_refuses(self):
+        row = entry()
+        del row["native_writable"]
+        with self.assertRaisesRegex(ValueError, "native Writable"):
+            join.build(catalog([row]), hydrated({"titl": {"Name": "Title"}}), "c", "h")
+
+    def test_generated_writer_on_a_natively_unwritable_row_refuses(self):
+        import write_readback_evidence
+        table = "Image::ExifTool::Exif::Main"
+        item = {**entry("Artist", "315"), "table": table,
+                "groups": {"0": "EXIF", "1": "IFD0", "2": "Author"},
+                "native_writable": {"state": "determined", "column": "no", "candidates": [], "class": "not_writable", "in_write_lookup": None}}
+        cat = catalog([item])
+        capture, sources, loaded = {"exiftool_version": "13.59"}, {}, {}
+        for field, path in write_readback_evidence.SOURCE_FILES.items():
+            capture[field] = "a" * 64
+            sources[path] = {"library_relative_path": path, "sha256": "a" * 64}
+            loaded[path] = "a" * 64
+        cat["producer"]["sources"] = sources
+        hyd = {"exiftool_version": "13.59", "hydrated_layouts": {
+            "catalog_counts": {"total_tag_entries": 1}, "source_provenance": {"sources": sources},
+            "tables": {table: {"full_name": table, "tags": {"315": {"Name": "Artist"}}}}}}
+        writer = {(table, "315", 0): {"name": "Artist", "write_group": "IFD0"}}
+        digests = {key: "b" * 64 for key in ("source_sha256", "final_ledger_sha256", "final_rust_sha256",
+                                             "public_ledger_sha256", "public_rust_sha256")}
+        source = json.dumps({"native_write_capture_context": {"loaded_modules": loaded}}).encode()
+        with patch.object(join, "writer_implementation", return_value=writer), \
+                self.assertRaisesRegex(ValueError, "does not write directly"):
+            join.build(cat, hyd, "c", "h", writer_source=source, writer_final_ledger={}, writer_final_rust="final",
+                       writer_public_ledger={"source": {"capture": capture}}, writer_public_rust="public",
+                       writer_input_digests=digests)
 
     def test_name_conflict_and_absence_are_truthful(self):
         result = join.build(catalog([entry("Title"), entry("Missing", "miss")]),

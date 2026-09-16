@@ -19,7 +19,7 @@ import instrument
 
 
 def validate(document: dict, pin: str) -> None:
-    if document.get('schema') != 'oxidex_hydrated_catalog_universe_v1':
+    if document.get('schema') != 'oxidex_hydrated_catalog_universe_v2':
         raise ValueError('unsupported catalog schema')
     if document.get('exiftool_version') != pin:
         raise ValueError('catalog version differs from repository pin')
@@ -58,8 +58,19 @@ def validate(document: dict, pin: str) -> None:
             raise ValueError('invalid case-insensitive public name identity')
         if set(entry['groups']) != {'0', '1', '2'} or any(not isinstance(g, str) for g in entry['groups'].values()):
             raise ValueError('catalog row is missing group identity')
+        validate_native_writable(entry.get('native_writable'))
+    classes, states, writable_names = {}, {}, set()
     for entry in entries:
         names.add(entry['normalized_name'])
+        fact = entry['native_writable']
+        classes[fact['class']] = classes.get(fact['class'], 0) + 1
+        states[fact['state']] = states.get(fact['state'], 0) + 1
+        if fact['class'] == 'writable':
+            writable_names.add(entry['normalized_name'])
+    if (counts.get('catalog_native_writable_classes') != classes
+            or counts.get('catalog_native_writable_states') != states
+            or counts.get('distinct_case_insensitive_writable_names') != len(writable_names)):
+        raise ValueError('native Writable classes are unaccounted')
     if sorted(names) != document['unique_names'] or len(names) != counts['distinct_case_insensitive_entry_names']:
         raise ValueError('unique public names are duplicated or unaccounted')
     if len(document['container_rows_outside_total']) != counts['catalog_container_rows_outside_total']:
@@ -69,6 +80,54 @@ def validate(document: dict, pin: str) -> None:
     sources = document['producer']['sources']
     if 'Image/ExifTool/BuildTagLookup.pm' not in sources or 'Image/ExifTool.pm' not in sources:
         raise ValueError('native source provenance is missing')
+
+
+WRITABLE_CLASSES = {'writable', 'writable_protected', 'not_writable', 'not_listed'}
+
+
+def writable_class(column: str, in_write_lookup: bool | None = None) -> str:
+    """BuildTagLookup POD semantics for one native Writable column value.
+
+    Anything but ``no`` is writable; a trailing ``*`` flag marks a Protected
+    tag that ExifTool writes only indirectly; a leading ``-`` links a separate
+    table.  Natively ``=struct`` replaces the whole column, even ``no``, so a
+    struct's class comes from BuildTagLookup's writable-tag lookup.
+    """
+    value = column[1:] if column.startswith('-') else column
+    if value.startswith('=struct'):
+        if type(in_write_lookup) is not bool:
+            raise ValueError('struct Writable column lacks its native write-lookup fact')
+        return 'writable' if in_write_lookup else 'not_writable'
+    if value == '' or re.match(r'no(?![A-Za-z0-9\[])', value):
+        return 'not_writable'
+    flags = re.search(r'[+/~!*:_^]*\Z', value).group(0)
+    return 'writable_protected' if '*' in flags else 'writable'
+
+
+def validate_native_writable(fact: object) -> None:
+    if not isinstance(fact, dict) or set(fact) != {'state', 'column', 'candidates', 'class', 'in_write_lookup'}:
+        raise ValueError('catalog row is missing its native Writable column')
+    state, column, candidates, klass = fact['state'], fact['column'], fact['candidates'], fact['class']
+    lookup = fact['in_write_lookup']
+    columns = [column] if isinstance(column, str) else candidates if isinstance(candidates, list) else []
+    is_struct = any(isinstance(c, str) and c.lstrip('-').startswith('=struct') for c in columns)
+    if (type(lookup) is bool) != is_struct:
+        raise ValueError('native write-lookup fact is present only for struct Writable columns')
+    if klass not in WRITABLE_CLASSES or not isinstance(candidates, list):
+        raise ValueError('native Writable class is malformed')
+    if state == 'determined':
+        if not isinstance(column, str) or candidates or writable_class(column, lookup) != klass:
+            raise ValueError('native Writable column and class disagree')
+    elif state == 'format_ambiguous':
+        if (column is not None or len(candidates) < 2 or candidates != sorted(set(candidates))
+                or not all(isinstance(c, str) for c in candidates)
+                or {writable_class(c, lookup) for c in candidates} != {klass}):
+            raise ValueError('ambiguous native Writable candidates are malformed')
+    elif state == 'not_listed':
+        if column is not None or candidates or klass != 'not_listed':
+            raise ValueError('unlisted native Writable fact is malformed')
+    else:
+        raise ValueError('native Writable state is unknown')
 
 
 def source_fingerprint(library: Path) -> dict[str, str]:
@@ -102,8 +161,18 @@ def render_counts(document: dict) -> str:
         ('Container/navigation rows outside the entry denominator', 'catalog_container_rows_outside_total', 'Preserved separately, not counted as additional ordinary tags'),
         ('Shortcut helper entries', 'shortcut_entries', 'Macro helpers, not fabricated file layouts'),
     ]
+    classes = counts['catalog_native_writable_classes']
+    writable_rows = [
+        ('Entries writable by ExifTool', classes.get('writable', 0), 'Native Writable column is anything but `no` and not Protected; the write-parity denominator'),
+        ('Entries ExifTool writes only indirectly', classes.get('writable_protected', 0), 'Protected (`*`): written automatically, never directly'),
+        ('Entries not writable by ExifTool', classes.get('not_writable', 0), 'Native Writable column is `no`'),
+        ('Entries omitted from TagNames', classes.get('not_listed', 0), 'Counted by BuildTagLookup but not documented, so no Writable column'),
+        ('Entries whose exact write format is ambiguous', counts['catalog_native_writable_states'].get('format_ambiguous', 0), 'Collapsed native columns; writability is still determined'),
+        ('Distinct case-insensitive writable names', counts['distinct_case_insensitive_writable_names'], 'Distinct `lc(Name)` over writable entries'),
+    ]
     return '\n'.join(['| Measurement | Count | Meaning |', '| --- | ---: | --- |'] +
-                     [f'| {label} | {counts[key]:,} | {meaning} |' for label, key, meaning in rows])
+                     [f'| {label} | {counts[key]:,} | {meaning} |' for label, key, meaning in rows] +
+                     [f'| {label} | {count:,} | {meaning} |' for label, count, meaning in writable_rows])
 
 
 def rendered_report(document: dict, template: str) -> str:
