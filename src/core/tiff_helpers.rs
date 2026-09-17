@@ -3942,7 +3942,18 @@ fn derive_makernote_preview_image(
             "(Binary data {length} bytes, use -b option to extract)"
         )),
     };
-    metadata.insert(key, value);
+    // Through `record_makernote_tag`, not a bare `insert`: the derived tag
+    // belongs to whichever directory produced the offset/length pair, and for
+    // `Nikon::PreviewIFD` that is family 1 `PreviewIFD` (Nikon.pm:5389), not
+    // `Nikon`. `parse_preview_ifd` emits `Nikon:PreviewImage` itself whenever
+    // the pointed-to range lies inside the loaded block, so this path is the
+    // out-of-block half of the same tag and must land in the same group.
+    // Every other manufacturer's key passes through unchanged -- none of
+    // `strip_duplicate_marker`, `priority_zero_duplicate_group1` or
+    // `nikon_subdirectory_group1` matches a `<Group>:PreviewImage`.
+    crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+        metadata, key, value,
+    );
 }
 
 /// Decodes a Sigma/Foveon MakerNote, and reports whether it did.
@@ -7014,6 +7025,49 @@ mod makernote_preview_image_tests {
             value.as_string(),
             Some("(Binary data 37370 bytes, use -b option to extract)")
         );
+    }
+
+    /// The derived tag belongs to the directory that produced the pair. For
+    /// `Nikon::PreviewIFD` that is family 1 `PreviewIFD` (Nikon.pm:5389) --
+    /// the pinned oracle prints `[PreviewIFD] PreviewImage` -- and not
+    /// `Nikon`, which a bare `metadata.insert` here used to leave it with.
+    /// `parse_preview_ifd` emits the in-block half itself, so this covers the
+    /// out-of-block placeholder that only this function can produce.
+    #[test]
+    fn a_derived_nikon_preview_image_keeps_the_preview_ifd_group() {
+        let tiff = block();
+        let mut metadata = MetadataMap::new();
+        let ctx = MakerNoteContext::in_tiff(&tiff, 100, 200, 12);
+        derive_makernote_preview_image(
+            &ctx,
+            &tags(&[
+                ("Nikon:PreviewImageStart", "900000"),
+                ("Nikon:PreviewImageLength", "37370"),
+            ]),
+            &mut metadata,
+        );
+        let occurrences = metadata.occurrences_for("Nikon:PreviewImage");
+        let occurrence = occurrences.first().expect("derived Nikon preview");
+        assert_eq!(occurrence.group1.as_ref(), "PreviewIFD");
+    }
+
+    /// A maker with no family-1 override keeps passing straight through.
+    #[test]
+    fn a_derived_pentax_preview_image_takes_no_group() {
+        let tiff = block();
+        let mut metadata = MetadataMap::new();
+        let ctx = MakerNoteContext::in_tiff(&tiff, 100, 200, 12);
+        derive_makernote_preview_image(
+            &ctx,
+            &tags(&[
+                ("Pentax:PreviewImageStart", "900000"),
+                ("Pentax:PreviewImageLength", "37370"),
+            ]),
+            &mut metadata,
+        );
+        let occurrences = metadata.occurrences_for("Pentax:PreviewImage");
+        let occurrence = occurrences.first().expect("derived Pentax preview");
+        assert_eq!(occurrence.group1.as_ref(), "");
     }
 
     /// Exif.pm:6228 -- `return undef if not $len`.
