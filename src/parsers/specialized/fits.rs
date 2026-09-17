@@ -213,14 +213,21 @@ impl FITSParser {
                         }
                         k if k.starts_with("NAXIS") && k.len() > 5 => {
                             if let Ok(axis_val) = value.parse::<i64>() {
-                                metadata
-                                    .insert(Self::tag_name(&keyword), TagValue::Integer(axis_val));
+                                metadata.insert(
+                                    format!("FITS:{}", Self::tag_name(&keyword)),
+                                    TagValue::Integer(axis_val),
+                                );
                                 naxis_values.push(axis_val);
                             }
                         }
                         _ => {
                             if !value.is_empty() {
-                                metadata.insert(Self::tag_name(&keyword), Self::tag_value(value));
+                                // Same table and family-1 group as the
+                                // COMMENT/HISTORY arm above: `FITS`.
+                                metadata.insert(
+                                    format!("FITS:{}", Self::tag_name(&keyword)),
+                                    Self::tag_value(value),
+                                );
                             }
                         }
                     }
@@ -1431,12 +1438,15 @@ mod tests {
         ]));
 
         let metadata = FITSParser.parse(&reader).unwrap();
-        assert_eq!(metadata.get_integer("Bitpix"), Some(8));
-        assert_eq!(metadata.get_integer("Naxis"), Some(0));
-        assert_eq!(metadata.get_string("CreateDate"), Some("28/01/97"));
-        assert_eq!(metadata.get_string("ObservationTime"), Some("11:56:26"));
-        assert_eq!(metadata.get_string("Timversn"), Some("XFF/95-004"));
-        assert_eq!(metadata.get_string("Datasum"), Some("         0"));
+        assert_eq!(metadata.get_integer("FITS:Bitpix"), Some(8));
+        assert_eq!(metadata.get_integer("FITS:Naxis"), Some(0));
+        assert_eq!(metadata.get_string("FITS:CreateDate"), Some("28/01/97"));
+        assert_eq!(
+            metadata.get_string("FITS:ObservationTime"),
+            Some("11:56:26")
+        );
+        assert_eq!(metadata.get_string("FITS:Timversn"), Some("XFF/95-004"));
+        assert_eq!(metadata.get_string("FITS:Datasum"), Some("         0"));
         assert!(!metadata.keys().any(|name| name.ends_with("Comment")));
     }
 

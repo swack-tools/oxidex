@@ -108,10 +108,10 @@ fn parse_flif_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
     let type_name = image_type_name(image_type)
         .map(str::to_string)
         .unwrap_or_else(|| (image_type as char).to_string());
-    metadata.insert("ImageType".to_string(), TagValue::String(type_name));
+    metadata.insert("File:ImageType".to_string(), TagValue::String(type_name));
 
     metadata.insert(
-        "BitDepth".to_string(),
+        "File:BitDepth".to_string(),
         match bit_depth_code {
             b'1' => TagValue::Integer(8),
             b'2' => TagValue::Integer(16),
@@ -127,11 +127,11 @@ fn parse_flif_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
     offset += height_bytes;
 
     metadata.insert(
-        "ImageWidth".to_string(),
+        "File:ImageWidth".to_string(),
         TagValue::Integer(width as i64 + 1),
     );
     metadata.insert(
-        "ImageHeight".to_string(),
+        "File:ImageHeight".to_string(),
         TagValue::Integer(height as i64 + 1),
     );
 
@@ -140,7 +140,7 @@ fn parse_flif_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
         let (frames, frame_bytes) = read_varint(reader, offset)?;
         offset += frame_bytes;
         metadata.insert(
-            "AnimationFrames".to_string(),
+            "File:AnimationFrames".to_string(),
             TagValue::Integer(frames as i64 + 2),
         );
     }
@@ -175,7 +175,7 @@ fn parse_flif_metadata_chunks(
             // ExifTool emits tag 5 for whatever this byte is; only 0 has a
             // PrintConv name, and anything else prints as the raw number.
             metadata.insert(
-                "Encoding".to_string(),
+                "File:Encoding".to_string(),
                 match first {
                     0 => TagValue::String("FLIF16".to_string()),
                     other => TagValue::Integer(other as i64),
@@ -268,7 +268,7 @@ fn parse_flif_exif(exif_data: &[u8], metadata: &mut MetadataMap) {
     }
 
     metadata.insert(
-        "ExifByteOrder".to_string(),
+        "File:ExifByteOrder".to_string(),
         TagValue::String(
             match byte_order {
                 ByteOrder::LittleEndian => "Little-endian (Intel, II)",
@@ -352,13 +352,13 @@ mod tests {
     fn test_header_characters_decode_rather_than_bitfield() {
         let metadata = parse_flif_metadata(&TestReader::new(minimal_flif())).unwrap();
         assert_eq!(
-            metadata.get_string("ImageType"),
+            metadata.get_string("File:ImageType"),
             Some("RGB (non-interlaced)")
         );
-        assert_eq!(metadata.get_integer("BitDepth"), Some(8));
-        assert_eq!(metadata.get_integer("ImageWidth"), Some(16));
-        assert_eq!(metadata.get_integer("ImageHeight"), Some(16));
-        assert_eq!(metadata.get_string("Encoding"), Some("FLIF16"));
+        assert_eq!(metadata.get_integer("File:BitDepth"), Some(8));
+        assert_eq!(metadata.get_integer("File:ImageWidth"), Some(16));
+        assert_eq!(metadata.get_integer("File:ImageHeight"), Some(16));
+        assert_eq!(metadata.get_string("File:Encoding"), Some("FLIF16"));
     }
 
     #[test]
@@ -370,10 +370,10 @@ mod tests {
 
         let metadata = parse_flif_metadata(&TestReader::new(data)).unwrap();
         assert_eq!(
-            metadata.get_string("ImageType"),
+            metadata.get_string("File:ImageType"),
             Some("RGB Animation (non-interlaced)")
         );
-        assert_eq!(metadata.get_integer("AnimationFrames"), Some(7));
+        assert_eq!(metadata.get_integer("File:AnimationFrames"), Some(7));
     }
 
     /// Chunk lengths are base-128 varints, not 4-byte big-endian integers.
@@ -506,7 +506,7 @@ mod tests {
         let metadata = parse_flif_metadata(&TestReader::new(data)).unwrap();
 
         assert_eq!(
-            metadata.get_string("ExifByteOrder"),
+            metadata.get_string("File:ExifByteOrder"),
             Some("Big-endian (Motorola, MM)")
         );
         assert_eq!(metadata.get_integer("IFD0:Orientation"), Some(1));
@@ -535,7 +535,7 @@ mod tests {
             parse_flif_metadata(&TestReader::new(flif_with_chunk(b"eXif", &chunk))).unwrap();
         assert_block_a(&metadata);
         assert_eq!(
-            metadata.get_string("ExifByteOrder"),
+            metadata.get_string("File:ExifByteOrder"),
             Some("Little-endian (Intel, II)")
         );
 

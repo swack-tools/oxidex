@@ -612,9 +612,12 @@ pub fn process_photoshop_segments(
             && let Some(body) = segment.data.strip_prefix(ADOBE_CM_HEADER)
             && let Some(value) = body.get(..2)
         {
-            metadata.insert(
-                "APP13:AdobeCMType".to_string(),
+            // `%JPEG::AdobeCM` is `GROUPS => { 0 => 'APP13', 1 => 'AdobeCM' }`
+            // (JPEG.pm:614).
+            metadata.insert_with_group1(
+                "APP13:AdobeCMType",
                 TagValue::Integer(u16::from_be_bytes([value[0], value[1]]) as i64),
+                "AdobeCM",
             );
         }
 
@@ -652,9 +655,7 @@ pub fn process_app3_segments(segments: &[Segment], metadata: &mut MetadataMap) {
         let Ok(meta) = parse_meta_app3(segment.data) else {
             continue;
         };
-        for (key, value) in meta.iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
+        metadata.merge_winners_keeping_group1(&meta);
     }
 
     if metadata.get_string("IFD0:Make") != Some("DJI") {
@@ -1081,9 +1082,7 @@ pub fn process_app11_segments(segments: &[Segment], metadata: &mut MetadataMap) 
             match parse_app11_jpeg_hdr(segment.data) {
                 Ok(hdr_metadata) => {
                     // Merge JPEG-HDR metadata into the main metadata map
-                    for (key, value) in hdr_metadata.iter() {
-                        metadata.insert(key.clone(), value.clone());
-                    }
+                    metadata.merge_winners_keeping_group1(&hdr_metadata);
                 }
                 Err(e) => {
                     // Log warning but continue processing other segments
@@ -1333,7 +1332,9 @@ pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         let quality: i64 = digits[..end]
             .iter()
             .fold(0, |acc, b| acc * 10 + i64::from(b - b'0'));
-        metadata.insert("APP15:Quality".to_string(), TagValue::Integer(quality));
+        // `%JPEG::GraphConv` is `GROUPS => { 0 => 'APP15', 1 => 'GraphConv' }`
+        // (JPEG.pm:667).
+        metadata.insert_with_group1("APP15:Quality", TagValue::Integer(quality), "GraphConv");
     }
 }
 
@@ -1584,7 +1585,9 @@ pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut Metadat
                 None
             };
             if let Some((key, value)) = mapped {
-                metadata.insert(key, TagValue::new_string(value));
+                // `%Ricoh::RMETA` is `GROUPS => { 0 => 'APP5', 1 => 'RMETA' }`
+                // (Ricoh.pm:831).
+                metadata.insert_with_group1(key, TagValue::new_string(value), "RMETA");
             }
         }
     }

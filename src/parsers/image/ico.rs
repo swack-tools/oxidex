@@ -156,7 +156,7 @@ impl FormatParser for ICOParser {
 
         let image_count = Self::read_image_count(reader)?;
         metadata.insert(
-            "ImageCount".to_string(),
+            "File:ImageCount".to_string(),
             TagValue::String(image_count.to_string()),
         );
 
@@ -172,24 +172,24 @@ impl FormatParser for ICOParser {
             ) = Self::analyze_entries(reader, image_count)?;
 
             metadata.insert(
-                "ImageWidth".to_string(),
+                "File:ImageWidth".to_string(),
                 TagValue::String(max_width.to_string()),
             );
             metadata.insert(
-                "ImageHeight".to_string(),
+                "File:ImageHeight".to_string(),
                 TagValue::String(max_height.to_string()),
             );
             metadata.insert(
-                "NumColors".to_string(),
+                "File:NumColors".to_string(),
                 TagValue::String(color_count.to_string()),
             );
             metadata.insert(
-                "ImageLength".to_string(),
+                "File:ImageLength".to_string(),
                 TagValue::String(image_length.to_string()),
             );
             if file_type == ICO_TYPE_ICON {
                 metadata.insert(
-                    "ColorPlanes".to_string(),
+                    "File:ColorPlanes".to_string(),
                     TagValue::String(color_planes.to_string()),
                 );
                 metadata.insert(
@@ -197,7 +197,7 @@ impl FormatParser for ICOParser {
                     TagValue::String(max_bits.to_string()),
                 );
                 metadata.insert(
-                    "BitsPerPixel".to_string(),
+                    "File:BitsPerPixel".to_string(),
                     TagValue::String(max_bits.to_string()),
                 );
             }

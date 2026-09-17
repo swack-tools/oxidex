@@ -13,12 +13,12 @@ fn extracts_all_ico_directory_entry_fields_reported_by_pinned_exiftool() {
     let reader = BufferedReader::new(Path::new(ICO_FIXTURE)).expect("open ICO fixture");
     let metadata = parse_ico_metadata(&reader).expect("parse ICO fixture");
 
-    assert_eq!(metadata.get_string("ImageWidth"), Some("1"));
-    assert_eq!(metadata.get_string("ImageHeight"), Some("1"));
-    assert_eq!(metadata.get_string("NumColors"), Some("2"));
-    assert_eq!(metadata.get_string("ColorPlanes"), Some("1"));
-    assert_eq!(metadata.get_string("BitsPerPixel"), Some("1"));
-    assert_eq!(metadata.get_string("ImageLength"), Some("56"));
+    assert_eq!(metadata.get_string("File:ImageWidth"), Some("1"));
+    assert_eq!(metadata.get_string("File:ImageHeight"), Some("1"));
+    assert_eq!(metadata.get_string("File:NumColors"), Some("2"));
+    assert_eq!(metadata.get_string("File:ColorPlanes"), Some("1"));
+    assert_eq!(metadata.get_string("File:BitsPerPixel"), Some("1"));
+    assert_eq!(metadata.get_string("File:ImageLength"), Some("56"));
 }
 
 #[test]
@@ -35,5 +35,5 @@ fn does_not_treat_cursor_hotspot_y_as_bits_per_pixel() {
 
     let metadata = parse_ico_metadata(&reader).expect("parse synthetic CUR");
 
-    assert!(!metadata.contains_key("BitsPerPixel"));
+    assert!(!metadata.contains_key("File:BitsPerPixel"));
 }

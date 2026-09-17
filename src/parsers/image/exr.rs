@@ -136,8 +136,14 @@ impl EXRParser {
                 if name == "dataWindow" {
                     let width = (x_max - x_min + 1) as u32;
                     let height = (y_max - y_min + 1) as u32;
-                    metadata.insert("ImageWidth".to_string(), TagValue::Integer(width as i64));
-                    metadata.insert("ImageHeight".to_string(), TagValue::Integer(height as i64));
+                    metadata.insert(
+                        "File:ImageWidth".to_string(),
+                        TagValue::Integer(width as i64),
+                    );
+                    metadata.insert(
+                        "File:ImageHeight".to_string(),
+                        TagValue::Integer(height as i64),
+                    );
                     // ExifTool format: "x_min y_min x_max y_max" (space separated)
                     metadata.insert(
                         "DataWindow".to_string(),

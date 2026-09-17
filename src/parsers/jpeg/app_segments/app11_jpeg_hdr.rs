@@ -256,6 +256,11 @@ fn scan_hdr_pairs(meta: &str) -> Vec<(&str, &str)> {
     pairs
 }
 
+/// ExifTool's family-1 group for these tags: `%JPEG::HDR` declares
+/// `GROUPS => { 0 => 'APP11', 1 => 'JPEG-HDR', 2 => 'Image' }` (JPEG.pm:592).
+/// Tags `ProcessJPEG_HDR` adds on the fly go into the same table.
+const JPEG_HDR_GROUP1: &str = "JPEG-HDR";
+
 /// Parses a JPEG-HDR APP11 segment and returns extracted metadata.
 ///
 /// # Arguments
@@ -303,9 +308,10 @@ pub fn parse_app11_jpeg_hdr(data: &[u8]) -> Result<MetadataMap> {
     if term > HDR_RI_IDENTIFIER.len() {
         let meta = String::from_utf8_lossy(&data[HDR_RI_IDENTIFIER.len()..term]);
         for (key, value) in scan_hdr_pairs(&meta) {
-            metadata.insert(
+            metadata.insert_with_group1(
                 format!("APP11:{}", hdr_tag_name(key)),
                 TagValue::String(value.to_string()),
+                JPEG_HDR_GROUP1,
             );
         }
     }
@@ -313,12 +319,13 @@ pub fn parse_app11_jpeg_hdr(data: &[u8]) -> Result<MetadataMap> {
     // `$et->HandleTag($tagTablePtr, 'RatioImage', substr($$dataPt, $pos));`
     // `RatioImage` is `Binary => 1`, so without -b ExifTool prints a placeholder.
     let ratio_image_size = data.len() - (term + HDR_META_TERMINATOR.len());
-    metadata.insert(
-        "APP11:RatioImage".to_string(),
+    metadata.insert_with_group1(
+        "APP11:RatioImage",
         TagValue::String(format!(
             "(Binary data {} bytes, use -b option to extract)",
             ratio_image_size
         )),
+        JPEG_HDR_GROUP1,
     );
 
     Ok(metadata)

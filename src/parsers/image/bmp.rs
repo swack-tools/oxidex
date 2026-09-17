@@ -181,23 +181,23 @@ impl FormatParser for BMPParser {
                 .find(|field| field.name == "BMPVersion")
                 .and_then(|field| field.print_conv.apply(i64::from(bmp_version)))
                 .unwrap_or_else(|| bmp_version.to_string());
-            metadata.insert("BMPVersion".to_string(), TagValue::String(version));
+            metadata.insert("File:BMPVersion".to_string(), TagValue::String(version));
 
             let image_length = Self::read_image_length(reader)?;
             metadata.insert(
-                "ImageLength".to_string(),
+                "File:ImageLength".to_string(),
                 TagValue::Integer(i64::from(image_length)),
             );
 
             let pixels_per_meter_x = Self::read_pixels_per_meter_x(reader)?;
             metadata.insert(
-                "PixelsPerMeterX".to_string(),
+                "File:PixelsPerMeterX".to_string(),
                 TagValue::Integer(i64::from(pixels_per_meter_x)),
             );
 
             let pixels_per_meter_y = Self::read_pixels_per_meter_y(reader)?;
             metadata.insert(
-                "PixelsPerMeterY".to_string(),
+                "File:PixelsPerMeterY".to_string(),
                 TagValue::Integer(i64::from(pixels_per_meter_y)),
             );
         }
@@ -207,11 +207,11 @@ impl FormatParser for BMPParser {
         let abs_height = height.abs() as u64;
 
         metadata.insert(
-            "ImageWidth".to_string(),
+            "File:ImageWidth".to_string(),
             TagValue::String(abs_width.to_string()),
         );
         metadata.insert(
-            "ImageHeight".to_string(),
+            "File:ImageHeight".to_string(),
             TagValue::String(abs_height.to_string()),
         );
 
@@ -223,11 +223,11 @@ impl FormatParser for BMPParser {
         );
 
         let planes = Self::read_planes(reader)?;
-        metadata.insert("Planes".to_string(), TagValue::Integer(planes as i64));
+        metadata.insert("File:Planes".to_string(), TagValue::Integer(planes as i64));
 
         let bit_depth = Self::read_bit_depth(reader)?;
         metadata.insert(
-            "BitDepth".to_string(),
+            "File:BitDepth".to_string(),
             TagValue::String(bit_depth.to_string()),
         );
         // Add BMP: prefixed version for format-specific tagging
@@ -248,7 +248,7 @@ impl FormatParser for BMPParser {
             _ => "Unknown",
         };
         metadata.insert(
-            "Compression".to_string(),
+            "File:Compression".to_string(),
             TagValue::String(compression_str.to_string()),
         );
         // Add BMP: prefixed version for format-specific tagging
@@ -287,7 +287,7 @@ impl FormatParser for BMPParser {
         let num_colors = Self::read_num_colors(reader)?;
         if num_colors > 0 {
             metadata.insert(
-                "NumColors".to_string(),
+                "File:NumColors".to_string(),
                 TagValue::Integer(num_colors as i64),
             );
             // Add BMP: prefixed version for format-specific tagging
@@ -310,7 +310,7 @@ impl FormatParser for BMPParser {
         let important_colors = Self::read_num_important_colors(reader)?;
         if important_colors > 0 {
             metadata.insert(
-                "NumImportantColors".to_string(),
+                "File:NumImportantColors".to_string(),
                 TagValue::Integer(important_colors as i64),
             );
         }
@@ -353,16 +353,19 @@ mod tests {
         let metadata = BMPParser.parse(&TestReader::new(bmp)).unwrap();
 
         assert_eq!(
-            metadata.get("BMPVersion"),
+            metadata.get("File:BMPVersion"),
             Some(&TagValue::String("Windows V3".to_string()))
         );
-        assert_eq!(metadata.get("ImageLength"), Some(&TagValue::Integer(64)));
         assert_eq!(
-            metadata.get("PixelsPerMeterX"),
+            metadata.get("File:ImageLength"),
+            Some(&TagValue::Integer(64))
+        );
+        assert_eq!(
+            metadata.get("File:PixelsPerMeterX"),
             Some(&TagValue::Integer(2835))
         );
         assert_eq!(
-            metadata.get("PixelsPerMeterY"),
+            metadata.get("File:PixelsPerMeterY"),
             Some(&TagValue::Integer(2835))
         );
     }
