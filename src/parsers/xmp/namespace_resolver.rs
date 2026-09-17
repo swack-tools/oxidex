@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use super::generated_namespaces::{URI_PREFIXES, standard_prefix, translated_prefix};
+use super::generated_namespaces::{URI_PREFIXES, translated_prefix};
 
 /// Manages XMP namespace prefix-to-URI mappings.
 ///
@@ -48,9 +48,27 @@ pub struct NamespaceResolver {
     cur_ns: HashMap<String, String>,
     /// ExifTool's per-packet `$$et{curURI}`: that prefix -> its URI.
     cur_uri: HashMap<String, String>,
-    /// Declared URI -> effective ExifTool namespace prefix (before
-    /// `%stdXlatNS`), fixed the first time the URI is declared.
-    effective_prefix: HashMap<String, String>,
+    /// ExifTool's `$$et{xlatNS}`: document prefix -> the prefix it is
+    /// translated to. Scoped the way `ParseXMPElement` scopes it, see
+    /// [`Self::push_element_scope`].
+    xlat: HashMap<String, String>,
+    /// One entry per open element (see [`Self::push_element_scope`]).
+    scopes: Vec<ElementScope>,
+    /// Bindings replaced by declarations not yet attached to a scope: the
+    /// declarations of the element about to be pushed.
+    pending_bindings: Vec<(String, Option<String>)>,
+}
+
+/// Namespace state to restore when an element closes.
+#[derive(Debug, Clone, Default)]
+struct ElementScope {
+    /// The prefix -> URI bindings this element's own `xmlns` declarations
+    /// replaced (XML scoping: restored when the element closes).
+    replaced_bindings: Vec<(String, Option<String>)>,
+    /// `xlatNS` as it was before the first translation change made by one of
+    /// this element's *children* (`ParseXMPElement`'s `$saveNS`, restored when
+    /// that level returns, XMP.pm:4247).
+    saved_xlat: Option<HashMap<String, String>>,
 }
 
 impl NamespaceResolver {
@@ -81,7 +99,9 @@ impl NamespaceResolver {
             uri_to_prefix: HashMap::new(),
             cur_ns: HashMap::new(),
             cur_uri: HashMap::new(),
-            effective_prefix: HashMap::new(),
+            xlat: HashMap::new(),
+            scopes: Vec::new(),
+            pending_bindings: Vec::new(),
         };
 
         // Register standard XMP namespaces
@@ -125,8 +145,10 @@ impl NamespaceResolver {
     /// resolver.register_namespace("custom", "http://example.com/ns/custom/");
     /// ```
     pub fn register_namespace(&mut self, prefix: &str, uri: &str) {
-        self.prefix_to_uri
+        let previous = self
+            .prefix_to_uri
             .insert(prefix.to_string(), uri.to_string());
+        self.pending_bindings.push((prefix.to_string(), previous));
         self.uri_to_prefix
             .insert(uri.to_string(), prefix.to_string());
         // `xmlns="..."` has no colon, and XMP.pm only handles `xmlns:PREFIX`
@@ -137,53 +159,131 @@ impl NamespaceResolver {
         }
     }
 
-    /// ExifTool's namespace-prefix taming for one `xmlns:PREFIX="URI"`
-    /// declaration (XMP.pm:3901-3955), recorded per URI.
+    /// Opens the scope of the element whose `xmlns` declarations were just
+    /// registered. Call once per start tag, after registering its
+    /// declarations and before resolving anything inside it, and pair it with
+    /// [`Self::pop_element_scope`] at the matching end tag (an empty element
+    /// pushes and pops at once).
     ///
-    /// A resolver lives for one XMP packet, like ExifTool's `curNS`/`curURI`
-    /// (reset per packet in `ProcessXMP`, XMP.pm:4277-4278), and every parse
-    /// pass registers declarations in document order, so every pass arrives
-    /// at the same prefix for the same URI.
-    fn tame_prefix(&mut self, prefix: &str, uri: &str) {
-        if let Some(std_ns) = standard_prefix_for_declared_uri(uri) {
-            // "use standard namespace prefix if pre-defined"
-            self.effective_prefix
-                .insert(uri.to_string(), std_ns.to_string());
-            return;
-        }
-        if let Some(used) = self.cur_ns.get(uri) {
-            // "use a consistent prefix over the entire XMP for a given
-            // namespace URI"
-            let used = used.clone();
-            self.effective_prefix.insert(uri.to_string(), used);
-            return;
-        }
-        // "use unique prefixes for all namespaces across the entire XMP":
-        // a prefix already bound to another non-standard URI in this packet,
-        // or one of ExifTool's own standard prefixes (`$nsURI{$ns}`), is
-        // replaced by the lowest free `tmpN`.
-        let mut used = prefix.to_string();
-        if self.cur_uri.contains_key(prefix) || is_standard_prefix(prefix) {
-            let mut index = 0usize;
-            while self.cur_uri.contains_key(&format!("tmp{index}")) {
-                index += 1;
-            }
-            used = format!("tmp{index}");
-        }
-        self.cur_ns.insert(uri.to_string(), used.clone());
-        self.cur_uri.insert(used.clone(), uri.to_string());
-        self.effective_prefix.insert(uri.to_string(), used);
+    /// Two scopes are tracked, because ExifTool's differs from XML's:
+    /// - prefix -> URI bindings follow XML: a declaration holds for its
+    ///   element and descendants and is undone when the element closes;
+    /// - prefix translations follow `ParseXMPElement` (XMP.pm:3768-4248): it
+    ///   processes one level of sibling elements, a translation a sibling's
+    ///   declaration introduces stays in force for every *later sibling* at
+    ///   that level and their descendants (`$saveNS or $saveNS = $xlatNS,
+    ///   $xlatNS = $$et{xlatNS} = { %$xlatNS }`, XMP.pm:3962), and the level
+    ///   restores the translation map when it returns (XMP.pm:4247). So a
+    ///   translation made on a child of element P is undone when P closes.
+    pub fn push_element_scope(&mut self) {
+        let replaced_bindings = std::mem::take(&mut self.pending_bindings);
+        self.scopes.push(ElementScope {
+            replaced_bindings,
+            saved_xlat: None,
+        });
     }
 
-    /// The ExifTool family-1 group for a property written with `prefix`:
-    /// `XMP-<prefix>`, where the prefix is the one ExifTool tamed the bound
-    /// URI to and then passed through `%stdXlatNS` (XMP.pm FoundXMP:
-    /// `$ns = $stdXlatNS{$ns} if $stdXlatNS{$ns}` ... `SetGroup($key,
-    /// "$$tagTablePtr{GROUPS}{0}-$ns")`).
+    /// Closes the innermost element scope; see [`Self::push_element_scope`].
+    pub fn pop_element_scope(&mut self) {
+        let Some(scope) = self.scopes.pop() else {
+            return;
+        };
+        if let Some(saved) = scope.saved_xlat {
+            self.xlat = saved;
+        }
+        for (prefix, previous) in scope.replaced_bindings.into_iter().rev() {
+            match previous {
+                Some(uri) => {
+                    self.prefix_to_uri.insert(prefix, uri);
+                }
+                None => {
+                    self.prefix_to_uri.remove(&prefix);
+                }
+            }
+        }
+    }
+
+    /// Records the translation map before its first change in the current
+    /// level (the innermost open element's children).
+    fn save_xlat_for_level(&mut self) {
+        // With no element open there is no level to restore on return.
+        if let Some(scope) = self.scopes.last_mut()
+            && scope.saved_xlat.is_none()
+        {
+            scope.saved_xlat = Some(self.xlat.clone());
+        }
+    }
+
+    /// ExifTool's namespace-prefix taming for one `xmlns:PREFIX="URI"`
+    /// declaration (XMP.pm:3901-3970).
+    ///
+    /// `curNS`/`curURI` are per packet (reset in `ProcessXMP`,
+    /// XMP.pm:4277-4278), and a resolver lives for one packet. The resulting
+    /// translation is textual -- it renames the prefix, not the URI -- and
+    /// scoped as [`Self::push_element_scope`] describes, which is why a
+    /// translation can outlive the declaration that caused it (XMP.pm leaks
+    /// it to later siblings, and a later plain re-declaration of the prefix
+    /// does not clear it).
+    fn tame_prefix(&mut self, prefix: &str, uri: &str) {
+        let new_prefix: Option<String> = if let Some(std_ns) = standard_prefix_for_declared_uri(uri)
+        {
+            // "use standard namespace prefix if pre-defined"
+            if std_ns != prefix {
+                Some(std_ns.to_string())
+            } else if self.xlat.contains_key(prefix) {
+                // "this prefix is re-defined to the standard prefix in this
+                // scope"
+                Some(String::new())
+            } else {
+                None
+            }
+        } else if let Some(used) = self.cur_ns.get(uri) {
+            // "use a consistent prefix over the entire XMP for a given
+            // namespace URI"
+            (used != prefix).then(|| used.clone())
+        } else {
+            // "use unique prefixes for all namespaces across the entire
+            // XMP": a prefix already bound to another non-standard URI in
+            // this packet, or one of ExifTool's own standard prefixes
+            // (`$nsURI{$ns}`), is replaced by the lowest free `tmpN`.
+            let mut used = prefix.to_string();
+            let mut new_prefix = None;
+            if self.cur_uri.contains_key(prefix) || is_standard_prefix(prefix) {
+                let mut index = 0usize;
+                while self.cur_uri.contains_key(&format!("tmp{index}")) {
+                    index += 1;
+                }
+                used = format!("tmp{index}");
+                new_prefix = Some(used.clone());
+            }
+            self.cur_ns.insert(uri.to_string(), used.clone());
+            self.cur_uri.insert(used, uri.to_string());
+            new_prefix
+        };
+        if let Some(new_prefix) = new_prefix {
+            self.save_xlat_for_level();
+            if new_prefix.is_empty() {
+                self.xlat.remove(prefix);
+            } else {
+                self.xlat.insert(prefix.to_string(), new_prefix);
+            }
+        }
+    }
+
+    /// The ExifTool family-1 group for a property written with `prefix`, as
+    /// of now: `XMP-<prefix>`, where the prefix is the document prefix after
+    /// ExifTool's translation ([`Self::tame_prefix`]) and then `%stdXlatNS`
+    /// (XMP.pm FoundXMP: `$ns = $stdXlatNS{$ns} if $stdXlatNS{$ns}` ...
+    /// `SetGroup($key, "$$tagTablePtr{GROUPS}{0}-$ns")`).
+    ///
+    /// ExifTool translates a property's name when it reaches the element,
+    /// before parsing the element's children, so callers resolve the group
+    /// right after [`Self::push_element_scope`] for that element -- not at its
+    /// end tag, when a child's declaration may have changed the answer.
     ///
     /// An empty prefix has no namespace, and ExifTool calls no `SetGroup` for
-    /// it, so the group stays plain `XMP`. A prefix with no declaration in
-    /// scope keeps its own spelling, as ExifTool's does.
+    /// it, so the group stays plain `XMP`. A prefix with no translation keeps
+    /// its own spelling, declared or not, as ExifTool's does.
     ///
     /// Not modelled here (the key is left as plain `XMP`):
     /// - URIs under `http://ns.exiftool.org/<g0>/<g1>/` (ExifTool's own `-X`
@@ -198,20 +298,21 @@ impl NamespaceResolver {
     ///   they are not standard and follow the document-prefix rules above.
     ///   PhotoMechanic.jpg bears this out (`photomechanic` -> `XMP-photomech`
     ///   through `%stdXlatNS`, not through a URI lookup).
+    /// - ExifTool processes a start tag's attributes in order, so an
+    ///   attribute *before* an `xmlns` on the same element is renamed
+    ///   retroactively while a property element is not; every declaration on
+    ///   an element is registered before any of its names are resolved here.
     pub fn group_for_prefix(&self, prefix: &str) -> String {
         if prefix.is_empty() {
             return "XMP".to_string();
         }
-        let effective = match self.resolve_prefix(prefix) {
-            Some(uri) if is_exiftool_static_group_uri(uri) => return "XMP".to_string(),
-            Some(uri) => self
-                .effective_prefix
-                .get(uri)
-                .map(String::as_str)
-                .or_else(|| standard_prefix_for_declared_uri(uri))
-                .unwrap_or(prefix),
-            None => prefix,
-        };
+        if self
+            .resolve_prefix(prefix)
+            .is_some_and(is_exiftool_static_group_uri)
+        {
+            return "XMP".to_string();
+        }
+        let effective = self.xlat.get(prefix).map_or(prefix, String::as_str);
         format!("XMP-{}", translated_prefix(effective))
     }
 
@@ -316,6 +417,16 @@ impl NamespaceResolver {
     }
 }
 
+/// Whether `suffix` (the part of a group after `XMP-`) is a group ExifTool
+/// reports for one of its standard namespaces: a `%nsURI` prefix after
+/// `%stdXlatNS`. Anything else is a document prefix or a `tmpN`, i.e. a
+/// namespace ExifTool has no tag table for.
+pub fn is_standard_group_suffix(suffix: &str) -> bool {
+    URI_PREFIXES
+        .iter()
+        .any(|(_, prefix)| translated_prefix(prefix) == suffix)
+}
+
 /// Whether `prefix` is one of ExifTool's standard prefixes (a key of
 /// `%nsURI`).
 fn is_standard_prefix(prefix: &str) -> bool {
@@ -342,22 +453,40 @@ fn is_exiftool_static_group_uri(uri: &str) -> bool {
 /// toggled, then the same URI with a different `N.N` version in its first
 /// `/N.N/` (or trailing `/N.N`) segment.
 fn standard_prefix_for_declared_uri(uri: &str) -> Option<&'static str> {
-    if let Some(prefix) = standard_prefix(uri) {
-        return Some(prefix);
+    standard_namespace_for_declared_uri(uri).map(|(_, prefix)| prefix)
+}
+
+/// The `%nsURI` URI ExifTool treats a declared URI as, by the same matching
+/// as [`standard_prefix_for_declared_uri`]; `None` for a non-standard URI.
+/// Lets URI-keyed rename tables follow ExifTool's slash/version tolerance
+/// (`http://ns.adobe.com/camera-raw-settings/12.3/` is the `crs` table).
+pub fn canonical_standard_uri(uri: &str) -> Option<&'static str> {
+    standard_namespace_for_declared_uri(uri).map(|(known, _)| known)
+}
+
+fn standard_namespace_for_declared_uri(uri: &str) -> Option<(&'static str, &'static str)> {
+    let find = |candidate: &str| {
+        URI_PREFIXES
+            .binary_search_by(|(known, _)| (*known).cmp(candidate))
+            .ok()
+            .map(|index| URI_PREFIXES[index])
+    };
+    if let Some(found) = find(uri) {
+        return Some(found);
     }
     let toggled = match uri.strip_suffix('/') {
         Some(stripped) => stripped.to_string(),
         None => format!("{uri}/"),
     };
-    if let Some(prefix) = standard_prefix(&toggled) {
-        return Some(prefix);
+    if let Some(found) = find(&toggled) {
+        return Some(found);
     }
     let (head, tail) = split_version_segment(uri)?;
     // `grep /^$try$/, keys %uri2ns` takes whichever match hash order yields
     // first; the table is sorted, so take the first sorted match.
-    URI_PREFIXES.iter().find_map(|(known, prefix)| {
-        let (known_head, known_tail) = split_version_segment(known)?;
-        (known_head == head && known_tail == tail).then_some(*prefix)
+    URI_PREFIXES.iter().copied().find(|(known, _)| {
+        split_version_segment(known)
+            .is_some_and(|(known_head, known_tail)| known_head == head && known_tail == tail)
     })
 }
 
@@ -579,6 +708,83 @@ mod tests {
                 "XMP-aaa",
                 "XMP-tmp1",
             ]
+        );
+    }
+
+    /// Runs `parse_xmp` and returns `(key, value)` for every property.
+    fn keys(packet: &str) -> Vec<(String, String)> {
+        crate::parsers::xmp::parse_xmp(packet.as_bytes()).unwrap()
+    }
+
+    const RDF_OPEN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#;
+    const RDF_CLOSE: &str = "</rdf:RDF></x:xmpmeta>";
+
+    /// Review packet t2.xmp: a declaration on a property's own child does not
+    /// change the property's group (pinned 13.59: `[XMP-a]`), because ExifTool
+    /// translates the property name before parsing its value.
+    #[test]
+    fn a_childs_declaration_does_not_regroup_its_parent_property() {
+        let got = keys(&format!(
+            r#"{RDF_OPEN}<rdf:Description rdf:about="" xmlns:a="http://e.com/A/"><a:x><rdf:Bag xmlns:a="http://e.com/B/"><rdf:li>v1</rdf:li><rdf:li>v2</rdf:li></rdf:Bag></a:x></rdf:Description>{RDF_CLOSE}"#
+        ));
+        assert!(got.iter().all(|(k, _)| k.starts_with("XMP-a:")), "{got:?}");
+    }
+
+    /// Review packet t3.xmp: a translation made by a sibling's declaration
+    /// leaks to later siblings, and re-declaring the prefix for its first URI
+    /// does not clear it (pinned 13.59: P1 `XMP-a`, P2-P4 `XMP-tmp0`).
+    #[test]
+    fn a_sibling_translation_leaks_to_later_siblings() {
+        let got = keys(&format!(
+            r#"{RDF_OPEN}<rdf:Description rdf:about="" xmlns:a="http://e.com/A/"><a:p1>1</a:p1></rdf:Description><rdf:Description rdf:about="" xmlns:a="http://e.com/B/"><a:p2>2</a:p2></rdf:Description><rdf:Description rdf:about="" xmlns:a="http://e.com/A/"><a:p3>3</a:p3></rdf:Description><rdf:Description rdf:about="" xmlns:b="http://e.com/B/"><b:p4>4</b:p4></rdf:Description>{RDF_CLOSE}"#
+        ));
+        let expected = [
+            ("XMP-a:P1", "1"),
+            ("XMP-tmp0:P2", "2"),
+            ("XMP-tmp0:P3", "3"),
+            ("XMP-tmp0:P4", "4"),
+        ];
+        for (key, value) in expected {
+            assert!(
+                got.contains(&(key.to_string(), value.to_string())),
+                "{key}: {got:?}"
+            );
+        }
+    }
+
+    /// Review packet t11.xmp: a translation made inside a struct is undone
+    /// when the struct's level returns (pinned 13.59: SIn and After both
+    /// `XMP-a`).
+    #[test]
+    fn a_translation_inside_a_struct_ends_with_the_struct() {
+        let got = keys(&format!(
+            r#"{RDF_OPEN}<rdf:Description rdf:about="" xmlns:a="http://e.com/A/"><a:s rdf:parseType="Resource"><a:in xmlns:a="http://e.com/B/">inner</a:in></a:s><a:after>outer</a:after></rdf:Description>{RDF_CLOSE}"#
+        ));
+        assert!(
+            got.contains(&("XMP-a:SIn".to_string(), "inner".to_string())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("XMP-a:After".to_string(), "outer".to_string())),
+            "{got:?}"
+        );
+    }
+
+    /// Review packet t5.xmp: URI-keyed renames follow ExifTool's slash and
+    /// version matching (pinned 13.59: `XMP-microsoft:RatingPercent`,
+    /// `XMP-crs:ColorTemperature`).
+    #[test]
+    fn uri_keyed_renames_match_tolerant_uris() {
+        let got = keys(&format!(
+            r#"{RDF_OPEN}<rdf:Description rdf:about="" xmlns:ms="http://ns.microsoft.com/photo/1.0/" xmlns:cr="http://ns.adobe.com/camera-raw-settings/12.3/"><ms:Rating>50</ms:Rating><cr:Temperature>5000</cr:Temperature></rdf:Description>{RDF_CLOSE}"#
+        ));
+        assert!(
+            got.contains(&("XMP-microsoft:RatingPercent".to_string(), "50".to_string())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("XMP-crs:ColorTemperature".to_string(), "5000".to_string())),
+            "{got:?}"
         );
     }
 

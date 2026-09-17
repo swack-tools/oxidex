@@ -241,28 +241,7 @@ pub fn resolve_requested_tags<'a>(
             // where the correct answer, matching `TagSink::record`'s own
             // winner projection (what default non-`-TAG` `-j` output uses)
             // and the pinned oracle's `-TrackID` default, is Track1's `1`.
-            matches.sort_by_key(|occurrence| occurrence.order);
-            let mut remaining = matches.into_iter();
-            let mut winner = remaining.next().expect("matches is non-empty");
-            for candidate in remaining {
-                // ExifTool.pm:9541-9551: promote an existing Priority => 0
-                // winner to 1 for the comparison, so a later Priority => 0
-                // arrival never displaces the first one.
-                let effective_old_priority = if winner.priority == 0 {
-                    1
-                } else {
-                    winner.priority
-                };
-                // ExifTool.pm:9564's `(not $$self{DOC_NUM} or ...)`: an
-                // occurrence recorded under a non-default sub-document/track
-                // Instance never displaces a winner recorded under a
-                // *different* Instance, regardless of priority.
-                let instance_ok = candidate.instance == Instance::default()
-                    || candidate.instance == winner.instance;
-                if candidate.priority >= effective_old_priority && instance_ok {
-                    winner = candidate;
-                }
-            }
+            let winner = found_tag_winner(matches);
             out.push(ResolvedOccurrence {
                 lookup_key: winner.lookup_key(),
                 occurrence: winner,
@@ -270,6 +249,73 @@ pub fn resolve_requested_tags<'a>(
         }
     }
     out
+}
+
+/// `FoundTag`'s winner among same-named occurrences: fold them in file order,
+/// letting an arrival displace the running winner only under
+/// ExifTool.pm:9541-9564's rules (see `resolve_requested_tags`).
+fn found_tag_winner(mut matches: Vec<&TagOccurrence>) -> &TagOccurrence {
+    matches.sort_by_key(|occurrence| occurrence.order);
+    let mut remaining = matches.into_iter();
+    let mut winner = remaining.next().expect("matches is non-empty");
+    for candidate in remaining {
+        // ExifTool.pm:9541-9551: promote an existing Priority => 0
+        // winner to 1 for the comparison, so a later Priority => 0
+        // arrival never displaces the first one.
+        let effective_old_priority = if winner.priority == 0 {
+            1
+        } else {
+            winner.priority
+        };
+        // ExifTool.pm:9564's `(not $$self{DOC_NUM} or ...)`: an
+        // occurrence recorded under a non-default sub-document/track
+        // Instance never displaces a winner recorded under a
+        // *different* Instance, regardless of priority.
+        let instance_ok =
+            candidate.instance == Instance::default() || candidate.instance == winner.instance;
+        if candidate.priority >= effective_old_priority && instance_ok {
+            winner = candidate;
+        }
+    }
+    winner
+}
+
+/// Lookup keys of XMP key-winners that lose, by tag name, to another XMP
+/// key-winner -- the entries a listing without `-a` must drop.
+///
+/// XMP properties are keyed by their family-1 namespace group
+/// (`XMP-xxxx:Test`, `XMP-tmp0:Test`), so two namespaces' same-named
+/// properties are distinct keys, and a key-winner listing would print both.
+/// ExifTool stores them under one tag key and keeps only the `FoundTag`
+/// winner unless `-a` is given (XMP6.xmp: `exiftool -G1 -s` prints only
+/// `[XMP-xxxx] Test : trout`). Scoped to family-0 `XMP` because that is the
+/// family whose keys carry a namespace group; other families' keys are left
+/// as they were.
+fn xmp_same_name_losers(metadata: &MetadataMap) -> HashSet<String> {
+    let mut by_name: Vec<(String, Vec<(&String, &TagOccurrence)>)> = Vec::new();
+    for (key, occurrence) in metadata.winner_occurrences() {
+        if family0_label(occurrence) != "XMP" {
+            continue;
+        }
+        let name = occurrence.name.to_ascii_lowercase();
+        match by_name.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, entries)) => entries.push((key, occurrence)),
+            None => by_name.push((name, vec![(key, occurrence)])),
+        }
+    }
+    let mut losers = HashSet::new();
+    for (_, entries) in by_name {
+        if entries.len() < 2 {
+            continue;
+        }
+        let winner = found_tag_winner(entries.iter().map(|(_, o)| *o).collect());
+        for (key, occurrence) in entries {
+            if !std::ptr::eq(occurrence, winner) {
+                losers.insert(key.clone());
+            }
+        }
+    }
+    losers
 }
 
 /// The value to display for `occurrence`: PrintConv-formatted (matching
@@ -514,9 +560,11 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 })
                 .collect()
         } else {
+            let losers = xmp_same_name_losers(raw_metadata);
             raw_metadata
                 .winner_occurrences()
                 .filter(|(key, _)| surviving_keys.contains(key.as_str()))
+                .filter(|(key, _)| !losers.contains(key.as_str()))
                 .map(|(key, occurrence)| ResolvedOccurrence {
                     occurrence,
                     lookup_key: key.clone(),
@@ -552,13 +600,14 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         return ResolvedFileOutput::Metadata(metadata);
     }
 
+    let losers = xmp_same_name_losers(raw_metadata);
     let metadata = if no_print_conv {
         // strip_extended_only rebuilt the display map and discarded value
         // forms. Use its key selection with the original winning occurrences.
         let values = raw_metadata.without_print_conv();
         values
             .iter()
-            .filter(|(key, _)| surviving.contains_key(key))
+            .filter(|(key, _)| surviving.contains_key(key) && !losers.contains(key.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
     } else {
@@ -567,6 +616,9 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         // plain output applies Printable's own control/whitespace rules.
         let mut formatted = MetadataMap::with_capacity(surviving.len());
         for (key, value) in surviving.iter() {
+            if losers.contains(key.as_str()) {
+                continue;
+            }
             formatted.insert(key.clone(), format_tag_value_rules(key, value));
         }
         formatted
@@ -1000,6 +1052,114 @@ mod tests {
                     }));
                 }
             }
+        }
+    }
+
+    /// A metadata map holding one XMP packet the way the sidecar reader
+    /// stores it (`parse_xmp` keys inserted through the plain shim).
+    fn xmp_packet_map(packet: &[u8]) -> MetadataMap {
+        let mut metadata = MetadataMap::new();
+        for (key, value) in crate::parsers::xmp::parse_xmp(packet).unwrap() {
+            metadata.insert(key, TagValue::new_string(value));
+        }
+        metadata
+    }
+
+    fn xmp_args(json: bool, all_tags: bool, grouped: bool, args: Vec<String>) -> CliArgs {
+        CliArgs {
+            detector: crate::cli::args::DetectorMode::Signature,
+            json,
+            csv: false,
+            short_format: !json,
+            all_tags,
+            group_display: grouped.then_some(vec![1]),
+            extended_output: false,
+            recursive: false,
+            preserve_file_times: false,
+            backup: false,
+            readonly: true,
+            exiftool_compat: true,
+            tags_from_file: None,
+            date_format: None,
+            dry_run: false,
+            strict: false,
+            args,
+        }
+    }
+
+    /// Values of every output entry named `name`, in any group.
+    fn output_values(output: ResolvedFileOutput, name: &str) -> Vec<String> {
+        match output {
+            ResolvedFileOutput::Lines(lines) => lines
+                .lines()
+                .filter_map(|line| line.split_once("] "))
+                .filter_map(|(_, rest)| rest.split_once(": "))
+                .filter(|(tag, _)| *tag == name)
+                .map(|(_, value)| value.to_string())
+                .collect(),
+            ResolvedFileOutput::Metadata(map) => map
+                .iter()
+                .filter(|(key, _)| key.rsplit(':').next() == Some(name))
+                .map(|(_, value)| value.as_string().unwrap_or_default().to_string())
+                .collect(),
+        }
+    }
+
+    /// XMP6.xmp's `xxxx:Test`/rebound `xxxx:Test` (and the review's d1/d2
+    /// packets, same property name under two unknown namespaces in either
+    /// order). Pinned ExifTool 13.59 without `-a` prints only the FIRST in
+    /// document order -- both are `XMP::other` tags minted at `Priority => 0`
+    /// (XMP.pm:3595) -- for `-G1 -s`, `-j` and a bare `-Test` request, and
+    /// prints both with `-a`.
+    #[test]
+    fn same_named_unknown_xmp_properties_keep_the_first_without_all() {
+        let packets: [(&[u8], &str, &str); 3] = [
+            (
+                br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                  <rdf:Description xmlns:xxxx="http://testtag.com/fish/1.0/">
+                    <xxxx:Test>trout</xxxx:Test></rdf:Description>
+                  <rdf:Description xmlns:xxxx="http://testtag.com/feline/1.0/">
+                    <xxxx:Test>tabby</xxxx:Test></rdf:Description>
+                </rdf:RDF>"#,
+                "trout",
+                "tabby",
+            ),
+            (
+                br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                  <rdf:Description xmlns:zeta="http://e.com/Z/" xmlns:alpha="http://e.com/A/">
+                    <zeta:Test>fromZeta</zeta:Test><alpha:Test>fromAlpha</alpha:Test>
+                  </rdf:Description></rdf:RDF>"#,
+                "fromZeta",
+                "fromAlpha",
+            ),
+            (
+                br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                  <rdf:Description xmlns:alpha="http://e.com/A/" xmlns:zeta="http://e.com/Z/">
+                    <alpha:Test>fromAlpha</alpha:Test><zeta:Test>fromZeta</zeta:Test>
+                  </rdf:Description></rdf:RDF>"#,
+                "fromAlpha",
+                "fromZeta",
+            ),
+        ];
+        for (packet, first, second) in packets {
+            let metadata = xmp_packet_map(packet);
+            let file = || "fixture.xmp".to_string();
+            for (json, grouped) in [(true, false), (true, true), (false, true)] {
+                let listing =
+                    resolve_file_output(&metadata, &xmp_args(json, false, grouped, vec![file()]));
+                assert_eq!(
+                    output_values(listing, "Test"),
+                    [first],
+                    "json={json} grouped={grouped}"
+                );
+            }
+            let requested = resolve_file_output(
+                &metadata,
+                &xmp_args(false, false, true, vec!["-Test".into(), file()]),
+            );
+            assert_eq!(output_values(requested, "Test"), [first]);
+            let all = resolve_file_output(&metadata, &xmp_args(false, true, true, vec![file()]));
+            assert_eq!(output_values(all, "Test"), [first, second]);
         }
     }
 }

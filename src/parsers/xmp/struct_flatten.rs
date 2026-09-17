@@ -273,6 +273,7 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
                 stack.push(frame);
                 emit_attributes(&e, &resolver, &stack, &mut collected)?;
                 close_frame(&mut stack, &mut collected);
+                resolver.pop_element_scope();
             }
 
             Ok(Event::Text(e)) => {
@@ -284,7 +285,10 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
                 }
             }
 
-            Ok(Event::End(_)) => close_frame(&mut stack, &mut collected),
+            Ok(Event::End(_)) => {
+                close_frame(&mut stack, &mut collected);
+                resolver.pop_element_scope();
+            }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
@@ -308,6 +312,10 @@ fn push_frame(
     stack: &mut [Frame],
 ) -> Result<Frame> {
     register_namespaces(element, resolver)?;
+    // Opened here, closed by the caller at the element's end (or at once for
+    // an empty element), so the group below sees this element's own
+    // declarations but not its children's.
+    resolver.push_element_scope();
 
     let name = element.name();
     let qname = std::str::from_utf8(name.as_ref()).map_err(|e| {
@@ -509,6 +517,7 @@ fn tag_id_segment(local: &str) -> String {
 
 fn rename_field<'a>(uri: Option<&str>, local: &'a str) -> &'a str {
     let Some(uri) = uri else { return local };
+    let uri = super::namespace_resolver::canonical_standard_uri(uri).unwrap_or(uri);
     FIELD_RENAMES
         .iter()
         .find(|(u, l, _)| *u == uri && *l == local)
@@ -586,6 +595,7 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
 
                 if is_empty {
                     stack.pop();
+                    resolver.pop_element_scope();
                 }
             }
 
@@ -616,6 +626,7 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
                         node_scope.pop();
                     }
                 }
+                resolver.pop_element_scope();
             }
 
             Ok(Event::Eof) => break,

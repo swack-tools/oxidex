@@ -203,6 +203,11 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // CountryCode, Scene and both pdfx custom properties.
     let mut description_depth = 0usize;
     let mut current_property: Option<String> = None;
+    // The reported `XMP-<ns>:Name` of `current_property`, resolved when its
+    // start tag is read: ExifTool translates a property's prefix before
+    // parsing its children, so a declaration inside the value must not
+    // change it (see `NamespaceResolver::group_for_prefix`).
+    let mut current_tag = String::new();
     let mut current_value = String::new();
     let mut depth = 0;
     let mut property_depth = 0;
@@ -223,7 +228,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     let mut property_is_struct = false;
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
 
@@ -231,6 +239,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
                 // Register any new namespaces from this element first
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
 
                 // Check for x:xmpmeta element and extract XMPToolkit
                 if is_xmpmeta(&tag_name) {
@@ -248,6 +257,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
+                        current_tag = format_tag_name(&tag_name, &resolver);
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         collection_values.clear();
@@ -285,11 +295,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                     current_value.clear();
                 } else if is_collection_container(&tag_name, &resolver) {
                     inside_collection = false;
-                } else if let Some(ref prop) = current_property
-                    && depth == property_depth
-                {
+                } else if current_property.is_some() && depth == property_depth {
                     // End of current property - extract tag name and value
-                    let prefixed_name = format_tag_name(prop, &resolver);
+                    let prefixed_name = std::mem::take(&mut current_tag);
 
                     if property_is_struct {
                         // Reported only through its flattened fields.
@@ -361,6 +369,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
                 // Register namespaces from empty elements
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
 
                 // Handle self-closing x:xmpmeta
                 if is_xmpmeta(&tag_name) {
@@ -406,6 +415,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
             }
         }
 
+        if closes_scope {
+            resolver.pop_element_scope();
+        }
         buf.clear();
     }
 
@@ -647,10 +659,14 @@ fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<St
     let mut current_cv_term_name = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
 
                 let tag_name = extract_tag_name(&e)?;
                 if about_cv_term_depth.is_none()
@@ -775,6 +791,7 @@ fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<St
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
             }
 
             Ok(Event::Eof) => break,
@@ -787,6 +804,9 @@ fn extract_about_cv_term_values(xml_bytes: &[u8]) -> Result<(Vec<String>, Vec<St
             }
         }
 
+        if closes_scope {
+            resolver.pop_element_scope();
+        }
         buf.clear();
     }
 
@@ -819,10 +839,14 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
     let mut lang_values: Vec<(String, String)> = Vec::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if mwg_rs_depth.is_none()
@@ -947,11 +971,15 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
             }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
             Err(_e) => break,
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -977,10 +1005,14 @@ fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<
     let mut values: Vec<(String, String)> = Vec::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if property_depth.is_none()
@@ -1026,6 +1058,7 @@ fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
                 if property_depth.is_some()
                     && is_rdf_li(&tag_name, &resolver)
@@ -1042,6 +1075,9 @@ fn extract_custom1_language_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<
                     "Invalid PLUS Custom1 XML: {e}"
                 )));
             }
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -1089,10 +1125,14 @@ fn extract_derived_from_ids(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let mut results = Vec::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if derived_depth.is_none()
@@ -1143,6 +1183,7 @@ fn extract_derived_from_ids(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if derived_depth.is_none()
@@ -1166,6 +1207,9 @@ fn extract_derived_from_ids(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
                     "Invalid XMP DerivedFrom XML: {e}"
                 )));
             }
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -1289,10 +1333,14 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     let mut nested_depth: Option<usize> = None;
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if is_rdf_description(&tag_name, &resolver) {
@@ -1408,11 +1456,15 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
             }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
             Err(_) => break,
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -1518,10 +1570,14 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     };
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if is_rdf_description(&tag_name, &resolver) {
@@ -1614,11 +1670,15 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
             }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
             Err(_) => break,
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -1700,10 +1760,14 @@ fn extract_plus_sequence_field(
     let mut current_value = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if owner_depth.is_none()
@@ -1746,11 +1810,15 @@ fn extract_plus_sequence_field(
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
             }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
             Err(_) => break,
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -1799,10 +1867,14 @@ fn extract_job_ref_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     let mut current_value = String::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        let event = reader.read_event_into(&mut buf);
+        // An end tag or empty element closes the element scope opened below.
+        let closes_scope = matches!(event, Ok(Event::End(_)) | Ok(Event::Empty(_)));
+        match event {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
                 let tag_name = extract_tag_name(&e)?;
 
                 if job_ref_depth.is_none()
@@ -1868,11 +1940,15 @@ fn extract_job_ref_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
 
             Ok(Event::Empty(e)) => {
                 register_namespaces_from_element(&e, &mut resolver)?;
+                resolver.push_element_scope();
             }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
             Err(_) => break,
+        }
+        if closes_scope {
+            resolver.pop_element_scope();
         }
         buf.clear();
     }
@@ -2913,6 +2989,9 @@ fn exiftool_property_name<'a>(family: &str, local: &'a str) -> &'a str {
 /// URI. `local` is the raw local name, before the leading letter is capitalized
 /// -- Google writes `hdrp_makernote` and `shot_log_data` in lower case.
 fn exiftool_property_name_for_uri<'a>(uri: &str, local: &'a str) -> &'a str {
+    // Match the table's URIs the way ExifTool matches a declaration to its
+    // tag table: trailing-slash and `N.N` version differences still select it.
+    let uri = super::namespace_resolver::canonical_standard_uri(uri).unwrap_or(uri);
     NAMESPACE_PROPERTY_RENAMES
         .iter()
         .find(|(u, l, _)| *u == uri && *l == local)

@@ -79,10 +79,35 @@ pub const SHIM_DEFAULT_PRIORITY: u8 = 1;
 /// store of the *priority winner* (ExifTool.pm:4008), and with these tables
 /// at `PRIORITY => 0` that winner is the EXIF tag whenever one exists --
 /// which is precisely ExifTool's observed `-G1 -s -FocalLength` answer.
+///
+/// `%Image::ExifTool::Google::GDepth` declares the same (Google.pm:220).
+///
+/// A property from a namespace ExifTool has no table for lands in
+/// `XMP::other` and is minted with `Priority => 0` (XMP.pm:3595,
+/// `$tagInfo = { Name => $name, IsDefault => 1, Priority => 0 }`), so a
+/// later same-named property never displaces the first one. Such a
+/// namespace is exactly one whose group suffix is not an ExifTool standard
+/// prefix -- a document prefix or a `tmpN` (see
+/// [`crate::parsers::xmp::namespace_resolver::is_standard_group_suffix`]).
+/// XMP6.xmp: `[XMP-xxxx] Test : trout` wins over `[XMP-tmp0] Test : tabby`.
+///
+/// Not modelled: an unknown property *name* inside a standard namespace
+/// (also `Priority => 0` in ExifTool), per-tag `Priority => 0` entries
+/// (`xmp:CreateDate`, `aux:LensID`, ...), and a non-standard URI whose
+/// document prefix happens to spell a translated standard group
+/// (`iptcCore`, `microsoft`, ...), which this group-name view cannot tell
+/// apart from the standard one.
 fn shim_group_priority(group0: &str) -> u8 {
     match group0 {
-        "XMP-tiff" | "XMP-exif" | "XMP-exifEX" => 0,
-        _ => SHIM_DEFAULT_PRIORITY,
+        "XMP-tiff" | "XMP-exif" | "XMP-exifEX" | "XMP-GDepth" => 0,
+        other => match other.strip_prefix("XMP-") {
+            Some(suffix)
+                if !crate::parsers::xmp::namespace_resolver::is_standard_group_suffix(suffix) =>
+            {
+                0
+            }
+            _ => SHIM_DEFAULT_PRIORITY,
+        },
     }
 }
 
@@ -262,6 +287,23 @@ mod tests {
         assert_eq!(occ.raw, TagValue::new_string("Canon"));
         assert!(occ.value.is_none());
         assert!(occ.print.is_none());
+    }
+
+    #[test]
+    fn shim_priority_demotes_xmp_groups_exiftool_has_no_table_for() {
+        // XMP.pm:1900/1992/2462 and Google.pm:220 table PRIORITY => 0.
+        for group in ["XMP-tiff", "XMP-exif", "XMP-exifEX", "XMP-GDepth"] {
+            assert_eq!(shim_group_priority(group), 0, "{group}");
+        }
+        // XMP::other tags (XMP.pm:3595): document prefixes and tmpN.
+        for group in ["XMP-xxxx", "XMP-tmp0", "XMP-myXMPns"] {
+            assert_eq!(shim_group_priority(group), 0, "{group}");
+        }
+        // Standard namespaces (after %stdXlatNS) and non-XMP groups keep the
+        // default.
+        for group in ["XMP-dc", "XMP-xmp", "XMP-iptcCore", "XMP-x", "XMP", "IFD0"] {
+            assert_eq!(shim_group_priority(group), SHIM_DEFAULT_PRIORITY, "{group}");
+        }
     }
 
     #[test]
