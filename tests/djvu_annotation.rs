@@ -66,8 +66,11 @@ fn extracts_standard_title_from_compressed_djvu_metadata() {
 
     let metadata = read_metadata(file.path()).expect("reads DjVu metadata");
 
+    // `DjVu::Meta` tags key on family 0 `DjVu`; their family-1 `DjVu-Meta`
+    // group is pinned by the parser's unit test.
     assert_eq!(
-        metadata.get_string("DjVu-Meta:Title"),
+        metadata.get_string("DjVu:Title"),
         Some("DjVu Metadata Sample")
     );
+    assert!(metadata.get("DjVu-Meta:Title").is_none());
 }
