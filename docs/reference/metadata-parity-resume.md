@@ -11,7 +11,7 @@ Resumed by the maintainer on 2026-09-15 after the tranche consolidated in PR [#7
 - [Review and validation record](parity-rollup-review-20260914.md)
 - [Migration plan](source-family-migration-plan.md)
 
-All 33,487 catalog entries are classified. This is inventory completeness, not read/write parity. The historical common-runtime snapshot has observed evidence for 26 catalog entries read and 19 written. The corpus read snapshot (runtime 8f453f55, 194 `t/images` files) matches 2,586 of 4,978 native `Group1:TagName` identities in both print and raw modes in at least one file. It credits 1,963 catalog entries by the exact ExifTool source row, each matched in every file that ExifTool read it from. Those are separate denominators. The full catalog-wide parity objective remains incomplete.
+All 33,487 catalog entries are classified. This is inventory completeness, not read/write parity. The historical common-runtime snapshot has observed evidence for 26 catalog entries read and 19 written. The corpus read snapshot (runtime 44e1c40e, 194 `t/images` files) matches 2,586 of 4,978 native `Group1:TagName` identities in both print and raw modes in at least one file. It credits 1,963 catalog entries by the exact ExifTool source row, each matched in every file that ExifTool read it from. Those are separate denominators. The full catalog-wide parity objective remains incomplete.
 
 ## First actions when resuming
 
