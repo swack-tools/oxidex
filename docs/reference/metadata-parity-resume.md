@@ -1,16 +1,17 @@
 # Resume metadata parity work
 
-Resumed by the maintainer on 2026-09-15 after the tranche consolidated in PR [#779](https://github.com/swack-tools/oxidex/pull/779). The first resumed milestone is the generated Garmin FIT reader ([source review](garmin-fit-source-review.md)). PRs #682 and #683 remain separate.
+Resumed by the maintainer on 2026-09-15 after the tranche consolidated in PR [#779](https://github.com/swack-tools/oxidex/pull/779). The first resumed milestone is the generated Garmin FIT reader ([source review](garmin-fit-source-review.md)). PRs #682 and #683 were closed as superseded by #787.
 
 ## Read first
 
 - [Checkpoint and exact denominators](goal-checkpoint-20260914.md)
 - [Source classifications by table](catalog-hydrated-join.md)
 - [Authenticated historical observations](catalog-hydrated-observed.md)
+- [Authenticated corpus read observations](catalog-corpus-observed.md)
 - [Review and validation record](parity-rollup-review-20260914.md)
 - [Migration plan](source-family-migration-plan.md)
 
-All 33,487 catalog entries are classified. This is inventory completeness, not read/write parity. The historical common-runtime snapshot has observed evidence for 26 catalog entries read and 19 written. The full catalog-wide parity objective remains incomplete.
+All 33,487 catalog entries are classified. This is inventory completeness, not read/write parity. The historical common-runtime snapshot has observed evidence for 26 catalog entries read and 19 written. The corpus read snapshot (runtime 8f453f55, 194 `t/images` files) matches 2,586 of 4,978 native `Group1:TagName` identities in both print and raw modes in at least one file. It credits 1,963 catalog entries by the exact ExifTool source row, each matched in every file that ExifTool read it from. Those are separate denominators. The full catalog-wide parity objective remains incomplete.
 
 ## First actions when resuming
 

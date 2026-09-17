@@ -167,22 +167,24 @@ def validate_snapshot(snapshot: dict) -> None:
             raise ValueError("published observed receipt mixes native runtimes")
 
 
-def render_report(snapshot: dict, current_source: dict | None = None) -> str:
+def render_report(snapshot: dict, current_source: dict | None = None, download: str | None = None) -> str:
     observed = snapshot["observed_join"]
+    download = download or f"catalog-hydrated-observed-{observed['inputs']['exiftool_version']}.json"
+    read_counts = observed["counts"].get("observed_read", {})
     current = "not compared"
     if current_source is not None:
         current = "matches historical source join" if canonical_hash(current_source) == snapshot["source_join_sha256"] else "differs from historical source join; observations remain historical"
     return "\n".join([
         "# Authenticated catalog observations", "",
         "This is a historical native receipt. It does not assert that a later source or runtime has the same observations.", "",
-        f"[Download the authenticated observation snapshot](/measurements/catalog-hydrated-observed-{observed['inputs']['exiftool_version']}.json).",
+        f"[Download the authenticated observation snapshot](/measurements/{download}).",
         "[Compare source classifications and remaining work](goal-checkpoint-20260914.md).", "",
         f"- Observed runtime commit: `{snapshot['native_evidence']['source_commit']}`",
         f"- Runtime input manifest: `{snapshot['native_evidence']['runtime_input_manifest_sha256']}`",
         f"- Historical source join SHA-256: `{snapshot['source_join_sha256']}`",
         f"- Current source applicability: {current}",
         f"- Source denominator: `{observed['counts']['joined_records']}`",
-        f"- Catalog entries with observed reads: `{observed['counts'].get('observed_read', {}).get('observed_matched_read', 0)}`",
+        f"- Catalog entries with observed reads: `{read_counts.get('observed_matched_read', 0)}`",
         f"- Catalog entries with observed writes: `{observed['counts'].get('observed_write', {}).get('observed_matched_write', 0)}`",
         f"- Source tables retained: `{len(snapshot['source_table_observations'])}`",
         f"- Source tables with observations: `{sum(any(bucket[axis].get(state, 0) for axis, state in [('observed_read', 'observed_matched_read'), ('observed_write', 'observed_matched_write')]) for bucket in snapshot['source_table_observations'].values())}`",
@@ -198,12 +200,13 @@ def main() -> int:
     parser.add_argument("--snapshot", required=True, type=Path)
     parser.add_argument("--current-source-join", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--download", help="published snapshot file name for the report link")
     parser.add_argument("--verify", action="store_true", required=True)
     args = parser.parse_args()
     snapshot = read(args.snapshot)
     validate_snapshot(snapshot)
     current = read(args.current_source_join) if args.current_source_join else None
-    text = render_report(snapshot, current)
+    text = render_report(snapshot, current, args.download)
     if args.report:
         args.report.write_text(text, encoding="utf-8")
     print("=== instrument: catalog observed historical receipt check ===")

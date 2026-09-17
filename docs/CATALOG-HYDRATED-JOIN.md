@@ -128,6 +128,47 @@ refused. `counts.write_parity` reports the direct-write denominator, generated
 declarations and matched write observations over `writable` entries only, and
 each source table reports `native_writable_catalog_entries`.
 
+## Corpus read receipts
+
+`corpus_read_receipt.py` records authenticated public-CLI reads of a whole
+corpus in three steps:
+
+- `build` records a Cargo build proof from a clean commit, keeping the Cargo
+  stdout/stderr bytes and the executable they name.
+- `observe` records pinned ExifTool (`-j -a -G1:4 -s`, and `-n`) and OxiDex
+  (`-j -a -G1`, and `--no-print-conv`) transcripts for every file. It also
+  records a `capture_corpus_sources.pl` transcript naming the exact
+  `(table, tag ID, variant index)` ExifTool used for every tag, plus version,
+  DOCX-capability and Perl probes and a library fingerprint.
+- `verify` checks the receipt against `.exiftool-version` and recomputes every
+  count and credit from the stored bytes.
+
+Matching rules:
+
+- An identity is a `Group1:TagName`. Native `CopyN` segments and OxiDex ` (N)`
+  suffixes fold into one identity per file carrying the multiset of its values.
+- JSON with a duplicate key is refused. Values compare as parsed JSON with
+  numbers kept as literal text.
+- An identity matches in a file only when both modes agree. Default-output-only
+  matches are reported and never credited.
+- A source row is credited only when every file in which ExifTool read it
+  matched. An identity whose captured rows do not account for exactly its
+  native values is unattributable in that file.
+
+`--corpus-read-evidence` joins a receipt only when three things hold: its runtime
+input manifest equals the joined checkout's, its ExifTool version equals the
+catalog pin, and every catalog producer source has the observed library's
+digest. Credited rows that are catalog coordinates become `observed_matched_read`.
+Rows outside the catalog, such as table entries ExifTool adds at run time, are
+counted but not credited.
+
+The corpus snapshot is published separately as
+`docs/public/measurements/catalog-corpus-observed-13.59.json` with report
+`docs/reference/catalog-corpus-observed.md`. CI verifies every published
+snapshot. A squash merge makes the observed runtime commit unreachable from the
+target branch, so it is kept at `staging/corpus-read-receipt-history`. The
+runtime input manifest, not the commit, binds the observation to source.
+
 ## Historical native observations
 
 `docs/public/measurements/catalog-hydrated-observed-13.59.json` is a separate
