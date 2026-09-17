@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use super::generated_namespaces::{STD_XLAT, TABLE_NAMESPACES, URI_PREFIXES, translated_prefix};
+use super::generated_namespaces::{URI_PREFIXES, translated_prefix};
 
 /// Manages XMP namespace prefix-to-URI mappings.
 ///
@@ -428,31 +428,6 @@ impl NamespaceResolver {
     pub fn extract_local_name(qname: &str) -> &str {
         qname.split(':').next_back().unwrap_or(qname)
     }
-}
-
-/// Whether `suffix` (the part of a group after `XMP-`) can only name a
-/// namespace ExifTool has no tag table for -- one whose properties land in
-/// `XMP::other` and are minted with `Priority => 0` (XMP.pm:3595).
-///
-/// It is decided from the group string, which is all a shim-keyed occurrence
-/// carries, so it answers `true` only when no table-backed namespace could
-/// produce the same suffix: not a `%nsURI` prefix or its `%stdXlatNS`
-/// translation, not a `TABLE_NAMESPACES` prefix (PhotoMechanic, Google
-/// Device) or its translation, and not any `%stdXlatNS` spelling. A document
-/// prefix that happens to spell one of those (`xmlns:iptcCore="http://e.com/"`
-/// reports `XMP-iptcCore` exactly as the real IPTC Core namespace does) is
-/// therefore treated as possibly table-backed: its priority is not known
-/// exactly, and callers must not arbitrate on it.
-pub fn is_unknown_namespace_group_suffix(suffix: &str) -> bool {
-    let standard = URI_PREFIXES
-        .iter()
-        .map(|(_, prefix)| *prefix)
-        .chain(TABLE_NAMESPACES.iter().map(|(_, prefix, _)| *prefix))
-        .any(|prefix| prefix == suffix || translated_prefix(prefix) == suffix);
-    let translation = STD_XLAT
-        .iter()
-        .any(|(from, to)| *from == suffix || *to == suffix);
-    !suffix.is_empty() && !standard && !translation
 }
 
 /// Whether `prefix` is one of ExifTool's standard prefixes (a key of

@@ -32,6 +32,7 @@
 //! ```
 
 pub mod generated_namespaces;
+pub mod generated_priorities;
 pub mod generic_xml;
 pub mod google_hdrp;
 pub mod history_parser;
