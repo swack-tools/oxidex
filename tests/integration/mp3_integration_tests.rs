@@ -33,7 +33,11 @@ fn mp3_fixture_reports_id3_size() {
     let metadata = parse_mp3_metadata(&reader).expect("Failed to parse pinned MP3 fixture");
 
     assert_eq!(
-        printed(metadata.get("ID3Size").expect("OxiDex missing ID3Size")),
+        printed(
+            metadata
+                .get("File:ID3Size")
+                .expect("OxiDex missing File:ID3Size")
+        ),
         "391"
     );
 }
