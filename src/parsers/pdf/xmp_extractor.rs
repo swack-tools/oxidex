@@ -27,7 +27,7 @@
 use crate::core::{FileReader, MetadataMap};
 use crate::error::{ExifToolError, Result};
 use crate::parsers::xmp::parse_xmp_history;
-use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
+use crate::parsers::xmp::rdf_parser::XmpValue;
 
 /// Searches for and extracts XMP metadata packets from a PDF file.
 ///
@@ -66,7 +66,7 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         Some(xmp_xml) => {
             // Preserve RDF bags and sequences as lists. Joining them here
             // loses the structured representation expected by MetadataMap.
-            let xmp_tags = parse_xmp_typed(xmp_xml)
+            let xmp_tags = crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(xmp_xml)
                 .map_err(|e| ExifToolError::parse_error(format!("XMP parsing failed: {}", e)))?;
 
             // Parse XMP history for forensic metadata
@@ -77,7 +77,7 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
             let total_tags = xmp_tags.len() + history_tags.len();
             let mut metadata = MetadataMap::with_capacity(total_tags);
 
-            for (key, typed) in xmp_tags {
+            for (key, typed, priority) in xmp_tags {
                 let value = match typed {
                     XmpValue::List(values) => crate::core::TagValue::Array(
                         values
@@ -87,11 +87,17 @@ pub fn extract_xmp_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
                     ),
                     XmpValue::Scalar(value) => crate::core::TagValue::new_string(value),
                 };
-                metadata.insert(key, value);
+                crate::parsers::xmp::rdf_parser::insert_xmp_tag(
+                    &mut metadata,
+                    key,
+                    value,
+                    priority,
+                );
             }
 
             for (key, value) in history_tags {
-                metadata.insert(key, crate::core::TagValue::new_string(value));
+                let priority = crate::parsers::xmp::history_parser::xmp_history_priority(&key);
+                metadata.insert_xmp(key, crate::core::TagValue::new_string(value), priority);
             }
 
             Ok(metadata)

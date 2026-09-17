@@ -3381,11 +3381,16 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
     let xmp_data = &data[xmp_start..];
 
     // Parse XMP tags using the existing XMP parser (takes bytes)
-    if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp(xmp_data) {
+    if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(xmp_data) {
         // The XMP parser already returns fully grouped keys (`XMP-dc:Creator`,
         // `XMP-x:XMPToolkit`); pass them through unchanged.
-        for (key, value) in xmp_tags {
-            metadata.insert(key, TagValue::new_string(value));
+        for (key, value, priority) in xmp_tags {
+            crate::parsers::xmp::rdf_parser::insert_xmp_tag(
+                metadata,
+                key,
+                TagValue::new_string(value.into_joined()),
+                priority,
+            );
         }
     }
 

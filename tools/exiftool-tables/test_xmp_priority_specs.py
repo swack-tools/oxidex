@@ -28,19 +28,29 @@ class XmpPrioritySpecTests(unittest.TestCase):
         # FoundXMP looks tables up by the prefix after %stdXlatNS.
         self.assertIn("iptcCore", namespaces)
         self.assertNotIn("Iptc4xmpCore", namespaces)
+        self.assertEqual(namespaces["iptcCore"]["namespace"], "Iptc4xmpCore")
         self.assertEqual(namespaces["photomech"]["table"], "Image::ExifTool::PhotoMechanic::XMP")
         self.assertEqual(namespaces["tiff"]["table_priority"], 0)
-        self.assertTrue(all(priority == 0 for priority in namespaces["exif"]["tags"].values()))
-        self.assertEqual(namespaces["pdf"]["tags"]["Keywords"], -1)
-        self.assertEqual(namespaces["xmp"]["tags"]["CreateDate"], 0)
-        # Flattened structure tags are entries too.
+        self.assertTrue(all(tag["priority"] == 0 for tag in namespaces["exif"]["tags"].values()))
+        self.assertEqual(namespaces["pdf"]["tags"]["Keywords"]["own_priority"], -1)
+        self.assertEqual(namespaces["xmp"]["tags"]["CreateDate"]["priority"], 0)
+        # Keyed by raw tag ID: cc:legalcode is named LegalCode.
+        self.assertEqual(namespaces["cc"]["tags"]["legalcode"]["name"], "LegalCode")
+        self.assertNotIn("LegalCode", namespaces["cc"]["tags"])
+        # Flattened structure IDs are entries too, and variable-namespace
+        # structures are marked.
         self.assertIn("FlashFired", namespaces["exif"]["tags"])
+        self.assertEqual(namespaces["iptcExt"]["tags"]["ImageRegion"]["struct"], "variable")
+        self.assertEqual(self.capture["xmp_ns"]["iptcExt"], "Iptc4xmpExt")
         for mutate in (lambda c: c.update(extra=1),
                        lambda c: c["namespaces"]["dc"].update(extra=1),
-                       lambda c: c["namespaces"]["dc"]["tags"].update(Title="1"),
-                       lambda c: c["namespaces"]["dc"]["tags"].update(Title=True),
-                       lambda c: c["namespaces"]["dc"]["tags"].update({'Q"uote': 1}),
-                       lambda c: c["namespaces"]["dc"].update(table_priority="0")):
+                       lambda c: c["namespaces"]["dc"]["tags"]["title"].update(priority="1"),
+                       lambda c: c["namespaces"]["dc"]["tags"]["title"].update(priority=True),
+                       lambda c: c["namespaces"]["dc"]["tags"]["title"].update(struct="odd"),
+                       lambda c: c["namespaces"]["dc"]["tags"]["title"].update(avoid=1),
+                       lambda c: c["namespaces"]["dc"]["tags"].update({'Q"uote': c["namespaces"]["dc"]["tags"]["title"]}),
+                       lambda c: c["namespaces"]["dc"].update(table_priority="0"),
+                       lambda c: c.update(xmp_ns={})):
             broken = copy.deepcopy(self.capture); mutate(broken)
             with self.assertRaises(ValueError):
                 specs.validate(broken)

@@ -816,9 +816,22 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
         }
     }
 
-    // Insert the DOCX aliases
+    // Insert the DOCX aliases. The XMP-dc ones are ExifTool's dc table
+    // entries (`title`, `subject`, `creator`, `description`), so they carry
+    // that table's FoundTag priority for arbitration among XMP tags.
     for (key, value) in docx_tags {
-        metadata.insert(key, value);
+        match key.strip_prefix("XMP-dc:") {
+            Some(name) => {
+                let priority = crate::parsers::xmp::priority::simple_property_priority(
+                    "dc",
+                    &name.to_ascii_lowercase(),
+                );
+                metadata.insert_xmp(key, value, priority);
+            }
+            None => {
+                metadata.insert(key, value);
+            }
+        }
     }
 }
 

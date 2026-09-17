@@ -19,7 +19,7 @@ use crate::error::{ExifToolError, Result};
 use crate::io::{ByteOrder as EndianByteOrder, EndianReader};
 use crate::parsers::image::embedded::parse_embedded_exif_at;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
-use crate::parsers::xmp::rdf_parser::parse_xmp;
+use crate::parsers::xmp::rdf_parser::{insert_xmp_tag, parse_xmp_prioritized};
 
 const FLIF_SIGNATURE: &[u8] = b"FLIF";
 
@@ -206,9 +206,14 @@ fn parse_flif_metadata_chunks(
             match &chunk_type {
                 b"eXif" => parse_flif_exif(&inflated, metadata),
                 b"eXmp" => {
-                    if let Ok(xmp_tags) = parse_xmp(&inflated) {
-                        for (tag_name, value) in xmp_tags {
-                            metadata.insert(tag_name, TagValue::String(value));
+                    if let Ok(xmp_tags) = parse_xmp_prioritized(&inflated) {
+                        for (tag_name, value, priority) in xmp_tags {
+                            insert_xmp_tag(
+                                metadata,
+                                tag_name,
+                                TagValue::String(value.into_joined()),
+                                priority,
+                            );
                         }
                     }
                 }

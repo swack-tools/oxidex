@@ -184,11 +184,80 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
 pub(crate) fn parse_xmp_typed_with_rational_forms(
     xml_bytes: &[u8],
 ) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
+    let (tags, rational_forms) = parse_xmp_packet(xml_bytes)?;
+    Ok((
+        tags.into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect(),
+        rational_forms,
+    ))
+}
+
+/// [`parse_xmp_typed`], with each tag's ExifTool FoundTag priority: the
+/// priority the XMP parser derived from the property's raw tag ID path and
+/// resolved namespace ([`super::priority`]), `None` for the non-XMP tags a
+/// packet can yield (Google's decoded HDR+ maker notes). Callers that store
+/// the tags should record the priority with
+/// [`crate::core::MetadataMap::insert_xmp`] -- see [`insert_xmp_tag`].
+pub fn parse_xmp_prioritized(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue, Option<i8>)>> {
+    Ok(parse_xmp_packet(xml_bytes)?.0)
+}
+
+/// Stores one tag from [`parse_xmp_prioritized`]: with its XMP priority
+/// when it has one, through the plain `insert` otherwise.
+pub fn insert_xmp_tag(
+    metadata: &mut crate::core::MetadataMap,
+    key: String,
+    value: crate::core::TagValue,
+    priority: Option<i8>,
+) {
+    match priority {
+        Some(priority) => {
+            metadata.insert_xmp(key, value, priority);
+        }
+        None => {
+            metadata.insert(key, value);
+        }
+    }
+}
+
+/// [`XmpValue`] as the `TagValue` the readers store: a List as an array.
+pub fn xmp_tag_value(value: XmpValue) -> crate::core::TagValue {
+    use crate::core::TagValue;
+    match value {
+        XmpValue::Scalar(value) => TagValue::new_string(value),
+        XmpValue::List(values) => {
+            TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
+        }
+    }
+}
+
+/// [`parse_xmp_prioritized`] plus the rational forms of
+/// [`parse_xmp_typed_with_rational_forms`].
+#[allow(clippy::type_complexity)]
+pub(crate) fn parse_xmp_prioritized_with_rational_forms(
+    xml_bytes: &[u8],
+) -> Result<(Vec<(String, XmpValue, Option<i8>)>, Vec<(String, String)>)> {
+    parse_xmp_packet(xml_bytes)
+}
+
+/// The packet parse behind every public entry point: tags with their
+/// priorities, and the rational forms described on
+/// [`parse_xmp_typed_with_rational_forms`].
+#[allow(clippy::type_complexity)]
+fn parse_xmp_packet(
+    xml_bytes: &[u8],
+) -> Result<(Vec<(String, XmpValue, Option<i8>)>, Vec<(String, String)>)> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true); // Trim whitespace from text nodes
 
     let mut resolver = NamespaceResolver::new();
     let mut results: Vec<(String, String)> = Vec::new();
+    // ExifTool's FoundTag priority for each tag in `results`, computed where
+    // the tag is found -- from the raw property path and resolved namespace
+    // (`super::priority`), which the reported, possibly renamed, key no
+    // longer carries. Set whenever a pass pushes the key.
+    let mut priorities: std::collections::HashMap<String, i8> = std::collections::HashMap::new();
     // Tags whose value came from a multi-entry Bag/Seq, with their elements
     // kept apart. Recorded beside `results` rather than replacing it so that
     // every focused pass below keeps working on plain strings.
@@ -208,6 +277,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // parsing its children, so a declaration inside the value must not
     // change it (see `NamespaceResolver::group_for_prefix`).
     let mut current_tag = String::new();
+    // ... and its priority, resolved at the same time.
+    let mut current_priority = 0i8;
     let mut current_value = String::new();
     let mut depth = 0;
     let mut property_depth = 0;
@@ -243,7 +314,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
                 // Check for x:xmpmeta element and extract XMPToolkit
                 if is_xmpmeta(&tag_name) {
-                    extract_xmpmeta_attributes(&e, &mut results)?;
+                    extract_xmpmeta_attributes(&e, &mut results, &mut priorities)?;
                 }
                 // Check if this is an rdf:Description element
                 else if is_rdf_description(&tag_name, &resolver) {
@@ -252,12 +323,13 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                         property_is_struct = true;
                     }
                     // Extract rdf:about and property attributes from Description
-                    extract_description_attributes(&e, &resolver, &mut results)?;
+                    extract_description_attributes(&e, &resolver, &mut results, &mut priorities)?;
                 } else if description_depth > 0 && current_property.is_none() {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
                         current_tag = format_tag_name(&tag_name, &resolver);
+                        current_priority = path_priority(&[&qname_property(&tag_name, &resolver)]);
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         collection_values.clear();
@@ -319,6 +391,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                                     _ => continue,
                                 };
                                 if !results.iter().any(|(t, _)| *t == tag) {
+                                    priorities.insert(tag.clone(), current_priority);
                                     results.push((tag, value.clone()));
                                 }
                             }
@@ -328,9 +401,11 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                                 list_elements
                                     .push((prefixed_name.clone(), collection_values.clone()));
                             }
+                            priorities.insert(prefixed_name.clone(), current_priority);
                             results.push((prefixed_name, collection_values.join(", ")));
                         }
                     } else if !current_value.trim().is_empty() {
+                        priorities.insert(prefixed_name.clone(), current_priority);
                         results.push((prefixed_name, current_value.trim().to_string()));
                     } else {
                         // An empty property -- `<x:Tag></x:Tag>`, or one whose
@@ -338,6 +413,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                         // reports it with an empty value (XMP.pm's ParseXMPElement
                         // calls FoundXMP whenever `length $val or not $shorthand`),
                         // so dropping it loses the tag outright.
+                        priorities.insert(prefixed_name.clone(), current_priority);
                         results.push((prefixed_name, String::new()));
                     }
                     current_property = None;
@@ -373,11 +449,11 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
                 // Handle self-closing x:xmpmeta
                 if is_xmpmeta(&tag_name) {
-                    extract_xmpmeta_attributes(&e, &mut results)?;
+                    extract_xmpmeta_attributes(&e, &mut results, &mut priorities)?;
                 }
                 // Handle self-closing rdf:Description (shorthand form)
                 else if is_rdf_description(&tag_name, &resolver) {
-                    extract_description_attributes(&e, &resolver, &mut results)?;
+                    extract_description_attributes(&e, &resolver, &mut results, &mut priorities)?;
                 }
             }
 
@@ -431,6 +507,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         // added later.
         results.retain(|(tag, _)| tag != TAG);
         list_elements.retain(|(tag, _)| tag != TAG);
+        priorities.insert(
+            TAG.to_string(),
+            fixed_path_priority(&[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvId")]),
+        );
         list_elements.push((TAG.to_string(), about_cv_term_cv_ids.clone()));
         results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
     }
@@ -442,6 +522,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         // added later.
         results.retain(|(tag, _)| tag != TAG);
         list_elements.retain(|(tag, _)| tag != TAG);
+        priorities.insert(
+            TAG.to_string(),
+            fixed_path_priority(&[("iptcExt", "AboutCvTerm"), ("iptcExt", "CvTermName")]),
+        );
         list_elements.push((TAG.to_string(), about_cv_term_names.clone()));
         results.push((TAG.to_string(), about_cv_term_names.join(", ")));
     }
@@ -452,6 +536,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     let artwork_titles = extract_artwork_title_values(xml_bytes)?;
     for (tag, value) in &artwork_titles {
         if !results.iter().any(|(t, _)| t == tag) {
+            priorities.insert(
+                tag.clone(),
+                fixed_path_priority(&[("iptcExt", "ArtworkOrObject"), ("iptcExt", "AOTitle")]),
+            );
             results.push((tag.clone(), value.clone()));
         }
     }
@@ -469,6 +557,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     for (tag, values) in custom1_language_values {
         results.retain(|(existing, _)| existing != &tag);
         list_elements.retain(|(existing, _)| existing != &tag);
+        priorities.insert(tag.clone(), fixed_path_priority(&[("plus", "Custom1")]));
         list_elements.push((tag.clone(), values.clone()));
         results.push((tag, values.join(", ")));
     }
@@ -477,6 +566,15 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // both forms, including a nested rdf:Description (XMP.xmp).
     for (tag, value) in extract_derived_from_ids(xml_bytes)? {
         results.retain(|(existing, _)| existing != &tag);
+        let field = if tag.ends_with("DocumentID") {
+            "documentID"
+        } else {
+            "instanceID"
+        };
+        priorities.insert(
+            tag.clone(),
+            fixed_path_priority(&[("xmpMM", "DerivedFrom"), ("stRef", field)]),
+        );
         results.push((tag, value));
     }
 
@@ -486,8 +584,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // exif:Flash/exif:Mode -> FlashMode and test:BareStruct/test:Item1 ->
     // BareStructItem1.
     let struct_fields = extract_top_level_struct_values(xml_bytes)?;
-    for (tag, value) in &struct_fields {
+    for (tag, value, priority) in &struct_fields {
         if !results.iter().any(|(t, _)| t == tag) {
+            priorities.insert(tag.clone(), *priority);
             results.push((tag.clone(), value.clone()));
         }
     }
@@ -497,6 +596,13 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     let copyright_owner = extract_plus_copyright_owner_name(xml_bytes)?;
     for (tag, value) in &copyright_owner {
         if !results.iter().any(|(t, _)| t == tag) {
+            // PLUS's container/field pairs: `XMP-plus:<Container>Name`.
+            let field = tag.rsplit(':').next().unwrap_or(tag);
+            let container = field.strip_suffix("Name").unwrap_or(field);
+            priorities.insert(
+                tag.clone(),
+                fixed_path_priority(&[("plus", container), ("plus", field)]),
+            );
             results.push((tag.clone(), value.clone()));
         }
     }
@@ -510,6 +616,17 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         results.retain(|(tag, _)| tag != "XMP-xmpBJ:JobRef");
         for (tag, value) in &job_ref_fields {
             if !results.iter().any(|(t, _)| t == tag) {
+                // `XMP-xmpBJ:JobRef<Field>` from stJob:<field>.
+                let field = tag
+                    .rsplit(':')
+                    .next()
+                    .and_then(|name| name.strip_prefix("JobRef"))
+                    .map(|field| field.to_ascii_lowercase())
+                    .unwrap_or_default();
+                priorities.insert(
+                    tag.clone(),
+                    fixed_path_priority(&[("xmpBJ", "JobRef"), ("stJob", &field)]),
+                );
                 results.push((tag.clone(), value.clone()));
             }
         }
@@ -520,8 +637,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // focused passes above, which know their schemas' FlatName overrides, keep
     // precedence over this one's plain path concatenation.
     let list_structs = extract_list_struct_values(xml_bytes)?;
-    for (tag, values) in &list_structs {
+    for (tag, values, priority) in &list_structs {
         if !results.iter().any(|(t, _)| t == tag) {
+            priorities.insert(tag.clone(), *priority);
             if values.len() > 1 {
                 list_elements.retain(|(existing, _)| existing != tag);
                 list_elements.push((tag.clone(), values.clone()));
@@ -535,10 +653,11 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // which knows its own schema's FlatName overrides and value formatting,
     // keeps precedence over this one's plain concatenation.
     let flattened = super::struct_flatten::extract_flattened_struct_fields(xml_bytes)?;
-    for (tag, values) in flattened {
+    for (tag, values, priority) in flattened {
         if results.iter().any(|(t, _)| *t == tag) {
             continue;
         }
+        priorities.insert(tag.clone(), priority);
         if values.len() > 1 {
             list_elements.push((tag.clone(), values.clone()));
         }
@@ -549,8 +668,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // because the fields of one node are spread across several places in the
     // document.
     let blank_nodes = super::struct_flatten::extract_blank_node_fields(xml_bytes)?;
-    for (tag, value) in blank_nodes {
+    for (tag, value, priority) in blank_nodes {
         results.retain(|(existing, _)| *existing != tag);
+        priorities.insert(tag.clone(), priority);
         results.push((tag, value));
     }
 
@@ -580,8 +700,17 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // on this function.
     let mut rational_forms: Vec<(String, String)> = Vec::new();
 
+    debug_assert!(
+        results.iter().all(|(tag, _)| priorities.contains_key(tag)),
+        "every XMP pass records a priority for the tags it reports: {:?}",
+        results
+            .iter()
+            .filter(|(tag, _)| !priorities.contains_key(tag))
+            .collect::<Vec<_>>()
+    );
+
     // Post-process results to apply formatting for specific tags
-    let mut formatted: Vec<(String, XmpValue)> = results
+    let mut formatted: Vec<(String, XmpValue, Option<i8>)> = results
         .into_iter()
         .map(
             |(tag, value)| match list_elements.iter().find(|(t, _)| *t == tag) {
@@ -590,7 +719,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                         .iter()
                         .map(|element| format_xmp_value(&tag, element))
                         .collect();
-                    (tag, XmpValue::List(formatted))
+                    let priority = Some(priorities.get(&tag).copied().unwrap_or(0));
+                    (tag, XmpValue::List(formatted), priority)
                 }
                 None => {
                     if matches!(
@@ -619,7 +749,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                         rational_forms.push((tag.clone(), format_xmp_plain_rational(&value)));
                     }
                     let formatted = format_xmp_value(&tag, &value);
-                    (tag, XmpValue::Scalar(formatted))
+                    let priority = Some(priorities.get(&tag).copied().unwrap_or(0));
+                    (tag, XmpValue::Scalar(formatted), priority)
                 }
             },
         )
@@ -627,8 +758,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
     if let Some(raw) = raw_hdrp_makernote {
         for (tag, value) in super::google_hdrp::decode_hdrp_plus_makernote(&raw) {
-            if !formatted.iter().any(|(t, _)| *t == tag) {
-                formatted.push((tag, XmpValue::Scalar(value)));
+            if !formatted.iter().any(|(t, _, _)| *t == tag) {
+                formatted.push((tag, XmpValue::Scalar(value), None));
             }
         }
     }
@@ -1277,6 +1408,38 @@ fn upsert_string_result(results: &mut Vec<(String, String)>, tag: &str, value: S
     }
 }
 
+/// A property's `(namespace, raw local name)` for
+/// [`super::priority::property_priority`]: the namespace prefix FoundXMP
+/// selects a table by (the group suffix) and the local name as written.
+fn qname_property(qname: &str, resolver: &NamespaceResolver) -> (String, String) {
+    let prefix = NamespaceResolver::extract_prefix(qname).unwrap_or("");
+    (
+        resolver.namespace_for_prefix(prefix),
+        NamespaceResolver::extract_local_name(qname).to_string(),
+    )
+}
+
+/// ExifTool's FoundTag priority for a property path of `(namespace, local)`.
+fn path_priority(path: &[&(String, String)]) -> i8 {
+    use super::priority::{PathProperty, property_priority};
+    let properties: Vec<PathProperty<'_>> = path
+        .iter()
+        .map(|(namespace, local)| PathProperty::new(namespace, local))
+        .collect();
+    property_priority(&properties)
+}
+
+/// ExifTool's FoundTag priority for a fixed property path the focused passes
+/// know by schema: `(namespace group suffix, raw local name)` pairs.
+fn fixed_path_priority(path: &[(&str, &str)]) -> i8 {
+    use super::priority::{PathProperty, property_priority};
+    let properties: Vec<PathProperty<'_>> = path
+        .iter()
+        .map(|(namespace, local)| PathProperty::new(namespace, local))
+        .collect();
+    property_priority(&properties)
+}
+
 /// Flattens top-level `rdf:parseType="Resource"` structures into ExifTool's
 /// `ParentField` tag names.
 ///
@@ -1307,12 +1470,12 @@ fn upsert_string_result(results: &mut Vec<(String, String)>, tag: &str, value: S
 /// `xml:lang`, optionally wrapped in a `rdf:Bag`) is emitted once per language
 /// as `ParentField-<lang>`, with `x-default` emitted under the bare name --
 /// matching ExifTool's `GetLangInfo` naming.
-fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
+fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, String, i8)>> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true);
 
     let mut resolver = NamespaceResolver::new();
-    let mut results: Vec<(String, String)> = Vec::new();
+    let mut results: Vec<(String, String, i8)> = Vec::new();
     let mut buf = Vec::new();
     let mut depth = 0usize;
 
@@ -1323,8 +1486,11 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     // field under the namespace of the first property contributing to the
     // tag name (XMP.pm GetXMPTagID), i.e. the struct's own.
     let mut struct_group = String::new();
+    // (namespace, raw local name) of the struct property, for its priority.
+    let mut struct_property = (String::new(), String::new());
     let mut field_depth: Option<usize> = None;
     let mut field_name = String::new();
+    let mut field_priority = 0i8;
     let mut field_text = String::new();
     let mut li_depth: Option<usize> = None;
     let mut li_lang: Option<String> = None;
@@ -1353,6 +1519,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                     struct_depth = Some(depth);
                     struct_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                     struct_group = resolver.group_for_qname(&tag_name);
+                    struct_property = qname_property(&tag_name, &resolver);
                 } else if let Some(sd) = struct_depth {
                     if field_depth.is_none()
                         && depth == sd + 1
@@ -1360,6 +1527,8 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                     {
                         field_depth = Some(depth);
                         field_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                        let field_property = qname_property(&tag_name, &resolver);
+                        field_priority = path_priority(&[&struct_property, &field_property]);
                         field_text.clear();
                         lang_values.clear();
                     } else if field_depth.is_some() && nested_depth.is_none() {
@@ -1405,7 +1574,11 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                     if lang_values.is_empty() {
                         let value = field_text.trim().to_string();
                         if !value.is_empty() {
-                            results.push((format!("{struct_group}:{reported}"), value));
+                            results.push((
+                                format!("{struct_group}:{reported}"),
+                                value,
+                                field_priority,
+                            ));
                         }
                     } else {
                         for (lang, value) in &lang_values {
@@ -1419,8 +1592,8 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                             // BTestTagField1); emitting the tag twice would
                             // just be a duplicate emission here, so first
                             // wins.
-                            if !results.iter().any(|(t, _)| *t == tag) {
-                                results.push((tag, value.clone()));
+                            if !results.iter().any(|(t, _, _)| *t == tag) {
+                                results.push((tag, value.clone(), field_priority));
                             }
                         }
                     }
@@ -1518,7 +1691,7 @@ const LIST_STRUCT_REPEAT_SCHEMAS: [&str; 10] = [
 /// `RegionName`/`RegionAreaH`/`RegionExtensions...` rather than the
 /// `RegionsRegionList...` this concatenation builds. Emitting those would trade
 /// missing tags for wrong ones.
-fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
+fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<String>, i8)>> {
     const MWG_RS_NS: &str = "http://www.metadataworkinggroup.com/schemas/regions/";
 
     let mut reader = Reader::from_reader(xml_bytes);
@@ -1534,6 +1707,8 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     // Family-1 group of the container property (the first property that
     // contributes to every flattened name below it).
     let mut container_group = String::new();
+    // (namespace, raw local name) of the container property.
+    let mut container_property = (String::new(), String::new());
     // ExifTool has `List` declarations for registered XMP schemas, but an
     // unknown schema is handled generically: repeated flattened fields keep
     // the first value (XMP4.xmp's test:StructList2Item1/Item2).  Track this
@@ -1548,24 +1723,27 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     // Field names below the container, with the RDF structural elements left
     // out -- the rest of ExifTool's tag ID, in pieces.
     let mut path: Vec<String> = Vec::new();
+    // The same fields' (namespace, raw local name), for their priority.
+    let mut path_properties: Vec<(String, String)> = Vec::new();
     let mut text = String::new();
-    // (flattened id, values, resource entry of the last value) in first-seen
-    // order.
-    let mut collected: Vec<(String, Vec<String>, Option<usize>)> = Vec::new();
+    // (flattened id, values, resource entry of the last value, priority) in
+    // first-seen order.
+    let mut collected: Vec<(String, Vec<String>, Option<usize>, i8)> = Vec::new();
 
     let mut push_value = |flat_id: String,
                           value: String,
                           allow_repeat: bool,
-                          resource_entry: Option<usize>| {
-        if let Some((_, values, previous_entry)) =
-            collected.iter_mut().find(|(id, _, _)| *id == flat_id)
+                          resource_entry: Option<usize>,
+                          priority: i8| {
+        if let Some((_, values, previous_entry, _)) =
+            collected.iter_mut().find(|(id, _, _, _)| *id == flat_id)
         {
             if allow_repeat || resource_entry.is_some_and(|entry| Some(entry) == *previous_entry) {
                 values.push(value);
                 *previous_entry = resource_entry;
             }
         } else {
-            collected.push((flat_id, vec![value], resource_entry));
+            collected.push((flat_id, vec![value], resource_entry, priority));
         }
     };
 
@@ -1592,6 +1770,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                         let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                         container_depth = Some(depth);
                         container_group = resolver.group_for_qname(&tag_name);
+                        container_property = qname_property(&tag_name, &resolver);
                         container_allows_repeated_fields =
                             NamespaceResolver::extract_prefix(&tag_name)
                                 .and_then(|prefix| resolver.resolve_prefix(prefix))
@@ -1602,6 +1781,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                             local
                         };
                         path.clear();
+                        path_properties.clear();
                         text.clear();
                     }
                 } else if is_rdf_namespace(&tag_name, &resolver) {
@@ -1615,6 +1795,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     }
                 } else {
                     path.push(ucfirst(NamespaceResolver::extract_local_name(&tag_name)));
+                    path_properties.push(qname_property(&tag_name, &resolver));
                     text.clear();
                 }
             }
@@ -1637,6 +1818,7 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     container_name.clear();
                     container_allows_repeated_fields = false;
                     path.clear();
+                    path_properties.clear();
                     text.clear();
                 } else if container_depth.is_some() {
                     let value = text.trim().to_string();
@@ -1646,16 +1828,20 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     if !value.is_empty() && !path.is_empty() {
                         let flat_id =
                             format!("{}:{}{}", container_group, container_name, path.join(""));
+                        let mut properties = vec![&container_property];
+                        properties.extend(path_properties.iter());
                         push_value(
                             flat_id,
                             value,
                             container_allows_repeated_fields,
                             resource_entry_depth.map(|_| resource_entry_index),
+                            path_priority(&properties),
                         );
                     }
                     text.clear();
                     if !is_rdf_namespace(&tag_name, &resolver) {
                         path.pop();
+                        path_properties.pop();
                     }
                 }
 
@@ -1685,9 +1871,13 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values, _)| {
+        .map(|(flat_id, values, _, priority)| {
             let (group, id) = flat_id.split_once(':').unwrap_or(("XMP", &flat_id));
-            (format!("{group}:{}", exiftool_flat_tag_name(id)), values)
+            (
+                format!("{group}:{}", exiftool_flat_tag_name(id)),
+                values,
+                priority,
+            )
         })
         .collect())
 }
@@ -2696,6 +2886,7 @@ fn is_xmpmeta(tag_name: &str) -> bool {
 fn extract_xmpmeta_attributes(
     element: &BytesStart,
     results: &mut Vec<(String, String)>,
+    priorities: &mut std::collections::HashMap<String, i8>,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -2712,6 +2903,12 @@ fn extract_xmpmeta_attributes(
 
             // Only add non-empty XMPToolkit values
             if !value.trim().is_empty() {
+                // XMP.pm %recognizedAttrs: both spellings are the x table's
+                // `xmptk` entry.
+                priorities.insert(
+                    "XMP-x:XMPToolkit".to_string(),
+                    super::priority::table_entry_priority("x", "xmptk"),
+                );
                 results.push(("XMP-x:XMPToolkit".to_string(), value.trim().to_string()));
             }
         }
@@ -2735,6 +2932,7 @@ fn extract_description_attributes(
     element: &BytesStart,
     resolver: &NamespaceResolver,
     results: &mut Vec<(String, String)>,
+    priorities: &mut std::collections::HashMap<String, i8>,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -2762,6 +2960,10 @@ fn extract_description_attributes(
             // An empty rdf:about is the "no subject URI" default every writer
             // emits; ExifTool reports no About tag for it.
             if !value.trim().is_empty() {
+                priorities.insert(
+                    "XMP-rdf:About".to_string(),
+                    super::priority::table_entry_priority("rdf", "about"),
+                );
                 results.push(("XMP-rdf:About".to_string(), value.trim().to_string()));
             }
             continue;
@@ -2787,6 +2989,10 @@ fn extract_description_attributes(
                 continue;
             }
             let prefixed_name = format_tag_name(key, resolver);
+            priorities.insert(
+                prefixed_name.clone(),
+                path_priority(&[&qname_property(key, resolver)]),
+            );
             results.push((prefixed_name, value.trim().to_string()));
         }
     }
@@ -5675,7 +5881,11 @@ mod top_level_struct_tests {
             </rdf:RDF>
         "#;
 
-        let tags = extract_top_level_struct_values(xml).unwrap();
+        let tags = extract_top_level_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(tag(&tags, "XMP-test:BareStructItem1"), Some("a1"));
         assert_eq!(tag(&tags, "XMP-test:BareStructItem2"), Some("a2"));
     }
@@ -5711,7 +5921,11 @@ mod top_level_struct_tests {
         "
         .as_bytes();
 
-        let tags = extract_top_level_struct_values(xml).unwrap();
+        let tags = extract_top_level_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(tag(&tags, "XMP-myXMPns:BTestTagField1-en-CA"), Some("eh?"));
         assert_eq!(
             tag(&tags, "XMP-myXMPns:BTestTagField1-fr"),
@@ -5756,7 +5970,11 @@ mod top_level_struct_tests {
             </rdf:RDF>
         "#;
 
-        let tags = extract_top_level_struct_values(xml).unwrap();
+        let tags = extract_top_level_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert!(
             !tags.iter().any(|(t, _)| t.contains(":RegionsRegionList")),
             "sub-structure leaked into the parent field name: {tags:?}"
@@ -5782,7 +6000,11 @@ mod top_level_struct_tests {
             </rdf:RDF>
         "#;
 
-        let tags = extract_top_level_struct_values(xml).unwrap();
+        let tags = extract_top_level_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(
             tag(&tags, "XMP-xmpMM:DerivedFromInstanceID"),
             Some("f0d208df-dc56-11df-95ac-e273561c7691")
@@ -5904,7 +6126,11 @@ mod top_level_struct_tests {
             </rdf:RDF>
         "#;
 
-        let tags = extract_top_level_struct_values(xml).unwrap();
+        let tags = extract_top_level_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(tag(&tags, "XMP-iptcCore:CreatorCity"), Some("Amsterdam"));
         assert_eq!(
             tag(&tags, "XMP-iptcCore:CreatorCountry"),
@@ -6182,7 +6408,11 @@ mod top_level_struct_tests {
   </Iptc4xmpExt:LocationShown>
  </rdf:Description>
 </rdf:RDF>"#;
-        let tags = extract_list_struct_values(xml).unwrap();
+        let tags = extract_list_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP-iptcExt:LocationShownCity")
@@ -6231,7 +6461,11 @@ mod top_level_struct_tests {
   </rdf:Bag></test:StructList2>
  </rdf:Description>
 </rdf:RDF>"#;
-        let tags = extract_list_struct_values(xml).unwrap();
+        let tags = extract_list_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(
             tags.iter()
                 .find(|(tag, _)| tag == "XMP-test:StructList2Item1")
@@ -6284,7 +6518,11 @@ mod top_level_struct_tests {
   </xmpMM:Manifest>
  </rdf:Description>
 </rdf:RDF>"#;
-        let tags = extract_list_struct_values(xml).unwrap();
+        let tags = extract_list_struct_values(xml)
+            .unwrap()
+            .into_iter()
+            .map(|(tag, value, _)| (tag, value))
+            .collect::<Vec<_>>();
         assert_eq!(
             tags.iter()
                 .find(|(t, _)| t == "XMP-xmpMM:ManifestLinkForm")

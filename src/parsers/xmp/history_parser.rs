@@ -284,6 +284,33 @@ pub fn parse_xmp_history(xmp_data: &str) -> Result<Vec<(String, String)>> {
     Ok(results)
 }
 
+/// ExifTool's FoundTag priority for a key [`parse_xmp_history`] reports
+/// (see `super::priority`): the xmpMM top-level properties and
+/// `DerivedFrom` fields it re-reads are the xmpMM table's entries; the
+/// numbered `History<N>...` and `HistoryCount` keys are not ExifTool tags at
+/// all and get the unknown-tag priority 0.
+pub fn xmp_history_priority(key: &str) -> i8 {
+    use super::priority::{PathProperty, property_priority, simple_property_priority};
+    let Some(name) = key.strip_prefix("XMP-xmpMM:") else {
+        return 0;
+    };
+    if name.starts_with("History") {
+        return 0;
+    }
+    if let Some(field) = name.strip_prefix("DerivedFrom") {
+        let mut local = field.to_string();
+        if let Some(first) = local.get(..1) {
+            let lower = first.to_ascii_lowercase();
+            local.replace_range(..1, &lower);
+        }
+        return property_priority(&[
+            PathProperty::new("xmpMM", "DerivedFrom"),
+            PathProperty::new("stRef", &local),
+        ]);
+    }
+    simple_property_priority("xmpMM", name)
+}
+
 /// Extract tag name from BytesStart event
 fn extract_tag_name(element: &BytesStart) -> Result<String> {
     let name = element.name();

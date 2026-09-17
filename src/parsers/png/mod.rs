@@ -316,21 +316,28 @@ pub fn parse_png_metadata_with_diagnostics(
                         TextRow::Tag { name, value, .. } => {
                             metadata.insert(format!("PNG:{name}"), value);
                         }
-                        TextRow::Xmp(packet) => match crate::parsers::xmp::parse_xmp(&packet) {
-                            // The XMP parser already returns `XMP-*` keys.
-                            Ok(xmp_tags) => {
-                                for (tag_name, value) in xmp_tags {
-                                    metadata.insert(tag_name, TagValue::new_string(value));
+                        TextRow::Xmp(packet) => {
+                            match crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(&packet) {
+                                // The XMP parser already returns `XMP-*` keys.
+                                Ok(xmp_tags) => {
+                                    for (tag_name, value, priority) in xmp_tags {
+                                        crate::parsers::xmp::rdf_parser::insert_xmp_tag(
+                                            &mut metadata,
+                                            tag_name,
+                                            TagValue::new_string(value.into_joined()),
+                                            priority,
+                                        );
+                                    }
+                                }
+                                // ExifTool reports an unparseable packet as a
+                                // warning and emits no PNG row for it.
+                                Err(e) => {
+                                    diagnostics.push(Diagnostic::warning(format!(
+                                        "Failed to parse XMP in PNG text chunk: {e}"
+                                    )));
                                 }
                             }
-                            // ExifTool reports an unparseable packet as a
-                            // warning and emits no PNG row for it.
-                            Err(e) => {
-                                diagnostics.push(Diagnostic::warning(format!(
-                                    "Failed to parse XMP in PNG text chunk: {e}"
-                                )));
-                            }
-                        },
+                        }
                         TextRow::Omit => {}
                     }
                 }

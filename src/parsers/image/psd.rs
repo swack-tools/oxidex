@@ -17,7 +17,6 @@ use crate::parsers::image::embedded::{parse_embedded_exif_at, parse_embedded_thu
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
 };
-use crate::parsers::xmp::rdf_parser::parse_xmp;
 
 const PSD_SIGNATURE: &[u8] = b"8BPS";
 
@@ -599,9 +598,15 @@ impl PSDParser {
     }
     /// Extract metadata from XMP using the proper RDF parser
     fn parse_xmp_data(xmp: &str, metadata: &mut MetadataMap) {
-        if let Ok(xmp_tags) = parse_xmp(xmp.as_bytes()) {
-            for (tag_name, value) in xmp_tags {
-                metadata.insert(tag_name, TagValue::String(value));
+        if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(xmp.as_bytes())
+        {
+            for (tag_name, value, priority) in xmp_tags {
+                crate::parsers::xmp::rdf_parser::insert_xmp_tag(
+                    metadata,
+                    tag_name,
+                    TagValue::String(value.into_joined()),
+                    priority,
+                );
             }
         }
     }

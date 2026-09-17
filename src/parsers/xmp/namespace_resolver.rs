@@ -329,6 +329,16 @@ impl NamespaceResolver {
         format!("XMP-{}", translated_prefix(effective))
     }
 
+    /// The namespace prefix [`Self::group_for_prefix`] reports, without the
+    /// `XMP-` (empty for a property filed under plain `XMP`) -- the key
+    /// FoundXMP selects a tag table by.
+    pub fn namespace_for_prefix(&self, prefix: &str) -> String {
+        self.group_for_prefix(prefix)
+            .strip_prefix("XMP-")
+            .unwrap_or("")
+            .to_string()
+    }
+
     /// [`Self::group_for_prefix`] for a qualified name (`dc:title`).
     pub fn group_for_qname(&self, qname: &str) -> String {
         self.group_for_prefix(Self::extract_prefix(qname).unwrap_or(""))
