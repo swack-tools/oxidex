@@ -322,27 +322,43 @@ class CopiedSonyTag202aMutations(unittest.TestCase):
         self.assertEqual(text.count(old), 1)
         self.sony.write_text(text.replace(old, new), encoding="utf-8")
 
-    def test_stale_and_source_derived_artifacts_for_name_offset_enum_and_row_changes(self):
-        base_names, base_enums = self.oracle()
+    # Each oracle() call runs oracle.pl over the whole copied library (~90s
+    # on a 4-vCPU runner). The unmutated baseline is identical for every
+    # mutation below, so it is computed once per class, and each mutation is
+    # its own test on its own fresh copy so CI can shard them.
+    _baseline = None
+
+    def baseline(self):
+        cls = type(self)
+        if cls._baseline is None:
+            cls._baseline = self.oracle()
+        return cls._baseline
+
+    def test_pristine_tag202a_oracle_has_seventeen_rows_and_no_enums(self):
+        base_names, base_enums = self.baseline()
         self.assertEqual(len(base_names), 17)
         self.assertFalse(base_enums)
 
+    def test_renamed_row_is_stale_and_source_derived_artifact_agrees(self):
         # Rename: the ordinary soundness name comparison catches the stale
         # value; a fresh source-derived artifact agrees without a tag rule.
+        base_names, _ = self.baseline()
         self.mutate("Name => 'FocalPlaneAFPointLocation1',", "Name => 'FocalPlaneAFPointLocationOne',")
         names, enums = self.oracle()
         self.assertNotEqual(base_names, names)
         self.assertEqual(self.source_derived(names, enums).fields, names)
 
+    def test_moved_offset_is_missing_until_source_derived_refresh(self):
         # Offset and a newly added row each produce one unclassified native
         # key in stale output, then disappear after source-driven refresh.
-        self.sony.write_text((PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8"), encoding="utf-8")
+        base_names, base_enums = self.baseline()
         self.mutate("0x06 => { Name => 'FocalPlaneAFPointLocation1'", "0x07 => { Name => 'FocalPlaneAFPointLocation1'")
         names, enums = self.oracle()
         self.assertTrue(inventory(self.source_derived(base_names, base_enums), names, enums).missing)
         self.assertFalse(inventory(self.source_derived(names, enums), names, enums).missing)
 
-        self.sony.write_text((PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8"), encoding="utf-8")
+    def test_added_row_is_missing_until_source_derived_refresh(self):
+        base_names, base_enums = self.baseline()
         self.mutate(
             "    0x02 => {\n        Name => 'FocalPlaneAFPointArea',",
             "    0x00 => { Name => 'NativeOnlyPoint', Format => 'int8u' },\n"
@@ -352,9 +368,10 @@ class CopiedSonyTag202aMutations(unittest.TestCase):
         self.assertTrue(inventory(self.source_derived(base_names, base_enums), names, enums).missing)
         self.assertFalse(inventory(self.source_derived(names, enums), names, enums).missing)
 
+    def test_added_enum_is_missing_until_source_derived_refresh(self):
         # The real table has no enum.  A native PrintConv map is the smallest
         # upgrade change that proves the inverse enum check is live.
-        self.sony.write_text((PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8"), encoding="utf-8")
+        base_names, base_enums = self.baseline()
         self.mutate("Format => 'int8u',\n        RawConv", "Format => 'int8u', PrintConv => { 1 => 'One' },\n        RawConv")
         names, enums = self.oracle()
         stale = inventory(self.source_derived(base_names, base_enums), names, enums)

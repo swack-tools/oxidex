@@ -89,7 +89,9 @@ jobs:
       # publishing atomic: the smoke test below runs before the manifest list
       # exists, so a failure here means no tag ever moves.
       #
-      # cache-from/cache-to use the GitHub Actions cache. Cache versions
+      # cache-from/cache-to use the GitHub Actions cache. ignore-error: a
+      # cache-service outage (seen on this PR's first dry run: HTTP 400 while
+      # exporting) must not fail a release whose image built. Cache versions
       # differ per runner OS/arch, so amd64 and
       # arm64 (different runner types in this matrix) never share entries
       # even without the explicit scope, but the scope is kept for clarity.
@@ -108,7 +110,7 @@ jobs:
           # build and populates the real cache.
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'workflow_dispatch' }}
           cache-from: type=gha,scope=oxidex-${{ matrix.arch }},version=1
-          cache-to: type=gha,scope=oxidex-${{ matrix.arch }},mode=max,version=1
+          cache-to: type=gha,scope=oxidex-${{ matrix.arch }},mode=max,version=1,ignore-error=true
 
       # Runs on the native runner for this architecture, so each image is
       # exercised on the hardware it targets. This cannot live in the merge
