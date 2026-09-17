@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 
-use super::generated_namespaces::{URI_PREFIXES, translated_prefix};
+use super::generated_namespaces::{STD_XLAT, TABLE_NAMESPACES, URI_PREFIXES, translated_prefix};
 
 /// Manages XMP namespace prefix-to-URI mappings.
 ///
@@ -65,10 +65,13 @@ struct ElementScope {
     /// The prefix -> URI bindings this element's own `xmlns` declarations
     /// replaced (XML scoping: restored when the element closes).
     replaced_bindings: Vec<(String, Option<String>)>,
-    /// `xlatNS` as it was before the first translation change made by one of
-    /// this element's *children* (`ParseXMPElement`'s `$saveNS`, restored when
-    /// that level returns, XMP.pm:4247).
-    saved_xlat: Option<HashMap<String, String>>,
+    /// Undo log for translation changes made by this element's *children*:
+    /// `(prefix, translation before the change)`, replayed in reverse when the
+    /// element closes. This is `ParseXMPElement`'s `$saveNS` (restored when
+    /// that level returns, XMP.pm:4247) without copying the whole map per
+    /// level, so a deeply nested packet costs O(depth + changes), not
+    /// O(depth x translations).
+    xlat_undo: Vec<(String, Option<String>)>,
 }
 
 impl NamespaceResolver {
@@ -122,6 +125,10 @@ impl NamespaceResolver {
 
         // Register PLUS namespace for image licensing
         resolver.register_namespace("plus", "http://ns.useplus.org/ldf/xmp/1.0/");
+
+        // The built-in bindings are the base scope: no element declared them,
+        // so no element's close may undo them.
+        resolver.pending_bindings.clear();
 
         resolver
     }
@@ -179,7 +186,7 @@ impl NamespaceResolver {
         let replaced_bindings = std::mem::take(&mut self.pending_bindings);
         self.scopes.push(ElementScope {
             replaced_bindings,
-            saved_xlat: None,
+            xlat_undo: Vec::new(),
         });
     }
 
@@ -188,8 +195,15 @@ impl NamespaceResolver {
         let Some(scope) = self.scopes.pop() else {
             return;
         };
-        if let Some(saved) = scope.saved_xlat {
-            self.xlat = saved;
+        for (prefix, previous) in scope.xlat_undo.into_iter().rev() {
+            match previous {
+                Some(translation) => {
+                    self.xlat.insert(prefix, translation);
+                }
+                None => {
+                    self.xlat.remove(&prefix);
+                }
+            }
         }
         for (prefix, previous) in scope.replaced_bindings.into_iter().rev() {
             match previous {
@@ -203,14 +217,17 @@ impl NamespaceResolver {
         }
     }
 
-    /// Records the translation map before its first change in the current
-    /// level (the innermost open element's children).
-    fn save_xlat_for_level(&mut self) {
+    /// Sets (`Some`) or removes (`None`) the translation for `prefix`,
+    /// logging the previous value against the current level (the innermost
+    /// open element's children) so the level's close can undo it.
+    fn set_xlat(&mut self, prefix: &str, translation: Option<String>) {
+        let previous = match translation {
+            Some(translation) => self.xlat.insert(prefix.to_string(), translation),
+            None => self.xlat.remove(prefix),
+        };
         // With no element open there is no level to restore on return.
-        if let Some(scope) = self.scopes.last_mut()
-            && scope.saved_xlat.is_none()
-        {
-            scope.saved_xlat = Some(self.xlat.clone());
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.xlat_undo.push((prefix.to_string(), previous));
         }
     }
 
@@ -261,12 +278,8 @@ impl NamespaceResolver {
             new_prefix
         };
         if let Some(new_prefix) = new_prefix {
-            self.save_xlat_for_level();
-            if new_prefix.is_empty() {
-                self.xlat.remove(prefix);
-            } else {
-                self.xlat.insert(prefix.to_string(), new_prefix);
-            }
+            let translation = (!new_prefix.is_empty()).then_some(new_prefix);
+            self.set_xlat(prefix, translation);
         }
     }
 
@@ -417,14 +430,29 @@ impl NamespaceResolver {
     }
 }
 
-/// Whether `suffix` (the part of a group after `XMP-`) is a group ExifTool
-/// reports for one of its standard namespaces: a `%nsURI` prefix after
-/// `%stdXlatNS`. Anything else is a document prefix or a `tmpN`, i.e. a
-/// namespace ExifTool has no tag table for.
-pub fn is_standard_group_suffix(suffix: &str) -> bool {
-    URI_PREFIXES
+/// Whether `suffix` (the part of a group after `XMP-`) can only name a
+/// namespace ExifTool has no tag table for -- one whose properties land in
+/// `XMP::other` and are minted with `Priority => 0` (XMP.pm:3595).
+///
+/// It is decided from the group string, which is all a shim-keyed occurrence
+/// carries, so it answers `true` only when no table-backed namespace could
+/// produce the same suffix: not a `%nsURI` prefix or its `%stdXlatNS`
+/// translation, not a `TABLE_NAMESPACES` prefix (PhotoMechanic, Google
+/// Device) or its translation, and not any `%stdXlatNS` spelling. A document
+/// prefix that happens to spell one of those (`xmlns:iptcCore="http://e.com/"`
+/// reports `XMP-iptcCore` exactly as the real IPTC Core namespace does) is
+/// therefore treated as possibly table-backed: its priority is not known
+/// exactly, and callers must not arbitrate on it.
+pub fn is_unknown_namespace_group_suffix(suffix: &str) -> bool {
+    let standard = URI_PREFIXES
         .iter()
-        .any(|(_, prefix)| translated_prefix(prefix) == suffix)
+        .map(|(_, prefix)| *prefix)
+        .chain(TABLE_NAMESPACES.iter().map(|(_, prefix, _)| *prefix))
+        .any(|prefix| prefix == suffix || translated_prefix(prefix) == suffix);
+    let translation = STD_XLAT
+        .iter()
+        .any(|(from, to)| *from == suffix || *to == suffix);
+    !suffix.is_empty() && !standard && !translation
 }
 
 /// Whether `prefix` is one of ExifTool's standard prefixes (a key of
@@ -784,6 +812,87 @@ mod tests {
         );
         assert!(
             got.contains(&("XMP-crs:ColorTemperature".to_string(), "5000".to_string())),
+            "{got:?}"
+        );
+    }
+
+    /// Review packet r1.xmp: a self-closing `x:xmpmeta` followed by an
+    /// `rdf:RDF` that relies on the built-in `rdf` binding. Closing the first
+    /// element must not undo the built-in bindings (pinned 13.59 and
+    /// 8f90b337: `[XMP-xmp] Rating 3`, `[XMP-dc] Format image/jpeg`).
+    #[test]
+    fn built_in_bindings_survive_the_first_element_closing() {
+        let got = keys(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="t"/><rdf:RDF><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"><xmp:Rating>3</xmp:Rating><dc:format>image/jpeg</dc:format></rdf:Description></rdf:RDF>"#,
+        );
+        assert!(
+            got.contains(&("XMP-xmp:Rating".to_string(), "3".to_string())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("XMP-dc:Format".to_string(), "image/jpeg".to_string())),
+            "{got:?}"
+        );
+
+        let mut resolver = NamespaceResolver::new();
+        resolver.push_element_scope();
+        resolver.pop_element_scope();
+        assert_eq!(
+            resolver.resolve_prefix("rdf"),
+            Some("http://www.w3.org/1999/02/22-rdf-syntax-ns#")
+        );
+    }
+
+    /// Each translation change is logged once against its level and undone
+    /// on close, so nesting N levels that each rebind a prefix keeps N undo
+    /// entries in total -- not a copy of the whole translation map per level
+    /// (a 5000-level packet took 4.48 GB that way).
+    #[test]
+    fn translation_undo_log_is_linear_in_changes() {
+        const DEPTH: usize = 5000;
+        let mut resolver = NamespaceResolver::new();
+        for level in 0..DEPTH {
+            resolver.register_namespace(&format!("p{level}"), "http://e.com/shared/");
+            resolver.push_element_scope();
+        }
+        let logged: usize = resolver.scopes.iter().map(|s| s.xlat_undo.len()).sum();
+        // p0 claims the URI; every later prefix is translated to p0.
+        assert_eq!(logged, DEPTH - 1);
+        assert_eq!(
+            resolver.group_for_prefix(&format!("p{}", DEPTH - 1)),
+            "XMP-p0"
+        );
+        for _ in 0..DEPTH {
+            resolver.pop_element_scope();
+        }
+        assert!(resolver.xlat.is_empty());
+
+        // And a deeply nested packet parses. `a:s0`'s own declaration
+        // translates `a` to `tmp0` at the Description's level, so both the
+        // flattened leaf and the later sibling land in XMP-tmp0 -- pinned
+        // 13.59 on the same shape three levels deep prints
+        // `[XMP-tmp0] S0S1S2Leaf : v` and `[XMP-tmp0] After : w`.
+        let mut packet = String::from(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:a="http://e.com/A/">"#,
+        );
+        for level in 0..500 {
+            packet.push_str(&format!(
+                r#"<a:s{level} rdf:parseType="Resource" xmlns:a="http://e.com/N{level}/">"#
+            ));
+        }
+        packet.push_str("<a:leaf>v</a:leaf>");
+        for level in (0..500).rev() {
+            packet.push_str(&format!("</a:s{level}>"));
+        }
+        packet.push_str("<a:after>w</a:after></rdf:Description></rdf:RDF>");
+        let got = keys(&packet);
+        assert!(
+            got.contains(&("XMP-tmp0:After".to_string(), "w".to_string())),
+            "{got:?}"
+        );
+        let leaf: String = (0..500).map(|level| format!("S{level}")).collect();
+        assert!(
+            got.contains(&(format!("XMP-tmp0:{leaf}Leaf"), "v".to_string())),
             "{got:?}"
         );
     }

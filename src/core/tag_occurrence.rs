@@ -85,24 +85,27 @@ pub const SHIM_DEFAULT_PRIORITY: u8 = 1;
 /// A property from a namespace ExifTool has no table for lands in
 /// `XMP::other` and is minted with `Priority => 0` (XMP.pm:3595,
 /// `$tagInfo = { Name => $name, IsDefault => 1, Priority => 0 }`), so a
-/// later same-named property never displaces the first one. Such a
-/// namespace is exactly one whose group suffix is not an ExifTool standard
-/// prefix -- a document prefix or a `tmpN` (see
-/// [`crate::parsers::xmp::namespace_resolver::is_standard_group_suffix`]).
-/// XMP6.xmp: `[XMP-xxxx] Test : trout` wins over `[XMP-tmp0] Test : tabby`.
+/// later same-named property never displaces the first one (XMP6.xmp:
+/// `[XMP-xxxx] Test : trout` keeps the tag over `[XMP-tmp0] Test : tabby`).
+/// Only groups that can *only* be such a namespace get it -- see
+/// [`crate::parsers::xmp::namespace_resolver::is_unknown_namespace_group_suffix`].
 ///
-/// Not modelled: an unknown property *name* inside a standard namespace
-/// (also `Priority => 0` in ExifTool), per-tag `Priority => 0` entries
-/// (`xmp:CreateDate`, `aux:LensID`, ...), and a non-standard URI whose
-/// document prefix happens to spell a translated standard group
-/// (`iptcCore`, `microsoft`, ...), which this group-name view cannot tell
-/// apart from the standard one.
+/// Full ExifTool XMP priority is NOT modelled: per-tag `Priority => 0`
+/// (`xmp:CreateDate`, `aux:LensID`, ...), `Avoid`/table `AVOID` (which
+/// `FoundTag` also turns into priority 0, ExifTool.pm:9472), and unknown
+/// property names inside a table-backed namespace (`dc:Test`, also
+/// `Priority => 0`) all keep the default here. Modelling them needs
+/// generated per-tag facts from the pinned tables; until then a
+/// table-backed XMP occurrence's priority is not known exactly, and
+/// `cli::tag_resolution`'s same-name XMP fold refuses to arbitrate on it.
 fn shim_group_priority(group0: &str) -> u8 {
     match group0 {
         "XMP-tiff" | "XMP-exif" | "XMP-exifEX" | "XMP-GDepth" => 0,
         other => match other.strip_prefix("XMP-") {
             Some(suffix)
-                if !crate::parsers::xmp::namespace_resolver::is_standard_group_suffix(suffix) =>
+                if crate::parsers::xmp::namespace_resolver::is_unknown_namespace_group_suffix(
+                    suffix,
+                ) =>
             {
                 0
             }
@@ -299,9 +302,22 @@ mod tests {
         for group in ["XMP-xxxx", "XMP-tmp0", "XMP-myXMPns"] {
             assert_eq!(shim_group_priority(group), 0, "{group}");
         }
-        // Standard namespaces (after %stdXlatNS) and non-XMP groups keep the
-        // default.
-        for group in ["XMP-dc", "XMP-xmp", "XMP-iptcCore", "XMP-x", "XMP", "IFD0"] {
+        // Standard and table-backed namespaces (after %stdXlatNS), and
+        // non-XMP groups, keep the default -- as does a document prefix that
+        // merely spells one of them, whose priority is not known exactly.
+        for group in [
+            "XMP-dc",
+            "XMP-xmp",
+            "XMP-iptcCore",
+            "XMP-x",
+            "XMP-dex",
+            "XMP-photomech",
+            "XMP-photomechanic",
+            "XMP-Device",
+            "XMP-MicrosoftPhoto",
+            "XMP",
+            "IFD0",
+        ] {
             assert_eq!(shim_group_priority(group), SHIM_DEFAULT_PRIORITY, "{group}");
         }
     }

@@ -288,16 +288,36 @@ fn found_tag_winner(mut matches: Vec<&TagOccurrence>) -> &TagOccurrence {
 /// properties are distinct keys, and a key-winner listing would print both.
 /// ExifTool stores them under one tag key and keeps only the `FoundTag`
 /// winner unless `-a` is given (XMP6.xmp: `exiftool -G1 -s` prints only
-/// `[XMP-xxxx] Test : trout`). Scoped to family-0 `XMP` because that is the
-/// family whose keys carry a namespace group; other families' keys are left
-/// as they were.
-fn xmp_same_name_losers(metadata: &MetadataMap) -> HashSet<String> {
+/// `[XMP-xxxx] Test : trout`).
+///
+/// Deliberately conservative: a same-named set is folded only when *every*
+/// member comes from a namespace ExifTool has no table for, where its
+/// priority is known exactly (`Priority => 0`, XMP.pm:3595). If any member
+/// is from a standard or table-backed namespace -- whose real priority
+/// depends on per-tag `Priority`/`Avoid` facts this crate does not model
+/// (see `shim_group_priority`) -- all of them are kept: an extra line is
+/// better than a confidently wrong winner (`photoshop:Headline` vs
+/// `Iptc4xmpExt:Headline`, where ExifTool keeps the first).
+///
+/// `distinct_label_families`: JSON output with `-G<n>` keys each tag by its
+/// group label, and ExifTool keeps same-named tags whose labels differ
+/// (pinned 13.59 `-j -G1 XMP6.xmp` has both `XMP-xxxx:Test` and
+/// `XMP-tmp0:Test`, while `-j`, `-j -G0` and `-G1 -s` have one). Passing the
+/// displayed families folds only within one label.
+fn xmp_same_name_losers(
+    metadata: &MetadataMap,
+    distinct_label_families: Option<&[u8]>,
+) -> HashSet<String> {
     let mut by_name: Vec<(String, Vec<(&String, &TagOccurrence)>)> = Vec::new();
     for (key, occurrence) in metadata.winner_occurrences() {
         if family0_label(occurrence) != "XMP" {
             continue;
         }
-        let name = occurrence.name.to_ascii_lowercase();
+        let mut name = occurrence.name.to_ascii_lowercase();
+        if let Some(families) = distinct_label_families {
+            name.push('\0');
+            name.push_str(&joined_family_label(occurrence, families));
+        }
         match by_name.iter_mut().find(|(n, _)| *n == name) {
             Some((_, entries)) => entries.push((key, occurrence)),
             None => by_name.push((name, vec![(key, occurrence)])),
@@ -306,6 +326,14 @@ fn xmp_same_name_losers(metadata: &MetadataMap) -> HashSet<String> {
     let mut losers = HashSet::new();
     for (_, entries) in by_name {
         if entries.len() < 2 {
+            continue;
+        }
+        let priorities_known = entries.iter().all(|(_, occurrence)| {
+            family1_label(occurrence).strip_prefix("XMP-").is_some_and(
+                crate::parsers::xmp::namespace_resolver::is_unknown_namespace_group_suffix,
+            )
+        });
+        if !priorities_known {
             continue;
         }
         let winner = found_tag_winner(entries.iter().map(|(_, o)| *o).collect());
@@ -560,7 +588,8 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
                 })
                 .collect()
         } else {
-            let losers = xmp_same_name_losers(raw_metadata);
+            let label_families = args.group_display.as_deref().filter(|_| args.json);
+            let losers = xmp_same_name_losers(raw_metadata, label_families);
             raw_metadata
                 .winner_occurrences()
                 .filter(|(key, _)| surviving_keys.contains(key.as_str()))
@@ -600,7 +629,7 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         return ResolvedFileOutput::Metadata(metadata);
     }
 
-    let losers = xmp_same_name_losers(raw_metadata);
+    let losers = xmp_same_name_losers(raw_metadata, None);
     let metadata = if no_print_conv {
         // strip_extended_only rebuilt the display map and discarded value
         // forms. Use its key selection with the original winning occurrences.
@@ -1144,7 +1173,7 @@ mod tests {
         for (packet, first, second) in packets {
             let metadata = xmp_packet_map(packet);
             let file = || "fixture.xmp".to_string();
-            for (json, grouped) in [(true, false), (true, true), (false, true)] {
+            for (json, grouped) in [(true, false), (false, true)] {
                 let listing =
                     resolve_file_output(&metadata, &xmp_args(json, false, grouped, vec![file()]));
                 assert_eq!(
@@ -1153,6 +1182,15 @@ mod tests {
                     "json={json} grouped={grouped}"
                 );
             }
+            // `-j -G1` keys by the differing family-1 labels, and ExifTool
+            // keeps both there.
+            let json_g1 =
+                resolve_file_output(&metadata, &xmp_args(true, false, true, vec![file()]));
+            let mut got = output_values(json_g1, "Test");
+            got.sort();
+            let mut want = vec![first.to_string(), second.to_string()];
+            want.sort();
+            assert_eq!(got, want);
             let requested = resolve_file_output(
                 &metadata,
                 &xmp_args(false, false, true, vec!["-Test".into(), file()]),
@@ -1160,6 +1198,121 @@ mod tests {
             assert_eq!(output_values(requested, "Test"), [first]);
             let all = resolve_file_output(&metadata, &xmp_args(false, true, true, vec![file()]));
             assert_eq!(output_values(all, "Test"), [first, second]);
+        }
+    }
+
+    /// Review packets p1-p9: a same-named pair where at least one side is
+    /// from a standard or table-backed namespace (or from a document prefix
+    /// that spells one). ExifTool's winner there depends on per-tag
+    /// `Priority`/`Avoid` facts that are not modelled -- pinned 13.59 keeps
+    /// the FIRST in p1 (`photoshop:Headline` over `Iptc4xmpExt:Headline`),
+    /// p2 (`xmp:Rating` over `dex:rating`) and p8, but the SECOND in p4
+    /// (`photomechanic:Prefs`), p7 (`dc:title`) and p9 -- so a listing
+    /// without `-a` must keep both rather than guess.
+    #[test]
+    fn same_named_xmp_properties_with_unmodelled_priority_are_all_kept() {
+        let rdf = |body: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{body}</rdf:RDF>"#
+            )
+        };
+        let desc = |ns: &str, uri: &str, prop: &str| {
+            format!(r#"<rdf:Description rdf:about="" xmlns:{ns}="{uri}">{prop}</rdf:Description>"#)
+        };
+        let alt =
+            |v: &str| format!(r#"<rdf:Alt><rdf:li xml:lang="x-default">{v}</rdf:li></rdf:Alt>"#);
+        let cases: Vec<(&str, String, [&str; 2])> = vec![
+            (
+                "Headline",
+                rdf(&(desc(
+                    "photoshop",
+                    "http://ns.adobe.com/photoshop/1.0/",
+                    "<photoshop:Headline>PS</photoshop:Headline>",
+                ) + &desc(
+                    "Iptc4xmpExt",
+                    "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+                    &format!(
+                        "<Iptc4xmpExt:Headline>{}</Iptc4xmpExt:Headline>",
+                        alt("EXT")
+                    ),
+                ))),
+                ["PS", "EXT"],
+            ),
+            (
+                "Rating",
+                rdf(&(desc(
+                    "xmp",
+                    "http://ns.adobe.com/xap/1.0/",
+                    "<xmp:Rating>1</xmp:Rating>",
+                ) + &desc(
+                    "dex",
+                    "http://ns.optimasc.com/dex/1.0/",
+                    "<dex:rating>2</dex:rating>",
+                ))),
+                ["1", "2"],
+            ),
+            (
+                "Test",
+                rdf(
+                    &(desc("yyyy", "http://e.com/Y/", "<yyyy:Test>fromY</yyyy:Test>")
+                        + &desc(
+                            "dc",
+                            "http://purl.org/dc/elements/1.1/",
+                            "<dc:Test>fromDC</dc:Test>",
+                        )),
+                ),
+                ["fromY", "fromDC"],
+            ),
+            (
+                "Test",
+                rdf(
+                    &(desc("yyyy", "http://e.com/Y/", "<yyyy:Test>fromY</yyyy:Test>")
+                        + &desc(
+                            "iptcCore",
+                            "http://e.com/IC/",
+                            "<iptcCore:Test>fromIC</iptcCore:Test>",
+                        )),
+                ),
+                ["fromY", "fromIC"],
+            ),
+            (
+                "Test",
+                rdf(
+                    &(desc("yyyy", "http://e.com/Y/", "<yyyy:Test>fromY</yyyy:Test>")
+                        + &desc(
+                            "photomech",
+                            "http://e.com/PM/",
+                            "<photomech:Test>fromPM</photomech:Test>",
+                        )),
+                ),
+                ["fromY", "fromPM"],
+            ),
+            (
+                "Foo",
+                rdf(&(desc(
+                    "Device",
+                    "http://ns.google.com/photos/dd/1.0/device/",
+                    "<Device:Foo>dev</Device:Foo>",
+                ) + &desc("yyyy", "http://e.com/Y/", "<yyyy:Foo>fromY</yyyy:Foo>"))),
+                ["dev", "fromY"],
+            ),
+        ];
+        for (name, packet, both) in cases {
+            let metadata = xmp_packet_map(packet.as_bytes());
+            for (json, grouped) in [(true, false), (true, true), (false, true)] {
+                let listing = resolve_file_output(
+                    &metadata,
+                    &xmp_args(json, false, grouped, vec!["fixture.xmp".into()]),
+                );
+                let mut got = output_values(listing, name);
+                got.sort();
+                let mut want = both.map(str::to_string).to_vec();
+                want.sort();
+                assert_eq!(
+                    got, want,
+                    "{name} json={json} grouped={grouped} in {packet}"
+                );
+            }
         }
     }
 }
