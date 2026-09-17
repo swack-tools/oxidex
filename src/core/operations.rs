@@ -1419,7 +1419,12 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // would be off by the directories it cannot see.
     if let Ok(file) = reader.read(0, reader.size() as usize) {
         use crate::parsers::jpeg::{afcp, fotostation, iptc_parser};
-        let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(&segments) <= 1 {
+        // An IFD0 IPTC-NAA block is non-standard too and would be numbered
+        // before the trailers; keep the trailers unnumbered rather than
+        // assign them the number that belongs to it.
+        let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(&segments) <= 1
+            && !crate::core::jpeg_helpers::exif_ifd0_has_iptc_naa(&segments, reader)
+        {
             iptc_parser::NonStandardIptcGroups::first()
         } else {
             iptc_parser::NonStandardIptcGroups::unnumbered()

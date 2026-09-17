@@ -167,3 +167,30 @@ fn gopro_app6_reports_the_gopro_group() {
     let g0 = case("GoPro.jpg", &["-G0", "-s", "-GoPro:Model"]).unwrap();
     assert_eq!(g0, vec!["[APP6] Model: HERO6 Black"]);
 }
+
+/// A JPEG with an IFD0 IPTC-NAA block and an AFCP trailer. Pinned ExifTool
+/// numbers the IFD0 block `IPTC2` and the trailer `IPTC3`; OxiDex does not
+/// yet number the IFD0 block, so the trailer must not take `IPTC2` (a request
+/// for `IPTC2:ObjectName` would silently return the trailer's value). Both stay
+/// under the unnumbered group until the IFD0 block is modelled.
+///
+/// Fixture: `t/images/AFCP.jpg` with `-IFD0:IPTC-NAA<=iptc.bin` written by the
+/// pinned ExifTool 13.59, whose `-a -G1 -s -ObjectName` output is
+/// `[IPTC2] ObjectName : ifd0obj` and `[IPTC3] ObjectName : object name`.
+#[test]
+fn trailer_iptc_is_not_numbered_ahead_of_an_ifd0_iptc_block() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/jpeg/afcp_trailer_with_ifd0_iptc.jpg"
+    );
+    let out = run(&["-a", "-G1", "-s", "-ObjectName", path]);
+    assert!(!out.contains("[IPTC2]"), "trailer took IPTC2:\n{out}");
+    assert!(
+        out.contains("ObjectName: object name"),
+        "trailer value missing:\n{out}"
+    );
+    assert!(
+        out.contains("ObjectName: ifd0obj"),
+        "IFD0 value missing:\n{out}"
+    );
+}

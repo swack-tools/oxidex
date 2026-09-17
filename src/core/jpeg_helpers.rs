@@ -125,6 +125,36 @@ pub fn process_jfif_segments(
     }
 }
 
+/// Whether an APP1 EXIF IFD0 carries a non-empty `IPTC-NAA` (0x83BB) block.
+///
+/// ExifTool treats that block as a non-standard IPTC directory in a JPEG, so it
+/// takes the first numbered family-1 group (`IPTC2`) ahead of any trailer
+/// IPTC. Callers that number trailer IPTC use this to avoid handing out a
+/// number that belongs to it.
+pub(crate) fn exif_ifd0_has_iptc_naa(segments: &[Segment], reader: &dyn FileReader) -> bool {
+    segments.iter().filter(|s| s.is_app1()).any(|segment| {
+        if segment.data.len() < 14 || &segment.data[0..6] != b"Exif\0\0" {
+            return false;
+        }
+        let tiff_data = &segment.data[6..];
+        let byte_order = match &tiff_data[0..2] {
+            b"II" => ByteOrder::LittleEndian,
+            b"MM" => ByteOrder::BigEndian,
+            _ => return false,
+        };
+        let header = match byte_order {
+            ByteOrder::LittleEndian => EndianReader::little_endian(tiff_data),
+            ByteOrder::BigEndian => EndianReader::big_endian(tiff_data),
+        };
+        let ifd_offset = header.u32_at(4).unwrap_or(0) as u64;
+        let tiff_reader = TiffSubReader::new(reader, segment.offset + 10);
+        parse_ifd(&tiff_reader, ifd_offset, byte_order).is_ok_and(|tags| {
+            tags.iter()
+                .any(|(tag_id, _, _, bytes)| *tag_id == 0x83BB && !bytes.is_empty())
+        })
+    })
+}
+
 /// Processes EXIF APP1 segments and extracts TIFF-based EXIF metadata.
 ///
 /// EXIF data is stored in APP1 segments with a TIFF structure containing
