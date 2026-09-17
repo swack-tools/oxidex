@@ -110,6 +110,14 @@ and variant repetition. Shared byte offsets are reported separately from tag
 identity. See the [runtime repair report](../../docs/reference/sony-raw-id-runtime.md)
 for the restored field, bounded validation and remaining real-file acceptance.
 
+## Corpus read receipts
+
+`corpus_read_receipt.py build|observe|verify` measures OxiDex's public reads of a
+corpus against pinned ExifTool with stored, replayable transcripts; see
+`docs/CATALOG-HYDRATED-JOIN.md` ("Corpus read receipts") for the identity,
+matching and catalog-attribution rules. Receipts are written outside the
+checkout and refuse a dirty tree.
+
 ## Garmin FIT specs
 
 `codegen.py` also emits the Garmin FIT message/field specs
