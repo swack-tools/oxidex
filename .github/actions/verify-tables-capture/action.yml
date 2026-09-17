@@ -16,5 +16,6 @@ runs:
         IN="$RUNNER_TEMP/verify-tables-capture"
         zstd -q -d "$IN/hydrated-reader.json.zst" -o "$RUNNER_TEMP/hydrated-reader.json"
         zstd -q -d "$IN/catalog-writer-source.json.zst" -o "$RUNNER_TEMP/catalog-writer-source.json"
-        cp "$IN"/native-processors-*.tsv "$IN"/garmin-fit-protocol.json "$RUNNER_TEMP/"
+        zstd -q -d "$IN/garmin-fit-protocol.json.zst" -o "$RUNNER_TEMP/garmin-fit-protocol.json"
+        cp "$IN"/native-processors-*.tsv "$RUNNER_TEMP/"
         ls -l "$RUNNER_TEMP"/hydrated-reader.json "$RUNNER_TEMP"/catalog-writer-source.json "$RUNNER_TEMP"/native-processors-*.tsv
