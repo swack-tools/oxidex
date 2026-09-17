@@ -24,6 +24,7 @@ import quicktime_generated_specs as quicktime_specs
 import quicktime_keys_specs
 import catalog_userdata
 import catalog_garmin_fit
+import catalog_corpus_reads
 import final_scalar_stage
 import codegen
 import setnewvalue_public_migration_ledger as public_migration
@@ -620,7 +621,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           userdata_read_evidence: dict | None = None, userdata_artifact_paths: tuple | None = None,
           garmin_fit_source: bytes | None = None, garmin_fit_ledger: dict | None = None,
           garmin_fit_rust: str | None = None, garmin_fit_input_digests: dict[str, str] | None = None,
-          garmin_fit_protocol_fact: bytes | None = None) -> dict:
+          garmin_fit_protocol_fact: bytes | None = None,
+          corpus_read_evidence: dict | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -674,6 +676,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
                for value in ifd_input_digests.values()):
             raise ValueError("IFD input digest is malformed")
+    corpus_credit, corpus_counts = catalog_corpus_reads.observed_reads(
+        corpus_read_evidence, catalog, quicktime_selector.ROOT)
     garmin_fit = catalog_garmin_fit.implementation(
         garmin_fit_ledger, garmin_fit_source, garmin_fit_rust, dump_source=ifd_source, expr_ledger=ifd_expr_ledger,
         protocol_fact=garmin_fit_protocol_fact,
@@ -828,6 +832,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                           and catalog_write_name in write_names.get(identity, ()))
         if matching_write:
             matched_write_contexts.add((*identity, catalog_write_name))
+        if identity in corpus_credit and state == "joined":
+            observed_read = catalog_corpus_reads.OBSERVED_STATE
         implementation_counts[implementation] += 1
         reader_counts[reader_implementation] += 1
         writer_counts[writer_state] += 1
@@ -869,6 +875,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
     if quicktime_keys_read_evidence is not None:
         inputs["quicktime_keys_read_evidence"] = {"sha256": canonical_hash(quicktime_keys_read_evidence),
                                                    "producer": quicktime_keys_read_evidence["producer"]}
+    if corpus_read_evidence is not None:
+        inputs["corpus_read_evidence"] = {"sha256": canonical_hash(corpus_read_evidence),
+                                          "producer": corpus_read_evidence["producer"]}
     if writer_read_evidence is not None:
         inputs["writer_read_evidence"] = {"sha256": canonical_hash(writer_read_evidence),
                                          "producer": writer_read_evidence["producer"]}
@@ -890,6 +899,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         result["counts"]["write_readback"].update(
             catalog_matched_write_operations=matching_operations,
             alternate_context_write_operations=len(observed_writes) - matching_operations)
+    if corpus_read_evidence is not None:
+        result["counts"]["corpus_read_attribution"] = corpus_counts
     result["source_tables"] = table_coverage(records, hydrated_by_id, table_hashes)
     return result
 
@@ -918,6 +929,23 @@ def report(join: dict) -> str:
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["writer_implementation"].items())
     lines += ["", "## Observed reads", "", "| Classification | Count |", "| --- | ---: |"]
     lines.extend(f"| `{key}` | {value} |" for key, value in counts["observed_read"].items())
+    if "corpus_read_attribution" in counts:
+        corpus = counts["corpus_read_attribution"]
+        metric = corpus["metric_c"]
+        lines += ["", "### Corpus reads (authenticated receipt)", "",
+                  "Public CLI reads of every corpus file compared with pinned ExifTool in print and raw modes. "
+                  "An identity matches in a file only when both modes carry identical values. ExifTool's own tag "
+                  "information names the exact source row of every native tag; a catalog entry is credited only "
+                  "when every file in which ExifTool read that row matched.", "",
+                  "| Measurement | Count |", "| --- | ---: |",
+                  f"| Corpus files | {metric['corpus_files']} |",
+                  f"| Distinct native `Group1:TagName` identities | {metric['distinct_group1_tag_identities_native']} |",
+                  f"| Matched in both modes (in at least one file) | {metric['distinct_group1_tag_identities_matched']} |",
+                  f"| Matched in default output (in at least one file; not credited alone) | {metric['distinct_group1_tag_identities_print_mode_matched']} |",
+                  f"| Source rows credited (matched in every file read) | {metric['credited_source_coordinates']} |",
+                  f"| Source rows withheld (failed in some file) | {metric['withheld_source_coordinates']} |",
+                  f"| Catalog entries credited | {corpus['credited_catalog_entries']} |",
+                  f"| Credited rows outside the catalog | {corpus['credited_coordinates_outside_catalog']} |"]
     if "write_readback" in counts:
         writes = counts["write_readback"]
         lines += ["", "## Observed public writes", "",
@@ -993,6 +1021,8 @@ def main() -> int:
     parser.add_argument("--quicktime-read-evidence", type=Path)
     parser.add_argument("--quicktime-keys-read-evidence", type=Path)
     parser.add_argument("--writer-read-evidence", type=Path)
+    parser.add_argument("--corpus-read-evidence", type=Path,
+                        help="corpus_read_receipt.py receipt for this checkout's runtime")
     parser.add_argument("--observed-snapshot", type=Path,
                         help="historical receipt emitted only after native evidence validation")
     parser.add_argument("--observed-report", type=Path)
@@ -1031,7 +1061,8 @@ def main() -> int:
     observed_outputs = (args.observed_snapshot, args.observed_report)
     if any(path is not None for path in observed_outputs) and any(path is None for path in observed_outputs):
         raise ValueError("observed snapshot and report must be supplied together")
-    evidence_paths = (args.quicktime_read_evidence, args.quicktime_keys_read_evidence, args.writer_read_evidence, args.quicktime_userdata_read_evidence)
+    evidence_paths = (args.quicktime_read_evidence, args.quicktime_keys_read_evidence, args.writer_read_evidence,
+                      args.quicktime_userdata_read_evidence, args.corpus_read_evidence)
     if all(path is not None for path in observed_outputs) and not any(path is not None for path in evidence_paths):
         raise ValueError("observed snapshot requires authenticated native evidence")
     validate_destinations(args.catalog, args.hydrated, args.output, args.report,
@@ -1045,7 +1076,8 @@ def main() -> int:
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []),
                           *([args.quicktime_keys_read_evidence] if args.quicktime_keys_read_evidence else []),
                           *([args.quicktime_userdata_read_evidence] if args.quicktime_userdata_read_evidence else []),
-                          *([args.writer_read_evidence] if args.writer_read_evidence else []))
+                          *([args.writer_read_evidence] if args.writer_read_evidence else []),
+                          *([args.corpus_read_evidence] if args.corpus_read_evidence else []))
     if all(path is not None for path in observed_outputs):
         validate_destinations(args.catalog, args.hydrated, args.observed_snapshot, args.observed_report,
                               args.output, args.report,
@@ -1107,6 +1139,7 @@ def main() -> int:
     quicktime_keys_read_evidence = read_json(args.quicktime_keys_read_evidence) if args.quicktime_keys_read_evidence else None
     userdata_read_evidence = read_json(args.quicktime_userdata_read_evidence) if args.quicktime_userdata_read_evidence else None
     writer_read_evidence = read_json(args.writer_read_evidence) if args.writer_read_evidence else None
+    corpus_read_evidence = read_json(args.corpus_read_evidence) if args.corpus_read_evidence else None
     common = dict(quicktime_keys_ledger=json.loads(keys_ledger), quicktime_keys_rust=keys_rust,
                   userdata_ledger=userdata_ledger, userdata_rust=userdata_rust,
                   userdata_input_digests=userdata_digests,
@@ -1124,7 +1157,7 @@ def main() -> int:
                  quicktime_digests, quicktime_read_evidence,
                  writer_read_evidence=writer_read_evidence,
                  quicktime_keys_read_evidence=quicktime_keys_read_evidence,
-                 userdata_read_evidence=userdata_read_evidence, **common)
+                 userdata_read_evidence=userdata_read_evidence, corpus_read_evidence=corpus_read_evidence, **common)
     rendered_join, rendered_report = json.dumps(join, indent=2, sort_keys=True) + "\n", report(join)
     observed_snapshot = observed_report = None
     if all(path is not None for path in observed_outputs):
@@ -1141,10 +1174,14 @@ def main() -> int:
             "quicktime_keys_read_evidence": quicktime_keys_read_evidence,
             "writer_read_evidence": writer_read_evidence,
             "quicktime_userdata_read_evidence": userdata_read_evidence,
+            "corpus_read_evidence": corpus_read_evidence,
         }.items() if value is not None}
         snapshot = make_authenticated_snapshot(source_join, join, evidence)
         observed_snapshot = json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
-        observed_report = observed_snapshot_report(snapshot)
+        observed_report = observed_snapshot_report(
+            snapshot, download=args.observed_snapshot.name,
+            title=("Authenticated corpus read observations" if corpus_read_evidence is not None
+                   else "Authenticated catalog observations"))
     documents = [(args.output, rendered_join), (args.report, rendered_report)]
     if observed_snapshot is not None:
         documents.extend([(args.observed_snapshot, observed_snapshot), (args.observed_report, observed_report)])

@@ -597,12 +597,16 @@ jobs:
       - name: Validate published observed catalog receipt, when present
         run: |
           set -euo pipefail
-          observed="docs/public/measurements/catalog-hydrated-observed-$(cat .exiftool-version).json"
-          if [[ -f "$observed" ]]; then
+          found=0
+          for observed in "docs/public/measurements/catalog-hydrated-observed-$(cat .exiftool-version).json" \
+                          "docs/public/measurements/catalog-corpus-observed-$(cat .exiftool-version).json"; do
+            [[ -f "$observed" ]] || continue
+            found=1
             python3 tools/exiftool-tables/catalog_observed_snapshot.py \
               --snapshot "$observed" --verify \
               --current-source-join "docs/public/measurements/catalog-hydrated-join-$(cat .exiftool-version).json"
-          else
+          done
+          if [[ "$found" == 0 ]]; then
             echo '=== instrument: catalog observed receipt check ==='
             echo 'No published native receipt yet; source declaration ledger remains independent.'
           fi
