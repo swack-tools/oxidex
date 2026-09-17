@@ -68,8 +68,9 @@ pub(crate) const PREVIEW_IFD_GROUP1: &str = "PreviewIFD";
 /// The `Nikon:`-keyed names [`parse_preview_ifd`] emits. No other Nikon table
 /// oxidex reads under a `Nikon:` key defines any of them (the pinned
 /// `Nikon.pm` has them only in `%Nikon::PreviewIFD`, plus XResolution/
-/// YResolution/ResolutionUnit in the AVI `%Nikon::AVITags`, which oxidex does
-/// not decode), so the name alone identifies the directory.
+/// YResolution/ResolutionUnit in the AVI `%Nikon::AVITags` and `PreviewImage`
+/// in the AVI/QuickTime `%Nikon::AVI` and `%Nikon::NCDT`, none of which oxidex
+/// decodes into this map), so the name alone identifies the directory.
 const PREVIEW_IFD_NAMES: &[&str] = &[
     "Compression",
     "XResolution",
@@ -77,6 +78,7 @@ const PREVIEW_IFD_NAMES: &[&str] = &[
     "ResolutionUnit",
     "PreviewImageStart",
     "PreviewImageLength",
+    "PreviewImage",
     "YCbCrPositioning",
 ];
 
@@ -86,6 +88,22 @@ pub(crate) fn preview_ifd_group1(name: &str) -> Option<&'static str> {
     PREVIEW_IFD_NAMES
         .contains(&name)
         .then_some(PREVIEW_IFD_GROUP1)
+}
+
+/// Every name `parse_preview_ifd` writes carries the `PreviewIFD` family-1
+/// group, `PreviewImage` included: the pinned oracle prints
+/// `[PreviewIFD] PreviewImage` for Nikon.nef, NikonD2Hs.jpg and NikonD70.jpg,
+/// and that tag used to be keyed `MakerNotes:` and so missed this mapping.
+#[cfg(test)]
+#[test]
+fn every_preview_ifd_name_this_module_writes_takes_the_group() {
+    for name in PREVIEW_IFD_NAMES {
+        assert_eq!(preview_ifd_group1(name), Some(PREVIEW_IFD_GROUP1), "{name}");
+    }
+    assert_eq!(preview_ifd_group1("PreviewImage"), Some("PreviewIFD"));
+    // A name this directory never writes takes no group.
+    assert_eq!(preview_ifd_group1("LensType"), None);
+    assert_eq!(preview_ifd_group1("PreviewImageSize"), None);
 }
 
 /// Walk `Nikon::PreviewIFD` (MakerNote tag 0x0011).
@@ -178,8 +196,20 @@ pub fn parse_preview_ifd(
             .get(start..start.saturating_add(length as usize))
             .is_some()
     {
+        // Keyed `Nikon:` like every other tag this directory emits, not
+        // `MakerNotes:`. Both resolve to family 0 `MakerNotes` through
+        // `tag_resolution::resolve_family0`, but only a `Nikon:` key reaches
+        // `preview_ifd_group1`, and without it the tag kept family 1
+        // `MakerNotes` -- so `-G1` mislabeled it and `-PreviewIFD:PreviewImage`
+        // could not resolve it, though the oracle prints
+        // `[PreviewIFD] PreviewImage` for Nikon.nef, NikonD2Hs.jpg and
+        // NikonD70.jpg. `Nikon::PreviewIFD` is the only Nikon table reaching
+        // this merge that defines `PreviewImage` at all: the other two in the
+        // pinned `Nikon.pm` are the AVI (`Nikon::AVI`, Nikon.pm:12321) and
+        // QuickTime (`Nikon::NCDT`, Nikon.pm:12522) video tables, neither of
+        // which feeds the TIFF MakerNote string map.
         tags.insert(
-            "MakerNotes:PreviewImage".to_string(),
+            "Nikon:PreviewImage".to_string(),
             format!("(Binary data {length} bytes, use -b option to extract)"),
         );
     }

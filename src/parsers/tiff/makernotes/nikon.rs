@@ -2106,7 +2106,7 @@ mod tests {
             crate::core::operations::read_metadata(path).expect("read pinned Nikon NEF fixture");
 
         assert_eq!(
-            metadata.get_string("MakerNotes:PreviewImage"),
+            metadata.get_string("Nikon:PreviewImage"),
             Some("(Binary data 26 bytes, use -b option to extract)")
         );
     }
