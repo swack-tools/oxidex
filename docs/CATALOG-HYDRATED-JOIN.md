@@ -81,6 +81,35 @@ declaration accounting part of the deterministic source denominator; it remains
 an unobserved declaration until an independent dispatch and fixture instrument
 is available.
 
+## Generated Garmin FIT reader
+
+`--garmin-fit-source`, `--garmin-fit-ledger`, `--garmin-fit-rust` and
+`--garmin-fit-protocol-fact` supply the bounded Garmin source fixture, the FIT
+ledger, `src/exiftool_tables/fit_tables.rs` and a fresh
+`capture_garmin_fit_fact.pl` capture of the pinned tree.
+`catalog_garmin_fit.py` accepts them only when:
+
+- the fixture's Garmin module equals the Garmin module of the authenticated full
+  dump (`--ifd-source`);
+- the fixture's protocol fact (base types, format sizes, integer width, code
+  bodies) equals the fresh capture;
+- the fixture's ProcessFIT source digest equals the catalog's pinned `Garmin.pm`;
+- the ledger and Rust replay exactly through `garmin_fit_specs.generate`, with
+  conversions admitted by that dump's source-bound expression ledger
+  (`--ifd-expr-ledger`); and
+- the replayed protocol is admitted.
+
+Every Garmin catalog row must then match a replayed row by exact coordinate and
+name. The FIT classification supersedes IFD schema candidacy for those rows:
+
+| FIT row | `reader_implementation` |
+| --- | --- |
+| generated, reached in ExifTool's default mode | `generated_reader_declaration_unobserved` |
+| generated, reached natively only with the Unknown option (not exposed by OxiDex) | `generated_reader_declaration_option_gated` |
+| refused | `blocked_generated_reader_refusal`, with the ledger's exact reasons |
+
+The per-table report's reader-declaration column excludes option-gated rows.
+
 ## Native writability and the write denominator
 
 Every record carries `catalog.native_writable`, copied from the catalog

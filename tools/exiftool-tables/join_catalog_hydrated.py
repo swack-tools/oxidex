@@ -23,6 +23,7 @@ import quicktime_atom_tables as quicktime_selector
 import quicktime_generated_specs as quicktime_specs
 import quicktime_keys_specs
 import catalog_userdata
+import catalog_garmin_fit
 import final_scalar_stage
 import codegen
 import setnewvalue_public_migration_ledger as public_migration
@@ -616,7 +617,10 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           ifd_expr_ledger: bytes | None = None, ifd_input_digests: dict[str, str] | None = None,
           userdata_ledger: dict | None = None, userdata_rust: str | None = None,
           userdata_input_digests: dict[str, str] | None = None,
-          userdata_read_evidence: dict | None = None, userdata_artifact_paths: tuple | None = None) -> dict:
+          userdata_read_evidence: dict | None = None, userdata_artifact_paths: tuple | None = None,
+          garmin_fit_source: bytes | None = None, garmin_fit_ledger: dict | None = None,
+          garmin_fit_rust: str | None = None, garmin_fit_input_digests: dict[str, str] | None = None,
+          garmin_fit_protocol_fact: bytes | None = None) -> dict:
     if catalog.get("exiftool_version") != hydrated.get("exiftool_version"):
         raise ValueError("catalog and hydrated ExifTool versions differ")
     supplied_quicktime = (itemlist_ledger, quicktime_capabilities, quicktime_bounded_source, quicktime_rust)
@@ -670,6 +674,18 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
                for value in ifd_input_digests.values()):
             raise ValueError("IFD input digest is malformed")
+    garmin_fit = catalog_garmin_fit.implementation(
+        garmin_fit_ledger, garmin_fit_source, garmin_fit_rust, dump_source=ifd_source, expr_ledger=ifd_expr_ledger,
+        protocol_fact=garmin_fit_protocol_fact,
+        catalog_sources=catalog["producer"]["sources"], rust_matches=quicktime_rust_matches)
+    if garmin_fit:
+        expected_fit_digests = {"source_sha256": hashlib.sha256(garmin_fit_source).hexdigest(),
+                                "ledger_sha256": canonical_hash(garmin_fit_ledger),
+                                "rust_sha256": hashlib.sha256(garmin_fit_rust.encode()).hexdigest()}
+        if garmin_fit_input_digests != expected_fit_digests:
+            raise ValueError("Garmin FIT input digests differ from replayed artifacts")
+    elif garmin_fit_input_digests is not None:
+        raise ValueError("Garmin FIT input digests require complete artifacts")
     observed_keys = quicktime_keys_observed_reads(quicktime_keys_read_evidence, quicktime_bounded_source,
                                                    quicktime_keys_ledger, quicktime_keys_rust, quicktime_input_digests)
     writer = writer_implementation(writer_source, writer_final_ledger, writer_final_rust, writer_public_ledger, writer_public_rust)
@@ -784,6 +800,16 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
                 raise ValueError("IFD ledger/catalog name identity differs")
             implementation = reader_implementation = "ifd_schema_declaration_" + ifd_candidate["reader_state"] + "_unobserved"
             refusal = (ifd_candidate["reasons"] + ifd_candidate["omissions"]) or None
+        fit_candidate = garmin_fit.get(identity)
+        if fit_candidate is not None and state == "joined":
+            # The generated FIT reader is the runtime consumer of these rows;
+            # its classification supersedes IFD schema candidacy.
+            if fit_candidate["name"] != entry["name"]:
+                raise ValueError("Garmin FIT ledger/catalog name identity differs")
+            implementation, refusal = catalog_garmin_fit.reader_state(fit_candidate)
+            reader_implementation = implementation
+        elif garmin_fit and identity[0].startswith("Image::ExifTool::Garmin::") and state == "joined":
+            raise ValueError(f"Garmin catalog row is absent from the replayed FIT ledger: {identity!r}")
         native_writable = entry["native_writable"]["class"]
         writer_candidate = writer.get(identity)
         # Refuse before source-row matching: an absent or conflicting row must
@@ -832,6 +858,8 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         inputs["ifd"] = dict(sorted(ifd_input_digests.items()))
     if userdata_input_digests is not None:
         inputs["quicktime_userdata"] = dict(sorted(userdata_input_digests.items()))
+    if garmin_fit_input_digests is not None:
+        inputs["garmin_fit"] = dict(sorted(garmin_fit_input_digests.items()))
     if userdata_read_evidence is not None:
         inputs["quicktime_userdata_read_evidence"] = {"sha256": canonical_hash(userdata_read_evidence),
                                                       "producer": userdata_read_evidence.get("producer")}
@@ -897,12 +925,13 @@ def report(join: dict) -> str:
                   f"Distinct observed Group1 names: {writes['distinct_group1_names']}"]
     lines += ["", "A join requires exact `(table full name, raw key, variant index)` and exact public-name spelling. Observations additionally require authenticated native comparisons in the exact Group1 context. Entries without imported evidence remain unobserved. Published historical receipts are linked at [authenticated catalog observations](catalog-hydrated-observed.md); they remain historical if this source ledger changes.", "",
               "## Source-table progress", "",
-              "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations replay their exact source and, when bound, the expression-oracle ledger. Eligible, omitted and refused schema rows remain separate; schema eligibility does not establish a runtime route. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
+              "Declarations below are authenticated schema facts, not runtime reachability or observed coverage. Reader declarations exclude `generated_reader_declaration_option_gated` rows, which ExifTool reaches only through an option OxiDex does not expose. IFD declarations replay their exact source and, when bound, the expression-oracle ledger. Eligible, omitted and refused schema rows remain separate; schema eligibility does not establish a runtime route. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.", "",
               "| Source table | Source variants | Catalog entries | Reader declarations | Natively writable entries | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |",
               "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for table, value in join.get("source_tables", {}).items():
         reader = sum(count for state, count in value["reader_implementation"].items()
-                     if state.startswith("generated_") or state.startswith("ifd_schema_declaration_eligible"))
+                     if (state.startswith("generated_") and state != "generated_reader_declaration_option_gated")
+                     or state.startswith("ifd_schema_declaration_eligible"))
         writer = sum(count for state, count in value["writer_implementation"].items() if state.startswith("generated_"))
         reasons = "; ".join(f"{reason}: {count}" for reason, count in value["reader_refusal_reasons"].items()) or "—"
         lines.append(f"| {table} | {value['source_variant_rows']} | {value['catalog_entries']} | {reader} | {value['native_writable_catalog_entries']} | {writer} | {value['observed_read_catalog_entries']} | {value['observed_write_catalog_entries']} | {reasons} |")
@@ -956,6 +985,11 @@ def main() -> int:
     parser.add_argument("--quicktime-userdata-ledger", type=Path)
     parser.add_argument("--quicktime-userdata-rust", type=Path)
     parser.add_argument("--quicktime-userdata-read-evidence", type=Path)
+    parser.add_argument("--garmin-fit-source", type=Path, help="bounded Garmin FIT source fixture")
+    parser.add_argument("--garmin-fit-ledger", type=Path)
+    parser.add_argument("--garmin-fit-rust", type=Path)
+    parser.add_argument("--garmin-fit-protocol-fact", type=Path,
+                        help="fresh capture_garmin_fit_fact.pl output for the pinned tree")
     parser.add_argument("--quicktime-read-evidence", type=Path)
     parser.add_argument("--quicktime-keys-read-evidence", type=Path)
     parser.add_argument("--writer-read-evidence", type=Path)
@@ -986,6 +1020,10 @@ def main() -> int:
         raise ValueError("UserData observations require complete UserData join inputs")
     if any(path is not None for path in writer_paths) and any(path is None for path in writer_paths):
         raise ValueError("writer join inputs must be supplied together")
+    garmin_fit_paths = (args.garmin_fit_source, args.garmin_fit_ledger, args.garmin_fit_rust, args.garmin_fit_protocol_fact)
+    if any(path is not None for path in garmin_fit_paths) and (
+            any(path is None for path in garmin_fit_paths) or args.ifd_source is None or args.ifd_expr_ledger is None):
+        raise ValueError("Garmin FIT join inputs must be supplied together with the IFD source and expression ledger")
     if any(path is not None for path in ifd_paths) and any(path is None for path in ifd_paths):
         raise ValueError("IFD join inputs must be supplied together")
     if args.ifd_expr_ledger is not None and any(path is None for path in ifd_paths):
@@ -1001,6 +1039,7 @@ def main() -> int:
                           args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
                           args.quicktime_keys_ledger, args.quicktime_keys_rust,
                           *(userdata_paths if all(path is not None for path in userdata_paths) else ()),
+                          *(garmin_fit_paths if all(path is not None for path in garmin_fit_paths) else ()),
                           *(writer_paths if all(path is not None for path in writer_paths) else ()),
                           *(ifd_expr_paths if all(path is not None for path in ifd_paths) else ()),
                           *([args.quicktime_read_evidence] if args.quicktime_read_evidence else []),
@@ -1014,6 +1053,7 @@ def main() -> int:
                               args.quicktime_source_capabilities, args.quicktime_itemlist_rust,
                               args.quicktime_keys_ledger, args.quicktime_keys_rust,
                               *(userdata_paths if all(path is not None for path in userdata_paths) else ()),
+                              *(garmin_fit_paths if all(path is not None for path in garmin_fit_paths) else ()),
                               *(writer_paths if all(path is not None for path in writer_paths) else ()),
                               *(ifd_expr_paths if all(path is not None for path in ifd_paths) else ()),
                               *(path for path in evidence_paths if path is not None))
@@ -1044,6 +1084,14 @@ def main() -> int:
                     "rust_sha256": hashlib.sha256(ifd_rust.encode()).hexdigest(),
                     **({"expr_ledger_sha256": hashlib.sha256(ifd_expr).hexdigest()} if ifd_expr is not None else {})}
                    if ifd_source else None)
+    garmin_fit_source = args.garmin_fit_source.read_bytes() if args.garmin_fit_source else None
+    garmin_fit_ledger = read_json(args.garmin_fit_ledger) if args.garmin_fit_ledger else None
+    garmin_fit_rust = args.garmin_fit_rust.read_text(encoding="utf-8") if args.garmin_fit_rust else None
+    garmin_fit_protocol_fact = args.garmin_fit_protocol_fact.read_bytes() if args.garmin_fit_protocol_fact else None
+    garmin_fit_digests = ({"source_sha256": hashlib.sha256(garmin_fit_source).hexdigest(),
+                           "ledger_sha256": canonical_hash(garmin_fit_ledger),
+                           "rust_sha256": hashlib.sha256(garmin_fit_rust.encode()).hexdigest()}
+                          if garmin_fit_source is not None else None)
     writer_source = args.writer_source.read_bytes() if args.writer_source else None
     writer_final = args.writer_final_ledger.read_bytes() if args.writer_final_ledger else None
     writer_final_rust = args.writer_final_rust.read_text(encoding="utf-8") if args.writer_final_rust else None
@@ -1067,7 +1115,10 @@ def main() -> int:
                   writer_final_rust=writer_final_rust, writer_public_ledger=json.loads(writer_public) if writer_public else None,
                   writer_public_rust=writer_public_rust, writer_input_digests=writer_digests,
                   ifd_source=ifd_source, ifd_ledger=json.loads(ifd_ledger) if ifd_ledger else None,
-                  ifd_rust=ifd_rust, ifd_expr_ledger=ifd_expr, ifd_input_digests=ifd_digests)
+                  ifd_rust=ifd_rust, ifd_expr_ledger=ifd_expr, ifd_input_digests=ifd_digests,
+                  garmin_fit_source=garmin_fit_source, garmin_fit_ledger=garmin_fit_ledger,
+                  garmin_fit_rust=garmin_fit_rust, garmin_fit_input_digests=garmin_fit_digests,
+                  garmin_fit_protocol_fact=garmin_fit_protocol_fact)
     join = build(catalog, hydrated, sha256(args.catalog), sha256(args.hydrated),
                  json.loads(quicktime_ledger), json.loads(quicktime_capabilities), quicktime_source, quicktime_rust,
                  quicktime_digests, quicktime_read_evidence,
