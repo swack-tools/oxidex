@@ -669,19 +669,19 @@ jobs:
             echo 'No published native receipt yet; source declaration ledger remains independent.'
           fi
 
-  # The tools suite (~1,500 unittest cases, ~20 min serially on WarpBuild 4x)
+  # The tools suite (~1,500 unittest cases, ~40 min serially on ubuntu-latest)
   # is split into balanced shards by tools/ci/unittest_shard.py using the
   # committed per-test timings in tools/ci/unittest_weights.json. Every test
   # id lands in exactly one shard, so the shards together run the full suite.
   verify-tables-tools:
-    name: Verify Generated Tables / tools ${{ matrix.shard }}/6
+    name: Verify Generated Tables / tools ${{ matrix.shard }}/8
     needs: [verify-tables-capture]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: exiftool
@@ -721,7 +721,7 @@ jobs:
           export OXIDEX_WORD_PROCESSOR=Image::ExifTool::CanonCustom::ProcessCanonCustom
           export OXIDEX_ALLOW_DIRTY_TREE=1
           cd tools/exiftool-tables
-          python3 ../ci/unittest_shard.py --weights ../ci/unittest_weights.json --shard "$SHARD" --of 6
+          python3 ../ci/unittest_shard.py --weights ../ci/unittest_weights.json --shard "$SHARD" --of 8
 
   verify-tables-drift:
     name: Verify Generated Tables / staleness and drift
@@ -788,17 +788,11 @@ jobs:
     steps:
       - name: Require every Verify Generated Tables job
         env:
-          RESULTS: ${{ toJSON(needs) }}
+          ALL_SUCCEEDED: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          set -euo pipefail
-          echo "$RESULTS" | python3 -c '
-          import json, sys
-          needs = json.load(sys.stdin)
-          bad = {name: job["result"] for name, job in needs.items() if job["result"] != "success"}
-          for name, job in sorted(needs.items()):
-              print(f"{name}: {job[\"result\"]}")
-          sys.exit(f"failed or skipped: {bad}" if bad else 0)
-          '
+          echo "fan-out job results: $RESULTS"
+          [ "$ALL_SUCCEEDED" = true ]
 
   metrics:
     name: Benchmarks
