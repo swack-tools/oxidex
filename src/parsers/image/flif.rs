@@ -427,7 +427,7 @@ mod tests {
         data.push(0x00);
 
         let metadata = parse_flif_metadata(&TestReader::new(data)).unwrap();
-        assert_eq!(metadata.get_string("XMP:Creator"), Some("Phil Harvey"));
+        assert_eq!(metadata.get_string("XMP-dc:Creator"), Some("Phil Harvey"));
     }
 
     /// A five-group varint carries 35 bits, so the accumulator has to reject

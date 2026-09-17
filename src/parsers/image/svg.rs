@@ -272,32 +272,32 @@ impl SVGParser {
 
     /// Extract Dublin Core elements that map to XMP tags
     fn extract_dublin_core(text: &str, metadata: &mut MetadataMap) {
-        // dc:date -> XMP:Date
+        // dc:date -> XMP-dc:Date
         if let Some(dc_date) = Self::extract_element_content(text, "dc:date")
             .or_else(|| Self::extract_attribute(text, "dc:date"))
         {
             metadata.insert(
-                "XMP:Date".to_string(),
+                "XMP-dc:Date".to_string(),
                 TagValue::new_string(Self::format_xmp_date(&dc_date)),
             );
         }
 
-        // dc:format -> XMP:Format
+        // dc:format -> XMP-dc:Format
         if let Some(dc_format) = Self::extract_element_content(text, "dc:format") {
-            metadata.insert("XMP:Format".to_string(), TagValue::new_string(dc_format));
+            metadata.insert("XMP-dc:Format".to_string(), TagValue::new_string(dc_format));
         }
 
-        // dc:language -> XMP:Language
+        // dc:language -> XMP-dc:Language
         if let Some(dc_lang) = Self::extract_element_content(text, "dc:language") {
-            metadata.insert("XMP:Language".to_string(), TagValue::new_string(dc_lang));
+            metadata.insert("XMP-dc:Language".to_string(), TagValue::new_string(dc_lang));
         }
 
-        // dc:publisher -> XMP:Publisher
+        // dc:publisher -> XMP-dc:Publisher
         if let Some(dc_pub) = Self::extract_element_content(text, "dc:publisher") {
-            metadata.insert("XMP:Publisher".to_string(), TagValue::new_string(dc_pub));
+            metadata.insert("XMP-dc:Publisher".to_string(), TagValue::new_string(dc_pub));
         }
 
-        // rdf:about (or bare "about" within an rdf:Description tag) -> XMP:About
+        // rdf:about (or bare "about" within an rdf:Description tag) -> XMP-rdf:About
         if let Some(desc_start) = text.find("<rdf:Description")
             && let Some(tag_end_rel) = text[desc_start..].find('>')
         {
@@ -305,7 +305,7 @@ impl SVGParser {
             if let Some(about) = Self::extract_attribute(desc_tag, "rdf:about")
                 .or_else(|| Self::extract_attribute(desc_tag, "about"))
             {
-                metadata.insert("XMP:About".to_string(), TagValue::new_string(about));
+                metadata.insert("XMP-rdf:About".to_string(), TagValue::new_string(about));
             }
         }
     }
@@ -676,13 +676,13 @@ impl FormatParser for SVGParser {
         // Extract Dublin Core metadata if present
         if text.contains("dc:") {
             if let Some(dc_title) = Self::extract_element_content(text, "dc:title") {
-                metadata.insert("XMP:Title".to_string(), TagValue::String(dc_title));
+                metadata.insert("XMP-dc:Title".to_string(), TagValue::String(dc_title));
             }
             if let Some(dc_creator) = Self::extract_dc_creator(text) {
-                metadata.insert("XMP:Creator".to_string(), TagValue::String(dc_creator));
+                metadata.insert("XMP-dc:Creator".to_string(), TagValue::String(dc_creator));
             }
             if let Some(dc_desc) = Self::extract_element_content(text, "dc:description") {
-                metadata.insert("XMP:Description".to_string(), TagValue::String(dc_desc));
+                metadata.insert("XMP-dc:Description".to_string(), TagValue::String(dc_desc));
             }
 
             // Extract additional Dublin Core elements
@@ -852,15 +852,15 @@ mod tests {
         let metadata = parser.parse(&reader).unwrap();
 
         assert_eq!(
-            metadata.get("XMP:Title").unwrap().as_string(),
+            metadata.get("XMP-dc:Title").unwrap().as_string(),
             Some("DC Title")
         );
         assert_eq!(
-            metadata.get("XMP:Creator").unwrap().as_string(),
+            metadata.get("XMP-dc:Creator").unwrap().as_string(),
             Some("DC Creator")
         );
         assert_eq!(
-            metadata.get("XMP:Description").unwrap().as_string(),
+            metadata.get("XMP-dc:Description").unwrap().as_string(),
             Some("DC Description")
         );
     }
@@ -875,7 +875,7 @@ mod tests {
         let parser = SVGParser;
         let metadata = parser.parse(&reader).expect("parse pinned XMP.svg fixture");
 
-        assert_eq!(metadata.get_string("XMP:Date"), Some("2000:04:11"));
+        assert_eq!(metadata.get_string("XMP-dc:Date"), Some("2000:04:11"));
     }
 
     #[test]
@@ -897,7 +897,7 @@ mod tests {
         let metadata = parser.parse(&reader).unwrap();
 
         assert_eq!(
-            metadata.get("XMP:Creator").unwrap().as_string(),
+            metadata.get("XMP-dc:Creator").unwrap().as_string(),
             Some("[\"Irving Bird\",\"Mary Lambert\"]")
         );
     }

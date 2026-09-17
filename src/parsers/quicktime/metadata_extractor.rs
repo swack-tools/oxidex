@@ -3382,15 +3382,10 @@ fn extract_xmp_from_atom(data: &[u8], metadata: &mut MetadataMap) -> Result<(), 
 
     // Parse XMP tags using the existing XMP parser (takes bytes)
     if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp(xmp_data) {
+        // The XMP parser already returns fully grouped keys (`XMP-dc:Creator`,
+        // `XMP-x:XMPToolkit`); pass them through unchanged.
         for (key, value) in xmp_tags {
-            // The XMP parser returns keys without "XMP:" prefix, so add it
-            // But some keys might already be prefixed, so check first
-            let full_key = if key.starts_with("XMP:") {
-                key
-            } else {
-                format!("XMP:{}", key)
-            };
-            metadata.insert(full_key, TagValue::new_string(value));
+            metadata.insert(key, TagValue::new_string(value));
         }
     }
 

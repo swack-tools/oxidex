@@ -705,8 +705,13 @@ pub fn parse_xml_file(reader: &dyn FileReader) -> Result<MetadataMap> {
         // every repeated key reported the last occurrence instead.
         // `TagSink::record` already implements both halves of that rule; this
         // only has to declare the priority honestly.
+        //
+        // The key's group is family 0 (`XMP`), with the namespace group
+        // (`XMP-gx`) carried as `group1`: that is `insert_occurrence`'s
+        // convention, and keying on `XMP-gx` instead made `-G0` print
+        // `[XMP-gx]` and `-XMP:all` miss every namespaced property.
         metadata.insert_occurrence(
-            format!("{}:{}", property.group1, property.name),
+            format!("XMP:{}", property.name),
             TagValue::new_string(property.value),
             0,
             &property.group1,

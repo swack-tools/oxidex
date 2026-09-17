@@ -291,18 +291,15 @@ mod tests {
         );
         // The embedded XMP packet is handed to the same generic
         // `parse_xmp_typed` every other container (JPEG, PDF, DjVu, PNG)
-        // delegates to; it currently reports `XMPToolkit` and this
-        // nested-namespace `pdf:Author` under the bare `XMP` group rather
-        // than ExifTool's `XMP-x`/`XMP-pdf` (verified against the same
-        // pinned oracle on `ExifTool.jpg`'s `XMPToolkit`, so this is a
-        // pre-existing characteristic of the shared parser, not something
-        // this SWF integration introduces or should paper over locally).
+        // delegates to, which reports ExifTool's family-1 groups:
+        // `exiftool -a -G1 -s t/images/Flash.swf` (pinned 13.59) prints
+        // `[XMP-x] XMPToolkit` and `[XMP-pdf] Author`.
         assert_eq!(
-            metadata.get("XMP:Author"),
+            metadata.get("XMP-pdf:Author"),
             Some(&TagValue::new_string("Phil"))
         );
         assert_eq!(
-            metadata.get("XMP:XMPToolkit"),
+            metadata.get("XMP-x:XMPToolkit"),
             Some(&TagValue::new_string("Image::ExifTool 7.50"))
         );
     }

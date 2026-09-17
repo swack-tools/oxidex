@@ -263,11 +263,7 @@ impl EPSParser {
                     // comma-joined string. ExifTool reports these as arrays,
                     // so re-expand the known list-type XMP tags here into
                     // TagValue::Array for correct multi-value representation.
-                    for list_tag in [
-                        "XMP:Subject",
-                        "XMP:SupplementalCategories",
-                        "XMP-photoshop:SupplementalCategories",
-                    ] {
+                    for list_tag in ["XMP-dc:Subject", "XMP-photoshop:SupplementalCategories"] {
                         if let Some(TagValue::String(joined)) = metadata.get(list_tag) {
                             let items: Vec<TagValue> = joined
                                 .split(", ")
@@ -293,27 +289,29 @@ impl EPSParser {
                         // attribute, the toolkit version attribute on the root
                         // wrapper element, and the nested stJob:name struct field
                         // inside xmpBJ:JobRef. Extract them directly here.
-                        if !metadata.contains_key("XMP:About") {
+                        if !metadata.contains_key("XMP-rdf:About") {
                             if let Some(about) = extract_xml_attribute(xml_str, "about") {
-                                metadata
-                                    .insert("XMP:About".to_string(), TagValue::new_string(about));
+                                metadata.insert(
+                                    "XMP-rdf:About".to_string(),
+                                    TagValue::new_string(about),
+                                );
                             }
                         }
-                        if !metadata.contains_key("XMP:XMPToolkit") {
+                        if !metadata.contains_key("XMP-x:XMPToolkit") {
                             if let Some(toolkit) = extract_xml_attribute(xml_str, "x:xaptk")
                                 .or_else(|| extract_xml_attribute(xml_str, "xmptk"))
                             {
                                 metadata.insert(
-                                    "XMP:XMPToolkit".to_string(),
+                                    "XMP-x:XMPToolkit".to_string(),
                                     TagValue::new_string(toolkit),
                                 );
                             }
                         }
-                        if !metadata.contains_key("XMP:JobRefName") {
+                        if !metadata.contains_key("XMP-xmpBJ:JobRefName") {
                             if let Some(job_name) = extract_xml_element_text(xml_str, "stJob:name")
                             {
                                 metadata.insert(
-                                    "XMP:JobRefName".to_string(),
+                                    "XMP-xmpBJ:JobRefName".to_string(),
                                     TagValue::new_string(job_name),
                                 );
                             }

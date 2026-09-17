@@ -30,6 +30,8 @@
 
 use std::collections::HashMap;
 
+use super::generated_namespaces::{URI_PREFIXES, standard_prefix, translated_prefix};
+
 /// Manages XMP namespace prefix-to-URI mappings.
 ///
 /// This resolver maintains bidirectional mappings between namespace prefixes
@@ -41,6 +43,14 @@ pub struct NamespaceResolver {
     prefix_to_uri: HashMap<String, String>,
     /// Maps URI to prefix (e.g., "http://ns.adobe.com/xap/1.0/" → "xmp")
     uri_to_prefix: HashMap<String, String>,
+    /// ExifTool's per-packet `$$et{curNS}`: non-standard namespace URI ->
+    /// the prefix ExifTool settled on for it (XMP.pm:3939-3955).
+    cur_ns: HashMap<String, String>,
+    /// ExifTool's per-packet `$$et{curURI}`: that prefix -> its URI.
+    cur_uri: HashMap<String, String>,
+    /// Declared URI -> effective ExifTool namespace prefix (before
+    /// `%stdXlatNS`), fixed the first time the URI is declared.
+    effective_prefix: HashMap<String, String>,
 }
 
 impl NamespaceResolver {
@@ -69,6 +79,9 @@ impl NamespaceResolver {
         let mut resolver = Self {
             prefix_to_uri: HashMap::new(),
             uri_to_prefix: HashMap::new(),
+            cur_ns: HashMap::new(),
+            cur_uri: HashMap::new(),
+            effective_prefix: HashMap::new(),
         };
 
         // Register standard XMP namespaces
@@ -116,6 +129,95 @@ impl NamespaceResolver {
             .insert(prefix.to_string(), uri.to_string());
         self.uri_to_prefix
             .insert(uri.to_string(), prefix.to_string());
+        // `xmlns="..."` has no colon, and XMP.pm only handles `xmlns:PREFIX`
+        // declarations (`if ($attr =~ /(.*?):/)`), so a default namespace
+        // never takes part in prefix taming.
+        if !prefix.is_empty() {
+            self.tame_prefix(prefix, uri);
+        }
+    }
+
+    /// ExifTool's namespace-prefix taming for one `xmlns:PREFIX="URI"`
+    /// declaration (XMP.pm:3901-3955), recorded per URI.
+    ///
+    /// A resolver lives for one XMP packet, like ExifTool's `curNS`/`curURI`
+    /// (reset per packet in `ProcessXMP`, XMP.pm:4277-4278), and every parse
+    /// pass registers declarations in document order, so every pass arrives
+    /// at the same prefix for the same URI.
+    fn tame_prefix(&mut self, prefix: &str, uri: &str) {
+        if let Some(std_ns) = standard_prefix_for_declared_uri(uri) {
+            // "use standard namespace prefix if pre-defined"
+            self.effective_prefix
+                .insert(uri.to_string(), std_ns.to_string());
+            return;
+        }
+        if let Some(used) = self.cur_ns.get(uri) {
+            // "use a consistent prefix over the entire XMP for a given
+            // namespace URI"
+            let used = used.clone();
+            self.effective_prefix.insert(uri.to_string(), used);
+            return;
+        }
+        // "use unique prefixes for all namespaces across the entire XMP":
+        // a prefix already bound to another non-standard URI in this packet,
+        // or one of ExifTool's own standard prefixes (`$nsURI{$ns}`), is
+        // replaced by the lowest free `tmpN`.
+        let mut used = prefix.to_string();
+        if self.cur_uri.contains_key(prefix) || is_standard_prefix(prefix) {
+            let mut index = 0usize;
+            while self.cur_uri.contains_key(&format!("tmp{index}")) {
+                index += 1;
+            }
+            used = format!("tmp{index}");
+        }
+        self.cur_ns.insert(uri.to_string(), used.clone());
+        self.cur_uri.insert(used.clone(), uri.to_string());
+        self.effective_prefix.insert(uri.to_string(), used);
+    }
+
+    /// The ExifTool family-1 group for a property written with `prefix`:
+    /// `XMP-<prefix>`, where the prefix is the one ExifTool tamed the bound
+    /// URI to and then passed through `%stdXlatNS` (XMP.pm FoundXMP:
+    /// `$ns = $stdXlatNS{$ns} if $stdXlatNS{$ns}` ... `SetGroup($key,
+    /// "$$tagTablePtr{GROUPS}{0}-$ns")`).
+    ///
+    /// An empty prefix has no namespace, and ExifTool calls no `SetGroup` for
+    /// it, so the group stays plain `XMP`. A prefix with no declaration in
+    /// scope keeps its own spelling, as ExifTool's does.
+    ///
+    /// Not modelled here (the key is left as plain `XMP`):
+    /// - URIs under `http://ns.exiftool.org/<g0>/<g1>/` (ExifTool's own `-X`
+    ///   output), whose tags ExifTool files under the family-0/1 groups named
+    ///   in the URI (`StaticGroup1`, XMP.pm:3599-3615) -- groups outside the
+    ///   `XMP` family entirely.
+    /// - ExifTool's clean-up of prefixes containing characters outside
+    ///   `[-.0-9A-Z_a-z\x80-\xff]` (XMP.pm:3480-3486); a well-formed XML
+    ///   prefix cannot contain them.
+    /// - `TABLE_NAMESPACES` (Google `Device`, PhotoMechanic): ExifTool only
+    ///   learns these URIs once their tag table loads, so at declaration time
+    ///   they are not standard and follow the document-prefix rules above.
+    ///   PhotoMechanic.jpg bears this out (`photomechanic` -> `XMP-photomech`
+    ///   through `%stdXlatNS`, not through a URI lookup).
+    pub fn group_for_prefix(&self, prefix: &str) -> String {
+        if prefix.is_empty() {
+            return "XMP".to_string();
+        }
+        let effective = match self.resolve_prefix(prefix) {
+            Some(uri) if is_exiftool_static_group_uri(uri) => return "XMP".to_string(),
+            Some(uri) => self
+                .effective_prefix
+                .get(uri)
+                .map(String::as_str)
+                .or_else(|| standard_prefix_for_declared_uri(uri))
+                .unwrap_or(prefix),
+            None => prefix,
+        };
+        format!("XMP-{}", translated_prefix(effective))
+    }
+
+    /// [`Self::group_for_prefix`] for a qualified name (`dc:title`).
+    pub fn group_for_qname(&self, qname: &str) -> String {
+        self.group_for_prefix(Self::extract_prefix(qname).unwrap_or(""))
     }
 
     /// Resolves a namespace prefix to its full URI.
@@ -212,6 +314,79 @@ impl NamespaceResolver {
     pub fn extract_local_name(qname: &str) -> &str {
         qname.split(':').next_back().unwrap_or(qname)
     }
+}
+
+/// Whether `prefix` is one of ExifTool's standard prefixes (a key of
+/// `%nsURI`).
+fn is_standard_prefix(prefix: &str) -> bool {
+    URI_PREFIXES.iter().any(|(_, known)| *known == prefix)
+}
+
+/// ExifTool's own `-X` namespaces, which carry their groups in the URI
+/// (XMP.pm:3599: `m{^http://ns.exiftool.(?:ca|org)/(.*?)/(.*?)/}`).
+fn is_exiftool_static_group_uri(uri: &str) -> bool {
+    let rest = uri
+        .strip_prefix("http://ns.exiftool.org/")
+        .or_else(|| uri.strip_prefix("http://ns.exiftool.ca/"));
+    rest.is_some_and(|rest| {
+        let mut parts = rest.splitn(3, '/');
+        matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some(_), Some(_), Some(_))
+        )
+    })
+}
+
+/// The standard prefix XMP.pm's `xmlns` handling finds for a declared URI
+/// (XMP.pm:3905-3926): the URI itself, then the URI with its trailing `/`
+/// toggled, then the same URI with a different `N.N` version in its first
+/// `/N.N/` (or trailing `/N.N`) segment.
+fn standard_prefix_for_declared_uri(uri: &str) -> Option<&'static str> {
+    if let Some(prefix) = standard_prefix(uri) {
+        return Some(prefix);
+    }
+    let toggled = match uri.strip_suffix('/') {
+        Some(stripped) => stripped.to_string(),
+        None => format!("{uri}/"),
+    };
+    if let Some(prefix) = standard_prefix(&toggled) {
+        return Some(prefix);
+    }
+    let (head, tail) = split_version_segment(uri)?;
+    // `grep /^$try$/, keys %uri2ns` takes whichever match hash order yields
+    // first; the table is sorted, so take the first sorted match.
+    URI_PREFIXES.iter().find_map(|(known, prefix)| {
+        let (known_head, known_tail) = split_version_segment(known)?;
+        (known_head == head && known_tail == tail).then_some(*prefix)
+    })
+}
+
+/// Splits `uri` around its first `/<digits>.<digits>` segment that is
+/// followed by `/` or the end of the string, returning the text before the
+/// version (including the `/`) and the text after it.
+fn split_version_segment(uri: &str) -> Option<(&str, &str)> {
+    let bytes = uri.as_bytes();
+    let mut start = 0usize;
+    while let Some(offset) = uri[start..].find('/') {
+        let slash = start + offset;
+        let mut i = slash + 1;
+        let major = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i > major && i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            let minor = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > minor && (i == bytes.len() || bytes[i] == b'/') {
+                return Some((&uri[..=slash], &uri[i..]));
+            }
+        }
+        start = slash + 1;
+    }
+    None
 }
 
 impl Default for NamespaceResolver {
@@ -354,6 +529,86 @@ mod tests {
         // Reverse lookup
         let prefix = resolver.resolve_uri(uri).unwrap();
         assert_eq!(prefix, "test");
+    }
+
+    /// Registers `(prefix, uri)` declarations in document order and returns
+    /// the group for each `prefix` right after its own declaration.
+    fn groups_after(declarations: &[(&str, &str)]) -> Vec<String> {
+        let mut resolver = NamespaceResolver::new();
+        declarations
+            .iter()
+            .map(|(prefix, uri)| {
+                resolver.register_namespace(prefix, uri);
+                resolver.group_for_prefix(prefix)
+            })
+            .collect()
+    }
+
+    /// Pinned ExifTool 13.59 (`exiftool -a -G1 -s`) on a packet declaring
+    /// these namespaces in this order reports exactly these groups:
+    /// XMP-photoshop, XMP-dc, XMP-tmp0, XMP-aaa, XMP-iptcCore,
+    /// XMP-microsoft, then (second rdf:Description) XMP-aaa, XMP-tmp1.
+    #[test]
+    fn group_prefixes_follow_exiftool_namespace_taming() {
+        let groups = groups_after(&[
+            // A different N.N version of a standard URI.
+            ("ps", "http://ns.adobe.com/photoshop/2.5/"),
+            // A standard URI missing its trailing slash.
+            ("dcx", "http://purl.org/dc/elements/1.1"),
+            // A standard prefix bound to a non-standard URI.
+            ("dc", "http://example.com/notdc/"),
+            ("aaa", "http://example.com/aaa/"),
+            // %stdXlatNS applies after the URI lookup.
+            ("core", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+            // Only `MicrosoftPhoto` translates; this is an ordinary prefix.
+            ("microsoft", "http://example.com/ms/"),
+            // A URI already seen keeps its first prefix.
+            ("bbb", "http://example.com/aaa/"),
+            // A prefix already used for another URI gets the next tmpN.
+            ("aaa", "http://example.com/other/"),
+        ]);
+        assert_eq!(
+            groups,
+            [
+                "XMP-photoshop",
+                "XMP-dc",
+                "XMP-tmp0",
+                "XMP-aaa",
+                "XMP-iptcCore",
+                "XMP-microsoft",
+                "XMP-aaa",
+                "XMP-tmp1",
+            ]
+        );
+    }
+
+    #[test]
+    fn unprefixed_undeclared_and_static_group_namespaces() {
+        let mut resolver = NamespaceResolver::new();
+        // No namespace: ExifTool calls no SetGroup, so the group stays XMP.
+        assert_eq!(resolver.group_for_prefix(""), "XMP");
+        // An undeclared prefix keeps its own spelling.
+        assert_eq!(resolver.group_for_prefix("undeclared"), "XMP-undeclared");
+        // ExifTool's own -X namespaces carry non-XMP groups; not modelled.
+        resolver.register_namespace("IFD0", "http://ns.exiftool.org/EXIF/IFD0/1.0/");
+        assert_eq!(resolver.group_for_prefix("IFD0"), "XMP");
+        // ...but ExifTool's plain `et` namespace is an ordinary standard one.
+        resolver.register_namespace("zz", "http://ns.exiftool.org/1.0/");
+        assert_eq!(resolver.group_for_prefix("zz"), "XMP-et");
+    }
+
+    #[test]
+    fn version_segment_split_matches_xmp_pm_regex() {
+        assert_eq!(
+            split_version_segment("http://ns.adobe.com/photoshop/2.5/"),
+            Some(("http://ns.adobe.com/photoshop/", "/"))
+        );
+        assert_eq!(
+            split_version_segment("http://ns.microsoft.com/photo/1.0"),
+            Some(("http://ns.microsoft.com/photo/", ""))
+        );
+        // `/1.0x/` is not a version segment.
+        assert_eq!(split_version_segment("http://example.com/1.0x/"), None);
     }
 
     #[test]

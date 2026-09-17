@@ -362,17 +362,28 @@ const ALL_DATES_NAMES: &[&str] = &[
 ///
 /// A bare pattern ("DateTimeOriginal") matches the name part of any
 /// group-prefixed key; a prefixed pattern ("XMP:CreateDate") must match the
-/// full key. Comparison is ASCII case-insensitive.
+/// name and the key's own group -- or, for an `XMP-<ns>` key, the family-0
+/// `XMP` group, so `XMP:CreateDate` still selects `XMP-xmp:CreateDate`.
+/// Comparison is ASCII case-insensitive.
 fn key_matches_pattern(key: &str, pattern: &str) -> bool {
     if key.eq_ignore_ascii_case(pattern) {
         return true;
     }
-    if !pattern.contains(':')
-        && let Some((_, name)) = key.split_once(':')
-    {
-        return name.eq_ignore_ascii_case(pattern);
+    let Some((key_group, name)) = key.split_once(':') else {
+        return false;
+    };
+    match pattern.split_once(':') {
+        None => name.eq_ignore_ascii_case(pattern),
+        Some((pattern_group, pattern_name)) => {
+            // Only the XMP namespace groups get the family-0 fallback: they
+            // are the keys that moved from `XMP:` to `XMP-<ns>:`, and
+            // widening it to e.g. `EXIF:` -> `IFD0:` would change which tags
+            // an existing pattern selects.
+            name.eq_ignore_ascii_case(pattern_name)
+                && (key_group.eq_ignore_ascii_case(pattern_group)
+                    || (key_group.starts_with("XMP-") && pattern_group.eq_ignore_ascii_case("XMP")))
+        }
     }
-    false
 }
 
 /// Shifts date/time tags in a file's metadata.
@@ -802,6 +813,18 @@ mod tests {
         // Prefixed pattern must match the whole key
         assert!(key_matches_pattern("XMP:CreateDate", "xmp:createdate"));
         assert!(!key_matches_pattern("PDF:CreateDate", "XMP:CreateDate"));
+        // ... or its family-0 group: XMP properties are keyed by their
+        // family-1 namespace group (`XMP-xmp`), and `XMP:CreateDate` must
+        // still select them, as `-XMP:CreateDate` does in ExifTool.
+        assert!(key_matches_pattern("XMP-xmp:CreateDate", "XMP:CreateDate"));
+        assert!(key_matches_pattern(
+            "XMP-xmp:CreateDate",
+            "XMP-xmp:CreateDate"
+        ));
+        assert!(!key_matches_pattern(
+            "XMP-xmp:CreateDate",
+            "XMP-exif:CreateDate"
+        ));
         // Name-only mismatch
         assert!(!key_matches_pattern("XMP:ModifyDate", "CreateDate"));
     }

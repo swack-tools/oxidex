@@ -40,7 +40,7 @@ use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 ///
 /// # Returns
 ///
-/// - `Ok(MetadataMap)`: Extracted XMP metadata with "XMP:" prefix
+/// - `Ok(MetadataMap)`: Extracted XMP metadata keyed by family-1 group (`XMP-dc:Creator`)
 /// - `Err(ExifToolError)`: Parse error or I/O error
 ///
 /// # XMP Packet Detection

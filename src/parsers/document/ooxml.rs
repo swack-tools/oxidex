@@ -802,10 +802,10 @@ fn add_docx_tag_aliases(metadata: &mut MetadataMap) {
         ("OOXML:ModifyDate", "DOCX:Modified"),
         ("OOXML:Words", "DOCX:WordCount"),
         ("OOXML:Pages", "DOCX:PageCount"),
-        ("OOXML:Title", "XMP:Title"),
-        ("OOXML:Subject", "XMP:Subject"),
-        ("OOXML:Creator", "XMP:Creator"),
-        ("OOXML:Description", "XMP:Description"),
+        ("OOXML:Title", "XMP-dc:Title"),
+        ("OOXML:Subject", "XMP-dc:Subject"),
+        ("OOXML:Creator", "XMP-dc:Creator"),
+        ("OOXML:Description", "XMP-dc:Description"),
     ];
 
     // Clone existing tags and create aliases with DOCX prefix
@@ -1457,10 +1457,10 @@ mod tests {
         ] {
             assert_eq!(
                 metadata
-                    .get(&format!("XMP:{name}"))
+                    .get(&format!("XMP-dc:{name}"))
                     .and_then(TagValue::as_string),
                 Some(expected),
-                "XMP:{name}"
+                "XMP-dc:{name}"
             );
         }
     }

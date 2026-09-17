@@ -66,8 +66,9 @@ use quick_xml::events::{BytesStart, Event};
 ///
 /// # Returns
 ///
-/// Vector of (tag_name, value) pairs where tag_name includes namespace
-/// prefix in the format "XMP:PropertyName" (e.g., "XMP:Creator", "XMP:Rights").
+/// Vector of (tag_name, value) pairs where tag_name carries ExifTool's
+/// family-1 group, `XMP-<prefix>:PropertyName` (e.g. "XMP-dc:Creator",
+/// "XMP-xmp:Rating"), or plain `XMP:` for a property with no namespace.
 ///
 /// # Errors
 ///
@@ -89,7 +90,7 @@ use quick_xml::events::{BytesStart, Event};
 ///
 /// let result = parse_xmp(xml).unwrap();
 /// assert_eq!(result.len(), 1);
-/// assert_eq!(result[0], ("XMP:Creator".to_string(), "John Doe".to_string()));
+/// assert_eq!(result[0], ("XMP-xmp:Creator".to_string(), "John Doe".to_string()));
 /// ```
 pub fn parse_xmp(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     Ok(parse_xmp_typed(xml_bytes)?
@@ -412,7 +413,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // fields from every structure into list-valued AboutCvTerm tags.
     let (about_cv_term_cv_ids, about_cv_term_names) = extract_about_cv_term_values(xml_bytes)?;
     if !about_cv_term_cv_ids.is_empty() {
-        const TAG: &str = "XMP:AboutCvTermCvId";
+        const TAG: &str = "XMP-iptcExt:AboutCvTermCvId";
 
         // Avoid duplicate output if generic structured-property support is
         // added later.
@@ -423,7 +424,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     }
 
     if !about_cv_term_names.is_empty() {
-        const TAG: &str = "XMP:AboutCvTermName";
+        const TAG: &str = "XMP-iptcExt:AboutCvTermName";
 
         // Avoid duplicate output if generic structured-property support is
         // added later.
@@ -494,7 +495,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // JobRef tag ExifTool never emits.
     let job_ref_fields = extract_job_ref_fields(xml_bytes)?;
     if !job_ref_fields.is_empty() {
-        results.retain(|(tag, _)| tag != "XMP:JobRef");
+        results.retain(|(tag, _)| tag != "XMP-xmpBJ:JobRef");
         for (tag, value) in &job_ref_fields {
             if !results.iter().any(|(t, _)| t == tag) {
                 results.push((tag.clone(), value.clone()));
@@ -541,13 +542,11 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         results.push((tag, value));
     }
 
-    // XMP's reported tag name is derived from the namespace URI, not the XML
-    // prefix.  Two different custom namespaces can therefore collapse onto
-    // the same generic `XMP:<name>` tag when a prefix is rebound in a later
-    // rdf:Description.  ExifTool registers the first such mapping (XMP6.xmp:
-    // fish/Test -> trout, then feline/Test -> tabby) and retains `trout`.
-    // Keep the first emitted value too, rather than letting a downstream
-    // MetadataMap insertion silently overwrite it.
+    // The passes above can report the same tag more than once; keep the first
+    // emission rather than letting a downstream MetadataMap insertion
+    // silently overwrite it. Distinct namespaces no longer collide here: a
+    // rebound prefix gets its own group (XMP6.xmp: `XMP-xxxx:Test` trout and
+    // `XMP-tmp0:Test` tabby, as ExifTool reports).
     let mut emitted_tags = std::collections::HashSet::new();
     results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
 
@@ -559,7 +558,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // a chance to see -- and rewrite -- the raw base64 text.
     let raw_hdrp_makernote = results
         .iter()
-        .find(|(tag, _)| tag == "XMP:HDRPlusMakerNote")
+        .find(|(tag, _)| tag == "XMP-GCamera:HDRPlusMakerNote")
         .map(|(_, value)| value.clone());
 
     // Tactical carriage for Canon.pm:10145-10175's CalcSensorDiag: the
@@ -902,12 +901,13 @@ fn extract_artwork_title_values(xml_bytes: &[u8]) -> Result<Vec<(String, String)
                 {
                     // Emit base tag with x-default value
                     if let Some(ref default_val) = x_default_value {
-                        results.push(("XMP:ArtworkTitle".to_string(), default_val.clone()));
+                        results.push(("XMP-iptcExt:ArtworkTitle".to_string(), default_val.clone()));
                     }
                     // Emit language-qualified tags
                     for (lang, val) in &lang_values {
                         if lang != "x-default" {
-                            results.push((format!("XMP:ArtworkTitle-{}", lang), val.clone()));
+                            results
+                                .push((format!("XMP-iptcExt:ArtworkTitle-{}", lang), val.clone()));
                         }
                     }
                     ao_title_depth = None;
@@ -1179,9 +1179,9 @@ fn derived_from_field_tag(
     st_ref_namespace: &str,
 ) -> Option<&'static str> {
     if is_property_in_namespace(qname, "documentID", st_ref_namespace, resolver) {
-        Some("XMP:DerivedFromDocumentID")
+        Some("XMP-xmpMM:DerivedFromDocumentID")
     } else if is_property_in_namespace(qname, "instanceID", st_ref_namespace, resolver) {
-        Some("XMP:DerivedFromInstanceID")
+        Some("XMP-xmpMM:DerivedFromInstanceID")
     } else {
         None
     }
@@ -1275,6 +1275,10 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     let mut description_depth: Option<usize> = None;
     let mut struct_depth: Option<usize> = None;
     let mut struct_name = String::new();
+    // Family-1 group of the struct property: ExifTool files a flattened
+    // field under the namespace of the first property contributing to the
+    // tag name (XMP.pm GetXMPTagID), i.e. the struct's own.
+    let mut struct_group = String::new();
     let mut field_depth: Option<usize> = None;
     let mut field_name = String::new();
     let mut field_text = String::new();
@@ -1300,6 +1304,7 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                 {
                     struct_depth = Some(depth);
                     struct_name = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
+                    struct_group = resolver.group_for_qname(&tag_name);
                 } else if let Some(sd) = struct_depth {
                     if field_depth.is_none()
                         && depth == sd + 1
@@ -1352,14 +1357,14 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
                     if lang_values.is_empty() {
                         let value = field_text.trim().to_string();
                         if !value.is_empty() {
-                            results.push((format!("XMP:{reported}"), value));
+                            results.push((format!("{struct_group}:{reported}"), value));
                         }
                     } else {
                         for (lang, value) in &lang_values {
                             let tag = if lang == "x-default" {
-                                format!("XMP:{reported}")
+                                format!("{struct_group}:{reported}")
                             } else {
-                                format!("XMP:{reported}-{lang}")
+                                format!("{struct_group}:{reported}-{lang}")
                             };
                             // ExifTool keeps every entry of a List-valued
                             // lang-alt (XMP5.xmp has two en-US entries for
@@ -1415,6 +1420,26 @@ fn extract_top_level_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Stri
     Ok(results)
 }
 
+/// Schemas whose flattened list-struct fields keep every repeated value (see
+/// `container_allows_repeated_fields` in [`extract_list_struct_values`]).
+///
+/// This is the set the retired `namespace_mapping` table happened to know
+/// (dc, xmp, xmpMM, xmpRights, exif, tiff, photoshop, Iptc4xmpCore,
+/// Iptc4xmpExt, plus), preserved as-is so that the group rework does not also
+/// change which repeated values this pass keeps.
+const LIST_STRUCT_REPEAT_SCHEMAS: [&str; 10] = [
+    "http://purl.org/dc/elements/1.1/",
+    "http://ns.adobe.com/xap/1.0/",
+    "http://ns.adobe.com/xap/1.0/mm/",
+    "http://ns.adobe.com/xap/1.0/rights/",
+    "http://ns.adobe.com/exif/1.0/",
+    "http://ns.adobe.com/tiff/1.0/",
+    "http://ns.adobe.com/photoshop/1.0/",
+    "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/",
+    "http://iptc.org/std/Iptc4xmpExt/2008-02-29/",
+    "http://ns.useplus.org/ldf/xmp/1.0/",
+];
+
 /// Flattens structures reached through an `rdf:Bag`/`rdf:Seq` of
 /// `rdf:li rdf:parseType="Resource"`.
 ///
@@ -1454,6 +1479,9 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
     let mut description_depth: Option<usize> = None;
     let mut container_depth: Option<usize> = None;
     let mut container_name = String::new();
+    // Family-1 group of the container property (the first property that
+    // contributes to every flattened name below it).
+    let mut container_group = String::new();
     // ExifTool has `List` declarations for registered XMP schemas, but an
     // unknown schema is handled generically: repeated flattened fields keep
     // the first value (XMP4.xmp's test:StructList2Item1/Item2).  Track this
@@ -1507,13 +1535,11 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     if is_container_candidate {
                         let local = ucfirst(NamespaceResolver::extract_local_name(&tag_name));
                         container_depth = Some(depth);
+                        container_group = resolver.group_for_qname(&tag_name);
                         container_allows_repeated_fields =
                             NamespaceResolver::extract_prefix(&tag_name)
                                 .and_then(|prefix| resolver.resolve_prefix(prefix))
-                                .is_some_and(|uri| {
-                                    super::namespace_mapping::namespace_to_family(uri).is_some()
-                                        || uri == "http://ns.adobe.com/xap/1.0/mm/"
-                                });
+                                .is_some_and(|uri| LIST_STRUCT_REPEAT_SCHEMAS.contains(&uri));
                         container_name = if is_flat_name_suppressed(&local) {
                             String::new()
                         } else {
@@ -1562,7 +1588,8 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
                     // the container is the whole property, which the ordinary
                     // RDF pass already reports.
                     if !value.is_empty() && !path.is_empty() {
-                        let flat_id = format!("{}{}", container_name, path.join(""));
+                        let flat_id =
+                            format!("{}:{}{}", container_group, container_name, path.join(""));
                         push_value(
                             flat_id,
                             value,
@@ -1598,7 +1625,10 @@ fn extract_list_struct_values(xml_bytes: &[u8]) -> Result<Vec<(String, Vec<Strin
 
     Ok(collected
         .into_iter()
-        .map(|(flat_id, values, _)| (format!("XMP:{}", exiftool_flat_tag_name(&flat_id)), values))
+        .map(|(flat_id, values, _)| {
+            let (group, id) = flat_id.split_once(':').unwrap_or(("XMP", &flat_id));
+            (format!("{group}:{}", exiftool_flat_tag_name(id)), values)
+        })
         .collect())
 }
 
@@ -1728,7 +1758,7 @@ fn extract_plus_sequence_field(
     if names.is_empty() {
         Ok(Vec::new())
     } else {
-        Ok(vec![(format!("XMP:{field}"), names.join(", "))])
+        Ok(vec![(format!("XMP-plus:{field}"), names.join(", "))])
     }
 }
 
@@ -1850,7 +1880,7 @@ fn extract_job_ref_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String)>> {
     Ok(collected
         .into_iter()
         .filter(|(_, values)| !values.is_empty())
-        .map(|(tag, values)| (format!("XMP:{tag}"), values.join(", ")))
+        .map(|(tag, values)| (format!("XMP-xmpBJ:{tag}"), values.join(", ")))
         .collect())
 }
 
@@ -2404,7 +2434,7 @@ mod legacy_adobe_xmp_tests {
         // every file an Adobe toolkit older than 2004 wrote.
         let results = parse_xmp(LEGACY_PACKET).unwrap();
         assert_eq!(
-            value_of(&results, "XMP:XMPToolkit").as_deref(),
+            value_of(&results, "XMP-x:XMPToolkit").as_deref(),
             Some("XMP toolkit 2.8.2-33, framework 1.5")
         );
     }
@@ -2416,7 +2446,7 @@ mod legacy_adobe_xmp_tests {
         // rdf:Description, so bare `about` IS `rdf:about`.
         let results = parse_xmp(LEGACY_PACKET).unwrap();
         assert_eq!(
-            value_of(&results, "XMP:About").as_deref(),
+            value_of(&results, "XMP-rdf:About").as_deref(),
             Some("uuid:c197d41e-f8f7-11d9-b03e-c023c3939af5")
         );
     }
@@ -2428,12 +2458,12 @@ mod legacy_adobe_xmp_tests {
         // not something ExifTool ever emits, so it must not survive alongside.
         let results = parse_xmp(LEGACY_PACKET).unwrap();
         assert_eq!(
-            value_of(&results, "XMP:JobRefName").as_deref(),
+            value_of(&results, "XMP-xmpBJ:JobRefName").as_deref(),
             Some("This isn't a job"),
             "the &apos; entity must survive as an apostrophe"
         );
         assert!(
-            value_of(&results, "XMP:JobRef").is_none(),
+            value_of(&results, "XMP-xmpBJ:JobRef").is_none(),
             "the struct container must not be reported next to its flattened field"
         );
     }
@@ -2452,11 +2482,11 @@ mod legacy_adobe_xmp_tests {
             </x:xmpmeta>"#;
         let results = parse_xmp(modern).unwrap();
         assert_eq!(
-            value_of(&results, "XMP:XMPToolkit").as_deref(),
+            value_of(&results, "XMP-x:XMPToolkit").as_deref(),
             Some("Image::ExifTool 12.46")
         );
         assert_eq!(
-            value_of(&results, "XMP:About").as_deref(),
+            value_of(&results, "XMP-rdf:About").as_deref(),
             Some("uuid:modern")
         );
     }
@@ -2474,9 +2504,7 @@ mod legacy_adobe_xmp_tests {
             </x:xmpmeta>"#;
         let results = parse_xmp(plain).unwrap();
         assert!(
-            results
-                .iter()
-                .all(|(tag, _)| !tag.starts_with("XMP:JobRef")),
+            results.iter().all(|(tag, _)| !tag.contains(":JobRef")),
             "found unexpected JobRef tags: {results:?}"
         );
     }
@@ -2515,12 +2543,12 @@ mod about_cv_term_tests {
         let result = parse_xmp(xml).unwrap();
         let cv_ids: Vec<_> = result
             .iter()
-            .filter(|(tag, _)| tag == "XMP:AboutCvTermCvId")
+            .filter(|(tag, _)| tag == "XMP-iptcExt:AboutCvTermCvId")
             .map(|(_, value)| value.as_str())
             .collect();
         let names: Vec<_> = result
             .iter()
-            .filter(|(tag, _)| tag == "XMP:AboutCvTermName")
+            .filter(|(tag, _)| tag == "XMP-iptcExt:AboutCvTermName")
             .map(|(_, value)| value.as_str())
             .collect();
 
@@ -2534,7 +2562,7 @@ mod about_cv_term_tests {
         assert_eq!(
             typed
                 .iter()
-                .find(|(tag, _)| tag == "XMP:AboutCvTermCvId")
+                .find(|(tag, _)| tag == "XMP-iptcExt:AboutCvTermCvId")
                 .map(|(_, value)| value),
             Some(&XmpValue::List(vec![
                 "1".to_string(),
@@ -2545,7 +2573,7 @@ mod about_cv_term_tests {
         assert_eq!(
             typed
                 .iter()
-                .find(|(tag, _)| tag == "XMP:AboutCvTermName")
+                .find(|(tag, _)| tag == "XMP-iptcExt:AboutCvTermName")
                 .map(|(_, value)| value),
             Some(&XmpValue::List(vec![
                 "one".to_string(),
@@ -2608,7 +2636,7 @@ fn extract_xmpmeta_attributes(
 
             // Only add non-empty XMPToolkit values
             if !value.trim().is_empty() {
-                results.push(("XMP:XMPToolkit".to_string(), value.trim().to_string()));
+                results.push(("XMP-x:XMPToolkit".to_string(), value.trim().to_string()));
             }
         }
     }
@@ -2658,7 +2686,7 @@ fn extract_description_attributes(
             // An empty rdf:about is the "no subject URI" default every writer
             // emits; ExifTool reports no About tag for it.
             if !value.trim().is_empty() {
-                results.push(("XMP:About".to_string(), value.trim().to_string()));
+                results.push(("XMP-rdf:About".to_string(), value.trim().to_string()));
             }
             continue;
         }
@@ -2894,16 +2922,16 @@ fn exiftool_property_name_for_uri<'a>(uri: &str, local: &'a str) -> &'a str {
 /// XMP properties ExifTool decodes from base64 before printing. Both are
 /// flagged `Binary => 1` on top of a `ValueConv => DecodeBase64`, so the
 /// reported length is the DECODED byte count (Google.pm, GImage/GDepth).
-const BASE64_DECODED_BINARY_TAGS: [&str; 2] = ["XMP:ImageData", "XMP:DepthImage"];
+const BASE64_DECODED_BINARY_TAGS: [&str; 2] = ["XMP-GImage:ImageData", "XMP-GDepth:DepthImage"];
 
 /// XMP properties flagged `Binary => 1` with NO ValueConv: the value stays the
 /// base64 text and ExifTool prints the length of that text, not of the bytes it
 /// encodes. GooglePixel6a.jpg's `GCamera:hdrp_makernote` is 79648 characters
 /// long and ExifTool reports 79648 bytes, where the decoded payload is 59734.
 const RAW_BINARY_TAGS: [&str; 3] = [
-    "XMP:HDRPMakerNote",
-    "XMP:HDRPlusMakerNote",
-    "XMP:ShotLogData",
+    "XMP-GCamera:HDRPMakerNote",
+    "XMP-GCamera:HDRPlusMakerNote",
+    "XMP-GCamera:ShotLogData",
 ];
 
 /// Renders a base64 XMP property the way ExifTool renders a binary tag.
@@ -2925,72 +2953,40 @@ fn base64_binary_placeholder(value: &str) -> Option<String> {
 
 /// Formats a tag name to match ExifTool's XMP output conventions.
 ///
-/// ExifTool uses a simplified "XMP:" prefix for most common XMP properties,
-/// regardless of their namespace. This function uses namespace URI resolution
-/// to determine the correct family prefix.
-///
-/// XMP properties are returned with these prefixes:
-/// - dc:title -> XMP:Title (Dublin Core uses simplified XMP: prefix and Title-case)
-/// - dc:rights -> XMP:Rights (Dublin Core uses simplified XMP: prefix and Title-case)
-/// - xmp:Creator -> XMP:Creator (Core XMP uses simplified XMP: prefix)
-/// - exif:Make -> XMP-exif:Make (EXIF namespace uses XMP-exif: prefix)
-/// - tiff:Model -> XMP-tiff:Model (TIFF namespace uses XMP-tiff: prefix)
+/// The group is ExifTool's family-1 `XMP-<prefix>`, where the prefix is the
+/// one ExifTool tames the property's namespace to within this packet
+/// ([`NamespaceResolver::group_for_prefix`]): `dc:title` -> `XMP-dc:Title`,
+/// `xap:CreateDate` -> `XMP-xmp:CreateDate`, `Iptc4xmpCore:Location` ->
+/// `XMP-iptcCore:Location`. A property with no prefix stays in plain `XMP`.
 fn format_tag_name(qname: &str, resolver: &NamespaceResolver) -> String {
-    use super::namespace_mapping::namespace_to_family;
-
     let mut local_name = NamespaceResolver::extract_local_name(qname).to_string();
     // XMP encodes otherwise-invalid property-name characters as U+2182 plus
     // four hexadecimal digits. ExifTool's generated tag ID drops the marker
     // but retains those digits (XMP3.xmp).
     local_name.retain(|ch| ch != '\u{2182}');
 
-    // Extract namespace prefix from the qualified name
-    if let Some(prefix) = NamespaceResolver::extract_prefix(qname) {
-        // Resolve the namespace URI from the prefix
-        let namespace_uri = resolver.resolve_prefix(prefix);
-        let family_prefix = if let Some(namespace_uri) = namespace_uri {
-            // Use namespace mapping to get ExifTool family prefix
-            namespace_to_family(namespace_uri).unwrap_or("XMP")
-        } else {
-            // Unknown namespace - use generic XMP prefix
-            "XMP"
-        };
-
-        // Schemas oxidex files under the plain XMP family need the rename
-        // applied on the raw local name, before capitalization: Google writes
-        // `hdrp_makernote`, not `Hdrp_makernote`.
-        if let Some(uri) = namespace_uri {
-            let renamed = exiftool_property_name_for_uri(uri, &local_name);
-            if renamed != local_name {
-                return format!("{}:{}", family_prefix, renamed);
-            }
+    let group = resolver.group_for_qname(qname);
+    if let Some(uri) =
+        NamespaceResolver::extract_prefix(qname).and_then(|prefix| resolver.resolve_prefix(prefix))
+    {
+        // Renames keyed on the namespace URI apply to the raw local name,
+        // before capitalization: Google writes `hdrp_makernote`, not
+        // `Hdrp_makernote`.
+        let renamed = exiftool_property_name_for_uri(uri, &local_name);
+        if renamed != local_name {
+            return format!("{group}:{renamed}");
         }
-
-        // XMP.pm reports exif:PixelYDimension as ExifImageHeight in the
-        // generic XMP family rather than under XMP-exif (XMP.xmp).
-        if family_prefix == "XMP-exif" && local_name == "PixelYDimension" {
-            return "XMP:ExifImageHeight".to_string();
-        }
-
-        // ExifTool capitalizes the first letter of all XMP property names
-        // to create consistent PascalCase tag names (e.g., album → Album)
-        if !local_name.is_empty() {
-            local_name = capitalize_first_letter(&local_name);
-        }
-
-        // Some properties are reported by ExifTool under a different name.
-        let reported = exiftool_property_name(family_prefix, &local_name);
-
-        // Format with the appropriate family prefix
-        format!("{}:{}", family_prefix, reported)
-    } else {
-        // No namespace prefix - use generic "XMP:" prefix
-        // Still capitalize to match ExifTool's PascalCase convention
-        if !local_name.is_empty() {
-            local_name = capitalize_first_letter(&local_name);
-        }
-        format!("XMP:{}", local_name)
     }
+
+    // ExifTool capitalizes the first letter of all XMP property names
+    // to create consistent PascalCase tag names (e.g., album → Album)
+    if !local_name.is_empty() {
+        local_name = capitalize_first_letter(&local_name);
+    }
+
+    // Some properties are reported by ExifTool under a different name.
+    let reported = exiftool_property_name(&group, &local_name);
+    format!("{group}:{reported}")
 }
 
 /// Capitalizes the first letter of a string
@@ -3051,7 +3047,7 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
 
     // XMP.pdf::Trapped removes one leading PDF name slash before its
     // True/False/Unknown PrintConv (ExifTool XMP.pm:1232-1237).
-    if tag == "XMP:Trapped" {
+    if tag == "XMP-pdf:Trapped" {
         return value.strip_prefix('/').unwrap_or(value).to_string();
     }
 
@@ -4198,10 +4194,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rebound_custom_prefix_keeps_the_first_generic_xmp_tag() {
+    fn rebound_custom_prefix_gets_a_tmp_prefix_of_its_own() {
         // ExifTool's XMP6.xmp fixture binds `xxxx` first to a fish schema,
-        // then to a feline schema. `exiftool -G1 -s XMP6.xmp` emits only
-        // `XMP-xxxx:Test : trout`.
+        // then to a feline schema. XMP.pm:3947-3951 gives the second URI the
+        // temporary prefix `tmp0`, so `exiftool -a -G1 -s XMP6.xmp` (pinned
+        // 13.59) emits both `[XMP-xxxx] Test : trout` and
+        // `[XMP-tmp0] Test : tabby`.
         let xml = br#"
             <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
               <rdf:Description xmlns:xxxx="http://testtag.com/fish/1.0/">
@@ -4215,7 +4213,10 @@ mod tests {
 
         assert_eq!(
             parse_xmp(xml).unwrap(),
-            vec![("XMP:Test".to_string(), "trout".to_string())]
+            vec![
+                ("XMP-xxxx:Test".to_string(), "trout".to_string()),
+                ("XMP-tmp0:Test".to_string(), "tabby".to_string()),
+            ]
         );
     }
 
@@ -4255,7 +4256,11 @@ mod tests {
         assert_eq!(value("XMP-plus:Custom1"), Some("cu1, cu2, cu3"), "{tags:?}");
         assert_eq!(value("XMP-plus:Custom1-de"), Some("de1, de3"));
         assert_eq!(value("XMP-plus:Custom1-fr"), Some("fr1, , fr3"));
-        assert!(!tags.iter().any(|(name, _)| name.starts_with("XMP:Custom1")));
+        assert!(
+            !tags
+                .iter()
+                .any(|(name, _)| name.ends_with(":Custom1") && name != "XMP-plus:Custom1")
+        );
 
         // PLUS.pm defines Custom1 as a Bag. `exiftool -json XMP9.xmp`
         // therefore preserves each language's entries as an array, including
@@ -4488,48 +4493,60 @@ mod tests {
     #[test]
     fn photomechanic_color_class_names_its_numbers() {
         // PhotoMechanic.pm:23-33 (%colorClasses).
-        assert_eq!(format_xmp_value("XMP:ColorClass", "0"), "0 (None)");
-        assert_eq!(format_xmp_value("XMP:ColorClass", "6"), "6 (Typical alt)");
-        assert_eq!(format_xmp_value("XMP:ColorClass", "8"), "8 (Trash)");
+        assert_eq!(
+            format_xmp_value("XMP-photomech:ColorClass", "0"),
+            "0 (None)"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-photomech:ColorClass", "6"),
+            "6 (Typical alt)"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-photomech:ColorClass", "8"),
+            "8 (Trash)"
+        );
         // Nothing is invented past the end of ExifTool's table.
-        assert_eq!(format_xmp_value("XMP:ColorClass", "9"), "9");
+        assert_eq!(format_xmp_value("XMP-photomech:ColorClass", "9"), "9");
     }
 
     #[test]
     fn photomechanic_tagged_is_the_xmp_boolean_only() {
         // PhotoMechanic.pm:133 -- PrintConv => { False => 'No', True => 'Yes' }.
-        assert_eq!(format_xmp_value("XMP:Tagged", "True"), "Yes");
-        assert_eq!(format_xmp_value("XMP:Tagged", "False"), "No");
+        assert_eq!(format_xmp_value("XMP-photomech:Tagged", "True"), "Yes");
+        assert_eq!(format_xmp_value("XMP-photomech:Tagged", "False"), "No");
         // ExifTool has no entry for 0/1, so neither do we.
-        assert_eq!(format_xmp_value("XMP:Tagged", "0"), "0");
-        assert_eq!(format_xmp_value("XMP:Tagged", "1"), "1");
+        assert_eq!(format_xmp_value("XMP-photomech:Tagged", "0"), "0");
+        assert_eq!(format_xmp_value("XMP-photomech:Tagged", "1"), "1");
     }
 
     #[test]
     fn photomechanic_prefs_names_its_four_fields() {
         // PhotoMechanic.pm:120-127.
         assert_eq!(
-            format_xmp_value("XMP:Prefs", "0:6:5:003344"),
+            format_xmp_value("XMP-photomech:Prefs", "0:6:5:003344"),
             "Tagged:0, ColorClass:6, Rating:5, FrameNum:003344"
         );
         // The first three captures are `\d+`; anything else is left alone.
-        assert_eq!(format_xmp_value("XMP:Prefs", "0:6:5"), "0:6:5");
-        assert_eq!(format_xmp_value("XMP:Prefs", "a:b:c:d"), "a:b:c:d");
+        assert_eq!(format_xmp_value("XMP-photomech:Prefs", "0:6:5"), "0:6:5");
+        assert_eq!(
+            format_xmp_value("XMP-photomech:Prefs", "a:b:c:d"),
+            "a:b:c:d"
+        );
     }
 
     #[test]
     fn photomechanic_time_created_uses_exif_time_conversion() {
         // PhotoMechanic.pm:134-140 -> Exif.pm:6085-6094 (ExifTime).
         assert_eq!(
-            format_xmp_value("XMP:TimeCreated", "062751-0500"),
+            format_xmp_value("XMP-photomech:TimeCreated", "062751-0500"),
             "06:27:51-05:00"
         );
         assert_eq!(
-            format_xmp_value("XMP:TimeCreated", "10 30 55+0500"),
+            format_xmp_value("XMP-photomech:TimeCreated", "10 30 55+0500"),
             "10:30:55+05:00"
         );
         assert_eq!(
-            format_xmp_value("XMP:TimeCreated", "not-a-time"),
+            format_xmp_value("XMP-photomech:TimeCreated", "not-a-time"),
             "not-a-time"
         );
     }
@@ -4545,7 +4562,7 @@ mod tests {
             crate::core::operations::read_metadata(path).expect("PhotoMechanic JPEG parses");
 
         assert_eq!(
-            metadata.get_string("XMP:TimeCreated"),
+            metadata.get_string("XMP-photomech:TimeCreated"),
             Some("06:27:51-05:00")
         );
     }
@@ -4655,11 +4672,11 @@ mod tests {
         let tags = parse_xmp(xml).expect("parses PDF Trapped property");
         assert_eq!(
             tags.iter()
-                .find(|(name, _)| name == "XMP:Trapped")
+                .find(|(name, _)| name == "XMP-pdf:Trapped")
                 .map(|(_, value)| value.as_str()),
             Some("Unknown")
         );
-        assert_eq!(format_xmp_value("XMP:Trapped", "//Unknown"), "/Unknown");
+        assert_eq!(format_xmp_value("XMP-pdf:Trapped", "//Unknown"), "/Unknown");
     }
 
     #[test]
@@ -4685,14 +4702,14 @@ mod tests {
         // Check that Creator and Rating are present with simplified XMP: prefix
         let creators: Vec<_> = result
             .iter()
-            .filter(|(name, _)| name == "XMP:Creator")
+            .filter(|(name, _)| name == "XMP-xmp:Creator")
             .collect();
         assert_eq!(creators.len(), 1);
         assert_eq!(creators[0].1, "John Doe");
 
         let ratings: Vec<_> = result
             .iter()
-            .filter(|(name, _)| name == "XMP:Rating")
+            .filter(|(name, _)| name == "XMP-xmp:Rating")
             .collect();
         assert_eq!(ratings.len(), 1);
         assert_eq!(ratings[0].1, "5");
@@ -4728,22 +4745,22 @@ mod tests {
 
         // Check for xmp properties with simplified XMP: prefix
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            prop_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:ModifyDate"),
-            "Missing XMP:ModifyDate"
+            prop_names.iter().any(|n| n == "XMP-xmp:ModifyDate"),
+            "Missing XMP-xmp:ModifyDate"
         );
 
         // Check for dc properties (Dublin Core uses simplified XMP: prefix and Title-case)
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Title"),
-            "Missing XMP:Title (dc:title)"
+            prop_names.iter().any(|n| n == "XMP-dc:Title"),
+            "Missing XMP-dc:Title (dc:title)"
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Rights"),
-            "Missing XMP:Rights (dc:rights)"
+            prop_names.iter().any(|n| n == "XMP-dc:Rights"),
+            "Missing XMP-dc:Rights (dc:rights)"
         );
 
         // Check for exif properties (EXIF namespace uses XMP-exif: prefix)
@@ -4819,8 +4836,8 @@ mod tests {
 
         // Should have simple properties but not the complex Bag structure
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
-        assert!(prop_names.iter().any(|n| n == "XMP:Creator"));
-        assert!(prop_names.iter().any(|n| n == "XMP:Title"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Creator"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Title"));
 
         // The Bag contents should not be present as individual items
         assert!(!prop_names.iter().any(|n| n.contains("keyword")));
@@ -4843,7 +4860,7 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[0],
-            ("XMP:Creator".to_string(), "John Doe".to_string())
+            ("XMP-xmp:Creator".to_string(), "John Doe".to_string())
         );
     }
 
@@ -4891,13 +4908,13 @@ mod tests {
         // Should handle properties from both Description blocks
         let creators: Vec<_> = result
             .iter()
-            .filter(|(name, _)| name == "XMP:Creator")
+            .filter(|(name, _)| name == "XMP-xmp:Creator")
             .collect();
         assert_eq!(creators.len(), 1);
 
         let titles: Vec<_> = result
             .iter()
-            .filter(|(name, _)| name == "XMP:Title")
+            .filter(|(name, _)| name == "XMP-dc:Title")
             .collect();
         assert_eq!(titles.len(), 1);
     }
@@ -4920,19 +4937,19 @@ mod tests {
         // Should have XMPToolkit and Creator
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
         assert!(
-            prop_names.iter().any(|n| n == "XMP:XMPToolkit"),
-            "Missing XMP:XMPToolkit. Found: {:?}",
+            prop_names.iter().any(|n| n == "XMP-x:XMPToolkit"),
+            "Missing XMP-x:XMPToolkit. Found: {:?}",
             prop_names
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            prop_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
 
         // Verify XMPToolkit value
         let toolkit = result
             .iter()
-            .find(|(name, _)| name == "XMP:XMPToolkit")
+            .find(|(name, _)| name == "XMP-x:XMPToolkit")
             .map(|(_, v)| v.as_str());
         assert_eq!(toolkit, Some("Image::ExifTool 12.46"));
     }
@@ -4954,19 +4971,19 @@ mod tests {
         // Should have About and Creator
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
         assert!(
-            prop_names.iter().any(|n| n == "XMP:About"),
-            "Missing XMP:About. Found: {:?}",
+            prop_names.iter().any(|n| n == "XMP-rdf:About"),
+            "Missing XMP-rdf:About. Found: {:?}",
             prop_names
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            prop_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
 
         // Verify About value
         let about = result
             .iter()
-            .find(|(name, _)| name == "XMP:About")
+            .find(|(name, _)| name == "XMP-rdf:About")
             .map(|(_, v)| v.as_str());
         assert_eq!(about, Some("uuid:faf5bdd5-ba3d-11da-ad31-d33d75182f1b"));
     }
@@ -4991,13 +5008,13 @@ mod tests {
         // Should have shorthand properties extracted
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
         assert!(
-            prop_names.iter().any(|n| n == "XMP:CreateDate"),
-            "Missing XMP:CreateDate. Found: {:?}",
+            prop_names.iter().any(|n| n == "XMP-xmp:CreateDate"),
+            "Missing XMP-xmp:CreateDate. Found: {:?}",
             prop_names
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:ModifyDate"),
-            "Missing XMP:ModifyDate"
+            prop_names.iter().any(|n| n == "XMP-xmp:ModifyDate"),
+            "Missing XMP-xmp:ModifyDate"
         );
         assert!(
             prop_names.iter().any(|n| n == "XMP-photoshop:DateCreated"),
@@ -5008,7 +5025,7 @@ mod tests {
         // Verify values
         let create_date = result
             .iter()
-            .find(|(name, _)| name == "XMP:CreateDate")
+            .find(|(name, _)| name == "XMP-xmp:CreateDate")
             .map(|(_, v)| v.as_str());
         // `exiftool -G1 -s` on this packet:
         //   [XMP-xmp] CreateDate : 2023:01:15 10:30:00
@@ -5033,22 +5050,22 @@ mod tests {
 
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
         assert!(
-            prop_names.iter().any(|n| n == "XMP:About"),
-            "Missing XMP:About. Found: {:?}",
+            prop_names.iter().any(|n| n == "XMP-rdf:About"),
+            "Missing XMP-rdf:About. Found: {:?}",
             prop_names
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Rating"),
-            "Missing XMP:Rating"
+            prop_names.iter().any(|n| n == "XMP-xmp:Rating"),
+            "Missing XMP-xmp:Rating"
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Label"),
-            "Missing XMP:Label"
+            prop_names.iter().any(|n| n == "XMP-xmp:Label"),
+            "Missing XMP-xmp:Label"
         );
 
         let rating = result
             .iter()
-            .find(|(name, _)| name == "XMP:Rating")
+            .find(|(name, _)| name == "XMP-xmp:Rating")
             .map(|(_, v)| v.as_str());
         assert_eq!(rating, Some("5"));
     }
@@ -5078,35 +5095,35 @@ mod tests {
 
         // XMPToolkit from x:xmpmeta
         assert!(
-            prop_names.iter().any(|n| n == "XMP:XMPToolkit"),
-            "Missing XMP:XMPToolkit. Found: {:?}",
+            prop_names.iter().any(|n| n == "XMP-x:XMPToolkit"),
+            "Missing XMP-x:XMPToolkit. Found: {:?}",
             prop_names
         );
 
         // Shorthand attributes from rdf:Description
         assert!(
-            prop_names.iter().any(|n| n == "XMP:CreateDate"),
-            "Missing XMP:CreateDate"
+            prop_names.iter().any(|n| n == "XMP-xmp:CreateDate"),
+            "Missing XMP-xmp:CreateDate"
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:ModifyDate"),
-            "Missing XMP:ModifyDate"
+            prop_names.iter().any(|n| n == "XMP-xmp:ModifyDate"),
+            "Missing XMP-xmp:ModifyDate"
         );
 
         // Child element properties
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator (dc:creator)"
+            prop_names.iter().any(|n| n == "XMP-dc:Creator"),
+            "Missing XMP-dc:Creator (dc:creator)"
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Title"),
-            "Missing XMP:Title (dc:title)"
+            prop_names.iter().any(|n| n == "XMP-dc:Title"),
+            "Missing XMP-dc:Title (dc:title)"
         );
 
         // Verify XMPToolkit value
         let toolkit = result
             .iter()
-            .find(|(name, _)| name == "XMP:XMPToolkit")
+            .find(|(name, _)| name == "XMP-x:XMPToolkit")
             .map(|(_, v)| v.as_str());
         assert_eq!(toolkit, Some("Adobe XMP Core 5.6-c140"));
     }
@@ -5128,13 +5145,13 @@ mod tests {
         // Should only have Creator, not an empty About
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
         assert!(
-            !prop_names.iter().any(|n| n == "XMP:About"),
-            "Should not include empty XMP:About. Found: {:?}",
+            !prop_names.iter().any(|n| n == "XMP-rdf:About"),
+            "Should not include empty XMP-rdf:About. Found: {:?}",
             prop_names
         );
         assert!(
-            prop_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            prop_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
     }
 
@@ -5292,17 +5309,17 @@ mod tests {
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         // Verify all 6 Dublin Core tags are extracted
-        assert!(prop_names.iter().any(|n| n == "XMP:Title"));
-        assert!(prop_names.iter().any(|n| n == "XMP:Creator"));
-        assert!(prop_names.iter().any(|n| n == "XMP:Subject"));
-        assert!(prop_names.iter().any(|n| n == "XMP:Description"));
-        assert!(prop_names.iter().any(|n| n == "XMP:Language"));
-        assert!(prop_names.iter().any(|n| n == "XMP:Rights"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Title"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Creator"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Subject"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Description"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Language"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Rights"));
 
         // Verify values
         let title = result
             .iter()
-            .find(|(n, _)| n == "XMP:Title")
+            .find(|(n, _)| n == "XMP-dc:Title")
             .map(|(_, v)| v);
         assert_eq!(title, Some(&"My Photo Collection".to_string()));
     }
@@ -5465,7 +5482,7 @@ mod tests {
         let prop_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         // Verify tags from all 4 namespaces are present
-        assert!(prop_names.iter().any(|n| n == "XMP:Title"));
+        assert!(prop_names.iter().any(|n| n == "XMP-dc:Title"));
         assert!(prop_names.iter().any(|n| n == "XMP-photoshop:Caption"));
         assert!(prop_names.iter().any(|n| n == "XMP-tiff:Make"));
         assert!(prop_names.iter().any(|n| n == "XMP-exif:ISO"));
@@ -5580,8 +5597,8 @@ mod top_level_struct_tests {
         "#;
 
         let tags = extract_top_level_struct_values(xml).unwrap();
-        assert_eq!(tag(&tags, "XMP:BareStructItem1"), Some("a1"));
-        assert_eq!(tag(&tags, "XMP:BareStructItem2"), Some("a2"));
+        assert_eq!(tag(&tags, "XMP-test:BareStructItem1"), Some("a1"));
+        assert_eq!(tag(&tags, "XMP-test:BareStructItem2"), Some("a2"));
     }
 
     /// `myXMPns:BTestTag` / `myXMPns:Field1` holds a Bag of lang-alts, which
@@ -5616,15 +5633,18 @@ mod top_level_struct_tests {
         .as_bytes();
 
         let tags = extract_top_level_struct_values(xml).unwrap();
-        assert_eq!(tag(&tags, "XMP:BTestTagField1-en-CA"), Some("eh?"));
-        assert_eq!(tag(&tags, "XMP:BTestTagField1-fr"), Some("ingénieux"));
+        assert_eq!(tag(&tags, "XMP-myXMPns:BTestTagField1-en-CA"), Some("eh?"));
+        assert_eq!(
+            tag(&tags, "XMP-myXMPns:BTestTagField1-fr"),
+            Some("ingénieux")
+        );
         // ExifTool prints en-US twice ("huh?" then "groovy") because the
         // field is List-valued; we keep the first and never emit the tag
         // twice.
-        assert_eq!(tag(&tags, "XMP:BTestTagField1-en-US"), Some("huh?"));
+        assert_eq!(tag(&tags, "XMP-myXMPns:BTestTagField1-en-US"), Some("huh?"));
         assert_eq!(
             tags.iter()
-                .filter(|(t, _)| t == "XMP:BTestTagField1-en-US")
+                .filter(|(t, _)| t == "XMP-myXMPns:BTestTagField1-en-US")
                 .count(),
             1
         );
@@ -5659,9 +5679,7 @@ mod top_level_struct_tests {
 
         let tags = extract_top_level_struct_values(xml).unwrap();
         assert!(
-            !tags
-                .iter()
-                .any(|(t, _)| t.starts_with("XMP:RegionsRegionList")),
+            !tags.iter().any(|(t, _)| t.contains(":RegionsRegionList")),
             "sub-structure leaked into the parent field name: {tags:?}"
         );
     }
@@ -5687,11 +5705,11 @@ mod top_level_struct_tests {
 
         let tags = extract_top_level_struct_values(xml).unwrap();
         assert_eq!(
-            tag(&tags, "XMP:DerivedFromInstanceID"),
+            tag(&tags, "XMP-xmpMM:DerivedFromInstanceID"),
             Some("f0d208df-dc56-11df-95ac-e273561c7691")
         );
         assert_eq!(
-            tag(&tags, "XMP:DerivedFromDocumentID"),
+            tag(&tags, "XMP-xmpMM:DerivedFromDocumentID"),
             Some("adobe:docid:indd:0419e6d7")
         );
     }
@@ -5713,8 +5731,11 @@ mod top_level_struct_tests {
         "#;
 
         let tags = parse_xmp(xml).unwrap();
-        assert_eq!(tag(&tags, "XMP:FlashMode"), Some("Off"));
-        assert_eq!(tag(&tags, "XMP:FlashReturn"), Some("No return detection"));
+        assert_eq!(tag(&tags, "XMP-exif:FlashMode"), Some("Off"));
+        assert_eq!(
+            tag(&tags, "XMP-exif:FlashReturn"),
+            Some("No return detection")
+        );
     }
 
     /// XMP.pm Flash struct PrintConv tables, asserted as literals.
@@ -5761,9 +5782,9 @@ mod top_level_struct_tests {
         "#;
 
         let tags = parse_xmp(xml).unwrap();
-        assert_eq!(tag(&tags, "XMP:FlashFired"), Some("True"));
-        assert_eq!(tag(&tags, "XMP:FlashFunction"), Some("False"));
-        assert_eq!(tag(&tags, "XMP:FlashRedEyeMode"), Some("True"));
+        assert_eq!(tag(&tags, "XMP-exif:FlashFired"), Some("True"));
+        assert_eq!(tag(&tags, "XMP-exif:FlashFunction"), Some("False"));
+        assert_eq!(tag(&tags, "XMP-exif:FlashRedEyeMode"), Some("True"));
     }
 
     /// `%boolConv` asserted as literals, including the spelling ExifTool's own
@@ -5805,17 +5826,23 @@ mod top_level_struct_tests {
         "#;
 
         let tags = extract_top_level_struct_values(xml).unwrap();
-        assert_eq!(tag(&tags, "XMP:CreatorCity"), Some("Amsterdam"));
-        assert_eq!(tag(&tags, "XMP:CreatorCountry"), Some("Netherlands"));
+        assert_eq!(tag(&tags, "XMP-iptcCore:CreatorCity"), Some("Amsterdam"));
         assert_eq!(
-            tag(&tags, "XMP:CreatorAddress"),
+            tag(&tags, "XMP-iptcCore:CreatorCountry"),
+            Some("Netherlands")
+        );
+        assert_eq!(
+            tag(&tags, "XMP-iptcCore:CreatorAddress"),
             Some("Govert Flinkstraat 302hs")
         );
-        assert_eq!(tag(&tags, "XMP:CreatorPostalCode"), Some("1073 CH"));
+        assert_eq!(
+            tag(&tags, "XMP-iptcCore:CreatorPostalCode"),
+            Some("1073 CH")
+        );
         assert!(
             !tags
                 .iter()
-                .any(|(t, _)| t.starts_with("XMP:CreatorContactInfoCi")),
+                .any(|(t, _)| t.contains(":CreatorContactInfoCi")),
             "raw flattened IDs leaked instead of ExifTool names: {tags:?}"
         );
     }
@@ -5859,7 +5886,10 @@ mod top_level_struct_tests {
         "#;
 
         let tags = extract_plus_copyright_owner_name(xml).unwrap();
-        assert_eq!(tag(&tags, "XMP:CopyrightOwnerName"), Some("Phil Harvey"));
+        assert_eq!(
+            tag(&tags, "XMP-plus:CopyrightOwnerName"),
+            Some("Phil Harvey")
+        );
     }
 
     /// The same local name in a foreign namespace must not be mistaken for the
@@ -6006,13 +6036,13 @@ mod top_level_struct_tests {
             "-1"
         );
         // MSImagingV1 (Microsoft Windows Live Photo Gallery) -- unknown
-        // namespace, so oxidex files it under the bare XMP family.
+        // namespace, reported under its own document prefix (`XMP-prefix0`).
         assert_eq!(
-            format_xmp_value("XMP:ExposureCompensation", "0.080000"),
+            format_xmp_value("XMP-prefix0:ExposureCompensation", "0.080000"),
             "0.080000"
         );
         assert_eq!(
-            format_xmp_value("XMP:ExposureCompensation", "0.000000"),
+            format_xmp_value("XMP-prefix0:ExposureCompensation", "0.000000"),
             "0.000000"
         );
     }
@@ -6076,18 +6106,18 @@ mod top_level_struct_tests {
         let tags = extract_list_struct_values(xml).unwrap();
         assert_eq!(
             tags.iter()
-                .find(|(t, _)| t == "XMP:LocationShownCity")
+                .find(|(t, _)| t == "XMP-iptcExt:LocationShownCity")
                 .map(|(_, values)| values.as_slice()),
             Some(["London".to_string(), "Paris".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
-                .find(|(t, _)| t == "XMP:LocationShownCountryCode")
+                .find(|(t, _)| t == "XMP-iptcExt:LocationShownCountryCode")
                 .map(|(_, values)| values.as_slice()),
             Some(["GB".to_string(), "FR".to_string()].as_slice())
         );
         // The container itself is not a flattened tag.
-        assert!(!tags.iter().any(|(t, _)| t == "XMP:LocationShown"));
+        assert!(!tags.iter().any(|(t, _)| t == "XMP-iptcExt:LocationShown"));
 
         // The Iptc4xmpExt table declares LocationShown as a Bag of
         // structures, so `exiftool -json XMP7.xmp` emits arrays rather than
@@ -6096,7 +6126,7 @@ mod top_level_struct_tests {
         assert_eq!(
             typed
                 .iter()
-                .find(|(tag, _)| tag == "XMP:LocationShownCity")
+                .find(|(tag, _)| tag == "XMP-iptcExt:LocationShownCity")
                 .map(|(_, value)| value),
             Some(&XmpValue::List(vec![
                 "London".to_string(),
@@ -6125,13 +6155,13 @@ mod top_level_struct_tests {
         let tags = extract_list_struct_values(xml).unwrap();
         assert_eq!(
             tags.iter()
-                .find(|(tag, _)| tag == "XMP:StructList2Item1")
+                .find(|(tag, _)| tag == "XMP-test:StructList2Item1")
                 .map(|(_, values)| values.as_slice()),
             Some(["c1-1".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
-                .find(|(tag, _)| tag == "XMP:StructList2Item2")
+                .find(|(tag, _)| tag == "XMP-test:StructList2Item2")
                 .map(|(_, values)| values.as_slice()),
             Some(["c2-1".to_string()].as_slice())
         );
@@ -6139,7 +6169,7 @@ mod top_level_struct_tests {
         // unknown-schema duplicate rule must not discard its second list item.
         assert_eq!(
             tags.iter()
-                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .find(|(tag, _)| tag == "XMP-test:StructList2TestList2")
                 .map(|(_, values)| values.as_slice()),
             Some(["y1".to_string(), "y2".to_string()].as_slice())
         );
@@ -6147,7 +6177,7 @@ mod top_level_struct_tests {
             parse_xmp_typed(xml)
                 .unwrap()
                 .iter()
-                .find(|(tag, _)| tag == "XMP:StructList2TestList2")
+                .find(|(tag, _)| tag == "XMP-test:StructList2TestList2")
                 .map(|(_, value)| value.clone()),
             Some(XmpValue::List(vec!["y1".to_string(), "y2".to_string()]))
         );
@@ -6178,13 +6208,13 @@ mod top_level_struct_tests {
         let tags = extract_list_struct_values(xml).unwrap();
         assert_eq!(
             tags.iter()
-                .find(|(t, _)| t == "XMP:ManifestLinkForm")
+                .find(|(t, _)| t == "XMP-xmpMM:ManifestLinkForm")
                 .map(|(_, values)| values.as_slice()),
             Some(["EmbedByReference".to_string()].as_slice())
         );
         assert_eq!(
             tags.iter()
-                .find(|(t, _)| t == "XMP:ManifestReferenceFilePath")
+                .find(|(t, _)| t == "XMP-xmpMM:ManifestReferenceFilePath")
                 .map(|(_, values)| values.as_slice()),
             Some([r"C:\some path\file.ext".to_string()].as_slice())
         );
@@ -6226,6 +6256,9 @@ mod top_level_struct_tests {
         assert_eq!(
             typed
                 .iter()
+                // `http://ns.exiftool.org/EXIF/IFD0/1.0/` names ExifTool's
+                // own static groups, which are not modelled, so the leaf
+                // keeps the plain `XMP` group.
                 .find(|(tag, _)| tag == "XMP:Make")
                 .map(|(_, value)| value.clone()),
             Some(XmpValue::Scalar("NIKON".to_string())),
@@ -6236,15 +6269,13 @@ mod top_level_struct_tests {
         // own (an unfixed build reports XMP:MakeId = "271" here, and
         // XMP:Toolkit = "Image::ExifTool 12.61" from the rdf:Description
         // attribute).
-        for bogus in [
-            "XMP:MakeId",
-            "XMP:MakeDesc",
-            "XMP:MakeVal",
-            "XMP:MakeTagid",
-            "XMP:Toolkit",
-        ] {
+        // Checked by name under any group: `zz` tames to ExifTool's `et`
+        // prefix, so a leaked Toolkit would be keyed `XMP-et:Toolkit`.
+        for bogus in ["MakeId", "MakeDesc", "MakeVal", "MakeTagid", "Toolkit"] {
             assert!(
-                !typed.iter().any(|(tag, _)| tag == bogus),
+                !typed
+                    .iter()
+                    .any(|(tag, _)| tag.rsplit(':').next() == Some(bogus)),
                 "et: control attribute leaked into a tag: {bogus} in {typed:?}"
             );
         }

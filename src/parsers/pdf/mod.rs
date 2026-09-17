@@ -36,7 +36,7 @@
 //! }
 //!
 //! // Access XMP metadata
-//! if let Some(creator) = metadata.get_string("XMP:creator") {
+//! if let Some(creator) = metadata.get_string("XMP-dc:Creator") {
 //!     println!("Creator: {}", creator);
 //! }
 //! # Ok(())

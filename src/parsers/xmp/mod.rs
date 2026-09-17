@@ -35,7 +35,6 @@ pub mod generated_namespaces;
 pub mod generic_xml;
 pub mod google_hdrp;
 pub mod history_parser;
-pub mod namespace_mapping;
 pub mod namespace_resolver;
 pub mod plus_vocab;
 pub mod rdf_parser;
@@ -46,7 +45,6 @@ use crate::error::Result;
 
 // Re-export main parsing function for convenience
 pub use history_parser::{XmpHistoryEntry, parse_xmp_history};
-pub use namespace_mapping::namespace_to_family;
 pub use namespace_resolver::NamespaceResolver;
 pub use rdf_parser::parse_xmp;
 
@@ -81,9 +79,14 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     // OVERHAUL_OXIDEX_PLAN.md, superseded by Step 18).
     let (xmp_tags, rational_forms) = rdf_parser::parse_xmp_typed_with_rational_forms(xmp_data)?;
 
-    // Add all XMP tags to metadata and enrich with core XMP tags for Worker 30
+    // Add every XMP tag exactly as the RDF parser keyed it. (An earlier
+    // "Worker 30" step here also synthesized XMP:CreatorTool from the
+    // XMPToolkit, and XMP:CreationDate/XMP:ModificationDate aliases of
+    // CreateDate/ModifyDate. ExifTool 13.59 emits none of them for a sidecar
+    // -- `exiftool -a -G1 -s t/images/XMP.xmp` has XMP-x:XMPToolkit and
+    // XMP-xmp:CreateDate/ModifyDate and nothing else -- so they were
+    // fabricated tags and are gone.)
     for (key, typed) in xmp_tags {
-        let value = typed.clone().into_joined();
         let stored = match typed {
             rdf_parser::XmpValue::List(values) => {
                 TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
@@ -95,85 +98,6 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
         // which the insert just above guarantees.
         if let Some((_, raw)) = rational_forms.iter().find(|(tag, _)| *tag == key) {
             metadata.set_value_form(key.clone(), raw.clone());
-        }
-
-        // Add Worker 30 core XMP tags based on extracted values
-        // These tags ensure consistent naming for core XMP properties
-        match key.as_str() {
-            // XMP:CreatorTool mapping
-            "XMP:XMPToolkit" | "XMP:CreatorTool" => {
-                if !metadata.contains_key("XMP:CreatorTool") {
-                    metadata.insert(
-                        "XMP:CreatorTool".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:CreationDate mapping
-            "XMP:CreateDate" | "XMP:CreationDate" => {
-                if !metadata.contains_key("XMP:CreationDate") {
-                    metadata.insert(
-                        "XMP:CreationDate".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:ModificationDate mapping
-            "XMP:ModifyDate" | "XMP:ModificationDate" => {
-                if !metadata.contains_key("XMP:ModificationDate") {
-                    metadata.insert(
-                        "XMP:ModificationDate".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:Creator mapping
-            "XMP:Creator" => {
-                // Ensure XMP:Creator is present
-                if !metadata.contains_key("XMP:Creator") {
-                    metadata.insert(
-                        "XMP:Creator".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:Subject mapping
-            "XMP:Subject" => {
-                if !metadata.contains_key("XMP:Subject") {
-                    metadata.insert(
-                        "XMP:Subject".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:Keywords mapping
-            "XMP:Keywords" => {
-                if !metadata.contains_key("XMP:Keywords") {
-                    metadata.insert(
-                        "XMP:Keywords".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:Description mapping
-            "XMP:Description" => {
-                if !metadata.contains_key("XMP:Description") {
-                    metadata.insert(
-                        "XMP:Description".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            // XMP:Rights mapping
-            "XMP:Rights" => {
-                if !metadata.contains_key("XMP:Rights") {
-                    metadata.insert(
-                        "XMP:Rights".to_string(),
-                        TagValue::new_string(value.clone()),
-                    );
-                }
-            }
-            _ => {}
         }
     }
 

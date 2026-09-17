@@ -412,7 +412,11 @@ pub const EXIF_DATE_TAGS: &[&str] = &[
 ///
 /// These XMP date tags should have their ISO 8601 dates converted to
 /// EXIF-style format while preserving subseconds and timezone information.
-pub const XMP_DATE_TAGS: &[&str] = &["XMP:ModifyDate", "XMP:CreateDate", "XMP:MetadataDate"];
+pub const XMP_DATE_TAGS: &[&str] = &[
+    "XMP-xmp:ModifyDate",
+    "XMP-xmp:CreateDate",
+    "XMP-xmp:MetadataDate",
+];
 
 /// Format rational number as ExifTool does
 ///
@@ -1010,9 +1014,9 @@ mod tests {
         assert_eq!(EXIF_DATE_TAGS.len(), 7);
 
         // Verify XMP_DATE_TAGS contains expected entries
-        assert!(XMP_DATE_TAGS.contains(&"XMP:ModifyDate"));
-        assert!(XMP_DATE_TAGS.contains(&"XMP:CreateDate"));
-        assert!(XMP_DATE_TAGS.contains(&"XMP:MetadataDate"));
+        assert!(XMP_DATE_TAGS.contains(&"XMP-xmp:ModifyDate"));
+        assert!(XMP_DATE_TAGS.contains(&"XMP-xmp:CreateDate"));
+        assert!(XMP_DATE_TAGS.contains(&"XMP-xmp:MetadataDate"));
         assert_eq!(XMP_DATE_TAGS.len(), 3);
     }
 }

@@ -569,11 +569,11 @@ mod tests {
         collect_chunk_metadata(annotation.as_bytes(), &mut metadata);
 
         assert_eq!(
-            metadata.get_string("XMP:Title"),
+            metadata.get_string("XMP-dc:Title"),
             Some("DjVu Metadata Sample")
         );
         assert_eq!(
-            metadata.get("XMP:Subject"),
+            metadata.get("XMP-dc:Subject"),
             Some(&TagValue::Array(vec![
                 TagValue::new_string("ExifTool"),
                 TagValue::new_string("Test"),

@@ -131,7 +131,7 @@ fn assemble_extended_xmp(segments: &[Segment]) -> Vec<Vec<u8>> {
 /// # Returns
 ///
 /// Vector of (tag_name, value) tuples where tag_name is in the format
-/// "XMP:PropertyName" (e.g., "XMP:Creator", "XMP:Rating").
+/// "XMP-<prefix>:PropertyName" (e.g., "XMP-dc:Creator", "XMP-xmp:Rating").
 ///
 /// Returns an empty vector if no XMP segments are found (not an error).
 ///
@@ -156,7 +156,7 @@ fn assemble_extended_xmp(segments: &[Segment]) -> Vec<Vec<u8>> {
 ///
 /// // Check for specific XMP tags
 /// for (tag_name, value) in &xmp_tags {
-///     if tag_name == "XMP:Creator" {
+///     if tag_name == "XMP-dc:Creator" {
 ///         println!("Creator: {}", value);
 ///     }
 /// }
@@ -400,16 +400,16 @@ mod tests {
         );
 
         // Check for specific tags with ExifTool-compatible prefixes
-        // Stream 6 changed to use simplified XMP: prefix for common namespaces
+        // Grouped by ExifTool family-1 namespace group (XMP-xmp)
         let has_creator = result
             .iter()
-            .any(|(name, value)| name == "XMP:Creator" && value == "John Doe");
-        assert!(has_creator, "Missing XMP:Creator tag");
+            .any(|(name, value)| name == "XMP-xmp:Creator" && value == "John Doe");
+        assert!(has_creator, "Missing XMP-xmp:Creator tag");
 
         let has_rating = result
             .iter()
-            .any(|(name, value)| name == "XMP:Rating" && value == "5");
-        assert!(has_rating, "Missing XMP:Rating tag");
+            .any(|(name, value)| name == "XMP-xmp:Rating" && value == "5");
+        assert!(has_rating, "Missing XMP-xmp:Rating tag");
     }
 
     #[test]
@@ -477,21 +477,21 @@ mod tests {
         assert!(result.len() >= 4, "Expected at least 4 XMP tags");
 
         // Check that we have properties from all namespaces
-        // Stream 6 changed to use simplified XMP: prefix for common namespaces (xmp, dc)
+        // Grouped by ExifTool family-1 namespace group (XMP-xmp, XMP-dc)
         // but XMP-exif: is kept for specialized exif namespace
         let tag_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Creator"),
-            "Missing XMP:Creator"
+            tag_names.iter().any(|n| n == "XMP-xmp:Creator"),
+            "Missing XMP-xmp:Creator"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Title"),
-            "Missing XMP:Title"
+            tag_names.iter().any(|n| n == "XMP-dc:Title"),
+            "Missing XMP-dc:Title"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP:Rights"),
-            "Missing XMP:Rights"
+            tag_names.iter().any(|n| n == "XMP-dc:Rights"),
+            "Missing XMP-dc:Rights"
         );
         assert!(
             tag_names.iter().any(|n| n == "XMP-exif:Make"),
@@ -530,11 +530,11 @@ mod tests {
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
 
         // Should have tags from both segments
-        // Stream 6 changed to use simplified XMP: prefix for common namespaces
+        // Grouped by ExifTool family-1 namespace group (XMP-xmp, XMP-dc)
         assert!(result.len() >= 2, "Expected tags from both XMP segments");
 
-        let has_creator = result.iter().any(|(name, _)| name == "XMP:Creator");
-        let has_title = result.iter().any(|(name, _)| name == "XMP:Title");
+        let has_creator = result.iter().any(|(name, _)| name == "XMP-xmp:Creator");
+        let has_title = result.iter().any(|(name, _)| name == "XMP-dc:Title");
 
         assert!(has_creator, "Missing tag from first XMP segment");
         assert!(has_title, "Missing tag from second XMP segment");
