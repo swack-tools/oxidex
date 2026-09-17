@@ -17,11 +17,12 @@ This report records exact source and generated-declaration identities. Generated
 
 | Classification | Count |
 | --- | ---: |
-| `blocked_generated_reader_refusal` | 151 |
-| `generated_reader_declaration_unobserved` | 179 |
-| `ifd_schema_declaration_eligible_unobserved` | 3815 |
-| `ifd_schema_declaration_omitted_unobserved` | 1217 |
-| `ifd_schema_declaration_refused_unobserved` | 9563 |
+| `blocked_generated_reader_refusal` | 156 |
+| `generated_reader_declaration_option_gated` | 1123 |
+| `generated_reader_declaration_unobserved` | 778 |
+| `ifd_schema_declaration_eligible_unobserved` | 2888 |
+| `ifd_schema_declaration_omitted_unobserved` | 418 |
+| `ifd_schema_declaration_refused_unobserved` | 9562 |
 | `source_row_not_yet_consumed` | 18562 |
 
 ## Native writability
@@ -62,7 +63,7 @@ A join requires exact `(table full name, raw key, variant index)` and exact publ
 
 ## Source-table progress
 
-Declarations below are authenticated schema facts, not runtime reachability or observed coverage. IFD declarations replay their exact source and, when bound, the expression-oracle ledger. Eligible, omitted and refused schema rows remain separate; schema eligibility does not establish a runtime route. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.
+Declarations below are authenticated schema facts, not runtime reachability or observed coverage. Reader declarations exclude `generated_reader_declaration_option_gated` rows, which ExifTool reaches only through an option OxiDex does not expose. IFD declarations replay their exact source and, when bound, the expression-oracle ledger. Eligible, omitted and refused schema rows remain separate; schema eligibility does not establish a runtime route. Unaccounted rows may have runtime consumers that this join has not indexed. Refusal reasons can overlap; their totals are not an additional row denominator.
 
 | Source table | Source variants | Catalog entries | Reader declarations | Natively writable entries | Writer declarations | Observed read entries | Observed write entries | Refusal reasons |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -382,178 +383,178 @@ Declarations below are authenticated schema facts, not runtime reachability or o
 | Image::ExifTool::GM::mrlh | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::GM::mrlv | 9 | 9 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::GPS::Main | 32 | 32 | 17 | 32 | 0 | 0 | 0 | print_conv: 12; raw_conv: 3; value_conv: 6 |
-| Image::ExifTool::Garmin::AADAccelFeatures | 5 | 5 | 3 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 1 |
-| Image::ExifTool::Garmin::AccelerometerData | 11 | 11 | 10 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::Activity | 7 | 7 | 5 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::ActivityMetrics | 19 | 19 | 6 | 0 | 0 | 0 | 0 | print_conv: 11; value_conv: 6 |
-| Image::ExifTool::Garmin::AlarmSettings | 8 | 8 | 5 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 2 |
-| Image::ExifTool::Garmin::Alert | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::AntChannelID | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::AntRx | 5 | 5 | 4 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::AntTx | 5 | 5 | 4 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::AviationAttitude | 11 | 11 | 10 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::BarometerData | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::BeatIntervals | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::BestEffort | 5 | 5 | 2 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::BikeProfile | 31 | 31 | 25 | 0 | 0 | 0 | 0 | print_conv: 6; value_conv: 6 |
-| Image::ExifTool::Garmin::BloodPressure | 10 | 10 | 3 | 0 | 0 | 0 | 0 | print_conv: 7 |
-| Image::ExifTool::Garmin::CPEStatus | 3 | 3 | 1 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::CadenceZone | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::CameraEvent | 4 | 4 | 3 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::Capabilities | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::ChronoShotData | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::ChronoShotSession | 7 | 7 | 2 | 0 | 0 | 0 | 0 | print_conv: 5; value_conv: 5 |
-| Image::ExifTool::Garmin::ClimbPro | 6 | 6 | 3 | 0 | 0 | 0 | 0 | print_conv: 3; raw_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::Clubs | 2 | 2 | 0 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::Common | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::ConnectIQField | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::Connectivity | 13 | 13 | 13 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::Course | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::CoursePoint | 7 | 7 | 3 | 0 | 0 | 0 | 0 | print_conv: 4; raw_conv: 2; value_conv: 4 |
-| Image::ExifTool::Garmin::DataScreen | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::DeveloperDataID | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::DeviceAuxBatteryInfo | 4 | 4 | 3 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::DeviceInfo | 19 | 19 | 15 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 2 |
-| Image::ExifTool::Garmin::DeviceSettings | 27 | 27 | 24 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 1 |
-| Image::ExifTool::Garmin::DeviceStatus | 3 | 3 | 0 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 1 |
-| Image::ExifTool::Garmin::DeviceUsed | 6 | 6 | 6 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::DiveAlarm | 12 | 12 | 9 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::DiveApneaAlarm | 12 | 12 | 9 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::DiveGas | 4 | 4 | 2 | 0 | 0 | 0 | 0 | print_conv: 2 |
-| Image::ExifTool::Garmin::DiveSettings | 33 | 33 | 20 | 0 | 0 | 0 | 0 | print_conv: 12; value_conv: 10 |
-| Image::ExifTool::Garmin::DiveSummary | 22 | 22 | 3 | 0 | 0 | 0 | 0 | print_conv: 19; value_conv: 18 |
-| Image::ExifTool::Garmin::ECGRawSample | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::ECGSmoothSample | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::ECGSummary | 7 | 7 | 2 | 0 | 0 | 0 | 0 | print_conv: 5; value_conv: 2 |
-| Image::ExifTool::Garmin::EPOStatus | 3 | 3 | 1 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::EnduranceScore | 8 | 8 | 8 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::Event | 18 | 18 | 15 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::ExdDataConceptConfiguration | 11 | 11 | 11 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::ExdDataFieldConfiguration | 6 | 6 | 6 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::ExdScreenConfiguration | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::ExerciseTitle | 3 | 3 | 3 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::FIT | 173 | 2 | 1 | 0 | 0 | 0 | 0 | raw_key_unrepresentable: 1 |
-| Image::ExifTool::Garmin::FieldCapabilities | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::FieldDescription | 14 | 14 | 14 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::FileCapabilities | 5 | 5 | 4 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::FileCreator | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::FileID | 7 | 7 | 6 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::FunctionalMetrics | 4 | 4 | 0 | 0 | 0 | 0 | 0 | print_conv: 4 |
-| Image::ExifTool::Garmin::GPS | 8 | 8 | 0 | 0 | 0 | 0 | 0 | print_conv: 6; raw_conv: 2; value_conv: 7 |
-| Image::ExifTool::Garmin::GPSEvent | 13 | 13 | 13 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::Goal | 12 | 12 | 10 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::GolfCourse | 11 | 11 | 8 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::GolfStats | 7 | 7 | 7 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::GyroscopeData | 8 | 8 | 7 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HR | 5 | 5 | 3 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::HRMProfile | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::HRV | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::HRVStatusSummary | 7 | 7 | 1 | 0 | 0 | 0 | 0 | print_conv: 6; value_conv: 6 |
-| Image::ExifTool::Garmin::HRVValue | 1 | 1 | 0 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::HRZone | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSAAccelerometerData | 6 | 6 | 4 | 0 | 0 | 0 | 0 | print_conv: 2 |
-| Image::ExifTool::Garmin::HSABodyBatteryData | 4 | 4 | 3 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSAConfigurationData | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::HSAEvent | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::HSAGyroscopeData | 6 | 6 | 3 | 0 | 0 | 0 | 0 | print_conv: 3 |
-| Image::ExifTool::Garmin::HSAHeartRateData | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSARespirationData | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSAStepData | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSAStressData | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSAWristTemperatureData | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HSA_SPO2Data | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::HillScore | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::Hole | 6 | 6 | 3 | 0 | 0 | 0 | 0 | print_conv: 3; raw_conv: 2; value_conv: 3 |
-| Image::ExifTool::Garmin::Jump | 9 | 9 | 2 | 0 | 0 | 0 | 0 | print_conv: 7; raw_conv: 2; value_conv: 4 |
-| Image::ExifTool::Garmin::Lap | 136 | 136 | 40 | 0 | 0 | 0 | 0 | print_conv: 96; raw_conv: 8; value_conv: 65 |
-| Image::ExifTool::Garmin::Length | 20 | 20 | 11 | 0 | 0 | 0 | 0 | print_conv: 9; value_conv: 6 |
-| Image::ExifTool::Garmin::Location | 7 | 7 | 3 | 0 | 0 | 0 | 0 | print_conv: 4; raw_conv: 2; value_conv: 4 |
-| Image::ExifTool::Garmin::MagnetometerData | 8 | 8 | 7 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::MapLayer | 13 | 13 | 13 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::MaxMetData | 8 | 8 | 6 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::MemoGlob | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::MesgCapabilities | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::MetZone | 3 | 3 | 1 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::Metronome | 4 | 4 | 3 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::Monitoring | 28 | 28 | 6 | 0 | 0 | 0 | 0 | print_conv: 21; value_conv: 10 |
-| Image::ExifTool::Garmin::MonitoringHRData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | print_conv: 2 |
-| Image::ExifTool::Garmin::MonitoringInfo | 5 | 5 | 3 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 1 |
-| Image::ExifTool::Garmin::MtbCx | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::MultisportActivity | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::MultisportSettings | 10 | 10 | 10 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::MusicInfo | 5 | 5 | 3 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 1 |
-| Image::ExifTool::Garmin::NMEASentence | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::NapEvent | 8 | 8 | 3 | 0 | 0 | 0 | 0 | print_conv: 5; value_conv: 3 |
-| Image::ExifTool::Garmin::OBDIIData | 8 | 8 | 5 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 1 |
-| Image::ExifTool::Garmin::OHRSettings | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::OneDSensorCalibration | 5 | 5 | 4 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::OpenWaterEvent | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::PersonalRecord | 4 | 4 | 3 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::PowerMode | 3 | 3 | 1 | 0 | 0 | 0 | 0 | print_conv: 2 |
-| Image::ExifTool::Garmin::PowerZone | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::Race | 4 | 4 | 0 | 0 | 0 | 0 | 0 | print_conv: 4; value_conv: 4 |
-| Image::ExifTool::Garmin::RaceEvent | 11 | 11 | 5 | 0 | 0 | 0 | 0 | print_conv: 6; raw_conv: 2; value_conv: 6 |
-| Image::ExifTool::Garmin::RangeAlert | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::RawBBI | 5 | 5 | 4 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::Record | 94 | 94 | 18 | 0 | 0 | 0 | 0 | print_conv: 75; raw_conv: 2; value_conv: 53 |
-| Image::ExifTool::Garmin::RespirationRate | 1 | 1 | 0 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::Routing | 7 | 7 | 7 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SDMProfile | 7 | 7 | 5 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::SPO2Data | 3 | 3 | 1 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 2 |
-| Image::ExifTool::Garmin::Schedule | 7 | 7 | 5 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::Score | 4 | 4 | 4 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SegmentFile | 8 | 8 | 8 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SegmentID | 9 | 9 | 9 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SegmentLap | 93 | 93 | 28 | 0 | 0 | 0 | 0 | print_conv: 65; raw_conv: 8; value_conv: 42 |
-| Image::ExifTool::Garmin::SegmentLeaderboardEntry | 6 | 6 | 5 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::SegmentPoint | 6 | 6 | 1 | 0 | 0 | 0 | 0 | print_conv: 5; raw_conv: 2; value_conv: 5 |
-| Image::ExifTool::Garmin::SensorSettings | 12 | 12 | 9 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 1 |
-| Image::ExifTool::Garmin::Session | 179 | 179 | 56 | 0 | 0 | 0 | 0 | print_conv: 119; raw_conv: 8; value_conv: 85 |
-| Image::ExifTool::Garmin::Set | 10 | 10 | 7 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::Shot | 6 | 6 | 2 | 0 | 0 | 0 | 0 | print_conv: 4; raw_conv: 4; value_conv: 4 |
-| Image::ExifTool::Garmin::SkinTempOvernight | 4 | 4 | 3 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::SlaveDevice | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SleepAssessment | 14 | 14 | 13 | 0 | 0 | 0 | 0 | value_conv: 1 |
-| Image::ExifTool::Garmin::SleepDataInfo | 3 | 3 | 1 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 1 |
-| Image::ExifTool::Garmin::SleepDisruptionOvernightSeverity | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SleepDisruptionSeverityPeriod | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SleepLevel | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::SleepRestlessMoments | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::SleepSchedule | 2 | 2 | 0 | 0 | 0 | 0 | 0 | print_conv: 2 |
-| Image::ExifTool::Garmin::Software | 2 | 2 | 1 | 0 | 0 | 0 | 0 | value_conv: 1 |
-| Image::ExifTool::Garmin::SpeedZone | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::Split | 42 | 42 | 7 | 0 | 0 | 0 | 0 | print_conv: 35; raw_conv: 4; value_conv: 23 |
-| Image::ExifTool::Garmin::SplitSummary | 25 | 25 | 2 | 0 | 0 | 0 | 0 | print_conv: 23; value_conv: 14 |
-| Image::ExifTool::Garmin::SplitTime | 11 | 11 | 0 | 0 | 0 | 0 | 0 | print_conv: 11; raw_conv: 4; value_conv: 11 |
-| Image::ExifTool::Garmin::Sport | 10 | 10 | 10 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::StressLevel | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::TankSummary | 4 | 4 | 1 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::TankUpdate | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::ThreeDSensorCalibration | 6 | 6 | 5 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::TimeInZone | 16 | 16 | 16 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::TimeStampCorrelation | 6 | 6 | 0 | 0 | 0 | 0 | 0 | print_conv: 6; value_conv: 4 |
-| Image::ExifTool::Garmin::Totals | 9 | 9 | 4 | 0 | 0 | 0 | 0 | print_conv: 5 |
-| Image::ExifTool::Garmin::TrainingFile | 5 | 5 | 4 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::TrainingLoad | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::TrainingReadiness | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::TrainingSettings | 47 | 47 | 35 | 0 | 0 | 0 | 0 | print_conv: 12; value_conv: 9 |
-| Image::ExifTool::Garmin::UserMetrics | 16 | 16 | 3 | 0 | 0 | 0 | 0 | print_conv: 13; value_conv: 8 |
-| Image::ExifTool::Garmin::UserProfile | 32 | 32 | 20 | 0 | 0 | 0 | 0 | print_conv: 11; value_conv: 7 |
-| Image::ExifTool::Garmin::Video | 3 | 3 | 2 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::VideoClip | 7 | 7 | 3 | 0 | 0 | 0 | 0 | print_conv: 4; value_conv: 2 |
-| Image::ExifTool::Garmin::VideoDescription | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::VideoFrame | 2 | 2 | 1 | 0 | 0 | 0 | 0 | print_conv: 1 |
-| Image::ExifTool::Garmin::VideoTitle | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::WatchfaceSettings | 2 | 2 | 2 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::WaypointHandling | 1 | 1 | 1 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Garmin::WeatherAlert | 5 | 5 | 3 | 0 | 0 | 0 | 0 | print_conv: 2; value_conv: 2 |
-| Image::ExifTool::Garmin::WeatherConditions | 15 | 15 | 6 | 0 | 0 | 0 | 0 | print_conv: 9; raw_conv: 2; value_conv: 4 |
-| Image::ExifTool::Garmin::WeightScale | 13 | 13 | 3 | 0 | 0 | 0 | 0 | print_conv: 10; value_conv: 9 |
-| Image::ExifTool::Garmin::Workout | 13 | 13 | 10 | 0 | 0 | 0 | 0 | print_conv: 3; value_conv: 3 |
-| Image::ExifTool::Garmin::WorkoutSchedule | 6 | 6 | 3 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 3 |
-| Image::ExifTool::Garmin::WorkoutSession | 6 | 6 | 5 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::WorkoutStep | 20 | 20 | 19 | 0 | 0 | 0 | 0 | print_conv: 1; value_conv: 1 |
-| Image::ExifTool::Garmin::ZonesTarget | 5 | 5 | 5 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AADAccelFeatures | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AccelerometerData | 11 | 11 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Activity | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ActivityMetrics | 19 | 19 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AlarmSettings | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Alert | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AntChannelID | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AntRx | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AntTx | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::AviationAttitude | 11 | 11 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::BarometerData | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::BeatIntervals | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::BestEffort | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::BikeProfile | 31 | 31 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::BloodPressure | 10 | 10 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::CPEStatus | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::CadenceZone | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::CameraEvent | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Capabilities | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ChronoShotData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ChronoShotSession | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ClimbPro | 6 | 6 | 6 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Clubs | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Common | 3 | 3 | 3 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ConnectIQField | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Connectivity | 13 | 13 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Course | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::CoursePoint | 7 | 7 | 7 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DataScreen | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DeveloperDataID | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DeviceAuxBatteryInfo | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DeviceInfo | 19 | 19 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DeviceSettings | 27 | 27 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DeviceStatus | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DeviceUsed | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DiveAlarm | 12 | 12 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DiveApneaAlarm | 12 | 12 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DiveGas | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DiveSettings | 33 | 33 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::DiveSummary | 22 | 22 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ECGRawSample | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ECGSmoothSample | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ECGSummary | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::EPOStatus | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::EnduranceScore | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Event | 18 | 18 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ExdDataConceptConfiguration | 11 | 11 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ExdDataFieldConfiguration | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ExdScreenConfiguration | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ExerciseTitle | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FIT | 173 | 2 | 2 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FieldCapabilities | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FieldDescription | 14 | 14 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FileCapabilities | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FileCreator | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FileID | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::FunctionalMetrics | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::GPS | 8 | 8 | 7 | 0 | 0 | 0 | 0 | value_conv_uncompiled: 1 |
+| Image::ExifTool::Garmin::GPSEvent | 13 | 13 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Goal | 12 | 12 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::GolfCourse | 11 | 11 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::GolfStats | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::GyroscopeData | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HR | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HRMProfile | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HRV | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HRVStatusSummary | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HRVValue | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HRZone | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAAccelerometerData | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSABodyBatteryData | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAConfigurationData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAEvent | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAGyroscopeData | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAHeartRateData | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSARespirationData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAStepData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAStressData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSAWristTemperatureData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HSA_SPO2Data | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::HillScore | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Hole | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Jump | 9 | 9 | 9 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Lap | 136 | 136 | 136 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Length | 20 | 20 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Location | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MagnetometerData | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MapLayer | 13 | 13 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MaxMetData | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MemoGlob | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MesgCapabilities | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MetZone | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Metronome | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Monitoring | 28 | 28 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MonitoringHRData | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MonitoringInfo | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MtbCx | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MultisportActivity | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MultisportSettings | 10 | 10 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::MusicInfo | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::NMEASentence | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::NapEvent | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::OBDIIData | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::OHRSettings | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::OneDSensorCalibration | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::OpenWaterEvent | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::PersonalRecord | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::PowerMode | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::PowerZone | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Race | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::RaceEvent | 11 | 11 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::RangeAlert | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::RawBBI | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Record | 94 | 94 | 94 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::RespirationRate | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Routing | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SDMProfile | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SPO2Data | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Schedule | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Score | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SegmentFile | 8 | 8 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SegmentID | 9 | 9 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SegmentLap | 93 | 93 | 93 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SegmentLeaderboardEntry | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SegmentPoint | 6 | 6 | 6 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SensorSettings | 12 | 12 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Session | 179 | 179 | 179 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Set | 10 | 10 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Shot | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SkinTempOvernight | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SlaveDevice | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepAssessment | 14 | 14 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepDataInfo | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepDisruptionOvernightSeverity | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepDisruptionSeverityPeriod | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepLevel | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepRestlessMoments | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SleepSchedule | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Software | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SpeedZone | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Split | 42 | 42 | 42 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SplitSummary | 25 | 25 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::SplitTime | 11 | 11 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Sport | 10 | 10 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::StressLevel | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TankSummary | 4 | 4 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TankUpdate | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ThreeDSensorCalibration | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TimeInZone | 16 | 16 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TimeStampCorrelation | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Totals | 9 | 9 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TrainingFile | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TrainingLoad | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TrainingReadiness | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::TrainingSettings | 47 | 47 | 0 | 0 | 0 | 0 | 0 | field_key_outside_u8_protocol: 4 |
+| Image::ExifTool::Garmin::UserMetrics | 16 | 16 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::UserProfile | 32 | 32 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Video | 3 | 3 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::VideoClip | 7 | 7 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::VideoDescription | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::VideoFrame | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::VideoTitle | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WatchfaceSettings | 2 | 2 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WaypointHandling | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WeatherAlert | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WeatherConditions | 15 | 15 | 15 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WeightScale | 13 | 13 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::Workout | 13 | 13 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WorkoutSchedule | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WorkoutSession | 6 | 6 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::WorkoutStep | 20 | 20 | 0 | 0 | 0 | 0 | 0 | — |
+| Image::ExifTool::Garmin::ZonesTarget | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::GeoTiff::Main | 64 | 64 | 64 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::GoPro::GLPI | 9 | 8 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::GoPro::GPMF | 122 | 115 | 0 | 0 | 0 | 0 | 0 | — |

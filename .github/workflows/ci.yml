@@ -527,10 +527,12 @@ jobs:
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_join_catalog_hydrated.py'
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_replay_ifd_catalog_inputs.py'
           python3 -m unittest discover -s tools/exiftool-tables -p 'test_catalog_userdata.py'
+          python3 -m unittest discover -s tools/exiftool-tables -p 'test_catalog_garmin_fit.py'
           # One post-load full dump binds writer declarations to this runner's
           # pinned native closure.  The hydrated reader dump remains the
           # catalog source coordinate authority.
           perl tools/exiftool-tables/dump_tables.pl "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/catalog-writer-source.json"
+          perl tools/exiftool-tables/capture_garmin_fit_fact.pl "$EXIFTOOL_SOURCE/lib" > "$RUNNER_TEMP/garmin-fit-protocol.json"
           # Expression proofs and IFD identity ledgers bind the entire capture,
           # including interpreter-specific envelopes. Re-prove on this runner;
           # never relabel the committed oracle as a fresh native observation.
@@ -555,6 +557,10 @@ jobs:
             --quicktime-keys-rust "src/parsers/quicktime/generated_keys_specs.rs" \
             --quicktime-userdata-ledger "tools/exiftool-tables/quicktime_generated_userdata_ledger.json" \
             --quicktime-userdata-rust "src/parsers/quicktime/generated_userdata_specs.rs" \
+            --garmin-fit-source "tools/exiftool-tables/fixtures/garmin_fit_source.json" \
+            --garmin-fit-ledger "tools/exiftool-tables/garmin_fit_ledger.json" \
+            --garmin-fit-rust "src/exiftool_tables/fit_tables.rs" \
+            --garmin-fit-protocol-fact "$RUNNER_TEMP/garmin-fit-protocol.json" \
             --ifd-source "$RUNNER_TEMP/catalog-writer-source.json" \
             --ifd-identity-ledger "$RUNNER_TEMP/catalog-ifd-identity.json" \
             --ifd-rust "src/exiftool_tables/ifd_tables.rs" \
