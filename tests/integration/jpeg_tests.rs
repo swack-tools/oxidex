@@ -578,63 +578,59 @@ fn test_jpeg_xmp_extraction_end_to_end() {
     // Check for Creator
     let creator_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-xmp:Creator")
+        .filter(|(name, _)| name == "XMP:Creator")
         .collect();
     assert_eq!(
         creator_tags.len(),
         1,
-        "Should have exactly one XMP-xmp:Creator tag"
+        "Should have exactly one XMP:Creator tag"
     );
     assert_eq!(
         creator_tags[0].1, "John Doe",
-        "XMP-xmp:Creator should be 'John Doe'"
+        "XMP:Creator should be 'John Doe'"
     );
-    println!("  ✓ XMP-xmp:Creator: {}", creator_tags[0].1);
+    println!("  ✓ XMP:Creator: {}", creator_tags[0].1);
 
     // Check for Rating
     let rating_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-xmp:Rating")
+        .filter(|(name, _)| name == "XMP:Rating")
         .collect();
     assert_eq!(
         rating_tags.len(),
         1,
-        "Should have exactly one XMP-xmp:Rating tag"
+        "Should have exactly one XMP:Rating tag"
     );
-    assert_eq!(rating_tags[0].1, "5", "XMP-xmp:Rating should be '5'");
-    println!("  ✓ XMP-xmp:Rating: {}", rating_tags[0].1);
+    assert_eq!(rating_tags[0].1, "5", "XMP:Rating should be '5'");
+    println!("  ✓ XMP:Rating: {}", rating_tags[0].1);
 
     // Check for title (dc:title)
     let title_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-dc:Title")
+        .filter(|(name, _)| name == "XMP:Title")
         .collect();
-    assert_eq!(
-        title_tags.len(),
-        1,
-        "Should have exactly one XMP-dc:Title tag"
-    );
+    assert_eq!(title_tags.len(), 1, "Should have exactly one XMP:Title tag");
     assert_eq!(
         title_tags[0].1, "Sample Photo",
-        "XMP-dc:Title should be 'Sample Photo'"
+        "XMP:Title should be 'Sample Photo'"
     );
-    println!("  ✓ XMP-dc:Title: {}", title_tags[0].1);
+    println!("  ✓ XMP:Title: {}", title_tags[0].1);
 
     // Check for rights (dc:rights)
     let rights_tags: Vec<_> = xmp_tags
         .iter()
-        .filter(|(name, _)| name == "XMP-dc:Rights")
+        .filter(|(name, _)| name == "XMP:Rights")
         .collect();
     assert_eq!(
         rights_tags.len(),
         1,
-        "Should have exactly one XMP-dc:Rights tag"
+        "Should have exactly one XMP:Rights tag"
     );
     assert_eq!(
         rights_tags[0].1, "Copyright 2024",
-        "XMP-dc:Rights should be 'Copyright 2024'"
+        "XMP:Rights should be 'Copyright 2024'"
     );
-    println!("  ✓ XMP-dc:Rights: {}", rights_tags[0].1);
+    println!("  ✓ XMP:Rights: {}", rights_tags[0].1);
 
     // === Step 8: Verify both EXIF and XMP can coexist ===
     println!("\nStep 8: Verifying EXIF and XMP coexistence...");
@@ -999,44 +995,41 @@ fn test_xmp_flows_to_metadata_map_via_read_metadata() {
     // === Verify specific expected XMP tags ===
     println!("\nStep 5: Verifying specific XMP tag values...");
 
-    // Keyed by ExifTool family-1 namespace group (XMP-xmp, XMP-dc)
+    // Stream 6 changed to use simplified XMP: prefix for common namespaces
     assert!(
-        metadata.contains_key("XMP-xmp:Creator"),
-        "Missing XMP-xmp:Creator tag"
+        metadata.contains_key("XMP:Creator"),
+        "Missing XMP:Creator tag"
     );
-    let creator = metadata.get("XMP-xmp:Creator").unwrap();
+    let creator = metadata.get("XMP:Creator").unwrap();
     assert!(
         format!("{:?}", creator).contains("John Doe"),
-        "XMP-xmp:Creator should be 'John Doe', got {:?}",
+        "XMP:Creator should be 'John Doe', got {:?}",
         creator
     );
-    println!("  ✓ XMP-xmp:Creator: {:?}", creator);
+    println!("  ✓ XMP:Creator: {:?}", creator);
 
     assert!(
-        metadata.contains_key("XMP-xmp:Rating"),
-        "Missing XMP-xmp:Rating tag"
+        metadata.contains_key("XMP:Rating"),
+        "Missing XMP:Rating tag"
     );
-    let rating = metadata.get("XMP-xmp:Rating").unwrap();
-    println!("  ✓ XMP-xmp:Rating: {:?}", rating);
+    let rating = metadata.get("XMP:Rating").unwrap();
+    println!("  ✓ XMP:Rating: {:?}", rating);
 
-    assert!(
-        metadata.contains_key("XMP-dc:Title"),
-        "Missing XMP-dc:Title tag"
-    );
-    let title = metadata.get("XMP-dc:Title").unwrap();
+    assert!(metadata.contains_key("XMP:Title"), "Missing XMP:Title tag");
+    let title = metadata.get("XMP:Title").unwrap();
     assert!(
         format!("{:?}", title).contains("Sample Photo"),
-        "XMP-dc:Title should be 'Sample Photo', got {:?}",
+        "XMP:Title should be 'Sample Photo', got {:?}",
         title
     );
-    println!("  ✓ XMP-dc:Title: {:?}", title);
+    println!("  ✓ XMP:Title: {:?}", title);
 
     assert!(
-        metadata.contains_key("XMP-dc:Rights"),
-        "Missing XMP-dc:Rights tag"
+        metadata.contains_key("XMP:Rights"),
+        "Missing XMP:Rights tag"
     );
-    let rights = metadata.get("XMP-dc:Rights").unwrap();
-    println!("  ✓ XMP-dc:Rights: {:?}", rights);
+    let rights = metadata.get("XMP:Rights").unwrap();
+    println!("  ✓ XMP:Rights: {:?}", rights);
 
     // === Final verification ===
     println!("\n=== Test Summary ===");

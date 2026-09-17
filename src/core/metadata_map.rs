@@ -510,11 +510,6 @@ impl MetadataMap {
         self.sink.values()
     }
 
-    /// The current winner occurrence of `key`, if any.
-    pub(crate) fn winner_occurrence(&self, key: &str) -> Option<&TagOccurrence> {
-        self.sink.winner_occurrence(key)
-    }
-
     /// Every key's current winner, paired with its full [`TagOccurrence`]
     /// rather than the flattened display value [`MetadataMap::iter`] gives.
     /// Used by Step 20's `--no-print-conv` handling and the CLI's

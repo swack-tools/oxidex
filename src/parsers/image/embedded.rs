@@ -8,13 +8,13 @@
 //! for `EXIF:Flash` do not change just because the bytes arrived inside a
 //! BPG extension instead of an APP1 segment.
 
+use crate::core::MetadataMap;
 use crate::core::tag_conversion::exif_entry_to_tag_value;
 use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd, parse_ifd1_directory};
-use crate::core::{MetadataMap, TagValue};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use crate::parsers::xmp::rdf_parser::parse_xmp;
+use crate::parsers::xmp::rdf_parser::insert_xmp_packet;
 use crate::tag_db::lookup_tag_name;
 
 /// EXIF sub-IFD pointer (`ExifOffset`).
@@ -236,16 +236,7 @@ pub fn parse_embedded_xmp(xmp_data: &[u8], metadata: &mut MetadataMap) -> bool {
     if std::str::from_utf8(xmp_data).is_err() {
         return false;
     }
-    match parse_xmp(xmp_data) {
-        Ok(tags) => {
-            let found = !tags.is_empty();
-            for (name, value) in tags {
-                metadata.insert(name, TagValue::new_string(value));
-            }
-            found
-        }
-        Err(_) => false,
-    }
+    insert_xmp_packet(metadata, xmp_data, false).is_ok_and(|stored| stored > 0)
 }
 
 /// Synthetic TIFF blocks shared by the tests of every container that hands

@@ -34,7 +34,7 @@
 use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::xmp::parse_xmp_history;
-use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed_with_rational_forms};
+use crate::parsers::xmp::rdf_parser::{XmpEntry, XmpValue, parse_xmp_entries_with_rational_forms};
 
 /// The XMP identifier string that appears at the start of XMP APP1 segments.
 /// This is a null-terminated string: "http://ns.adobe.com/xap/1.0/\0"
@@ -131,7 +131,7 @@ fn assemble_extended_xmp(segments: &[Segment]) -> Vec<Vec<u8>> {
 /// # Returns
 ///
 /// Vector of (tag_name, value) tuples where tag_name is in the format
-/// "XMP-<prefix>:PropertyName" (e.g., "XMP-dc:Creator", "XMP-xmp:Rating").
+/// "XMP:PropertyName" (e.g., "XMP:Creator", "XMP:Rating").
 ///
 /// Returns an empty vector if no XMP segments are found (not an error).
 ///
@@ -156,7 +156,7 @@ fn assemble_extended_xmp(segments: &[Segment]) -> Vec<Vec<u8>> {
 ///
 /// // Check for specific XMP tags
 /// for (tag_name, value) in &xmp_tags {
-///     if tag_name == "XMP-dc:Creator" {
+///     if tag_name == "XMP:Creator" {
 ///         println!("Creator: {}", value);
 ///     }
 /// }
@@ -206,7 +206,12 @@ fn xmp_payload_to_utf8(payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, XmpValue)>> {
-    Ok(extract_xmp_from_segments_with_value_forms(segments)?.0)
+    Ok(extract_xmp_from_segments_with_value_forms(segments)?
+        .0
+        .into_iter()
+        .filter(|entry| !entry.shadowed)
+        .map(|entry| (entry.key, entry.value))
+        .collect())
 }
 
 /// [`extract_xmp_from_segments`], plus each property's ValueConv text where
@@ -219,7 +224,7 @@ pub fn extract_xmp_from_segments(segments: &[Segment]) -> Result<Vec<(String, Xm
 /// them the PrintConv-rounded string.
 pub fn extract_xmp_from_segments_with_value_forms(
     segments: &[Segment],
-) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
+) -> Result<(Vec<XmpEntry>, Vec<(String, String)>)> {
     let mut all_xmp_tags = Vec::new();
     let mut all_value_forms = Vec::new();
 
@@ -244,7 +249,7 @@ pub fn extract_xmp_from_segments_with_value_forms(
 
         // Parse the XMP XML data for standard properties
         let (xmp_tags, value_forms) =
-            parse_xmp_typed_with_rational_forms(xml_payload).map_err(|e| {
+            parse_xmp_entries_with_rational_forms(xml_payload).map_err(|e| {
                 ExifToolError::parse_error(format!("Failed to parse XMP segment: {}", e))
             })?;
 
@@ -257,7 +262,7 @@ pub fn extract_xmp_from_segments_with_value_forms(
             all_xmp_tags.extend(
                 history_tags
                     .into_iter()
-                    .map(|(tag, value)| (tag, XmpValue::Scalar(value))),
+                    .map(|(tag, value)| XmpEntry::plain(tag, XmpValue::Scalar(value))),
             );
         }
     }
@@ -269,7 +274,7 @@ pub fn extract_xmp_from_segments_with_value_forms(
     for packet in assemble_extended_xmp(segments) {
         let converted = xmp_payload_to_utf8(&packet);
         let xml_payload: &[u8] = converted.as_deref().unwrap_or(&packet);
-        if let Ok((xmp_tags, value_forms)) = parse_xmp_typed_with_rational_forms(xml_payload) {
+        if let Ok((xmp_tags, value_forms)) = parse_xmp_entries_with_rational_forms(xml_payload) {
             all_xmp_tags.extend(xmp_tags);
             all_value_forms.extend(value_forms);
         }
@@ -278,7 +283,7 @@ pub fn extract_xmp_from_segments_with_value_forms(
             all_xmp_tags.extend(
                 history_tags
                     .into_iter()
-                    .map(|(tag, value)| (tag, XmpValue::Scalar(value))),
+                    .map(|(tag, value)| XmpEntry::plain(tag, XmpValue::Scalar(value))),
             );
         }
     }
@@ -400,16 +405,16 @@ mod tests {
         );
 
         // Check for specific tags with ExifTool-compatible prefixes
-        // Grouped by ExifTool family-1 namespace group (XMP-xmp)
+        // Stream 6 changed to use simplified XMP: prefix for common namespaces
         let has_creator = result
             .iter()
-            .any(|(name, value)| name == "XMP-xmp:Creator" && value == "John Doe");
-        assert!(has_creator, "Missing XMP-xmp:Creator tag");
+            .any(|(name, value)| name == "XMP:Creator" && value == "John Doe");
+        assert!(has_creator, "Missing XMP:Creator tag");
 
         let has_rating = result
             .iter()
-            .any(|(name, value)| name == "XMP-xmp:Rating" && value == "5");
-        assert!(has_rating, "Missing XMP-xmp:Rating tag");
+            .any(|(name, value)| name == "XMP:Rating" && value == "5");
+        assert!(has_rating, "Missing XMP:Rating tag");
     }
 
     #[test]
@@ -477,21 +482,21 @@ mod tests {
         assert!(result.len() >= 4, "Expected at least 4 XMP tags");
 
         // Check that we have properties from all namespaces
-        // Grouped by ExifTool family-1 namespace group (XMP-xmp, XMP-dc)
+        // Stream 6 changed to use simplified XMP: prefix for common namespaces (xmp, dc)
         // but XMP-exif: is kept for specialized exif namespace
         let tag_names: Vec<String> = result.iter().map(|(name, _)| name.clone()).collect();
 
         assert!(
-            tag_names.iter().any(|n| n == "XMP-xmp:Creator"),
-            "Missing XMP-xmp:Creator"
+            tag_names.iter().any(|n| n == "XMP:Creator"),
+            "Missing XMP:Creator"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP-dc:Title"),
-            "Missing XMP-dc:Title"
+            tag_names.iter().any(|n| n == "XMP:Title"),
+            "Missing XMP:Title"
         );
         assert!(
-            tag_names.iter().any(|n| n == "XMP-dc:Rights"),
-            "Missing XMP-dc:Rights"
+            tag_names.iter().any(|n| n == "XMP:Rights"),
+            "Missing XMP:Rights"
         );
         assert!(
             tag_names.iter().any(|n| n == "XMP-exif:Make"),
@@ -530,11 +535,11 @@ mod tests {
         let result = extract_xmp_from_segments(&segments).expect("Failed to extract XMP");
 
         // Should have tags from both segments
-        // Grouped by ExifTool family-1 namespace group (XMP-xmp, XMP-dc)
+        // Stream 6 changed to use simplified XMP: prefix for common namespaces
         assert!(result.len() >= 2, "Expected tags from both XMP segments");
 
-        let has_creator = result.iter().any(|(name, _)| name == "XMP-xmp:Creator");
-        let has_title = result.iter().any(|(name, _)| name == "XMP-dc:Title");
+        let has_creator = result.iter().any(|(name, _)| name == "XMP:Creator");
+        let has_title = result.iter().any(|(name, _)| name == "XMP:Title");
 
         assert!(has_creator, "Missing tag from first XMP segment");
         assert!(has_title, "Missing tag from second XMP segment");

@@ -79,7 +79,7 @@ pub const SHIM_DEFAULT_PRIORITY: u8 = 1;
 /// store of the *priority winner* (ExifTool.pm:4008), and with these tables
 /// at `PRIORITY => 0` that winner is the EXIF tag whenever one exists --
 /// which is precisely ExifTool's observed `-G1 -s -FocalLength` answer.
-fn shim_group_priority(group0: &str) -> u8 {
+pub(crate) fn shim_group_priority(group0: &str) -> u8 {
     match group0 {
         "XMP-tiff" | "XMP-exif" | "XMP-exifEX" => 0,
         _ => SHIM_DEFAULT_PRIORITY,

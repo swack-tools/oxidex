@@ -77,7 +77,7 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     // `parse_xmp_typed_with_rational_forms` for why the composite layer needs
     // it and why this carriage is tactical (Step 8 of
     // OVERHAUL_OXIDEX_PLAN.md, superseded by Step 18).
-    let (xmp_tags, rational_forms) = rdf_parser::parse_xmp_typed_with_rational_forms(xmp_data)?;
+    let (xmp_tags, rational_forms) = rdf_parser::parse_xmp_entries_with_rational_forms(xmp_data)?;
 
     // Add every XMP tag exactly as the RDF parser keyed it. (An earlier
     // "Worker 30" step here also synthesized XMP:CreatorTool from the
@@ -86,18 +86,14 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     // -- `exiftool -a -G1 -s t/images/XMP.xmp` has XMP-x:XMPToolkit and
     // XMP-xmp:CreateDate/ModifyDate and nothing else -- so they were
     // fabricated tags and are gone.)
-    for (key, typed) in xmp_tags {
-        let stored = match typed {
-            rdf_parser::XmpValue::List(values) => {
-                TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
-            }
-            rdf_parser::XmpValue::Scalar(value) => TagValue::new_string(value),
-        };
-        metadata.insert(key.clone(), stored);
+    for entry in &xmp_tags {
+        rdf_parser::insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
         // `set_value_form` only attaches to a tag already present in the map,
         // which the insert just above guarantees.
-        if let Some((_, raw)) = rational_forms.iter().find(|(tag, _)| *tag == key) {
-            metadata.set_value_form(key.clone(), raw.clone());
+        if !entry.shadowed
+            && let Some((_, raw)) = rational_forms.iter().find(|(key, _)| *key == entry.key)
+        {
+            metadata.set_value_form(entry.key.clone(), raw.clone());
         }
     }
 

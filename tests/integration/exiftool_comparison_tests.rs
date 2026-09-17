@@ -198,9 +198,9 @@ fn extract_value(val: &Value) -> Value {
 /// This function normalizes both formats to enable comparison.
 fn normalize_tag_name(tag_name: &str) -> String {
     // XMP namespace normalization MUST come first
-    // Both tools output family-1 XMP groups ("XMP-dc:Title",
-    // "XMP-xmp:Creator"); normalize to a unified "XMP:" prefix so a
-    // comparison keyed on family 0 still lines up.
+    // Perl ExifTool outputs: "XMP-dc:Title", "XMP-xmp:Creator"
+    // OxiDex outputs: "XMP:Title", "XMP:Creator"
+    // Normalize to unified "XMP:" prefix for comparison
     if let Some(rest) = tag_name.strip_prefix("XMP-dc:") {
         return format!("XMP:{}", rest);
     }

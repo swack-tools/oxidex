@@ -471,15 +471,16 @@ pub fn parse_tiff_file(reader: &dyn FileReader) -> Result<IfdEntries> {
                 XMP_TAG => {
                     // Tag 700: XMP metadata
                     // Extract XMP metadata using the XMP parser
-                    use crate::parsers::xmp::parse_xmp;
+                    use crate::parsers::xmp::rdf_parser::parse_xmp_entries;
 
                     let xmp_data = value.as_ref();
-                    match parse_xmp(xmp_data) {
+                    match parse_xmp_entries(xmp_data) {
                         Ok(xmp_tags) => {
                             // Convert XMP tags to IfdEntries format
                             // Store as synthetic entries with XMP_TAG ID
-                            for (key, val) in xmp_tags {
-                                let synthetic_value = format!("{}: {}", key, val);
+                            for entry in xmp_tags.into_iter().filter(|entry| !entry.shadowed) {
+                                let synthetic_value =
+                                    format!("{}: {}", entry.key, entry.value.into_joined());
                                 all_tags.push((
                                     XMP_TAG,
                                     7, // Type UNDEFINED

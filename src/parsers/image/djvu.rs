@@ -6,7 +6,7 @@
 //! `metadata` path, including `annote` and standard metadata fields.
 
 use crate::core::{FileReader, Instance, MetadataMap, TagValue};
-use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
+use crate::parsers::xmp::rdf_parser::insert_xmp_packet;
 use djvu_bzz::bzz_decode;
 use djvu_iff::{Chunk, parse};
 
@@ -395,17 +395,7 @@ fn collect_annotation_expression(expression: Expression, metadata: &mut Metadata
         && tag == "xmp"
         && let Some(Expression::Atom(xml) | Expression::String(xml)) = items.get(1)
     {
-        if let Ok(tags) = parse_xmp_typed(xml.as_bytes()) {
-            for (name, value) in tags {
-                let value = match value {
-                    XmpValue::Scalar(value) => TagValue::new_string(value),
-                    XmpValue::List(values) => {
-                        TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
-                    }
-                };
-                metadata.insert(name, value);
-            }
-        }
+        let _ = insert_xmp_packet(metadata, xml.as_bytes(), true);
         return;
     }
     metadata_from_expression(expression, metadata);
@@ -569,11 +559,11 @@ mod tests {
         collect_chunk_metadata(annotation.as_bytes(), &mut metadata);
 
         assert_eq!(
-            metadata.get_string("XMP-dc:Title"),
+            metadata.get_string("XMP:Title"),
             Some("DjVu Metadata Sample")
         );
         assert_eq!(
-            metadata.get("XMP-dc:Subject"),
+            metadata.get("XMP:Subject"),
             Some(&TagValue::Array(vec![
                 TagValue::new_string("ExifTool"),
                 TagValue::new_string("Test"),

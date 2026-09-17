@@ -639,12 +639,12 @@ impl FormatParser for GIFParser {
 
         // Parse XMP data if present
         if let Some(xmp_bytes) = scan_result.xmp_data {
-            match crate::parsers::xmp::rdf_parser::parse_xmp(&xmp_bytes) {
-                Ok(xmp_tags) => {
-                    for (tag_name, value) in xmp_tags {
-                        metadata.insert(tag_name, TagValue::String(value));
-                    }
-                }
+            match crate::parsers::xmp::rdf_parser::insert_xmp_packet(
+                &mut metadata,
+                &xmp_bytes,
+                false,
+            ) {
+                Ok(_) => {}
                 Err(e) => {
                     eprintln!("Warning: Failed to parse XMP in GIF: {}", e);
                 }

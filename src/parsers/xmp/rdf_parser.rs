@@ -184,11 +184,263 @@ pub fn parse_xmp_typed(xml_bytes: &[u8]) -> Result<Vec<(String, XmpValue)>> {
 pub(crate) fn parse_xmp_typed_with_rational_forms(
     xml_bytes: &[u8],
 ) -> Result<(Vec<(String, XmpValue)>, Vec<(String, String)>)> {
+    let (formatted, _, rational_forms) = parse_xmp_packet(xml_bytes)?;
+    Ok((formatted, rational_forms))
+}
+
+/// One XMP tag as a reader stores it.
+///
+/// `key` is the key this reader used before XMP tags carried their
+/// namespace group: `XMP-<prefix>:Name` for the ten namespaces it mapped
+/// (dc and xmp excluded), `XMP:Name` for everything else and for every
+/// structure field. `group1` is the tag's real family-1 group (`XMP-dc`).
+/// Storing under the legacy key with `group1` beside it keeps exactly the
+/// pre-existing winners -- which tags a listing without `-a` shows, and
+/// which one a request returns -- while `-G1` and `-a` show the true groups.
+///
+/// `shadowed` marks a tag the reader used to drop because an earlier tag
+/// already had its legacy key (XMP6.xmp's `tmp0:Test` next to `xxxx:Test`);
+/// it is stored after the others at priority 0, so it is visible with `-a`
+/// but never replaces a winner.
+///
+/// This keeps the pre-existing, not ExifTool's, choice among same-named XMP
+/// tags: ExifTool's FoundTag priorities (per-tag Priority/Avoid, table
+/// PRIORITY, QuickTime's PRIORITY_DIR) are not modelled here; that work is
+/// tracked on the `staging/xmp-exact-priority` branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XmpEntry {
+    /// The key the tag is stored under.
+    pub key: String,
+    /// The tag keyed by its family-1 group, as [`parse_xmp_typed`] reports it.
+    pub tag: String,
+    /// The family-1 group (`XMP-dc`); empty for a non-XMP tag.
+    pub group1: String,
+    pub value: XmpValue,
+    pub shadowed: bool,
+}
+
+impl XmpEntry {
+    fn new(legacy_key: &str, tag: &str, value: XmpValue, shadowed: bool) -> Self {
+        Self {
+            key: legacy_key.to_string(),
+            tag: tag.to_string(),
+            group1: tag
+                .split_once(':')
+                .map_or("", |(group, _)| group)
+                .to_string(),
+            value,
+            shadowed,
+        }
+    }
+
+    /// An entry for a tag outside the XMP groups (history, HDR+ makernote),
+    /// stored under its own key.
+    pub fn plain(key: String, value: XmpValue) -> Self {
+        Self {
+            key: key.clone(),
+            tag: key,
+            group1: String::new(),
+            value,
+            shadowed: false,
+        }
+    }
+
+    /// The value as stored: a list as an array of strings when `typed`,
+    /// else joined.
+    pub fn tag_value(&self, typed: bool) -> crate::core::TagValue {
+        use crate::core::TagValue;
+        match &self.value {
+            XmpValue::List(values) if typed => {
+                TagValue::Array(values.iter().cloned().map(TagValue::new_string).collect())
+            }
+            value => TagValue::new_string(value.clone().into_joined()),
+        }
+    }
+}
+
+/// The entries a reader stores for one packet; see [`XmpEntry`].
+pub fn parse_xmp_entries(xml_bytes: &[u8]) -> Result<Vec<XmpEntry>> {
+    Ok(parse_xmp_packet(xml_bytes)?.1)
+}
+
+/// [`parse_xmp_entries`] plus the rational forms of
+/// [`parse_xmp_typed_with_rational_forms`], keyed by the storage key of the
+/// visible entry they belong to.
+pub(crate) fn parse_xmp_entries_with_rational_forms(
+    xml_bytes: &[u8],
+) -> Result<(Vec<XmpEntry>, Vec<(String, String)>)> {
+    let (_, entries, rational_forms) = parse_xmp_packet(xml_bytes)?;
+    let rational_forms = rational_forms
+        .into_iter()
+        .filter_map(|(tag, form)| {
+            entries
+                .iter()
+                .find(|entry| !entry.shadowed && entry.tag == tag)
+                .map(|entry| (entry.key.clone(), form))
+        })
+        .collect();
+    Ok((entries, rational_forms))
+}
+
+/// Parses one packet and stores every entry (see [`XmpEntry`]); list values
+/// become arrays when `typed`, else joined strings. Returns the number of
+/// entries stored.
+pub fn insert_xmp_packet(
+    metadata: &mut crate::core::MetadataMap,
+    xml_bytes: &[u8],
+    typed: bool,
+) -> Result<usize> {
+    let entries = parse_xmp_entries(xml_bytes)?;
+    for entry in &entries {
+        insert_xmp_entry(metadata, entry, entry.tag_value(typed));
+    }
+    Ok(entries.len())
+}
+
+/// Stores one XMP tag found outside the RDF parser under `key` (`XMP:Title`)
+/// with its family-1 group (`XMP-dc`) and the key's usual priority.
+pub fn insert_grouped_xmp_tag(
+    metadata: &mut crate::core::MetadataMap,
+    key: &str,
+    group1: &str,
+    value: crate::core::TagValue,
+) {
+    let group0 = key.split_once(':').map_or("", |(group, _)| group);
+    metadata.insert_occurrence(
+        key,
+        value,
+        crate::core::tag_occurrence::shim_group_priority(group0),
+        group1,
+        crate::core::Instance::default(),
+    );
+}
+
+/// Stores one [`XmpEntry`] with `value` (the caller's `TagValue` for it).
+pub fn insert_xmp_entry(
+    metadata: &mut crate::core::MetadataMap,
+    entry: &XmpEntry,
+    value: crate::core::TagValue,
+) {
+    if entry.group1.is_empty() {
+        metadata.insert(entry.key.clone(), value);
+        return;
+    }
+    let priority = if entry.shadowed {
+        0
+    } else {
+        crate::core::tag_occurrence::shim_group_priority(
+            entry.key.split_once(':').map_or("", |(group, _)| group),
+        )
+    };
+    metadata.insert_occurrence(
+        entry.key.clone(),
+        value,
+        priority,
+        &entry.group1,
+        crate::core::Instance::default(),
+    );
+}
+
+/// The emissions of the parser's passes replayed under legacy keys with the
+/// guard/replace/dedup operations each pass applied to its keys -- which
+/// decides, exactly as before, which tag wins each legacy key.
+#[derive(Default)]
+struct LegacyResults {
+    /// `(legacy key, reported key, raw value)` in emission order.
+    entries: Vec<(String, String, String)>,
+    /// How many of `entries` carry each legacy key.
+    counts: std::collections::HashMap<String, usize>,
+    /// Every emission's legacy key, first seen per `(reported key, value)`.
+    seen: std::collections::HashMap<(String, String), String>,
+}
+
+impl LegacyResults {
+    fn has(&self, legacy_key: &str) -> bool {
+        self.counts.get(legacy_key).is_some_and(|count| *count > 0)
+    }
+
+    fn push(&mut self, legacy_key: &str, tag: &str, value: &str) {
+        self.seen
+            .entry((tag.to_string(), value.to_string()))
+            .or_insert_with(|| legacy_key.to_string());
+        *self.counts.entry(legacy_key.to_string()).or_default() += 1;
+        self.entries
+            .push((legacy_key.to_string(), tag.to_string(), value.to_string()));
+    }
+
+    fn remove(&mut self, legacy_key: &str) {
+        if self.has(legacy_key) {
+            self.entries.retain(|(key, _, _)| key != legacy_key);
+            self.counts.remove(legacy_key);
+        }
+    }
+
+    fn dedup(&mut self) {
+        let mut kept = std::collections::HashSet::new();
+        self.entries.retain(|(key, _, _)| kept.insert(key.clone()));
+        for count in self.counts.values_mut() {
+            *count = (*count).min(1);
+        }
+    }
+
+    fn key_for(&self, tag: &str, value: &str) -> String {
+        self.seen
+            .get(&(tag.to_string(), value.to_string()))
+            .cloned()
+            .unwrap_or_else(|| generic_legacy_key(tag))
+    }
+}
+
+/// The legacy key of a tag from a pass that filed everything under plain
+/// `XMP` (structure fields, and the focused passes' fixed names).
+fn generic_legacy_key(tag: &str) -> String {
+    format!("XMP:{}", tag.split_once(':').map_or(tag, |(_, name)| name))
+}
+
+/// The legacy key of a simple property or shorthand attribute: the old
+/// namespace-to-family table (ten URIs, with dc and xmp filed under plain
+/// `XMP`) applied to the property's URI, and exif:PixelYDimension's
+/// ExifImageHeight under plain `XMP`.
+fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> String {
+    let name = tag.split_once(':').map_or(tag, |(_, name)| name);
+    let family = NamespaceResolver::extract_prefix(qname)
+        .and_then(|prefix| resolver.resolve_prefix(prefix))
+        .map_or("XMP", |uri| match uri {
+            "http://ns.adobe.com/xap/1.0/mm/" => "XMP-xmpMM",
+            "http://ns.adobe.com/xap/1.0/rights/" => "XMP-xmpRights",
+            "http://ns.adobe.com/exif/1.0/" => "XMP-exif",
+            "http://ns.adobe.com/tiff/1.0/" => "XMP-tiff",
+            "http://ns.adobe.com/photoshop/1.0/" => "XMP-photoshop",
+            "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/" => "XMP-iptcCore",
+            "http://iptc.org/std/Iptc4xmpExt/2008-02-29/" => "XMP-iptcExt",
+            "http://ns.useplus.org/ldf/xmp/1.0/" => "XMP-plus",
+            _ => "XMP",
+        });
+    if family == "XMP-exif" && name == "ExifImageHeight" {
+        return "XMP:ExifImageHeight".to_string();
+    }
+    format!("{family}:{name}")
+}
+
+/// The packet parse behind every entry point: the tags keyed by their
+/// family-1 group (what [`parse_xmp_typed`] reports), the entries readers
+/// store, and the rational forms.
+#[allow(clippy::type_complexity)]
+fn parse_xmp_packet(
+    xml_bytes: &[u8],
+) -> Result<(
+    Vec<(String, XmpValue)>,
+    Vec<XmpEntry>,
+    Vec<(String, String)>,
+)> {
     let mut reader = Reader::from_reader(xml_bytes);
     reader.config_mut().trim_text(true); // Trim whitespace from text nodes
 
     let mut resolver = NamespaceResolver::new();
     let mut results: Vec<(String, String)> = Vec::new();
+    // The same emissions under the keys this reader used before XMP tags
+    // carried their namespace group -- see `LegacyResults`.
+    let mut legacy = LegacyResults::default();
     // Tags whose value came from a multi-entry Bag/Seq, with their elements
     // kept apart. Recorded beside `results` rather than replacing it so that
     // every focused pass below keeps working on plain strings.
@@ -208,6 +460,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // parsing its children, so a declaration inside the value must not
     // change it (see `NamespaceResolver::group_for_prefix`).
     let mut current_tag = String::new();
+    // ... and its legacy key, resolved at the same time.
+    let mut current_legacy = String::new();
     let mut current_value = String::new();
     let mut depth = 0;
     let mut property_depth = 0;
@@ -243,7 +497,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
                 // Check for x:xmpmeta element and extract XMPToolkit
                 if is_xmpmeta(&tag_name) {
-                    extract_xmpmeta_attributes(&e, &mut results)?;
+                    extract_xmpmeta_attributes(&e, &mut results, &mut legacy)?;
                 }
                 // Check if this is an rdf:Description element
                 else if is_rdf_description(&tag_name, &resolver) {
@@ -252,12 +506,13 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                         property_is_struct = true;
                     }
                     // Extract rdf:about and property attributes from Description
-                    extract_description_attributes(&e, &resolver, &mut results)?;
+                    extract_description_attributes(&e, &resolver, &mut results, &mut legacy)?;
                 } else if description_depth > 0 && current_property.is_none() {
                     // This is a property element inside rdf:Description
                     // Check if it's a complex structure we should skip
                     if is_simple_property(&tag_name, &resolver) {
                         current_tag = format_tag_name(&tag_name, &resolver);
+                        current_legacy = legacy_simple_key(&tag_name, &resolver, &current_tag);
                         current_property = Some(tag_name.to_string());
                         current_value.clear();
                         collection_values.clear();
@@ -298,6 +553,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                 } else if current_property.is_some() && depth == property_depth {
                     // End of current property - extract tag name and value
                     let prefixed_name = std::mem::take(&mut current_tag);
+                    let legacy_name = std::mem::take(&mut current_legacy);
 
                     if property_is_struct {
                         // Reported only through its flattened fields.
@@ -310,14 +566,18 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                                 .position(|l| l.as_deref() == Some("x-default"))
                                 .unwrap_or(0);
                             for (index, value) in collection_values.iter().enumerate() {
-                                let tag = match collection_langs.get(index).and_then(Clone::clone) {
-                                    Some(lang) if index != default_index => {
-                                        format!("{prefixed_name}-{lang}")
-                                    }
-                                    _ if index == default_index => prefixed_name.clone(),
-                                    None => continue,
-                                    _ => continue,
-                                };
+                                let suffix =
+                                    match collection_langs.get(index).and_then(Clone::clone) {
+                                        Some(lang) if index != default_index => format!("-{lang}"),
+                                        _ if index == default_index => String::new(),
+                                        None => continue,
+                                        _ => continue,
+                                    };
+                                let tag = format!("{prefixed_name}{suffix}");
+                                let legacy_tag = format!("{legacy_name}{suffix}");
+                                if !legacy.has(&legacy_tag) {
+                                    legacy.push(&legacy_tag, &tag, value);
+                                }
                                 if !results.iter().any(|(t, _)| *t == tag) {
                                     results.push((tag, value.clone()));
                                 }
@@ -328,9 +588,15 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                                 list_elements
                                     .push((prefixed_name.clone(), collection_values.clone()));
                             }
+                            legacy.push(
+                                &legacy_name,
+                                &prefixed_name,
+                                &collection_values.join(", "),
+                            );
                             results.push((prefixed_name, collection_values.join(", ")));
                         }
                     } else if !current_value.trim().is_empty() {
+                        legacy.push(&legacy_name, &prefixed_name, current_value.trim());
                         results.push((prefixed_name, current_value.trim().to_string()));
                     } else {
                         // An empty property -- `<x:Tag></x:Tag>`, or one whose
@@ -338,6 +604,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
                         // reports it with an empty value (XMP.pm's ParseXMPElement
                         // calls FoundXMP whenever `length $val or not $shorthand`),
                         // so dropping it loses the tag outright.
+                        legacy.push(&legacy_name, &prefixed_name, "");
                         results.push((prefixed_name, String::new()));
                     }
                     current_property = None;
@@ -373,11 +640,11 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
 
                 // Handle self-closing x:xmpmeta
                 if is_xmpmeta(&tag_name) {
-                    extract_xmpmeta_attributes(&e, &mut results)?;
+                    extract_xmpmeta_attributes(&e, &mut results, &mut legacy)?;
                 }
                 // Handle self-closing rdf:Description (shorthand form)
                 else if is_rdf_description(&tag_name, &resolver) {
-                    extract_description_attributes(&e, &resolver, &mut results)?;
+                    extract_description_attributes(&e, &resolver, &mut results, &mut legacy)?;
                 }
             }
 
@@ -432,6 +699,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         results.retain(|(tag, _)| tag != TAG);
         list_elements.retain(|(tag, _)| tag != TAG);
         list_elements.push((TAG.to_string(), about_cv_term_cv_ids.clone()));
+        legacy.remove("XMP:AboutCvTermCvId");
+        legacy.push("XMP:AboutCvTermCvId", TAG, &about_cv_term_cv_ids.join(", "));
         results.push((TAG.to_string(), about_cv_term_cv_ids.join(", ")));
     }
 
@@ -443,6 +712,8 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         results.retain(|(tag, _)| tag != TAG);
         list_elements.retain(|(tag, _)| tag != TAG);
         list_elements.push((TAG.to_string(), about_cv_term_names.clone()));
+        legacy.remove("XMP:AboutCvTermName");
+        legacy.push("XMP:AboutCvTermName", TAG, &about_cv_term_names.join(", "));
         results.push((TAG.to_string(), about_cv_term_names.join(", ")));
     }
 
@@ -451,6 +722,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // (not those nested inside mwg-rs:Regions) into language-qualified tags.
     let artwork_titles = extract_artwork_title_values(xml_bytes)?;
     for (tag, value) in &artwork_titles {
+        let legacy_tag = generic_legacy_key(tag);
+        if !legacy.has(&legacy_tag) {
+            legacy.push(&legacy_tag, tag, value);
+        }
         if !results.iter().any(|(t, _)| t == tag) {
             results.push((tag.clone(), value.clone()));
         }
@@ -465,9 +740,13 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         // installed under this same family/name. Doing this inside the loop
         // made the following language delete the freshly written default.
         results.retain(|(existing, _)| existing != "XMP-plus:Custom1");
+        legacy.remove("XMP-plus:Custom1");
     }
     for (tag, values) in custom1_language_values {
         results.retain(|(existing, _)| existing != &tag);
+        // Custom1 already had its namespace group before.
+        legacy.remove(&tag);
+        legacy.push(&tag, &tag, &values.join(", "));
         list_elements.retain(|(existing, _)| existing != &tag);
         list_elements.push((tag.clone(), values.clone()));
         results.push((tag, values.join(", ")));
@@ -477,6 +756,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // both forms, including a nested rdf:Description (XMP.xmp).
     for (tag, value) in extract_derived_from_ids(xml_bytes)? {
         results.retain(|(existing, _)| existing != &tag);
+        let legacy_tag = generic_legacy_key(&tag);
+        legacy.remove(&legacy_tag);
+        legacy.push(&legacy_tag, &tag, &value);
         results.push((tag, value));
     }
 
@@ -487,6 +769,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // BareStructItem1.
     let struct_fields = extract_top_level_struct_values(xml_bytes)?;
     for (tag, value) in &struct_fields {
+        let legacy_tag = generic_legacy_key(tag);
+        if !legacy.has(&legacy_tag) {
+            legacy.push(&legacy_tag, tag, value);
+        }
         if !results.iter().any(|(t, _)| t == tag) {
             results.push((tag.clone(), value.clone()));
         }
@@ -496,6 +782,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // so the generic pass above does not reach it.
     let copyright_owner = extract_plus_copyright_owner_name(xml_bytes)?;
     for (tag, value) in &copyright_owner {
+        let legacy_tag = generic_legacy_key(tag);
+        if !legacy.has(&legacy_tag) {
+            legacy.push(&legacy_tag, tag, value);
+        }
         if !results.iter().any(|(t, _)| t == tag) {
             results.push((tag.clone(), value.clone()));
         }
@@ -508,7 +798,12 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     let job_ref_fields = extract_job_ref_fields(xml_bytes)?;
     if !job_ref_fields.is_empty() {
         results.retain(|(tag, _)| tag != "XMP-xmpBJ:JobRef");
+        legacy.remove("XMP:JobRef");
         for (tag, value) in &job_ref_fields {
+            let legacy_tag = generic_legacy_key(tag);
+            if !legacy.has(&legacy_tag) {
+                legacy.push(&legacy_tag, tag, value);
+            }
             if !results.iter().any(|(t, _)| t == tag) {
                 results.push((tag.clone(), value.clone()));
             }
@@ -521,6 +816,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // precedence over this one's plain path concatenation.
     let list_structs = extract_list_struct_values(xml_bytes)?;
     for (tag, values) in &list_structs {
+        let legacy_tag = generic_legacy_key(tag);
+        if !legacy.has(&legacy_tag) {
+            legacy.push(&legacy_tag, tag, &values.join(", "));
+        }
         if !results.iter().any(|(t, _)| t == tag) {
             if values.len() > 1 {
                 list_elements.retain(|(existing, _)| existing != tag);
@@ -536,6 +835,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // keeps precedence over this one's plain concatenation.
     let flattened = super::struct_flatten::extract_flattened_struct_fields(xml_bytes)?;
     for (tag, values) in flattened {
+        let legacy_tag = generic_legacy_key(&tag);
+        if !legacy.has(&legacy_tag) {
+            legacy.push(&legacy_tag, &tag, &values.join(", "));
+        }
         if results.iter().any(|(t, _)| *t == tag) {
             continue;
         }
@@ -551,6 +854,9 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     let blank_nodes = super::struct_flatten::extract_blank_node_fields(xml_bytes)?;
     for (tag, value) in blank_nodes {
         results.retain(|(existing, _)| *existing != tag);
+        let legacy_tag = generic_legacy_key(&tag);
+        legacy.remove(&legacy_tag);
+        legacy.push(&legacy_tag, &tag, &value);
         results.push((tag, value));
     }
 
@@ -561,6 +867,7 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // `XMP-tmp0:Test` tabby, as ExifTool reports).
     let mut emitted_tags = std::collections::HashSet::new();
     results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
+    legacy.dedup();
 
     // Google's `GCamera:HdrPlusMakernote` property carries a base64,
     // encrypted, gzipped Protobuf blob (Google.pm's `ProcessHDRP`). ExifTool
@@ -580,60 +887,111 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // on this function.
     let mut rational_forms: Vec<(String, String)> = Vec::new();
 
+    // Formats one reported value; a tag with collected list elements stays
+    // a List.
+    let mut format_value = |tag: &str, value: &str, record_forms: bool| -> XmpValue {
+        if let Some((_, elements)) = list_elements.iter().find(|(t, _)| t == tag) {
+            return XmpValue::List(
+                elements
+                    .iter()
+                    .map(|element| format_xmp_value(tag, element))
+                    .collect(),
+            );
+        }
+        if record_forms {
+            if matches!(
+                tag.rsplit(':').next(),
+                Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
+            ) {
+                rational_forms.push((tag.to_string(), value.to_string()));
+            }
+            // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
+            // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
+            // precision the composites need: BuildCompositeTags hands
+            // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
+            // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
+            // quotient (11109/1000 -> 11.109), never the printed
+            // "11.1 mm". Carry that ValueConv beside the print form --
+            // as the evaluated quotient, not the raw `n/d`, because
+            // (unlike the FocalPlane pair above, whose denominator
+            // Canon.pm:10152-10153 reads back out) nothing needs the
+            // fraction itself, and the quotient is also what
+            // `--no-print-conv` should show. Gated on the source
+            // actually being an `n/d` fraction: a plain-decimal
+            // source has no extra precision to preserve.
+            if matches!(tag.rsplit(':').next(), Some("FocalLength"))
+                && parse_xmp_rational(value).is_some()
+            {
+                rational_forms.push((tag.to_string(), format_xmp_plain_rational(value)));
+            }
+        }
+        XmpValue::Scalar(format_xmp_value(tag, value))
+    };
+
     // Post-process results to apply formatting for specific tags
     let mut formatted: Vec<(String, XmpValue)> = results
-        .into_iter()
-        .map(
-            |(tag, value)| match list_elements.iter().find(|(t, _)| *t == tag) {
-                Some((_, elements)) => {
-                    let formatted = elements
-                        .iter()
-                        .map(|element| format_xmp_value(&tag, element))
-                        .collect();
-                    (tag, XmpValue::List(formatted))
-                }
-                None => {
-                    if matches!(
-                        tag.rsplit(':').next(),
-                        Some("FocalPlaneXResolution" | "FocalPlaneYResolution")
-                    ) {
-                        rational_forms.push((tag.clone(), value.clone()));
-                    }
-                    // exif:FocalLength (XMP.pm:2161-2165) is a plain rational
-                    // whose PrintConv (`sprintf("%.1f mm",$val)`) discards
-                    // precision the composites need: BuildCompositeTags hands
-                    // `@val` the post-ValueConv store (ExifTool.pm:4008+), so
-                    // ExifTool's DOF/FOV/FocalLength35efl see the evaluated
-                    // quotient (11109/1000 -> 11.109), never the printed
-                    // "11.1 mm". Carry that ValueConv beside the print form --
-                    // as the evaluated quotient, not the raw `n/d`, because
-                    // (unlike the FocalPlane pair above, whose denominator
-                    // Canon.pm:10152-10153 reads back out) nothing needs the
-                    // fraction itself, and the quotient is also what
-                    // `--no-print-conv` should show. Gated on the source
-                    // actually being an `n/d` fraction: a plain-decimal
-                    // source has no extra precision to preserve.
-                    if matches!(tag.rsplit(':').next(), Some("FocalLength"))
-                        && parse_xmp_rational(&value).is_some()
-                    {
-                        rational_forms.push((tag.clone(), format_xmp_plain_rational(&value)));
-                    }
-                    let formatted = format_xmp_value(&tag, &value);
-                    (tag, XmpValue::Scalar(formatted))
-                }
-            },
-        )
+        .iter()
+        .map(|(tag, value)| (tag.clone(), format_value(tag, value, true)))
         .collect();
+
+    // What callers store: every tag the reader used to report under its
+    // legacy key first, then the rest of `formatted` (see `XmpEntry`).
+    let mut entries: Vec<XmpEntry> = Vec::new();
+    let mut claimed = vec![false; results.len()];
+    // Unclaimed `results` indices per (tag, value), earliest first.
+    let mut unclaimed: std::collections::HashMap<(&str, &str), std::collections::VecDeque<usize>> =
+        std::collections::HashMap::new();
+    for (index, (tag, value)) in results.iter().enumerate() {
+        unclaimed
+            .entry((tag.as_str(), value.as_str()))
+            .or_default()
+            .push_back(index);
+    }
+    for (legacy_key, tag, value) in &legacy.entries {
+        if let Some(index) = unclaimed
+            .get_mut(&(tag.as_str(), value.as_str()))
+            .and_then(std::collections::VecDeque::pop_front)
+        {
+            claimed[index] = true;
+            entries.push(XmpEntry::new(
+                legacy_key,
+                tag,
+                formatted[index].1.clone(),
+                false,
+            ));
+        } else {
+            entries.push(XmpEntry::new(
+                legacy_key,
+                tag,
+                format_value(tag, value, false),
+                false,
+            ));
+        }
+    }
+    for (index, (tag, value)) in results.iter().enumerate() {
+        if !claimed[index] {
+            entries.push(XmpEntry::new(
+                &legacy.key_for(tag, value),
+                tag,
+                formatted[index].1.clone(),
+                true,
+            ));
+        }
+    }
 
     if let Some(raw) = raw_hdrp_makernote {
         for (tag, value) in super::google_hdrp::decode_hdrp_plus_makernote(&raw) {
             if !formatted.iter().any(|(t, _)| *t == tag) {
+                entries.push(XmpEntry::plain(
+                    tag.clone(),
+                    XmpValue::Scalar(value.clone()),
+                ));
                 formatted.push((tag, XmpValue::Scalar(value)));
             }
         }
     }
 
-    Ok((formatted, rational_forms))
+    Ok((formatted, entries, rational_forms))
 }
 
 /// Extracts flattened fields from the IPTC Extension AboutCvTerm structured bag.
@@ -2696,6 +3054,7 @@ fn is_xmpmeta(tag_name: &str) -> bool {
 fn extract_xmpmeta_attributes(
     element: &BytesStart,
     results: &mut Vec<(String, String)>,
+    legacy: &mut LegacyResults,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -2712,6 +3071,7 @@ fn extract_xmpmeta_attributes(
 
             // Only add non-empty XMPToolkit values
             if !value.trim().is_empty() {
+                legacy.push("XMP:XMPToolkit", "XMP-x:XMPToolkit", value.trim());
                 results.push(("XMP-x:XMPToolkit".to_string(), value.trim().to_string()));
             }
         }
@@ -2735,6 +3095,7 @@ fn extract_description_attributes(
     element: &BytesStart,
     resolver: &NamespaceResolver,
     results: &mut Vec<(String, String)>,
+    legacy: &mut LegacyResults,
 ) -> Result<()> {
     for attr in element.attributes().flatten() {
         let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
@@ -2762,6 +3123,7 @@ fn extract_description_attributes(
             // An empty rdf:about is the "no subject URI" default every writer
             // emits; ExifTool reports no About tag for it.
             if !value.trim().is_empty() {
+                legacy.push("XMP:About", "XMP-rdf:About", value.trim());
                 results.push(("XMP-rdf:About".to_string(), value.trim().to_string()));
             }
             continue;
@@ -2787,6 +3149,8 @@ fn extract_description_attributes(
                 continue;
             }
             let prefixed_name = format_tag_name(key, resolver);
+            let legacy_name = legacy_simple_key(key, resolver, &prefixed_name);
+            legacy.push(&legacy_name, &prefixed_name, value.trim());
             results.push((prefixed_name, value.trim().to_string()));
         }
     }
@@ -4641,7 +5005,7 @@ mod tests {
             crate::core::operations::read_metadata(path).expect("PhotoMechanic JPEG parses");
 
         assert_eq!(
-            metadata.get_string("XMP-photomech:TimeCreated"),
+            metadata.get_string("XMP:TimeCreated"),
             Some("06:27:51-05:00")
         );
     }
@@ -6358,5 +6722,83 @@ mod top_level_struct_tests {
                 "et: control attribute leaked into a tag: {bogus} in {typed:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+    use crate::core::{MetadataMap, TagValue};
+
+    fn packet(body: &str, namespaces: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" {namespaces}>{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    /// Same-named properties of two namespaces the reader always filed under
+    /// one `XMP:` key keep the first as that key's entry; the second stays
+    /// visible to `-a` as a shadowed entry with its own group.
+    #[test]
+    fn same_named_properties_keep_the_first_under_the_shared_key() {
+        let xml = packet(
+            "<a:Test>trout</a:Test><b:Test>bass</b:Test>",
+            r#"xmlns:a="urn:a/" xmlns:b="urn:b/""#,
+        );
+        let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+        let tests: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.tag.ends_with(":Test"))
+            .collect();
+        assert_eq!(tests.len(), 2, "{entries:?}");
+        assert_eq!(tests[0].key, "XMP:Test");
+        assert_eq!(tests[0].group1, "XMP-a");
+        assert!(!tests[0].shadowed);
+        assert_eq!(tests[1].key, "XMP:Test");
+        assert_eq!(tests[1].group1, "XMP-b");
+        assert!(tests[1].shadowed);
+
+        let mut metadata = MetadataMap::new();
+        for entry in &entries {
+            insert_xmp_entry(&mut metadata, entry, entry.tag_value(true));
+        }
+        assert_eq!(metadata.get_string("XMP:Test"), Some("trout"));
+        let groups: Vec<String> = metadata
+            .occurrences_for("XMP:Test")
+            .iter()
+            .map(|occurrence| occurrence.group1.to_string())
+            .collect();
+        assert_eq!(groups, ["XMP-a", "XMP-b"]);
+    }
+
+    /// The namespaces the reader always keyed by their own group keep that
+    /// key, so their properties never compete with plain `XMP:` ones.
+    #[test]
+    fn separately_keyed_namespaces_keep_their_own_keys() {
+        let xml = packet(
+            "<exif:DateTimeOriginal>2020</exif:DateTimeOriginal><photoshop:DateCreated>2021</photoshop:DateCreated><xmp:CreateDate>2022</xmp:CreateDate>",
+            r#"xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/""#,
+        );
+        let entries = parse_xmp_entries(xml.as_bytes()).unwrap();
+        let find = |tag: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.tag == tag)
+                .unwrap_or_else(|| panic!("{tag} in {entries:?}"))
+        };
+        assert_eq!(
+            find("XMP-exif:DateTimeOriginal").key,
+            "XMP-exif:DateTimeOriginal"
+        );
+        assert_eq!(
+            find("XMP-photoshop:DateCreated").key,
+            "XMP-photoshop:DateCreated"
+        );
+        assert_eq!(find("XMP-xmp:CreateDate").key, "XMP:CreateDate");
+        assert!(entries.iter().all(|entry| !entry.shadowed));
+        assert_eq!(
+            find("XMP-xmp:CreateDate").tag_value(false),
+            TagValue::new_string("2022")
+        );
     }
 }

@@ -451,23 +451,18 @@ pub fn process_xmp_segments(
     match crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments_with_value_forms(segments) {
         Ok((xmp_tags, value_forms)) => {
             // Add all XMP tags to metadata
-            for (tag_name, value) in xmp_tags {
+            for entry in &xmp_tags {
                 // A List keeps its entries apart -- ExifTool reports
-                // dc:subject as a list, not one joined string.
-                let tag_value = match value {
-                    crate::parsers::xmp::rdf_parser::XmpValue::List(values) => {
-                        TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
-                    }
-                    // XMP is a text format and ExifTool prints the property's
-                    // characters back verbatim: crs:ProcessVersion "11.0" is
-                    // "11.0", not 11, and Device:Camera's "0.321765" keeps all
-                    // six digits. Parsing to a number and re-formatting loses
-                    // exactly those.
-                    crate::parsers::xmp::rdf_parser::XmpValue::Scalar(value) => {
-                        TagValue::new_string(value)
-                    }
-                };
-                metadata.insert(tag_name, tag_value);
+                // dc:subject as a list, not one joined string. A scalar
+                // stays the property's text: XMP is a text format and
+                // ExifTool prints the characters back verbatim
+                // (crs:ProcessVersion "11.0" is "11.0", not 11, and
+                // Device:Camera's "0.321765" keeps all six digits).
+                crate::parsers::xmp::rdf_parser::insert_xmp_entry(
+                    metadata,
+                    entry,
+                    entry.tag_value(true),
+                );
             }
             // The ValueConv text of any property whose print formatting
             // discarded precision (exif:FocalLength's `%.1f mm`, the
