@@ -32,7 +32,7 @@ jobs:
     name: Build docs from a clean checkout
     # 2x: npm ci plus a VitePress build, ~1 minute end to end and mostly I/O
     # and single-threaded bundling. No Rust is compiled here.
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -50,10 +50,8 @@ jobs:
           fi
           echo "Confirmed: docs/reference/comparison/ has no generated report (cold-clone conditions)."
 
-      # WarpBuild-native fork: routes the npm cache through WarpBuild's cache
-      # backend on this warp-ubuntu-* runner instead of the GitHub one.
       - name: Setup Node.js
-        uses: WarpBuilds/setup-node@2867cf8f859d73439e1ad18b542617e5a29f0f10 # v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'npm'

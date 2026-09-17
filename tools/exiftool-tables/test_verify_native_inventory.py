@@ -322,27 +322,43 @@ class CopiedSonyTag202aMutations(unittest.TestCase):
         self.assertEqual(text.count(old), 1)
         self.sony.write_text(text.replace(old, new), encoding="utf-8")
 
-    def test_stale_and_source_derived_artifacts_for_name_offset_enum_and_row_changes(self):
-        base_names, base_enums = self.oracle()
+    # Each oracle() call runs oracle.pl over the whole copied library (~90s
+    # on a 4-vCPU runner). The unmutated baseline is identical for every
+    # mutation below, so it is computed once per class, and each mutation is
+    # its own test on its own fresh copy so CI can shard them.
+    _baseline = None
+
+    def baseline(self):
+        cls = type(self)
+        if cls._baseline is None:
+            cls._baseline = self.oracle()
+        return cls._baseline
+
+    def test_pristine_tag202a_oracle_has_seventeen_rows_and_no_enums(self):
+        base_names, base_enums = self.baseline()
         self.assertEqual(len(base_names), 17)
         self.assertFalse(base_enums)
 
+    def test_renamed_row_is_stale_and_source_derived_artifact_agrees(self):
         # Rename: the ordinary soundness name comparison catches the stale
         # value; a fresh source-derived artifact agrees without a tag rule.
+        base_names, _ = self.baseline()
         self.mutate("Name => 'FocalPlaneAFPointLocation1',", "Name => 'FocalPlaneAFPointLocationOne',")
         names, enums = self.oracle()
         self.assertNotEqual(base_names, names)
         self.assertEqual(self.source_derived(names, enums).fields, names)
 
+    def test_moved_offset_is_missing_until_source_derived_refresh(self):
         # Offset and a newly added row each produce one unclassified native
         # key in stale output, then disappear after source-driven refresh.
-        self.sony.write_text((PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8"), encoding="utf-8")
+        base_names, base_enums = self.baseline()
         self.mutate("0x06 => { Name => 'FocalPlaneAFPointLocation1'", "0x07 => { Name => 'FocalPlaneAFPointLocation1'")
         names, enums = self.oracle()
         self.assertTrue(inventory(self.source_derived(base_names, base_enums), names, enums).missing)
         self.assertFalse(inventory(self.source_derived(names, enums), names, enums).missing)
 
-        self.sony.write_text((PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8"), encoding="utf-8")
+    def test_added_row_is_missing_until_source_derived_refresh(self):
+        base_names, base_enums = self.baseline()
         self.mutate(
             "    0x02 => {\n        Name => 'FocalPlaneAFPointArea',",
             "    0x00 => { Name => 'NativeOnlyPoint', Format => 'int8u' },\n"
@@ -352,68 +368,82 @@ class CopiedSonyTag202aMutations(unittest.TestCase):
         self.assertTrue(inventory(self.source_derived(base_names, base_enums), names, enums).missing)
         self.assertFalse(inventory(self.source_derived(names, enums), names, enums).missing)
 
+    def test_added_enum_is_missing_until_source_derived_refresh(self):
         # The real table has no enum.  A native PrintConv map is the smallest
         # upgrade change that proves the inverse enum check is live.
-        self.sony.write_text((PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8"), encoding="utf-8")
+        base_names, base_enums = self.baseline()
         self.mutate("Format => 'int8u',\n        RawConv", "Format => 'int8u', PrintConv => { 1 => 'One' },\n        RawConv")
         names, enums = self.oracle()
         stale = inventory(self.source_derived(base_names, base_enums), names, enums)
         self.assertTrue(stale.missing_enum_entries)
         self.assertFalse(inventory(self.source_derived(names, enums), names, enums).missing_enum_entries)
 
-    def test_real_codegen_regeneration_catches_and_refreshes_native_mutations(self):
-        """A copied native edit must travel through dump_tables.py and codegen.py.
+    # A copied native edit must travel through dump_tables.py and codegen.py.
+    #
+    # This is intentionally distinct from the small accounting tests above:
+    # those supply ParsedRust facts to isolate verifier behavior; these prove
+    # that no hand-maintained Rust fact is needed for a supported native
+    # source change to reach the artifact and clear the independent
+    # inventory. The unmutated regeneration is shared by every case, so it is
+    # computed once per class; each case is its own test so CI can shard them.
+    _regenerated_baseline = None
 
-        This is intentionally distinct from the small accounting test above:
-        the latter supplies ParsedRust facts to isolate verifier behavior;
-        this test proves that no hand-maintained Rust fact is needed for a
-        supported native source change to reach the artifact and clear the
-        independent inventory.
-        """
-        original = (PINNED_SOURCE / "lib/Image/ExifTool/Sony.pm").read_text(encoding="utf-8")
-        _, base, base_omissions = self.regenerate()
+    def regenerated_baseline(self):
+        cls = type(self)
+        if cls._regenerated_baseline is None:
+            _, base, base_omissions = self.regenerate()
+            cls._regenerated_baseline = (base, base_omissions)
+        return cls._regenerated_baseline
+
+    def test_real_codegen_baseline_is_complete(self):
+        base, base_omissions = self.regenerated_baseline()
         self.assertTrue(base_omissions.present)
         self.assertFalse(self.real_inventory(base, base_omissions).missing)
 
-        cases = (
-            (
-                "rename",
-                "Name => 'FocalPlaneAFPointLocation1',",
-                "Name => 'FocalPlaneAFPointLocationOne',",
-                lambda stale: stale.generated_name_mismatches,
-            ),
-            (
-                "offset",
-                "0x06 => { Name => 'FocalPlaneAFPointLocation1'",
-                "0x07 => { Name => 'FocalPlaneAFPointLocation1'",
-                lambda stale: stale.missing,
-            ),
-            (
-                "new row",
-                "    0x02 => {\n        Name => 'FocalPlaneAFPointArea',",
-                "    0x00 => { Name => 'NativeOnlyPoint', Format => 'int8u' },\n"
-                "    0x02 => {\n        Name => 'FocalPlaneAFPointArea',",
-                lambda stale: stale.missing,
-            ),
-            (
-                "enum",
-                "Format => 'int8u',\n        RawConv",
-                "Format => 'int8u', PrintConv => { 1 => 'One' },\n        RawConv",
-                lambda stale: stale.missing_enum_entries,
-            ),
+    def assert_real_codegen_refreshes(self, label, old, new, stale_failure):
+        base, base_omissions = self.regenerated_baseline()
+        self.mutate(old, new)
+        stale = self.real_inventory(base, base_omissions)
+        self.assertTrue(stale_failure(stale), f"stale artifact hid native {label}")
+        _, fresh, fresh_omissions = self.regenerate()
+        got = self.real_inventory(fresh, fresh_omissions)
+        self.assertFalse(got.missing)
+        self.assertFalse(got.generated_name_mismatches)
+        self.assertFalse(got.name_mismatches)
+        self.assertFalse(got.missing_enum_entries)
+
+    def test_real_codegen_refreshes_renamed_row(self):
+        self.assert_real_codegen_refreshes(
+            "rename",
+            "Name => 'FocalPlaneAFPointLocation1',",
+            "Name => 'FocalPlaneAFPointLocationOne',",
+            lambda stale: stale.generated_name_mismatches,
         )
-        for label, old, new, stale_failure in cases:
-            with self.subTest(label=label):
-                self.sony.write_text(original, encoding="utf-8")
-                self.mutate(old, new)
-                stale = self.real_inventory(base, base_omissions)
-                self.assertTrue(stale_failure(stale), f"stale artifact hid native {label}")
-                _, fresh, fresh_omissions = self.regenerate()
-                got = self.real_inventory(fresh, fresh_omissions)
-                self.assertFalse(got.missing)
-                self.assertFalse(got.generated_name_mismatches)
-                self.assertFalse(got.name_mismatches)
-                self.assertFalse(got.missing_enum_entries)
+
+    def test_real_codegen_refreshes_moved_offset(self):
+        self.assert_real_codegen_refreshes(
+            "offset",
+            "0x06 => { Name => 'FocalPlaneAFPointLocation1'",
+            "0x07 => { Name => 'FocalPlaneAFPointLocation1'",
+            lambda stale: stale.missing,
+        )
+
+    def test_real_codegen_refreshes_added_row(self):
+        self.assert_real_codegen_refreshes(
+            "new row",
+            "    0x02 => {\n        Name => 'FocalPlaneAFPointArea',",
+            "    0x00 => { Name => 'NativeOnlyPoint', Format => 'int8u' },\n"
+            "    0x02 => {\n        Name => 'FocalPlaneAFPointArea',",
+            lambda stale: stale.missing,
+        )
+
+    def test_real_codegen_refreshes_added_enum(self):
+        self.assert_real_codegen_refreshes(
+            "enum",
+            "Format => 'int8u',\n        RawConv",
+            "Format => 'int8u', PrintConv => { 1 => 'One' },\n        RawConv",
+            lambda stale: stale.missing_enum_entries,
+        )
 
 
 if __name__ == "__main__":

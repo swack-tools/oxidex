@@ -124,23 +124,22 @@ mod phase3_integration_tests {
 
     /// Test 7: Verify cache configuration for Rust dependencies
     ///
-    /// Caching moved off `actions/cache` to `WarpBuilds/rust-cache`, which
-    /// knows the cargo layout itself -- so there is no longer an explicit
-    /// `~/.cargo` path list in the workflow to assert on. Asserting the
-    /// provider too keeps a silent fallback to the GitHub cache backend
-    /// (the action's default) from passing this test.
+    /// `Swatinem/rust-cache` knows the cargo layout itself, so there is no
+    /// explicit `~/.cargo` path list in the workflow to assert on. The job
+    /// runs on a standard GitHub-hosted runner, so the action's default
+    /// GitHub Actions cache backend is the intended one.
     #[test]
     fn test_cache_configuration() {
         let workflow_path = Path::new(".github/workflows/deploy-docs.yml");
         let content = fs::read_to_string(workflow_path).expect("should read workflow file");
 
         assert!(
-            content.contains("WarpBuilds/rust-cache"),
-            "should use the WarpBuild rust-cache action"
+            content.contains("Swatinem/rust-cache"),
+            "should use the rust-cache action"
         );
         assert!(
-            content.contains("cache-provider: warpbuild"),
-            "rust-cache should target the WarpBuild cache backend, not the GitHub default"
+            !content.contains("cache-provider: warpbuild"),
+            "rust-cache must not target the WarpBuild backend on a GitHub-hosted runner"
         );
     }
 

