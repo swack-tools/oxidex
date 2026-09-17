@@ -130,59 +130,71 @@ fn metadata_from_expression(expression: Expression, metadata: &mut MetadataMap) 
         return;
     }
 
+    // Every entry is a tag of `%Image::ExifTool::DjVu::Meta`, whose family-1
+    // group is `DjVu-Meta` (DjVu.pm:133-193). ProcessMeta (DjVu.pm:286-307)
+    // adds an unlisted key to the table as `ucfirst` of its legal characters.
     for item in items.into_iter().skip(1) {
         let Expression::List(pair) = item else {
             continue;
         };
-        let Some(Expression::Atom(name)) = pair.first() else {
+        let Some(Expression::Atom(key) | Expression::String(key)) = pair.first() else {
             continue;
         };
         let value = match pair.get(1) {
             Some(Expression::Atom(value) | Expression::String(value)) => value,
             _ => continue,
         };
-        match name.as_str() {
-            "annote" => metadata.insert(
-                "DjVu:Annotation".to_string(),
-                TagValue::new_string(value.clone()),
+        let (name, value) = match key.as_str() {
+            "CreationDate" => match djvu_date(value) {
+                Some(value) => ("CreateDate".to_string(), value),
+                None => continue,
+            },
+            "ModDate" => match djvu_date(value) {
+                Some(value) => ("ModifyDate".to_string(), value),
+                None => continue,
+            },
+            "Trapped" => (
+                "Trapped".to_string(),
+                value.trim_start_matches('/').to_string(),
             ),
-            "Author" => {
-                metadata.insert(
-                    "DjVu-Meta:Author".to_string(),
-                    TagValue::new_string(value.clone()),
-                );
-                metadata.insert(
-                    "DjVu:Author".to_string(),
-                    TagValue::new_string(value.clone()),
-                )
-            }
-            "Title" => {
-                metadata.insert(
-                    "DjVu-Meta:Title".to_string(),
-                    TagValue::new_string(value.clone()),
-                );
-                metadata.insert(
-                    "DjVu:Title".to_string(),
-                    TagValue::new_string(value.clone()),
-                )
-            }
-            "url" => metadata.insert("DjVu:URL".to_string(), TagValue::new_string(value.clone())),
-            "CreationDate" => djvu_date(value).and_then(|value| {
-                metadata.insert("DjVu:CreateDate".to_string(), TagValue::new_string(value))
-            }),
-            "ModDate" => djvu_date(value).and_then(|value| {
-                metadata.insert("DjVu:ModifyDate".to_string(), TagValue::new_string(value))
-            }),
-            "Trapped" => metadata.insert(
-                "DjVu:Trapped".to_string(),
-                TagValue::new_string(value.trim_start_matches('/').to_string()),
-            ),
-            "note" | "Subject" | "Keywords" | "Creator" | "Producer" => {
-                metadata.insert(format!("DjVu:{name}"), TagValue::new_string(value.clone()))
-            }
-            _ => None,
+            _ => match meta_tag_name(key) {
+                Some(name) => (name, value.clone()),
+                None => continue,
+            },
         };
+        metadata.insert_occurrence(
+            format!("DjVu:{name}"),
+            TagValue::new_string(value),
+            1,
+            "DjVu-Meta",
+            Instance::default(),
+        );
     }
+}
+
+/// `%Image::ExifTool::DjVu::Meta` tag name for a metadata key: the table's
+/// explicit `Name`, else the Tag ID itself, which ExifTool capitalizes
+/// (`ucfirst`) after removing characters outside `[-_a-zA-Z0-9]`.
+fn meta_tag_name(key: &str) -> Option<String> {
+    let named = match key {
+        "annote" => "Annotation",
+        "booktitle" => "BookTitle",
+        "crossref" => "CrossRef",
+        "eprint" => "EPrint",
+        "howpublished" => "HowPublished",
+        "url" => "URL",
+        _ => "",
+    };
+    if !named.is_empty() {
+        return Some(named.to_string());
+    }
+    let legal: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        .collect();
+    let mut chars = legal.chars();
+    let first = chars.next()?;
+    Some(first.to_ascii_uppercase().to_string() + chars.as_str())
 }
 
 /// Convert the RFC 3339-like PDF DocInfo date form accepted by ExifTool's
@@ -507,6 +519,34 @@ mod tests {
             Some("2008:09:23 12:31:34-04:00")
         );
         assert_eq!(metadata.get_string("DjVu:Trapped"), Some("Unknown"));
+    }
+
+    #[test]
+    fn metadata_entries_are_djvu_meta_tags_named_like_exiftool() {
+        // DjVu.djvu's metadata (t/images), plus an unlisted key and one
+        // with characters ProcessMeta strips before `ucfirst`.
+        let expressions = ExpressionParser::new(
+            r#"(metadata (note "Must escape") (Author "Phil Harvey") (title "Lower") (url "http://x") (my.key "v"))"#,
+        )
+        .expressions()
+        .unwrap();
+        let mut metadata = MetadataMap::new();
+        for expression in expressions {
+            metadata_from_expression(expression, &mut metadata);
+        }
+        for (key, value) in [
+            ("DjVu:Note", "Must escape"),
+            ("DjVu:Author", "Phil Harvey"),
+            ("DjVu:Title", "Lower"),
+            ("DjVu:URL", "http://x"),
+            ("DjVu:Mykey", "v"),
+        ] {
+            let occurrences = metadata.occurrences_for(key);
+            assert_eq!(occurrences.len(), 1, "{key} is recorded once");
+            assert_eq!(&*occurrences[0].group1, "DjVu-Meta", "{key} group1");
+            assert_eq!(metadata.get_string(key), Some(value));
+        }
+        assert!(metadata.get("DjVu:note").is_none());
     }
 
     #[test]
