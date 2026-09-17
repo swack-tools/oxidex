@@ -24,10 +24,11 @@ separately and never credited alone.
 
 Source coordinates are credited exactly. For each file, the native source
 capture names the `(table, tag ID, variant index)` behind every occurrence of
-an identity; its occurrence count must equal the native JSON value count, or
-the identity is unattributable in that file. A coordinate is credited only when
-every file in which ExifTool read it matched that identity; one failure
-anywhere withholds it.
+an identity, from one process per file like the CLI; the capture's tag set and
+counts must equal the native JSON exactly, or the receipt is refused. A matched
+identity with an occurrence that has no table row is unattributable. A
+coordinate is credited only when every file in which ExifTool read it matched
+that identity; one failure anywhere withholds it.
 """
 from __future__ import annotations
 
@@ -145,8 +146,10 @@ def native_command(native: dict, mode: str, path: str) -> list[str]:
             "-config", "", "-j", "-a", "-G1:4", "-s", *(["-n"] if mode == "raw" else []), path]
 
 
-def source_command(native: dict, paths: list[str]) -> list[str]:
-    return [native["perl"]["path"], native["source_capture"]["path"], native["library"], *paths]
+def source_command(native: dict, path: str) -> list[str]:
+    # One process per file, like the CLI: ExifTool module loading has lasting
+    # side effects (Composite overrides, AddTagToTable) across files.
+    return [native["perl"]["path"], native["source_capture"]["path"], native["library"], path]
 
 
 def public_command(proof: dict, mode: str, path: str) -> list[str]:
@@ -265,26 +268,32 @@ def identities(raw: bytes, side: str) -> dict[tuple[str, str], list[str]]:
     return {identity: sorted(values) for identity, values in result.items()}
 
 
-def source_rows(receipt: dict) -> dict[str, dict[tuple[str, str], Counter]]:
-    """-> {file: {(Group1, TagName): Counter of (table, tag ID, variant) or None}}."""
-    native, root = receipt["native"], Path(receipt["corpus"]["root"])
-    names = list(receipt["corpus"]["files"])
-    raw = stdout_of(receipt["sources"], source_command(native, [str(root / name) for name in names]),
-                    require_success=True)
-    document = json.loads(raw)
-    if not isinstance(document, dict) or set(document) != {str(root / name) for name in names}:
+def source_rows(receipt: dict, name: str) -> dict[tuple[str, str], Counter]:
+    """-> {(Group1, TagName): Counter of (table, tag ID, variant) or None} for one file."""
+    path = str(Path(receipt["corpus"]["root"]) / name)
+    facts = receipt["sources"]
+    if not isinstance(facts, dict) or set(facts) != set(receipt["corpus"]["files"]):
         raise ValueError("source capture does not cover exactly the corpus")
-    result = {}
-    for name in names:
-        by_identity = defaultdict(Counter)
-        for row in document[str(root / name)]:
-            if not isinstance(row, list) or len(row) != 5:
-                raise ValueError("source capture row is malformed")
-            group, tag, table, tag_id, variant = row
-            coordinate = (table, tag_id, variant) if variant is not None else None
-            by_identity[(group, tag)][coordinate] += 1
-        result[name] = by_identity
-    return result
+    document = json.loads(stdout_of(facts[name], source_command(receipt["native"], path), require_success=True),
+                          object_pairs_hook=_unique_object)
+    if not isinstance(document, dict) or set(document) != {path} or not isinstance(document[path], list):
+        raise ValueError("source capture does not describe its file")
+    by_identity = defaultdict(Counter)
+    for row in document[path]:
+        if not isinstance(row, list) or len(row) != 5:
+            raise ValueError("source capture row is malformed")
+        group, tag, table, tag_id, variant = row
+        if group in IGNORED_GROUPS or f"{group}:{tag}" in IGNORED_KEYS:
+            continue
+        by_identity[(group, tag)][(table, tag_id, variant) if variant is not None else None] += 1
+    return by_identity
+
+
+def _unique_object(items):
+    keys = [key for key, _ in items]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate JSON key")
+    return dict(items)
 
 
 def derive(receipt: dict) -> dict:
@@ -319,12 +328,17 @@ def derive(receipt: dict) -> dict:
             actual = {}
             counts["public_failed_file_modes"] += 1
         by_file[row["file"]][row["mode"]] = (expected, actual)
-    sources = source_rows(receipt)
     per_identity_files = defaultdict(set)
     print_identities, native_identities = set(), set()
     coordinate_files = defaultdict(lambda: {"matched": set(), "failed": set()})
     for name, modes in sorted(by_file.items()):
         (expected_print, actual_print), (expected_raw, actual_raw) = modes["print"], modes["raw"]
+        sources = source_rows(receipt, name)
+        # The capture must describe exactly the tags the CLI reported, or its
+        # rows cannot be trusted to name what the CLI read.
+        if {identity: sum(rows.values()) for identity, rows in sources.items()} != \
+                {identity: len(values) for identity, values in expected_print.items()}:
+            raise ValueError(f"source capture differs from the native CLI tag set: {name}")
         native_identities.update(f"{g}:{n}" for g, n in expected_print)
         counts["native_file_identities"] += len(expected_print)
         counts["extra_file_identities"] += sum(1 for identity in actual_print if identity not in expected_print)
@@ -345,12 +359,18 @@ def derive(receipt: dict) -> dict:
                 counts["missing_file_identities"] += 1
             else:
                 counts["mismatched_file_identities"] += 1
-            coordinates = sources[name].get(identity, Counter())
-            if sum(coordinates.values()) != len(values) or None in coordinates:
+            coordinates = sources[identity]
+            if not matched:
+                # A failure withholds every real row behind the identity, even
+                # when another occurrence has no row to name.
+                for coordinate in coordinates:
+                    if coordinate is not None:
+                        coordinate_files[coordinate]["failed"].add(name)
+            elif None in coordinates:
                 counts["unattributable_file_identities"] += 1
-                continue
-            for coordinate in coordinates:
-                coordinate_files[coordinate]["matched" if matched else "failed"].add(name)
+            else:
+                for coordinate in coordinates:
+                    coordinate_files[coordinate]["matched"].add(name)
     credited = sorted(list(coordinate) for coordinate, result in coordinate_files.items()
                       if result["matched"] and not result["failed"])
     counts["credited_source_coordinates"] = len(credited)
@@ -389,7 +409,7 @@ def observe(args) -> Path:
     receipt = {"schema": SCHEMA, "instrument": "corpus_read_receipt.py", "producer": snapshot,
                "build_proof": proof, "native": native,
                "corpus": {"root": str(corpus), "files": files}, "observations": [],
-               "sources": transcript(source_command(native, [str(corpus / name) for name in files]), env=env),
+               "sources": {name: transcript(source_command(native, str(corpus / name)), env=env) for name in files},
                "scope": "public CLI reads of every corpus file in print and raw modes; "
                         "exact source-coordinate credit; no writes"}
     for name in files:
@@ -416,6 +436,9 @@ def validate(receipt: dict, expected_version: str) -> dict:
         raise ValueError("corpus read receipt schema differs")
     validate_build_proof(receipt.get("build_proof"), receipt.get("producer"))
     validate_native(receipt["native"], expected_version)
+    if receipt["native"]["source_capture"]["sha256"] != receipt["producer"]["instrument_inputs"].get(
+            "capture_corpus_sources.pl"):
+        raise ValueError("source capture script differs from the producer's instrument inputs")
     files = receipt.get("corpus", {}).get("files")
     if not isinstance(files, dict) or not files or any(
             not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in files.values()):

@@ -32,9 +32,9 @@ def receipt(files, sources):
                 "file": name, "mode": mode,
                 "native": fact(receipt_tool.native_command(NATIVE, mode, path), encode(native_pairs)),
                 "oxidex": fact(receipt_tool.public_command(PROOF, mode, path), encode(public_pairs))})
-    capture = json.dumps({"/corpus/" + name: rows for name, rows in sources.items()}).encode()
-    return {"build_proof": PROOF, "native": NATIVE, "observations": observations,
-            "sources": fact(receipt_tool.source_command(NATIVE, ["/corpus/" + name for name in files]), capture),
+    captures = {name: fact(receipt_tool.source_command(NATIVE, "/corpus/" + name),
+                           json.dumps({"/corpus/" + name: rows}).encode()) for name, rows in sources.items()}
+    return {"build_proof": PROOF, "native": NATIVE, "observations": observations, "sources": captures,
             "corpus": {"root": "/corpus", "files": {name: "d" * 64 for name in files}}}
 
 
@@ -108,11 +108,27 @@ class DeriveTests(unittest.TestCase):
 
     def test_unattributable_identity_is_never_credited(self):
         sources = self.sources()
-        sources["a.jpg"] = [MAKE, MAKE, ORIENTATION]   # count differs from the one JSON value
         sources["b.jpg"] = [["IFD0", "Make", None, None, None], MODEL]
         derived = receipt_tool.derive(receipt(self.files(), sources))
+        # b.jpg's match cannot name its row; a.jpg alone still credits 271.
+        self.assertEqual(derived["credited_coordinates"], [["Image::ExifTool::Exif::Main", "271", 0]])
+        self.assertEqual(derived["metric_c"]["unattributable_file_identities"], 1)
+
+    def test_a_failing_file_withholds_rows_even_when_partly_unattributable(self):
+        files = self.files()
+        files["b.jpg"] = {"print": ([("IFD0:Make", '"Canon"'), ("IFD0:Copy1:Make", '"Canon"')], [("IFD0:Make", '"WRONG"')]),
+                          "raw": ([("IFD0:Make", '"Canon"'), ("IFD0:Copy1:Make", '"Canon"')], [("IFD0:Make", '"WRONG"')])}
+        sources = {"a.jpg": [MAKE, ORIENTATION], "b.jpg": [MAKE, ["IFD0", "Make", None, None, None]]}
+        derived = receipt_tool.derive(receipt(files, sources))
         self.assertEqual(derived["credited_coordinates"], [])
-        self.assertEqual(derived["metric_c"]["unattributable_file_identities"], 2)
+        self.assertEqual(derived["metric_c"]["withheld_source_coordinates"], 1)
+
+    def test_capture_that_differs_from_the_native_tag_set_refuses(self):
+        for label, rows in (("extra row", [MAKE, ORIENTATION, MODEL]), ("missing row", [MAKE]),
+                            ("count", [MAKE, MAKE, ORIENTATION])):
+            sources = self.sources(); sources["a.jpg"] = rows
+            with self.subTest(label), self.assertRaisesRegex(ValueError, "differs from the native CLI tag set"):
+                receipt_tool.derive(receipt(self.files(), sources))
 
     def test_failed_public_run_counts_everything_missing(self):
         document = receipt(self.files(), self.sources())
@@ -131,7 +147,8 @@ class DeriveTests(unittest.TestCase):
             lambda d: d["observations"][0]["native"]["command"].append("-n"),
             lambda d: d["observations"].pop(),
             lambda d: d["observations"].append(copy.deepcopy(d["observations"][0])),
-            lambda d: d["sources"].update(returncode=2),
+            lambda d: d["sources"]["a.jpg"].update(returncode=2),
+            lambda d: d["sources"].pop("a.jpg"),
         )
         for index, mutate in enumerate(mutations):
             document = copy.deepcopy(base); mutate(document)

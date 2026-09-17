@@ -1178,7 +1178,10 @@ def main() -> int:
         }.items() if value is not None}
         snapshot = make_authenticated_snapshot(source_join, join, evidence)
         observed_snapshot = json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
-        observed_report = observed_snapshot_report(snapshot, download=args.observed_snapshot.name)
+        observed_report = observed_snapshot_report(
+            snapshot, download=args.observed_snapshot.name,
+            title=("Authenticated corpus read observations" if corpus_read_evidence is not None
+                   else "Authenticated catalog observations"))
     documents = [(args.output, rendered_join), (args.report, rendered_report)]
     if observed_snapshot is not None:
         documents.extend([(args.observed_snapshot, observed_snapshot), (args.observed_report, observed_report)])

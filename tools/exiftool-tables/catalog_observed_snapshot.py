@@ -167,7 +167,8 @@ def validate_snapshot(snapshot: dict) -> None:
             raise ValueError("published observed receipt mixes native runtimes")
 
 
-def render_report(snapshot: dict, current_source: dict | None = None, download: str | None = None) -> str:
+def render_report(snapshot: dict, current_source: dict | None = None, download: str | None = None,
+                  title: str = "Authenticated catalog observations") -> str:
     observed = snapshot["observed_join"]
     download = download or f"catalog-hydrated-observed-{observed['inputs']['exiftool_version']}.json"
     read_counts = observed["counts"].get("observed_read", {})
@@ -175,7 +176,7 @@ def render_report(snapshot: dict, current_source: dict | None = None, download: 
     if current_source is not None:
         current = "matches historical source join" if canonical_hash(current_source) == snapshot["source_join_sha256"] else "differs from historical source join; observations remain historical"
     return "\n".join([
-        "# Authenticated catalog observations", "",
+        f"# {title}", "",
         "This is a historical native receipt. It does not assert that a later source or runtime has the same observations.", "",
         f"[Download the authenticated observation snapshot](/measurements/{download}).",
         "[Compare source classifications and remaining work](goal-checkpoint-20260914.md).", "",
@@ -201,12 +202,13 @@ def main() -> int:
     parser.add_argument("--current-source-join", type=Path)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--download", help="published snapshot file name for the report link")
+    parser.add_argument("--title", default="Authenticated catalog observations")
     parser.add_argument("--verify", action="store_true", required=True)
     args = parser.parse_args()
     snapshot = read(args.snapshot)
     validate_snapshot(snapshot)
     current = read(args.current_source_join) if args.current_source_join else None
-    text = render_report(snapshot, current, args.download)
+    text = render_report(snapshot, current, args.download, args.title)
     if args.report:
         args.report.write_text(text, encoding="utf-8")
     print("=== instrument: catalog observed historical receipt check ===")
