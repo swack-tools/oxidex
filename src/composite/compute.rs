@@ -2190,7 +2190,12 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         // Exif.pm Composite::GPSPosition uses the ValueConv forms separated by
         // a space and the coordinate PrintConv forms separated by `, `.
         ("Exif", "GPSPosition") => {
-            let (latitude, longitude) = (f(get(i, 0))?, f(get(i, 1))?);
+            // The inputs are the coordinates' ValueConv forms: signed decimal
+            // degrees. A value that is not wholly a number (an unconverted XMP
+            // `DD,MM.mmN` string) must not be truncated to its leading digits,
+            // which silently drops minutes and the hemisphere.
+            let whole = |v: Option<&str>| v?.trim().parse::<f64>().ok();
+            let (latitude, longitude) = (whole(get(i, 0))?, whole(get(i, 1))?);
             if get(i, 0)?.is_empty() && get(i, 1)?.is_empty() {
                 return None;
             }
@@ -2267,6 +2272,22 @@ mod tests {
     /// the comparison harness diffs.
     fn c(name: &str, v: &[Option<&str>]) -> Option<String> {
         compute("Exif", name, v, None).map(|c| c.print)
+    }
+
+    #[test]
+    fn gps_position_refuses_coordinates_that_are_not_decimal_degrees() {
+        // An unconverted XMP coordinate must not be truncated to its degrees.
+        assert_eq!(
+            c("GPSPosition", &[Some("10,30.5N"), Some("20,15.25W")]),
+            None
+        );
+        assert_eq!(
+            c(
+                "GPSPosition",
+                &[Some("54.9896666666667"), Some("-1.91416666666667")]
+            ),
+            Some("54 deg 59' 22.80\" N, 1 deg 54' 51.00\" W".to_string())
+        );
     }
 
     /// Print form, with a manufacturer in scope.

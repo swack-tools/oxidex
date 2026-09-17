@@ -223,6 +223,10 @@ struct Frame {
     part: Option<String>,
     /// Namespace URI backing `part`, used to scope the FlatName overrides.
     uri: Option<String>,
+    /// ExifTool family-1 group (`XMP-<prefix>`) for this element's prefix,
+    /// resolved when the element was opened. A flattened tag takes the group
+    /// of its first contributing segment (XMP.pm GetXMPTagID).
+    group: String,
     /// `xml:lang` carried by this element (an `rdf:li` of a lang-alt).
     lang: Option<String>,
     text: String,
@@ -232,7 +236,8 @@ struct Frame {
     has_fields: bool,
 }
 
-/// Extracts every structure field in `xml_bytes` as `("XMP:<FlatName>", value)`.
+/// Extracts every structure field in `xml_bytes` as
+/// `("XMP-<prefix>:<FlatName>", value)`.
 ///
 /// Only paths with two or more contributing segments are reported: a one-segment
 /// path is a plain top-level property, which the main RDF pass already handles
@@ -268,6 +273,7 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
                 stack.push(frame);
                 emit_attributes(&e, &resolver, &stack, &mut collected)?;
                 close_frame(&mut stack, &mut collected);
+                resolver.pop_element_scope();
             }
 
             Ok(Event::Text(e)) => {
@@ -279,7 +285,10 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
                 }
             }
 
-            Ok(Event::End(_)) => close_frame(&mut stack, &mut collected),
+            Ok(Event::End(_)) => {
+                close_frame(&mut stack, &mut collected);
+                resolver.pop_element_scope();
+            }
 
             Ok(Event::Eof) => break,
             Ok(_) => {}
@@ -293,10 +302,7 @@ pub fn extract_flattened_struct_fields(xml_bytes: &[u8]) -> Result<Vec<(String, 
         buf.clear();
     }
 
-    Ok(collected
-        .into_iter()
-        .map(|(id, values)| (format!("XMP:{id}"), values))
-        .collect())
+    Ok(collected)
 }
 
 /// Builds the [`Frame`] for `element` and counts it against its parent.
@@ -306,6 +312,10 @@ fn push_frame(
     stack: &mut [Frame],
 ) -> Result<Frame> {
     register_namespaces(element, resolver)?;
+    // Opened here, closed by the caller at the element's end (or at once for
+    // an empty element), so the group below sees this element's own
+    // declarations but not its children's.
+    resolver.push_element_scope();
 
     let name = element.name();
     let qname = std::str::from_utf8(name.as_ref()).map_err(|e| {
@@ -322,6 +332,7 @@ fn push_frame(
 
     Ok(Frame {
         part: (!ignored).then(|| tag_id_segment(rename_field(uri.as_deref(), local))),
+        group: resolver.group_for_prefix(prefix),
         uri,
         lang: lang_attribute(element)?,
         // An element with no content of its own takes its value from
@@ -412,11 +423,13 @@ fn flat_tag_name(stack: &[Frame], extra_segment: Option<&str>) -> Option<String>
     let mut id = String::new();
     let mut segments = 0usize;
     let mut root_uri: Option<&str> = None;
+    let mut group = "XMP";
 
     for frame in stack {
         let Some(part) = &frame.part else { continue };
         if segments == 0 {
             root_uri = frame.uri.as_deref();
+            group = &frame.group;
         }
         segments += 1;
         id.push_str(part);
@@ -440,8 +453,8 @@ fn flat_tag_name(stack: &[Frame], extra_segment: Option<&str>) -> Option<String>
         return None;
     }
     match lang {
-        Some(lang) if lang != "x-default" => Some(format!("{name}-{lang}")),
-        _ => Some(name),
+        Some(lang) if lang != "x-default" => Some(format!("{group}:{name}-{lang}")),
+        _ => Some(format!("{group}:{name}")),
     }
 }
 
@@ -504,6 +517,7 @@ fn tag_id_segment(local: &str) -> String {
 
 fn rename_field<'a>(uri: Option<&str>, local: &'a str) -> &'a str {
     let Some(uri) = uri else { return local };
+    let uri = super::namespace_resolver::canonical_standard_uri(uri).unwrap_or(uri);
     FIELD_RENAMES
         .iter()
         .find(|(u, l, _)| *u == uri && *l == local)
@@ -554,6 +568,8 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
                     // that both defines the node and, when nested inside a
                     // property, is that property's value.
                     if let Some(prefix) = reference_prefix(&stack) {
+                        // `prefix` is `XMP-<ns>:<Name>`: the reference
+                        // property's group and flattened name.
                         references.push((prefix, node_id.clone()));
                     }
                     if nodes.iter().all(|(id, _)| *id != node_id) {
@@ -579,6 +595,7 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
 
                 if is_empty {
                     stack.pop();
+                    resolver.pop_element_scope();
                 }
             }
 
@@ -609,6 +626,7 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
                         node_scope.pop();
                     }
                 }
+                resolver.pop_element_scope();
             }
 
             Ok(Event::Eof) => break,
@@ -629,7 +647,7 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
             continue;
         };
         for (field, value) in fields {
-            let tag = format!("XMP:{prefix}{field}");
+            let tag = format!("{prefix}{field}");
             if !out.iter().any(|(t, _): &(String, String)| *t == tag) {
                 out.push((tag, value.clone()));
             }
@@ -644,12 +662,14 @@ pub fn extract_blank_node_fields(xml_bytes: &[u8]) -> Result<Vec<(String, String
 /// (a top-level node definition defines fields but names no tag).
 fn reference_prefix(stack: &[Frame]) -> Option<String> {
     let mut prefix = String::new();
+    let mut group: Option<&str> = None;
     for frame in stack {
         if let Some(part) = &frame.part {
+            group.get_or_insert(&frame.group);
             prefix.push_str(part);
         }
     }
-    (!prefix.is_empty()).then_some(prefix)
+    group.map(|group| format!("{group}:{prefix}"))
 }
 
 fn push_node_field(
@@ -800,19 +820,25 @@ mod tests {
     fn mwg_regions_use_their_flat_name_prefix() {
         let tags = extract_flattened_struct_fields(MWG_REGION_XMP).unwrap();
         assert_eq!(
-            value_of(&tags, "XMP:RegionAppliedToDimensionsW").as_deref(),
+            value_of(&tags, "XMP-mwg-rs:RegionAppliedToDimensionsW").as_deref(),
             Some("3264")
         );
-        assert_eq!(value_of(&tags, "XMP:RegionAreaX").as_deref(), Some("0.578"));
-        assert_eq!(value_of(&tags, "XMP:RegionType").as_deref(), Some("Face"));
+        assert_eq!(
+            value_of(&tags, "XMP-mwg-rs:RegionAreaX").as_deref(),
+            Some("0.578")
+        );
+        assert_eq!(
+            value_of(&tags, "XMP-mwg-rs:RegionType").as_deref(),
+            Some("Face")
+        );
         // apple-fi:Timestamp is reported as TimeStamp (XMP2.pl).
         assert_eq!(
-            value_of(&tags, "XMP:RegionExtensionsTimeStamp").as_deref(),
+            value_of(&tags, "XMP-mwg-rs:RegionExtensionsTimeStamp").as_deref(),
             Some("-1179414036")
         );
         // The un-rewritten concatenations must not leak out.
-        assert!(value_of(&tags, "XMP:RegionsAppliedToDimensionsW").is_none());
-        assert!(value_of(&tags, "XMP:RegionsRegionListType").is_none());
+        assert!(value_of(&tags, "XMP-mwg-rs:RegionsAppliedToDimensionsW").is_none());
+        assert!(value_of(&tags, "XMP-mwg-rs:RegionsRegionListType").is_none());
     }
 
     /// IPTC Extension's `ArtworkOrObject` fields carry `Flat => 1` regardless
@@ -851,11 +877,15 @@ mod tests {
 
         let tags = extract_flattened_struct_fields(XMP).unwrap();
         assert_eq!(
-            value_of(&tags, "XMP:RegionExtensionsArtworkTitle-de").as_deref(),
+            value_of(&tags, "XMP-mwg-rs:RegionExtensionsArtworkTitle-de").as_deref(),
             Some("verfaenglich")
         );
         assert!(
-            value_of(&tags, "XMP:RegionExtensionsArtworkOrObjectAOTitle-de").is_none(),
+            value_of(
+                &tags,
+                "XMP-mwg-rs:RegionExtensionsArtworkOrObjectAOTitle-de"
+            )
+            .is_none(),
             "the un-renamed concatenation must not leak out: {tags:?}"
         );
     }
@@ -875,7 +905,7 @@ mod tests {
 </rdf:RDF>"#;
         let tags = extract_flattened_struct_fields(XMP).unwrap();
         assert_eq!(
-            value_of(&tags, "XMP:HistoryAction").as_deref(),
+            value_of(&tags, "XMP-xmpMM:HistoryAction").as_deref(),
             Some("saved, derived")
         );
     }
@@ -902,12 +932,15 @@ mod tests {
  </rdf:Description>
 </rdf:RDF>"#;
         let tags = extract_flattened_struct_fields(XMP).unwrap();
-        assert_eq!(value_of(&tags, "XMP:Trait").as_deref(), Some("Physical"));
         assert_eq!(
-            value_of(&tags, "XMP:DepthMapFar").as_deref(),
+            value_of(&tags, "XMP-Device:Trait").as_deref(),
+            Some("Physical")
+        );
+        assert_eq!(
+            value_of(&tags, "XMP-Device:DepthMapFar").as_deref(),
             Some("6.145783")
         );
-        assert!(value_of(&tags, "XMP:CamerasTrait").is_none());
+        assert!(value_of(&tags, "XMP-Device:CamerasTrait").is_none());
     }
 
     #[test]
@@ -926,11 +959,11 @@ mod tests {
 </rdf:RDF>"#;
         let tags = extract_flattened_struct_fields(XMP).unwrap();
         assert_eq!(
-            value_of(&tags, "XMP:DirectoryItemMime").as_deref(),
+            value_of(&tags, "XMP-GContainer:DirectoryItemMime").as_deref(),
             Some("image/jpeg")
         );
         assert_eq!(
-            value_of(&tags, "XMP:DirectoryItemSemantic").as_deref(),
+            value_of(&tags, "XMP-GContainer:DirectoryItemSemantic").as_deref(),
             Some("Primary")
         );
     }
@@ -960,11 +993,11 @@ mod tests {
 </rdf:RDF>"#;
         let tags = extract_flattened_struct_fields(XMP).unwrap();
         assert_eq!(
-            value_of(&tags, "XMP:LookName").as_deref(),
+            value_of(&tags, "XMP-crs:LookName").as_deref(),
             Some("Adobe Color")
         );
         assert_eq!(
-            value_of(&tags, "XMP:LookName-de-DE").as_deref(),
+            value_of(&tags, "XMP-crs:LookName-de-DE").as_deref(),
             Some("Adobe Farbe")
         );
     }
@@ -988,15 +1021,15 @@ mod tests {
 </rdf:RDF>"#;
         let tags = extract_flattened_struct_fields(XMP).unwrap();
         assert_eq!(
-            value_of(&tags, "XMP:LookName").as_deref(),
+            value_of(&tags, "XMP-crs:LookName").as_deref(),
             Some("Adobe Color")
         );
         assert!(
-            value_of(&tags, "XMP:LookNameId").is_none(),
+            value_of(&tags, "XMP-crs:LookNameId").is_none(),
             "et:id must not invent a field: {tags:?}"
         );
         assert!(
-            value_of(&tags, "XMP:LookNameDesc").is_none(),
+            value_of(&tags, "XMP-crs:LookNameDesc").is_none(),
             "et:desc must not invent a field: {tags:?}"
         );
     }

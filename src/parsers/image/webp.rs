@@ -12,7 +12,7 @@ use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::image::embedded::parse_embedded_exif_at;
-use crate::parsers::xmp::rdf_parser::parse_xmp;
+use crate::parsers::xmp::rdf_parser::insert_xmp_packet;
 
 /// WebP signature: "RIFF" + size + "WEBP"
 const RIFF_SIGNATURE: &[u8] = b"RIFF";
@@ -278,11 +278,7 @@ fn parse_webp_chunks(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
                     let xmp_data = reader.read(chunk_data_offset, chunk_size as usize)?;
 
                     // Parse the XMP and extract metadata
-                    if let Ok(xmp_props) = parse_xmp(xmp_data) {
-                        for (name, value) in xmp_props {
-                            metadata.insert(name, TagValue::String(value));
-                        }
-                    }
+                    let _ = insert_xmp_packet(metadata, xmp_data, false);
                 }
             }
             b"ICCP" => {

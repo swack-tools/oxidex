@@ -6,7 +6,7 @@ use base64::{Engine as _, engine::general_purpose};
 
 use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
-use crate::parsers::xmp::parse_xmp;
+use crate::parsers::xmp::rdf_parser::{insert_grouped_xmp_tag, insert_xmp_packet};
 
 /// Maximum bytes to read from SVG file for parsing (SVG headers are at the start)
 const MAX_READ_SIZE: usize = 65536; // 64KB
@@ -243,11 +243,7 @@ impl SVGParser {
         if let Some(start) = text.find("<x:xmpmeta") {
             if let Some(end) = text[start..].find("</x:xmpmeta>") {
                 let xmp_data = &text[start..start + end + 12];
-                if let Ok(xmp_tuples) = parse_xmp(xmp_data.as_bytes()) {
-                    for (key, value) in xmp_tuples {
-                        metadata.insert(key, TagValue::new_string(value));
-                    }
-                }
+                let _ = insert_xmp_packet(metadata, xmp_data.as_bytes(), false);
             }
         }
         // Also look for standalone rdf:RDF inside metadata element
@@ -259,11 +255,7 @@ impl SVGParser {
                         let rdf_data = &meta_content[rdf_start..rdf_start + rdf_end + 10];
                         // Wrap in xmpmeta for parser
                         let wrapped = format!("<x:xmpmeta>{}</x:xmpmeta>", rdf_data);
-                        if let Ok(xmp_tuples) = parse_xmp(wrapped.as_bytes()) {
-                            for (key, value) in xmp_tuples {
-                                metadata.insert(key, TagValue::new_string(value));
-                            }
-                        }
+                        let _ = insert_xmp_packet(metadata, wrapped.as_bytes(), false);
                     }
                 }
             }
@@ -276,25 +268,42 @@ impl SVGParser {
         if let Some(dc_date) = Self::extract_element_content(text, "dc:date")
             .or_else(|| Self::extract_attribute(text, "dc:date"))
         {
-            metadata.insert(
-                "XMP:Date".to_string(),
+            insert_grouped_xmp_tag(
+                metadata,
+                "XMP:Date",
+                "XMP-dc",
                 TagValue::new_string(Self::format_xmp_date(&dc_date)),
             );
         }
 
         // dc:format -> XMP:Format
         if let Some(dc_format) = Self::extract_element_content(text, "dc:format") {
-            metadata.insert("XMP:Format".to_string(), TagValue::new_string(dc_format));
+            insert_grouped_xmp_tag(
+                metadata,
+                "XMP:Format",
+                "XMP-dc",
+                TagValue::new_string(dc_format),
+            );
         }
 
         // dc:language -> XMP:Language
         if let Some(dc_lang) = Self::extract_element_content(text, "dc:language") {
-            metadata.insert("XMP:Language".to_string(), TagValue::new_string(dc_lang));
+            insert_grouped_xmp_tag(
+                metadata,
+                "XMP:Language",
+                "XMP-dc",
+                TagValue::new_string(dc_lang),
+            );
         }
 
         // dc:publisher -> XMP:Publisher
         if let Some(dc_pub) = Self::extract_element_content(text, "dc:publisher") {
-            metadata.insert("XMP:Publisher".to_string(), TagValue::new_string(dc_pub));
+            insert_grouped_xmp_tag(
+                metadata,
+                "XMP:Publisher",
+                "XMP-dc",
+                TagValue::new_string(dc_pub),
+            );
         }
 
         // rdf:about (or bare "about" within an rdf:Description tag) -> XMP:About
@@ -305,7 +314,12 @@ impl SVGParser {
             if let Some(about) = Self::extract_attribute(desc_tag, "rdf:about")
                 .or_else(|| Self::extract_attribute(desc_tag, "about"))
             {
-                metadata.insert("XMP:About".to_string(), TagValue::new_string(about));
+                insert_grouped_xmp_tag(
+                    metadata,
+                    "XMP:About",
+                    "XMP-rdf",
+                    TagValue::new_string(about),
+                );
             }
         }
     }
@@ -676,13 +690,28 @@ impl FormatParser for SVGParser {
         // Extract Dublin Core metadata if present
         if text.contains("dc:") {
             if let Some(dc_title) = Self::extract_element_content(text, "dc:title") {
-                metadata.insert("XMP:Title".to_string(), TagValue::String(dc_title));
+                insert_grouped_xmp_tag(
+                    &mut metadata,
+                    "XMP:Title",
+                    "XMP-dc",
+                    TagValue::String(dc_title),
+                );
             }
             if let Some(dc_creator) = Self::extract_dc_creator(text) {
-                metadata.insert("XMP:Creator".to_string(), TagValue::String(dc_creator));
+                insert_grouped_xmp_tag(
+                    &mut metadata,
+                    "XMP:Creator",
+                    "XMP-dc",
+                    TagValue::String(dc_creator),
+                );
             }
             if let Some(dc_desc) = Self::extract_element_content(text, "dc:description") {
-                metadata.insert("XMP:Description".to_string(), TagValue::String(dc_desc));
+                insert_grouped_xmp_tag(
+                    &mut metadata,
+                    "XMP:Description",
+                    "XMP-dc",
+                    TagValue::String(dc_desc),
+                );
             }
 
             // Extract additional Dublin Core elements

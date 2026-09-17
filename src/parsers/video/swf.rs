@@ -41,7 +41,7 @@
 use crate::core::formatters::duration::convert_duration;
 use crate::core::{FileReader, MetadataMap, TagValue};
 use crate::exiftool_tables::decode_bits;
-use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
+use crate::parsers::xmp::rdf_parser::insert_xmp_packet;
 use flate2::read::ZlibDecoder;
 use std::io::Read;
 
@@ -224,17 +224,7 @@ pub fn parse_swf_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
             has_meta = true;
         } else if tag == 77 {
             let payload = &rest[pos..pos + tag_size];
-            if let Ok(tags) = parse_xmp_typed(payload) {
-                for (name, value) in tags {
-                    let value = match value {
-                        XmpValue::Scalar(value) => TagValue::new_string(value),
-                        XmpValue::List(values) => {
-                            TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
-                        }
-                    };
-                    metadata.insert(name, value);
-                }
-            }
+            let _ = insert_xmp_packet(&mut metadata, payload, true);
             break;
         }
 

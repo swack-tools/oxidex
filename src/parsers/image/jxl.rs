@@ -12,7 +12,7 @@ use crate::core::{FileFormat, FileReader, FormatParser, MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::io::EndianReader;
 use crate::parsers::image::embedded::parse_embedded_exif_at;
-use crate::parsers::xmp::rdf_parser::parse_xmp;
+use crate::parsers::xmp::rdf_parser::insert_xmp_packet;
 
 /// Bare codestream signature: 0xFF 0x0A
 const JXL_CODESTREAM_SIGNATURE: &[u8] = &[0xFF, 0x0A];
@@ -312,11 +312,7 @@ impl JXLParser {
 
     /// Extract metadata from XMP using the proper RDF parser
     fn parse_xmp_data(xmp: &str, metadata: &mut MetadataMap) {
-        if let Ok(xmp_tags) = parse_xmp(xmp.as_bytes()) {
-            for (tag_name, value) in xmp_tags {
-                metadata.insert(tag_name, TagValue::String(value));
-            }
-        }
+        let _ = insert_xmp_packet(metadata, xmp.as_bytes(), false);
     }
 }
 

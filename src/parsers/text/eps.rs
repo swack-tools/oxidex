@@ -16,7 +16,10 @@ use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
 };
-use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
+use crate::parsers::xmp::parse_xmp_history;
+use crate::parsers::xmp::rdf_parser::{
+    insert_grouped_xmp_tag, insert_xmp_entry, parse_xmp_entries,
+};
 
 /// Maximum bytes to read from EPS file for parsing
 const MAX_READ_SIZE: usize = 1024 * 1024; // 1MB
@@ -251,31 +254,30 @@ impl EPSParser {
                 if let Some(end_offset) = find_subsequence(&data[xml_start_pos..], XMP_END) {
                     let xmp_data = &data[xml_start_pos..xml_start_pos + end_offset];
 
-                    // Parse the XMP data
-                    if let Ok(xmp_tags) = parse_xmp(xmp_data) {
-                        for (key, value) in xmp_tags {
-                            metadata.insert(key, TagValue::new_string(value));
-                        }
-                    }
-
-                    // The shared XMP parser flattens list-type properties
-                    // (rdf:Bag/Seq/Alt, e.g. dc:subject) into a single
-                    // comma-joined string. ExifTool reports these as arrays,
-                    // so re-expand the known list-type XMP tags here into
-                    // TagValue::Array for correct multi-value representation.
-                    for list_tag in [
-                        "XMP:Subject",
-                        "XMP:SupplementalCategories",
-                        "XMP-photoshop:SupplementalCategories",
-                    ] {
-                        if let Some(TagValue::String(joined)) = metadata.get(list_tag) {
-                            let items: Vec<TagValue> = joined
-                                .split(", ")
-                                .map(|s| TagValue::new_string(s.to_string()))
-                                .collect();
-                            if items.len() > 1 {
-                                metadata.insert(list_tag.to_string(), TagValue::Array(items));
+                    // Parse the XMP data. List-type properties (rdf:Bag/Seq/Alt,
+                    // e.g. dc:subject) are read as one comma-joined string;
+                    // ExifTool reports the known list-type tags below as arrays,
+                    // so they are re-expanded into TagValue::Array before they
+                    // are stored.
+                    if let Ok(entries) = parse_xmp_entries(xmp_data) {
+                        for entry in &entries {
+                            let mut value = entry.tag_value(false);
+                            if matches!(
+                                entry.key.as_str(),
+                                "XMP:Subject"
+                                    | "XMP:SupplementalCategories"
+                                    | "XMP-photoshop:SupplementalCategories"
+                            ) && let TagValue::String(joined) = &value
+                            {
+                                let items: Vec<TagValue> = joined
+                                    .split(", ")
+                                    .map(|s| TagValue::new_string(s.to_string()))
+                                    .collect();
+                                if items.len() > 1 {
+                                    value = TagValue::Array(items);
+                                }
                             }
+                            insert_xmp_entry(metadata, entry, value);
                         }
                     }
 
@@ -295,16 +297,22 @@ impl EPSParser {
                         // inside xmpBJ:JobRef. Extract them directly here.
                         if !metadata.contains_key("XMP:About") {
                             if let Some(about) = extract_xml_attribute(xml_str, "about") {
-                                metadata
-                                    .insert("XMP:About".to_string(), TagValue::new_string(about));
+                                insert_grouped_xmp_tag(
+                                    metadata,
+                                    "XMP:About",
+                                    "XMP-rdf",
+                                    TagValue::new_string(about),
+                                );
                             }
                         }
                         if !metadata.contains_key("XMP:XMPToolkit") {
                             if let Some(toolkit) = extract_xml_attribute(xml_str, "x:xaptk")
                                 .or_else(|| extract_xml_attribute(xml_str, "xmptk"))
                             {
-                                metadata.insert(
-                                    "XMP:XMPToolkit".to_string(),
+                                insert_grouped_xmp_tag(
+                                    metadata,
+                                    "XMP:XMPToolkit",
+                                    "XMP-x",
                                     TagValue::new_string(toolkit),
                                 );
                             }
@@ -312,8 +320,10 @@ impl EPSParser {
                         if !metadata.contains_key("XMP:JobRefName") {
                             if let Some(job_name) = extract_xml_element_text(xml_str, "stJob:name")
                             {
-                                metadata.insert(
-                                    "XMP:JobRefName".to_string(),
+                                insert_grouped_xmp_tag(
+                                    metadata,
+                                    "XMP:JobRefName",
+                                    "XMP-xmpBJ",
                                     TagValue::new_string(job_name),
                                 );
                             }

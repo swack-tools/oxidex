@@ -710,11 +710,11 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // simply never handed the bytes to it, so every RAW file
                     // reported zero XMP tags while ExifTool read them.
                     if *tag_id == 0x02BC {
-                        if let Ok(xmp_tags) = crate::parsers::xmp::rdf_parser::parse_xmp(bytes) {
-                            for (tag_name, tag_value) in xmp_tags {
-                                metadata.insert(tag_name, TagValue::new_string(tag_value));
-                            }
-                        }
+                        let _ = crate::parsers::xmp::rdf_parser::insert_xmp_packet(
+                            &mut metadata,
+                            bytes,
+                            false,
+                        );
                         // The raw packet itself is not a tag ExifTool reports.
                         continue;
                     }
@@ -5149,12 +5149,8 @@ fn parse_cr3(data: &[u8], _format: RawFormat) -> Result<MetadataMap> {
 
     // XMP lives in a top-level `uuid` box (QuickTime.pm's UUID-XMP condition
     // matches be7acfcb-97a9-42e8-9c71-999491e3afac), not in the Canon uuid box.
-    if let Some(payload) = find_cr3_uuid_box(data, &UUID_XMP)
-        && let Ok(xmp_tags) = crate::parsers::xmp::parse_xmp(payload)
-    {
-        for (tag_name, tag_value) in xmp_tags {
-            metadata.insert(tag_name, TagValue::new_string(tag_value));
-        }
+    if let Some(payload) = find_cr3_uuid_box(data, &UUID_XMP) {
+        let _ = crate::parsers::xmp::rdf_parser::insert_xmp_packet(&mut metadata, payload, false);
     }
 
     // PreviewImage is its own top-level `uuid` box. QuickTime.pm's PreviewImage

@@ -109,6 +109,10 @@ pub fn family1_label(occurrence: &TagOccurrence) -> &str {
 pub fn family0_label(occurrence: &TagOccurrence) -> &str {
     if occurrence.group1.is_empty() {
         resolve_family0(&occurrence.group0)
+    } else if occurrence.group0.starts_with("XMP-") {
+        // An XMP tag stored under a namespace-group key (`XMP-exif:FNumber`)
+        // with its family-1 group beside it is family-0 `XMP`.
+        "XMP"
     } else {
         &occurrence.group0
     }
