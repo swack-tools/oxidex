@@ -48,6 +48,10 @@ pub struct NamespaceResolver {
     cur_ns: HashMap<String, String>,
     /// ExifTool's per-packet `$$et{curURI}`: that prefix -> its URI.
     cur_uri: HashMap<String, String>,
+    /// Lowest `N` whose `tmpN` is not yet a key of `cur_uri`. Keys are only
+    /// ever added, so this never moves back, and allocating a `tmpN` costs
+    /// amortized O(1) instead of rescanning from `tmp0` every time.
+    next_tmp: usize,
     /// ExifTool's `$$et{xlatNS}`: document prefix -> the prefix it is
     /// translated to. Scoped the way `ParseXMPElement` scopes it, see
     /// [`Self::push_element_scope`].
@@ -102,6 +106,7 @@ impl NamespaceResolver {
             uri_to_prefix: HashMap::new(),
             cur_ns: HashMap::new(),
             cur_uri: HashMap::new(),
+            next_tmp: 0,
             xlat: HashMap::new(),
             scopes: Vec::new(),
             pending_bindings: Vec::new(),
@@ -266,11 +271,10 @@ impl NamespaceResolver {
             let mut used = prefix.to_string();
             let mut new_prefix = None;
             if self.cur_uri.contains_key(prefix) || is_standard_prefix(prefix) {
-                let mut index = 0usize;
-                while self.cur_uri.contains_key(&format!("tmp{index}")) {
-                    index += 1;
+                while self.cur_uri.contains_key(&format!("tmp{}", self.next_tmp)) {
+                    self.next_tmp += 1;
                 }
-                used = format!("tmp{index}");
+                used = format!("tmp{}", self.next_tmp);
                 new_prefix = Some(used.clone());
             }
             self.cur_ns.insert(uri.to_string(), used.clone());
@@ -485,13 +489,23 @@ fn standard_namespace_for_declared_uri(uri: &str) -> Option<(&'static str, &'sta
         return Some(found);
     }
     let (head, tail) = split_version_segment(uri)?;
-    // `grep /^$try$/, keys %uri2ns` takes whichever match hash order yields
-    // first; the table is sorted, so take the first sorted match.
-    URI_PREFIXES.iter().copied().find(|(known, _)| {
-        split_version_segment(known)
-            .is_some_and(|(known_head, known_tail)| known_head == head && known_tail == tail)
-    })
+    VERSIONED_URIS.get(&(head, tail)).copied()
 }
+
+/// The standard URIs that carry an `N.N` version segment, keyed by the text
+/// around it. `grep /^$try$/, keys %uri2ns` takes whichever match hash order
+/// yields first; the table is sorted, so the first sorted URI is kept.
+static VERSIONED_URIS: std::sync::LazyLock<
+    HashMap<(&'static str, &'static str), (&'static str, &'static str)>,
+> = std::sync::LazyLock::new(|| {
+    let mut index = HashMap::new();
+    for &(known, prefix) in URI_PREFIXES {
+        if let Some(key) = split_version_segment(known) {
+            index.entry(key).or_insert((known, prefix));
+        }
+    }
+    index
+});
 
 /// Splits `uri` around its first `/<digits>.<digits>` segment that is
 /// followed by `/` or the end of the string, returning the text before the
