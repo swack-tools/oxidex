@@ -768,9 +768,12 @@ fn parse_tdhd(data: &[u8]) -> Result<MetadataMap> {
 /// A metadata map of the NITF tags present; a short record simply yields
 /// fewer tags, as ExifTool's binary-data reader does.
 fn parse_nitf(data: &[u8]) -> MetadataMap {
+    // `%JPEG::NITF` is `GROUPS => { 0 => 'APP6', 1 => 'NITF', 2 => 'Image' }`
+    // (JPEG.pm:708); the `APP6:` key prefix is family 0.
+    const NITF_GROUP1: &str = "NITF";
     let mut metadata = MetadataMap::new();
     let mut put = |name: &str, value: TagValue| {
-        metadata.insert(format!("APP6:{}", name), value);
+        metadata.insert_with_group1(format!("APP6:{}", name), value, NITF_GROUP1);
     };
     // PrintConv hash misses report the raw code, never a neighbouring label.
     let lookup = |code: i64, table: &[(i64, &str)]| -> TagValue {

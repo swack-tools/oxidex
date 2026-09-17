@@ -308,8 +308,14 @@ impl FormatParser for RadianceParser {
                     "Orientation".to_string(),
                     TagValue::String(orientation.unwrap_or(&axes).to_string()),
                 );
-                metadata.insert("ImageHeight".to_string(), TagValue::Integer(height as i64));
-                metadata.insert("ImageWidth".to_string(), TagValue::Integer(width as i64));
+                metadata.insert(
+                    "File:ImageHeight".to_string(),
+                    TagValue::Integer(height as i64),
+                );
+                metadata.insert(
+                    "File:ImageWidth".to_string(),
+                    TagValue::Integer(width as i64),
+                );
             }
         }
 
@@ -393,8 +399,14 @@ mod tests {
         let mut data = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 480 +X 640\n".to_vec();
         data.extend_from_slice(&[0x02, 0x02]);
         let metadata = parse(data);
-        assert_eq!(metadata.get("ImageHeight"), Some(&TagValue::Integer(480)));
-        assert_eq!(metadata.get("ImageWidth"), Some(&TagValue::Integer(640)));
+        assert_eq!(
+            metadata.get("File:ImageHeight"),
+            Some(&TagValue::Integer(480))
+        );
+        assert_eq!(
+            metadata.get("File:ImageWidth"),
+            Some(&TagValue::Integer(640))
+        );
         assert_eq!(string(&metadata, "Orientation"), "Horizontal (normal)");
     }
 

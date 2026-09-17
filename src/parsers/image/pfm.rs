@@ -128,7 +128,7 @@ impl FormatParser for PFMParser {
         // answer the tables had already given correctly.
         metadata.insert("FileType".to_string(), TagValue::String("PFM".to_string()));
         metadata.insert(
-            "ColorSpace".to_string(),
+            "File:ColorSpace".to_string(),
             TagValue::String(
                 match header.color_space {
                     "PF" => "RGB",
@@ -139,15 +139,15 @@ impl FormatParser for PFMParser {
             ),
         );
         metadata.insert(
-            "ImageWidth".to_string(),
+            "File:ImageWidth".to_string(),
             TagValue::Integer(header.width as i64),
         );
         metadata.insert(
-            "ImageHeight".to_string(),
+            "File:ImageHeight".to_string(),
             TagValue::Integer(header.height as i64),
         );
         metadata.insert(
-            "ByteOrder".to_string(),
+            "File:ByteOrder".to_string(),
             TagValue::String(
                 if header.scale > 0.0 {
                     "Big-endian"
@@ -191,13 +191,13 @@ mod tests {
         let reader = make_reader("PF\n4 2\n1.0\n", 4 * 2 * 3 * 4);
         let meta = parse_pfm_metadata(&reader).expect("parse should succeed");
         assert_eq!(
-            meta.get("ColorSpace"),
+            meta.get("File:ColorSpace"),
             Some(&TagValue::String("RGB".to_string()))
         );
-        assert_eq!(meta.get("ImageWidth"), Some(&TagValue::Integer(4)));
-        assert_eq!(meta.get("ImageHeight"), Some(&TagValue::Integer(2)));
+        assert_eq!(meta.get("File:ImageWidth"), Some(&TagValue::Integer(4)));
+        assert_eq!(meta.get("File:ImageHeight"), Some(&TagValue::Integer(2)));
         assert_eq!(
-            meta.get("ByteOrder"),
+            meta.get("File:ByteOrder"),
             Some(&TagValue::String("Big-endian".to_string()))
         );
     }
@@ -207,13 +207,13 @@ mod tests {
         let reader = make_reader("Pf\n8 3\n-1.0\n", 8 * 3 * 4);
         let meta = parse_pfm_metadata(&reader).expect("parse should succeed");
         assert_eq!(
-            meta.get("ColorSpace"),
+            meta.get("File:ColorSpace"),
             Some(&TagValue::String("Monochrome".to_string()))
         );
-        assert_eq!(meta.get("ImageWidth"), Some(&TagValue::Integer(8)));
-        assert_eq!(meta.get("ImageHeight"), Some(&TagValue::Integer(3)));
+        assert_eq!(meta.get("File:ImageWidth"), Some(&TagValue::Integer(8)));
+        assert_eq!(meta.get("File:ImageHeight"), Some(&TagValue::Integer(3)));
         assert_eq!(
-            meta.get("ByteOrder"),
+            meta.get("File:ByteOrder"),
             Some(&TagValue::String("Little-endian".to_string()))
         );
     }

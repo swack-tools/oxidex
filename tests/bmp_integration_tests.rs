@@ -17,7 +17,7 @@ fn os2_bmp_extracts_planes_from_the_os2_dib_layout() {
     let reader = BufferedReader::from_bytes(&bmp);
     let metadata = parse_bmp_metadata(&reader).expect("parse synthetic OS/2 BMP");
 
-    assert_eq!(metadata.get_integer("Planes"), Some(1));
+    assert_eq!(metadata.get_integer("File:Planes"), Some(1));
 }
 
 #[test]
@@ -26,5 +26,5 @@ fn bmp_fixture_extracts_planes_from_the_dib_header() {
     let reader = BufferedReader::new(Path::new(BMP_FIXTURE)).expect("open pinned BMP fixture");
     let metadata = parse_bmp_metadata(&reader).expect("parse pinned BMP fixture");
 
-    assert_eq!(metadata.get_integer("Planes"), Some(1));
+    assert_eq!(metadata.get_integer("File:Planes"), Some(1));
 }

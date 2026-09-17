@@ -501,7 +501,7 @@ fn test_pcapng_operating_system() {
         .expect("Failed to parse PCAP-NG operating-system option");
 
     assert_eq!(
-        metadata.get("OperatingSystem"),
+        metadata.get("File:OperatingSystem"),
         Some(&TagValue::String(
             "64-bit Windows 10 (1809), build 17763".to_string()
         )),
@@ -523,7 +523,7 @@ fn test_pcapng_interface_operating_system() {
         .expect("Failed to parse PCAP-NG interface operating-system option");
 
     assert_eq!(
-        metadata.get("OperatingSystem"),
+        metadata.get("File:OperatingSystem"),
         Some(&TagValue::String(
             "64-bit Windows 10 (1809), build 17763".to_string()
         )),

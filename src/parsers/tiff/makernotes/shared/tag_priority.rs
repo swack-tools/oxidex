@@ -199,7 +199,28 @@ pub(crate) fn record_makernote_tag(
         );
         return;
     }
+    if let Some(group1) = nikon_subdirectory_group1(&tag_name) {
+        metadata.insert_with_group1(tag_name, tag_value, group1);
+        return;
+    }
     metadata.insert(tag_name, tag_value);
+}
+
+/// The family-1 group of a `Nikon:`-keyed tag decoded from a Nikon
+/// sub-directory whose table names a family-1 group other than `Nikon`:
+/// `PreviewIFD` (Nikon.pm:5389) or `NikonCapture` (NikonCapture.pm module
+/// default). The storage key, priority and family 0 (`MakerNotes`, through
+/// `tag_resolution::resolve_family0`) are unchanged; only the `-G1` label
+/// and family-1-qualified requests see the group.
+///
+/// The Nikon parsers return a `HashMap<String, String>`, which has nowhere to
+/// carry a group, so the name decides -- and only for names exactly one Nikon
+/// directory can produce (see `preview_ifd_group1` and
+/// `capture_only_group1`).
+fn nikon_subdirectory_group1(tag_name: &str) -> Option<&'static str> {
+    let name = tag_name.strip_prefix("Nikon:")?;
+    crate::parsers::tiff::makernotes::nikon::sub_ifds::preview_ifd_group1(name)
+        .or_else(|| crate::parsers::tiff::makernotes::nikon_capture_data::capture_only_group1(name))
 }
 
 /// Records display and ValueConv from one parsed occurrence before arbitration.

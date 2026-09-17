@@ -213,9 +213,11 @@ pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<()
             2 => "Even",
             _ => "Unknown",
         };
-        metadata.insert(
-            "APP0:InterleavedField".to_string(),
+        // `%JPEG::AVI1` is `GROUPS => { 0 => 'APP0', 1 => 'AVI1' }` (JPEG.pm:675).
+        metadata.insert_with_group1(
+            "APP0:InterleavedField",
             TagValue::String(interleaved_str.to_string()),
+            "AVI1",
         );
         return Ok(());
     }

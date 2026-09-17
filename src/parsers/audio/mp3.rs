@@ -107,7 +107,7 @@ impl FormatParser for Mp3Parser {
 
         if id3_size > 0 {
             metadata.insert(
-                "ID3Size".to_string(),
+                "File:ID3Size".to_string(),
                 TagValue::new_integer(id3_size as i64),
             );
         }

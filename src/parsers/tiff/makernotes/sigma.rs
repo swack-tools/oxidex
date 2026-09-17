@@ -51,6 +51,14 @@ const FOVEON_HEADER: &[u8] = b"FOVEON\0\0";
 /// the two-byte version field.
 const IFD_START: usize = 10;
 
+/// ExifTool's family-1 group for every tag this module emits.
+/// `%Image::ExifTool::Sigma::Main` declares `GROUPS => { 0 => 'MakerNotes',
+/// 2 => 'Camera' }` (Sigma.pm:268) with no family 1, so `GetTagTable` fills
+/// it from the module name (ExifTool.pm:8979-8985). The pinned oracle prints
+/// `[MakerNotes:Sigma]` under `-G0:1` for Sigma.jpg and SigmaDP2.x3f. The
+/// storage key stays `MakerNotes:<Name>`, which is already family 0.
+pub(crate) const SIGMA_GROUP1: &str = "Sigma";
+
 /// TIFF field types used below.
 const TYPE_STRING: u16 = 2;
 const TYPE_SHORT: u16 = 3;
@@ -103,7 +111,7 @@ pub fn parse_sigma_makernote(
             // duplicates of 0x0017 and 0x0007: ExifTool keeps the first
             // extraction, so an existing value is never overwritten.
             if metadata.get(&format!("MakerNotes:{name}")).is_none() {
-                metadata.insert(format!("MakerNotes:{name}"), value);
+                metadata.insert_with_group1(format!("MakerNotes:{name}"), value, SIGMA_GROUP1);
             }
         }
         match (*tag_id, *field_type) {
@@ -118,9 +126,10 @@ pub fn parse_sigma_makernote(
     // Measured on SigmaDP2.x3f: stored 2388, ExifTool prints 2692 (= 2388 +
     // 292 for the JpgFromRaw payload + 12 for the TIFF header inside it).
     if let Some(start) = preview_start {
-        metadata.insert(
-            "MakerNotes:PreviewImageStart".to_string(),
+        metadata.insert_with_group1(
+            "MakerNotes:PreviewImageStart",
             TagValue::new_integer(i64::from(start) + tiff_base as i64),
+            SIGMA_GROUP1,
         );
     }
 
@@ -131,9 +140,10 @@ pub fn parse_sigma_makernote(
         && let Some(image) =
             tiff.get(start as usize..(start as usize).saturating_add(length as usize))
     {
-        metadata.insert(
-            "MakerNotes:PreviewImage".to_string(),
+        metadata.insert_with_group1(
+            "MakerNotes:PreviewImage",
             TagValue::new_binary(image.to_vec()),
+            SIGMA_GROUP1,
         );
     }
 }

@@ -635,6 +635,36 @@ pub fn parse_nikon_capture_data(data: &[u8], tags: &mut HashMap<String, String>)
     }
 }
 
+/// ExifTool's family-1 group for NikonCapture tags. Every
+/// `%Image::ExifTool::NikonCapture::*` table declares `GROUPS => { 0 =>
+/// 'MakerNotes', 2 => 'Image' }` (NikonCapture.pm:43, :267, :295, ...) with
+/// no family 1, which `GetTagTable` fills from the module name
+/// (ExifTool.pm:8979-8985).
+pub(crate) const NIKON_CAPTURE_GROUP1: &str = "NikonCapture";
+
+/// Tag names this module emits that another table oxidex reads under the same
+/// `Nikon:` key also defines, so a `Nikon:<name>` key alone cannot say which
+/// directory produced it: `NoiseReduction` and `VignetteControl` are also
+/// `Nikon::Main` tags (0x0095, 0x002a), and `Rotation` is also a ShotInfo
+/// tag (`Nikon::ShotInfoD80` and others). These keep the `Nikon` family-1
+/// label rather than risk `-NikonCapture:Rotation` returning a ShotInfo value.
+const NAMES_SHARED_WITH_OTHER_NIKON_TABLES: &[&str] =
+    &["NoiseReduction", "Rotation", "VignetteControl"];
+
+/// The family-1 group for a `Nikon:<name>` key when `name` can only have come
+/// from this module: a `MAIN_TAGS` or sub-table field name that no other
+/// Nikon table shares.
+pub(crate) fn capture_only_group1(name: &str) -> Option<&'static str> {
+    if NAMES_SHARED_WITH_OTHER_NIKON_TABLES.contains(&name) {
+        return None;
+    }
+    let in_main = MAIN_TAGS.iter().any(|(_, n, _)| *n == name);
+    let in_sub = SUBDIRS
+        .iter()
+        .any(|(_, _, table)| table.fields.iter().any(|f| f.name == name));
+    (in_main || in_sub).then_some(NIKON_CAPTURE_GROUP1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,6 +711,21 @@ mod tests {
                 .map(String::as_str),
             Some("-10")
         );
+    }
+
+    /// NikonCapture-only names take the `NikonCapture` family-1 group; names
+    /// another Nikon table also defines, and names this module never emits,
+    /// get none.
+    #[test]
+    fn capture_only_group1_is_exact() {
+        assert_eq!(capture_only_group1("AdvancedRaw"), Some("NikonCapture"));
+        assert_eq!(capture_only_group1("CropLeft"), Some("NikonCapture"));
+        assert_eq!(capture_only_group1("WBAdjMode"), Some("NikonCapture"));
+        for shared in ["NoiseReduction", "Rotation", "VignetteControl"] {
+            assert_eq!(capture_only_group1(shared), None, "{shared}");
+        }
+        assert_eq!(capture_only_group1("LensType"), None);
+        assert_eq!(capture_only_group1("Compression"), None);
     }
 
     /// The ids are 32-bit. A build that truncated them to 16 -- as the

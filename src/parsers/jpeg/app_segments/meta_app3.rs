@@ -24,6 +24,11 @@ const META_IDENTIFIERS: [&[u8]; 3] = [b"Meta\0\0", b"META\0\0", b"Exif\0\0"];
 /// base every IFD value offset is relative to.
 const TIFF_BASE: usize = 6;
 
+/// ExifTool's family-1 group for this table: `%Image::ExifTool::Kodak::Meta`
+/// declares `GROUPS => { 0 => 'Meta', 1 => 'MetaIFD', 2 => 'Image' }`
+/// (Kodak.pm:2697). The storage key keeps its `Meta:` family-0 prefix.
+const META_GROUP1: &str = "MetaIFD";
+
 /// Maps a Kodak Meta tag id to ExifTool's tag name.
 ///
 /// Ids ExifTool does not list are `Unknown` and stay hidden, so they are
@@ -200,7 +205,7 @@ fn read_ifd(tiff: &[u8], offset: usize, endian: Endian, metadata: &mut MetadataM
         };
 
         if let Some(value) = convert_value(id, format, element_count, raw, endian) {
-            metadata.insert(format!("Meta:{}", name), value);
+            metadata.insert_with_group1(format!("Meta:{}", name), value, META_GROUP1);
         }
     }
 }

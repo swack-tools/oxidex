@@ -163,7 +163,7 @@ impl FormatParser for MpcParser {
             id3_size += 128;
         }
         if id3_size > 0 {
-            metadata.insert("ID3Size", TagValue::new_integer(id3_size as i64));
+            metadata.insert("File:ID3Size", TagValue::new_integer(id3_size as i64));
         }
 
         if let Some((frames, version)) = pending_id3v2 {

@@ -60,6 +60,34 @@ fn scalar_u32(entry: &IfdEntry, data: &[u8], tiff_start: usize, order: ByteOrder
     }
 }
 
+/// ExifTool's family-1 group for `Nikon::PreviewIFD`: `GROUPS => { 0 =>
+/// 'MakerNotes', 1 => 'PreviewIFD', 2 => 'Image' }` (Nikon.pm:5389), also
+/// set on the 0x0011 pointer itself (Nikon.pm:1874).
+pub(crate) const PREVIEW_IFD_GROUP1: &str = "PreviewIFD";
+
+/// The `Nikon:`-keyed names [`parse_preview_ifd`] emits. No other Nikon table
+/// oxidex reads under a `Nikon:` key defines any of them (the pinned
+/// `Nikon.pm` has them only in `%Nikon::PreviewIFD`, plus XResolution/
+/// YResolution/ResolutionUnit in the AVI `%Nikon::AVITags`, which oxidex does
+/// not decode), so the name alone identifies the directory.
+const PREVIEW_IFD_NAMES: &[&str] = &[
+    "Compression",
+    "XResolution",
+    "YResolution",
+    "ResolutionUnit",
+    "PreviewImageStart",
+    "PreviewImageLength",
+    "YCbCrPositioning",
+];
+
+/// The family-1 group for a `Nikon:<name>` key produced by
+/// [`parse_preview_ifd`].
+pub(crate) fn preview_ifd_group1(name: &str) -> Option<&'static str> {
+    PREVIEW_IFD_NAMES
+        .contains(&name)
+        .then_some(PREVIEW_IFD_GROUP1)
+}
+
 /// Walk `Nikon::PreviewIFD` (MakerNote tag 0x0011).
 ///
 /// `PreviewImageStart` is reported only when the absolute file offset of the

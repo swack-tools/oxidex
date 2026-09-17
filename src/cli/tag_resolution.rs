@@ -102,20 +102,20 @@ pub fn family1_label(occurrence: &TagOccurrence) -> &str {
     }
 }
 
-/// The family-0 label to show for `-Gn` display: `group0` itself when a
-/// migrated call site already set a real `group1` (the convention
-/// `insert_occurrence`/`insert_occurrence_with_raw` callers follow), else
-/// [`resolve_family0`] applied to `group0`.
+/// The family-0 label to show for `-Gn` display: [`resolve_family0`]
+/// applied to `group0`, whether or not a call site set a real `group1`.
+///
+/// `insert_occurrence` callers pass a real family-0 `group0` (`File`,
+/// `EXIF`, `ID3`, `MakerNotes`), which `resolve_family0` returns unchanged:
+/// none of its arms maps a real family-0 group. Callers that keep a
+/// family-1-flavored storage key and record the family-1 group beside it --
+/// `Nikon:AdvancedRaw` under `NikonCapture`, `Canon:FNumber` under `Canon`,
+/// `XMP-exif:FNumber` under `XMP-exif` -- still need the mapping: ExifTool
+/// prints `[MakerNotes:NikonCapture]` and `[MakerNotes:Canon]` under
+/// `-G0:1` (NikonCapture.pm:43 and Canon.pm `GROUPS => { 0 => 'MakerNotes'
+/// }`), never `[Nikon:NikonCapture]` or `[Canon:Canon]`.
 pub fn family0_label(occurrence: &TagOccurrence) -> &str {
-    if occurrence.group1.is_empty() {
-        resolve_family0(&occurrence.group0)
-    } else if occurrence.group0.starts_with("XMP-") {
-        // An XMP tag stored under a namespace-group key (`XMP-exif:FNumber`)
-        // with its family-1 group beside it is family-0 `XMP`.
-        "XMP"
-    } else {
-        &occurrence.group0
-    }
+    resolve_family0(&occurrence.group0)
 }
 
 /// The label for an arbitrary family number, for `-Gn` display.
