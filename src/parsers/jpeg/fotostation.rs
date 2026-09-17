@@ -21,7 +21,7 @@
 
 use crate::core::{MetadataMap, TagValue};
 use crate::parsers::jpeg::app_segments::perl_number;
-use crate::parsers::jpeg::iptc_parser::extract_iptc_from_block;
+use crate::parsers::jpeg::iptc_parser::{NonStandardIptcGroups, extract_iptc_from_block};
 
 /// Constant that ends every FotoStation record footer.
 const FOTOSTATION_SIGNATURE: [u8; 4] = [0xa1, 0xb2, 0xc3, 0xd4];
@@ -52,6 +52,26 @@ const MAX_TAG: u16 = 0x04;
 /// trailer's IPTC record carries; empty when the file carries no FotoStation
 /// trailer.
 pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
+    parse_fotostation_trailer_grouped(file, &mut NonStandardIptcGroups::unnumbered())
+}
+
+/// Where the outermost FotoStation record this module reads ends, if the file
+/// has one -- for ordering the trailer against the others ExifTool processes
+/// from the end of the file inwards.
+pub fn fotostation_trailer_position(file: &[u8]) -> Option<usize> {
+    find_outermost_footer_end(file)
+}
+
+/// [`parse_fotostation_trailer`], recording each IPTC record under the
+/// family-1 group `iptc_groups` hands out next. Records are visited in the
+/// chain's own order, outermost first -- the order ExifTool processes them in
+/// (`ExifTool.jpg` -v: `FotoStation_2 trailer` before `FotoStation_1`) -- and a
+/// FotoStation IPTC record is never at a standard IPTC path, so each takes one
+/// numbered group.
+pub fn parse_fotostation_trailer_grouped(
+    file: &[u8],
+    iptc_groups: &mut NonStandardIptcGroups,
+) -> MetadataMap {
     let mut metadata = MetadataMap::new();
     let Some(mut end) = find_outermost_footer_end(file) else {
         return metadata;
@@ -65,8 +85,9 @@ pub fn parse_fotostation_trailer(file: &[u8]) -> MetadataMap {
             // FotoStation.jpg keeps its whole IPTC block here rather than in an
             // APP13 resource, so without this the file reports no IPTC at all.
             TAG_IPTC => {
+                let group1 = iptc_groups.next_group();
                 for (name, value) in extract_iptc_from_block(record) {
-                    metadata.insert(name, TagValue::new_string(value));
+                    metadata.insert_with_group1(name, TagValue::new_string(value), &group1);
                 }
             }
             _ => {}
@@ -230,6 +251,42 @@ mod tests {
         // The IPTC record (tag 1) belongs to the IPTC parser, and the
         // validity-check word at index 5 is not a tag.
         assert_eq!(m.len(), 10);
+    }
+
+    /// Pinned ExifTool 13.59 `-a -G1 -s t/images/FotoStation.jpg`: the trailer
+    /// IPTC reports `[IPTC2] ApplicationRecordVersion : 2`. Two IPTC records
+    /// in one chain are two directories, numbered outermost first.
+    #[test]
+    fn test_iptc_records_take_numbered_family1_groups_outermost_first() {
+        use crate::cli::tag_resolution::family1_label;
+        use crate::parsers::jpeg::iptc_parser::NonStandardIptcGroups;
+
+        // ApplicationRecordVersion 2 (2:00, int16u) and ObjectName (2:05).
+        let inner = b"\x1c\x02\x00\x00\x02\x00\x02\x1c\x02\x05\x00\x05inner";
+        let outer = b"\x1c\x02\x00\x00\x02\x00\x02\x1c\x02\x05\x00\x05outer";
+        let mut file = b"\xff\xd8\xff\xd9".to_vec();
+        file.extend_from_slice(&record(0x01, inner));
+        file.extend_from_slice(&record(0x01, outer));
+
+        let m = parse_fotostation_trailer_grouped(&file, &mut NonStandardIptcGroups::first());
+        let groups: Vec<(String, String)> = m
+            .all_occurrences()
+            .filter(|(k, _)| k == "IPTC:ObjectName")
+            .map(|(_, o)| {
+                (
+                    family1_label(o).to_string(),
+                    o.raw.as_string().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            groups,
+            vec![
+                ("IPTC2".to_string(), "outer".to_string()),
+                ("IPTC3".to_string(), "inner".to_string()),
+            ]
+        );
+        assert!(fotostation_trailer_position(&file).is_some());
     }
 
     #[test]

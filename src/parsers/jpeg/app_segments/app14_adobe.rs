@@ -39,6 +39,11 @@ use crate::error::{ExifToolError, Result};
 /// The "Adobe" identifier that marks an APP14 segment as Adobe-format.
 const ADOBE_IDENTIFIER: &[u8] = b"Adobe";
 
+/// ExifTool's family-1 group for the APP14 Adobe tags:
+/// `%Image::ExifTool::JPEG::Adobe` declares `GROUPS => { 0 => 'APP14', 1 =>
+/// 'Adobe', 2 => 'Image' }` (JPEG.pm:629). Family 0 is the key's `APP14`.
+const ADOBE_GROUP1: &str = "Adobe";
+
 /// Minimum length for a valid APP14 Adobe segment.
 ///
 /// Structure: "Adobe" (5) + Version (2) + Flags0 (2) + Flags1 (2) + ColorTransform (1) = 12 bytes
@@ -106,18 +111,27 @@ pub fn parse_app14_adobe(data: &[u8]) -> Result<MetadataMap> {
     // Parse fields after the "Adobe" identifier (big-endian byte order)
     // Offset 5: DCTEncodeVersion (2 bytes)
     let dct_version = u16::from_be_bytes([data[5], data[6]]);
-    metadata.insert(
+    metadata.insert_with_group1(
         "APP14:DCTEncodeVersion",
         TagValue::Integer(i64::from(dct_version)),
+        ADOBE_GROUP1,
     );
 
     // Offset 7: APP14Flags0 (2 bytes)
     let flags0 = u16::from_be_bytes([data[7], data[8]]);
-    metadata.insert("APP14:APP14Flags0", TagValue::Integer(i64::from(flags0)));
+    metadata.insert_with_group1(
+        "APP14:APP14Flags0",
+        TagValue::Integer(i64::from(flags0)),
+        ADOBE_GROUP1,
+    );
 
     // Offset 9: APP14Flags1 (2 bytes)
     let flags1 = u16::from_be_bytes([data[9], data[10]]);
-    metadata.insert("APP14:APP14Flags1", TagValue::Integer(i64::from(flags1)));
+    metadata.insert_with_group1(
+        "APP14:APP14Flags1",
+        TagValue::Integer(i64::from(flags1)),
+        ADOBE_GROUP1,
+    );
 
     // Offset 11: ColorTransform (1 byte)
     let color_transform = data[11];
@@ -128,17 +142,19 @@ pub fn parse_app14_adobe(data: &[u8]) -> Result<MetadataMap> {
         other => {
             // For unknown values, we still record them but as a numeric string
             // This matches ExifTool's behavior of showing unexpected values
-            metadata.insert(
+            metadata.insert_with_group1(
                 "APP14:ColorTransform",
                 TagValue::String(format!("Unknown ({})", other)),
+                ADOBE_GROUP1,
             );
             return Ok(metadata);
         }
     };
 
-    metadata.insert(
+    metadata.insert_with_group1(
         "APP14:ColorTransform",
         TagValue::String(transform_string.to_string()),
+        ADOBE_GROUP1,
     );
 
     Ok(metadata)

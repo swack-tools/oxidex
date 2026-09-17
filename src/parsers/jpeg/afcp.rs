@@ -45,7 +45,7 @@
 //! same position FotoStation's trailer IPTC uses and for the same reason.
 
 use crate::core::{MetadataMap, TagValue};
-use crate::parsers::jpeg::iptc_parser::extract_iptc_values_from_block;
+use crate::parsers::jpeg::iptc_parser::{NonStandardIptcGroups, extract_iptc_values_from_block};
 use crate::parsers::trailer;
 
 const MAGIC_BE: [u8; 4] = *b"AXS!";
@@ -82,6 +82,23 @@ struct Located {
 /// `AFCP:Text` for a `TEXT` entry; empty when the file carries no AFCP
 /// trailer, or the trailer has no directory entry this module reads.
 pub fn parse_afcp_trailer(file: &[u8]) -> MetadataMap {
+    parse_afcp_trailer_grouped(file, &mut NonStandardIptcGroups::unnumbered())
+}
+
+/// Where the AFCP block this module reads begins, if the file has one --
+/// for ordering it against the other trailers ExifTool processes from the
+/// end of the file inwards.
+pub fn afcp_trailer_position(file: &[u8]) -> Option<usize> {
+    find_afcp_block(file).map(|located| located.block_start)
+}
+
+/// [`parse_afcp_trailer`], recording each IPTC directory under the family-1
+/// group `iptc_groups` hands out next (AFCP is never a standard IPTC
+/// location, so each directory takes one numbered group).
+pub fn parse_afcp_trailer_grouped(
+    file: &[u8],
+    iptc_groups: &mut NonStandardIptcGroups,
+) -> MetadataMap {
     let mut metadata = MetadataMap::new();
     let Some(located) = find_afcp_block(file) else {
         return metadata;
@@ -89,8 +106,9 @@ pub fn parse_afcp_trailer(file: &[u8]) -> MetadataMap {
     for (tag, data) in afcp_entries(file, &located) {
         match tag {
             TAG_IPTC => {
+                let group1 = iptc_groups.next_group();
                 for (name, value) in extract_iptc_values_from_block(data) {
-                    metadata.insert(name, value);
+                    metadata.insert_with_group1(name, value, &group1);
                 }
             }
             TAG_TEXT => {
@@ -335,6 +353,47 @@ mod tests {
         assert_eq!(m.get_string("IPTC:Province-State"), Some("state"));
         // The `%SCC` entry isn't in `%AFCP::Main`, so ExifTool ignores it too.
         assert_eq!(m.len(), 20);
+    }
+
+    /// Pinned ExifTool 13.59 `-a -G1 -s t/images/AFCP.jpg`: the AFCP
+    /// trailer's IPTC is the file's only IPTC, and still non-standard for a
+    /// JPEG, so it reports `[IPTC2] ApplicationRecordVersion : 2`. The storage
+    /// key stays `IPTC:<Name>` (family 0); only the family-1 group is numbered.
+    #[test]
+    fn test_afcp_iptc_takes_the_next_numbered_family1_group() {
+        use crate::cli::tag_resolution::{family0_label, family1_label};
+        use crate::parsers::jpeg::iptc_parser::NonStandardIptcGroups;
+
+        let file = build_afcp_file(b"\xff\xd8\xff\xd9", afcp_jpg_iptc_block(), b"x");
+        let family = |m: &MetadataMap, key: &str| {
+            let (_, occurrence) = m
+                .all_occurrences()
+                .find(|(k, _)| k == key)
+                .unwrap_or_else(|| panic!("{key} missing"));
+            (
+                family0_label(occurrence).to_string(),
+                family1_label(occurrence).to_string(),
+            )
+        };
+
+        let mut groups = NonStandardIptcGroups::first();
+        let m = parse_afcp_trailer_grouped(&file, &mut groups);
+        assert_eq!(m.get_string("IPTC:ObjectName"), Some("object name"));
+        assert_eq!(
+            family(&m, "IPTC:ApplicationRecordVersion"),
+            ("IPTC".to_string(), "IPTC2".to_string())
+        );
+        // The count advanced past this directory.
+        assert_eq!(groups.next_group(), "IPTC3");
+        // `AFCP:Text` is not IPTC and keeps its own group.
+        assert!(afcp_trailer_position(&file).is_some());
+
+        // Unnumbered keeps the legacy `IPTC` label.
+        let m = parse_afcp_trailer(&file);
+        assert_eq!(
+            family(&m, "IPTC:ApplicationRecordVersion"),
+            ("IPTC".to_string(), "IPTC".to_string())
+        );
     }
 
     #[test]
