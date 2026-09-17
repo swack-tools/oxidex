@@ -57,7 +57,7 @@ jobs:
     #
     # Debug, not release: 44 files is nothing to parse, so the whole job is
     # compile time and `--release` would only add LTO for no measured gain.
-    runs-on: warp-ubuntu-latest-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     # Read-only. This job no longer pushes to main -- see the "Report
     # changes" step below for why -- so it needs nothing more than checkout.
@@ -79,10 +79,9 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-          cache-provider: warpbuild
           shared-key: update-coverage-docs
 
       # No EXIFTOOL_VERSION literal. A pin in this file would be a second
@@ -111,7 +110,7 @@ jobs:
       # release -- the exact skew that manufactures phantom regressions.
       - name: Restore pinned ExifTool source
         id: exiftool-cache
-        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/exiftool
           key: exiftool-clone-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
@@ -146,7 +145,7 @@ jobs:
       # `success()` semantics keep a bad tree from being persisted.
       - name: Save pinned ExifTool source
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
-        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/exiftool
           key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}

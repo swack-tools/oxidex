@@ -26,10 +26,9 @@ permissions:
 jobs:
   verify-tag-on-main:
     name: Verify tag is reachable from main
-    # 2x: a full-depth clone and one `git merge-base` call. On Warp to skip
-    # the GitHub-hosted queue -- this job gates the whole workflow, so its
-    # queue wait is on the critical path for every release.
-    runs-on: warp-ubuntu-latest-x64-2x
+    # A full-depth clone and one `git merge-base` call; this job gates the
+    # whole workflow.
+    runs-on: ubuntu-latest
     outputs:
       allowed: ${{ steps.ancestry.outputs.allowed }}
     steps:
@@ -68,7 +67,7 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"warp-ubuntu-latest-x64-8x"},{"arch":"arm64","platform":"linux/arm64","runner":"warp-ubuntu-latest-arm64-8x"}]') }}
+          ${{ fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,14 +75,8 @@ jobs:
       # No setup-qemu-action anywhere: each architecture builds natively on its
       # own runner. Emulating an arm64 Rust build of this workspace would take
       # 5-10x longer.
-      # network=host: required for WarpBuild's Docker layer cache, which
-      # proxies the GHA cache backend through a localhost listener buildx
-      # can only reach with the host network driver.
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          driver-opts: |
-            network=host
 
       - name: Log in to Docker Hub
         if: github.event_name != 'workflow_dispatch'
@@ -96,11 +89,8 @@ jobs:
       # publishing atomic: the smoke test below runs before the manifest list
       # exists, so a failure here means no tag ever moves.
       #
-      # cache-from/cache-to point at WarpBuild's local cache proxy
-      # (https://www.warpbuild.com/docs/ci/features/caching#docker-layer-caching)
-      # rather than the real GitHub Actions cache -- WarpBuild's runners cache
-      # layers on their own faster backend behind a gha-compatible localhost
-      # listener. Cache versions differ per runner OS/arch, so amd64 and
+      # cache-from/cache-to use the GitHub Actions cache. Cache versions
+      # differ per runner OS/arch, so amd64 and
       # arm64 (different runner types in this matrix) never share entries
       # even without the explicit scope, but the scope is kept for clarity.
       - name: Build and push by digest
@@ -117,8 +107,8 @@ jobs:
           # between a dry run and a release, so the dry run measures the real
           # build and populates the real cache.
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'workflow_dispatch' }}
-          cache-from: type=gha,url=http://127.0.0.1:49160/,scope=oxidex-${{ matrix.arch }},version=1
-          cache-to: type=gha,url=http://127.0.0.1:49160/,scope=oxidex-${{ matrix.arch }},mode=max,version=1
+          cache-from: type=gha,scope=oxidex-${{ matrix.arch }},version=1
+          cache-to: type=gha,scope=oxidex-${{ matrix.arch }},mode=max,version=1
 
       # Runs on the native runner for this architecture, so each image is
       # exercised on the hardware it targets. This cannot live in the merge
@@ -170,12 +160,9 @@ jobs:
     name: Publish manifest list
     needs: [verify-tag-on-main, build]
     if: github.event_name != 'workflow_dispatch' && needs.verify-tag-on-main.outputs.allowed == 'true' && needs.build.result == 'success'
-    # 2x: no image build happens here -- this downloads two digest stubs and
-    # calls `buildx imagetools create`, which is registry I/O end to end. It
-    # is on a Warp runner rather than ubuntu-latest to avoid the GitHub-hosted
-    # queue (measured at 8 minutes in deploy-docs.yml's notes, against ~5
-    # seconds to start a Warp runner), not for the cores.
-    runs-on: warp-ubuntu-latest-x64-2x
+    # No image build happens here -- this downloads two digest stubs and
+    # calls `buildx imagetools create`, which is registry I/O end to end.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Download digests

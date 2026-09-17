@@ -39,7 +39,7 @@ concurrency:
 jobs:
   bump:
     name: Bump ExifTool (${{ inputs.version }})
-    runs-on: warp-ubuntu-latest-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       # contents: write only matters on a real (non-dry-run) bump, to push
@@ -55,10 +55,9 @@ jobs:
         with:
           components: rustfmt
 
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-          cache-provider: warpbuild
           shared-key: bump-exiftool
 
       # dump_tables.pl and the tier-2 gen_*.pl scripts need Archive::Zip for

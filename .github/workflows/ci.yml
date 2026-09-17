@@ -33,7 +33,13 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Runner sizing (WarpBuild x64: 2x=2vCPU/7GB, 4x=4/16, 8x=8/32, 16x=16/64).
+# Runners: every job runs on a standard GitHub-hosted runner, which is free
+# for this public repository (ubuntu-latest = 4 vCPU / 16 GB). The per-job
+# "2x/4x/8x" notes and the table below are the historical WarpBuild sizing
+# measurements (2x=2vCPU/7GB, 4x=4/16, 8x=8/32, 16x=16/64), kept as evidence
+# of what more cores buy each job. Larger GitHub runners are billed even for
+# public repositories; measure before reaching for one.
+#
 # Sizes below were chosen from measured step timings, not job wall-clock --
 # a slow job is not necessarily a CPU-bound one. See the per-job notes.
 #
@@ -81,21 +87,18 @@ jobs:
     # (clippy --all-features). The dominant step is rustsec/audit-check at
     # ~2m55s, which is network I/O against the advisory database and does not
     # get faster with more cores.
-    runs-on: warp-ubuntu-latest-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
-      # WarpBuild-native cache backend: on warp-ubuntu-* runners this reads/
-      # writes through Warp's cache infra instead of the (much slower, cross-
-      # region) GitHub Actions cache. shared-key separates this job's cache
-      # from Build & Test's so a clippy-only cache miss can't evict the other.
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      # shared-key separates this job's cache from Build & Test's so a
+      # clippy-only cache miss can't evict the other.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-          cache-provider: warpbuild
           shared-key: lint
       - run: cargo fmt --all -- --check
       # Pure-Python, no build: catches a test reading the pinned sample corpus
@@ -149,17 +152,16 @@ jobs:
     #
     # If you add a cargo step here, give it `--all-features` and nothing
     # else, or it will rebuild the workspace for its own feature graph.
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     # Cargo profile overrides, CI-only on purpose -- they are env rather than
     # a [profile.test] edit so local dev and the OOM guards in Cargo.toml are
     # untouched.
     #
-    # [profile.test] carries codegen-units = 4, which caps codegen at four
-    # parallel units on a runner with eight vCPUs; that setting and the
+    # [profile.test] carries codegen-units = 4; that setting and the
     # per-package opt-level = 2 overrides exist to stop the generated tag
-    # crates OOMing a small machine, and this runner has 32 GB. 16 units
-    # matches [profile.dev].
+    # crates OOMing a small machine. 16 units matches [profile.dev]. This was
+    # sized on a 32 GB WarpBuild runner; the standard runner has 16 GB.
     #
     # line-tables-only keeps file:line in backtraces (RUST_BACKTRACE=1 is set
     # workflow-wide) while skipping the full debuginfo this never reads.
@@ -171,7 +173,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      # WarpBuild-native cache backend (see the Lint & Audit job for why).
       # cache-all-crates: this job also builds cargo-nextest and cbindgen via
       # taiki-e/install-action, and default caching only covers workspace
       # dependencies, not CI tooling.
@@ -198,10 +199,9 @@ jobs:
       #    for `crate-type`. sccache caches rlib/lib but not cdylib,
       #    staticlib or test harnesses -- which is precisely what this crate
       #    builds for its C FFI, and precisely where the time goes.
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-          cache-provider: warpbuild
           shared-key: test
           cache-all-crates: true
       - uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
@@ -254,7 +254,7 @@ jobs:
       # never populated. Keep these two key families distinct.
       - name: Restore pinned ExifTool source
         id: exiftool-cache
-        uses: WarpBuilds/cache/restore@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/exiftool-src
           key: exiftool-src-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
@@ -297,7 +297,7 @@ jobs:
       # restore step's cache-primary-key rather than recomputing it.
       - name: Save pinned ExifTool source
         if: steps.exiftool-cache.outputs.cache-hit != 'true'
-        uses: WarpBuilds/cache/save@dad44e2487e9dc889ad6e6bd198e77bb2d828eee # v2.0.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/exiftool-src
           key: ${{ steps.exiftool-cache.outputs.cache-primary-key }}
@@ -401,18 +401,17 @@ jobs:
     # 4x, not 8x: fixloop sets codegen-units = 16 so this parallelises, but
     # it is not the long pole -- Build & Test is. Sizing it to finish just
     # inside that job is what this is worth paying for, not raw speed.
-    runs-on: warp-ubuntu-latest-x64-4x
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-      # WarpBuild-native cache backend. Its own shared-key on purpose:
+      # Its own cache shared-key on purpose:
       # this job compiles a different profile from Build & Test, and a
       # shared entry was measured slower (see that job's note).
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-          cache-provider: warpbuild
           shared-key: release-build
       # If you add a step here, give it `--all-features` and nothing else.
       #
@@ -449,7 +448,7 @@ jobs:
     # six minutes while the redirected complete dump was still running. This
     # termination pattern does not establish its cause. Try the already
     # supported 4x class while retaining the full source inventory.
-    runs-on: warp-ubuntu-latest-x64-4x
+    runs-on: ubuntu-latest
     # PR #779 run 34914682473 reached the 35m cap after source-bound replay,
     # table verification and tier-2 regeneration, while the full tool suite
     # was still exercising native source mutations. Keep all checks and allow
@@ -773,7 +772,7 @@ jobs:
     # numbers after it, on hardware or methodology. If any of this changes
     # again, both jobs move together, in one commit, and the discontinuity is
     # recorded in CHANGELOG.md again.
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # No `needs:` on purpose. This used to wait for Build & Test, which put
@@ -810,11 +809,10 @@ jobs:
           fi
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         if: steps.changes.outputs.run == 'true'
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.changes.outputs.run == 'true'
         with:
           cache-on-failure: true
-          cache-provider: warpbuild
           shared-key: metrics
       - name: Run benchmarks
         if: steps.changes.outputs.run == 'true'
