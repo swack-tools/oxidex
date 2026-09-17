@@ -6,7 +6,7 @@
 //! `metadata` path, including `annote` and standard metadata fields.
 
 use crate::core::{FileReader, Instance, MetadataMap, TagValue};
-use crate::parsers::xmp::rdf_parser::XmpValue;
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 use djvu_bzz::bzz_decode;
 use djvu_iff::{Chunk, parse};
 
@@ -395,15 +395,15 @@ fn collect_annotation_expression(expression: Expression, metadata: &mut Metadata
         && tag == "xmp"
         && let Some(Expression::Atom(xml) | Expression::String(xml)) = items.get(1)
     {
-        if let Ok(tags) = crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(xml.as_bytes()) {
-            for (name, value, priority) in tags {
+        if let Ok(tags) = parse_xmp_typed(xml.as_bytes()) {
+            for (name, value) in tags {
                 let value = match value {
                     XmpValue::Scalar(value) => TagValue::new_string(value),
                     XmpValue::List(values) => {
                         TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
                     }
                 };
-                crate::parsers::xmp::rdf_parser::insert_xmp_tag(metadata, name, value, priority);
+                metadata.insert(name, value);
             }
         }
         return;

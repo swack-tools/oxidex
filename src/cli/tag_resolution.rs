@@ -256,17 +256,28 @@ pub fn resolve_requested_tags_labelled<'a>(
             // winner projection (what default non-`-TAG` `-j` output uses)
             // and the pinned oracle's `-TrackID` default, is Track1's `1`.
             //
-            // Same-named XMP occurrences are first reduced to ExifTool's XMP
-            // winner (`xmp_found_tag_winner`, on the priorities the XMP
-            // parser stored); only that winner then competes with other
+            // Same-named XMP occurrences are first reduced to one XMP winner
+            // (`xmp_found_tag_winner`: the first emitted, not ExifTool's
+            // priority rule); only that winner then competes with other
             // groups' occurrences under the existing cross-group fold, whose
             // `TagOccurrence::priority` inputs are unchanged pre-existing
             // behavior. Under `-j -G<n>` the XMP entries printed per label
             // follow the exiftool script (`xmp_label_selection`).
-            let (xmp, mut others): (Vec<&TagOccurrence>, Vec<&TagOccurrence>) = matches
+            let (mut xmp, mut others): (Vec<&TagOccurrence>, Vec<&TagOccurrence>) = matches
                 .into_iter()
                 .partition(|occurrence| is_xmp_occurrence(occurrence));
+            // Within one key the sink's own winner stands (a reader that
+            // re-records a key replaces its earlier value); the XMP winner is
+            // chosen among those key winners, as in the listing.
+            xmp.retain(|occurrence| {
+                metadata
+                    .winner_occurrence(&occurrence.lookup_key())
+                    .is_some_and(|winner| std::ptr::eq(winner, *occurrence))
+            });
             if xmp.is_empty() {
+                if others.is_empty() {
+                    continue;
+                }
                 let winner = found_tag_winner(others);
                 out.push(ResolvedOccurrence {
                     lookup_key: winner.lookup_key(),
@@ -326,53 +337,38 @@ fn found_tag_winner(mut matches: Vec<&TagOccurrence>) -> &TagOccurrence {
     winner
 }
 
-/// Whether `occurrence` is an XMP tag (family 0 `XMP`).
+/// Whether `occurrence` is an XMP tag filed under a namespace group
+/// (`XMP-<prefix>`, family 0 `XMP`). A key left in plain `XMP` -- a property
+/// with no namespace, or ExifTool's own `-X` output groups this reader does
+/// not model -- keeps the pre-existing cross-group handling.
 fn is_xmp_occurrence(occurrence: &TagOccurrence) -> bool {
-    family0_label(occurrence) == "XMP"
+    family0_label(occurrence) == "XMP" && family1_label(occurrence).starts_with("XMP-")
 }
 
-/// ExifTool's FoundTag priority for an XMP occurrence: what the XMP parser
-/// computed from the property's raw tag ID path and resolved namespace
-/// ([`crate::parsers::xmp::priority`]) and stored on the occurrence. An XMP
-/// occurrence recorded without one (a caller that synthesizes an XMP key
-/// outside the parser) is treated as an unknown tag, which FoundXMP mints at
-/// `Priority => 0` (XMP.pm ~3595).
-fn xmp_found_tag_priority(occurrence: &TagOccurrence) -> i8 {
-    occurrence.xmp_priority.unwrap_or(0)
-}
-
-/// ExifTool's winner among same-named XMP occurrences, per FoundTag
-/// (ExifTool.pm ~9468-9590), folded in document order. The first occurrence
-/// stores its priority only when non-zero, and an unstored or zero stored
-/// priority is promoted to 1 for the comparison ("promote existing
-/// 0-priority tag so it takes precedence over a new 0-tag"). A later
-/// occurrence replaces the winner iff its priority is `>=` that, and then
-/// stores its own priority, zero included (`$$self{PRIORITY}{$tag} =
-/// $priority` in the duplicate branch). So an earlier 0 beats a later 0, a
-/// later 1 beats an earlier 0 or 1, and a -1 winner is replaced by the next
-/// 0, which then holds against later 0s.
+/// The XMP winner among same-named XMP occurrences: the first one the XMP
+/// parser emitted (lowest recording order).
 ///
-/// This arbitrates XMP occurrences among themselves. How the XMP winner
-/// competes with other groups' same-named tags is the pre-existing
-/// cross-group fold (`found_tag_winner`), unchanged here.
-fn xmp_found_tag_winner<'a>(mut matches: Vec<&'a TagOccurrence>) -> &'a TagOccurrence {
-    matches.sort_by_key(|occurrence| occurrence.order);
-    let mut remaining = matches.into_iter();
-    let mut winner = remaining.next().expect("matches is non-empty");
-    let mut stored = xmp_found_tag_priority(winner);
-    for candidate in remaining {
-        let old = if stored == 0 { 1 } else { stored };
-        let priority = xmp_found_tag_priority(candidate);
-        // ExifTool.pm's `(not $$self{DOC_NUM} or ...)` guard, as in
-        // `found_tag_winner`.
-        let instance_ok =
-            candidate.instance == Instance::default() || candidate.instance == winner.instance;
-        if priority >= old && instance_ok {
-            winner = candidate;
-            stored = priority;
-        }
-    }
-    winner
+/// XMP properties are keyed by their family-1 namespace group, so two
+/// namespaces' same-named properties are distinct keys. Before that, every
+/// namespace but a handful shared one `XMP:<Name>` key and the parser kept
+/// the first emission, so "first emitted wins" is exactly the pre-existing
+/// winner, now applied across the per-namespace keys.
+///
+/// This is NOT ExifTool's FoundTag arbitration. ExifTool gives each XMP tag
+/// a priority -- the tag's `Priority`, the table's `PRIORITY`, 0 for `Avoid`
+/// or for a property its table does not define, and `PRIORITY_DIR` raising
+/// 0 to 1 in QuickTime-family files (QuickTime.pm, ExifTool.pm ~9553) -- and
+/// a later tag of equal-or-higher priority replaces an earlier one. None of
+/// that is modelled here; the exact model is tracked on the
+/// `staging/xmp-exact-priority` branch.
+///
+/// How the XMP winner competes with other groups' same-named tags is the
+/// pre-existing cross-group fold (`found_tag_winner`), unchanged here.
+fn xmp_found_tag_winner<'a>(matches: Vec<&'a TagOccurrence>) -> &'a TagOccurrence {
+    matches
+        .into_iter()
+        .min_by_key(|occurrence| occurrence.order)
+        .expect("matches is non-empty")
 }
 
 /// The XMP occurrences JSON output with `-G<n>` prints for one tag name,
@@ -419,7 +415,8 @@ fn xmp_label_selection<'a>(
 /// where ExifTool stores them under one tag and prints only the winner
 /// unless `-a` is given (XMP6.xmp `-G1 -s`: `[XMP-xxxx] Test : trout`;
 /// XMP.xmp: `[XMP-exif] NativeDigest` only), chosen by
-/// [`xmp_found_tag_winner`]. With `label_families` (JSON with `-G<n>`) the
+/// [`xmp_found_tag_winner`] (first emitted; see its note on what ExifTool
+/// does instead). With `label_families` (JSON with `-G<n>`) the
 /// printed set is [`xmp_label_selection`] against the overall winner, which
 /// is the XMP winner's pre-existing cross-group fold with the other groups'
 /// same-named key winners.
@@ -1204,18 +1201,11 @@ mod tests {
     }
 
     /// A metadata map holding one XMP packet the way the sidecar reader
-    /// stores it (`parse_xmp_prioritized` keys with their priorities).
+    /// stores it (`parse_xmp` keys inserted through the plain shim).
     fn xmp_packet_map(packet: &[u8]) -> MetadataMap {
         let mut metadata = MetadataMap::new();
-        for (key, value, priority) in
-            crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(packet).unwrap()
-        {
-            crate::parsers::xmp::rdf_parser::insert_xmp_tag(
-                &mut metadata,
-                key,
-                TagValue::new_string(value.into_joined()),
-                priority,
-            );
+        for (key, value) in crate::parsers::xmp::parse_xmp(packet).unwrap() {
+            metadata.insert(key, TagValue::new_string(value));
         }
         metadata
     }
@@ -1286,20 +1276,20 @@ mod tests {
     }
 
     /// Same-named XMP tags from different namespaces, matched to pinned
-    /// ExifTool 13.59 on the review packets p1-p9, d1, d2, c1/c2/c4/c5/c7,
-    /// n1/n2 (a -1 winner replaced by a 0 that then holds), k1/k2/k3 and px
-    /// (raw tag IDs are case-sensitive: `cc:LegalCode`, `dc:Title`,
-    /// `exif:dateTimeOriginal` are unknown), v1 (a variable-namespace
-    /// structure field copies its own table's entry) and rx.
-    /// ExifTool arbitrates them with FoundTag and the tables' per-tag
-    /// priorities: `-j -G0` (like every listing without `-a`) keeps the one
+    /// ExifTool 13.59 on the review packets whose ExifTool winner is the
+    /// first emitted property (see `xmp_found_tag_winner`).
+    /// `-j -G0` (like every listing without `-a`) keeps the one
     /// winner, `-j -G1` keeps one per group label, a bare request returns the
     /// winner (per label under `-j -G1`), and `-a` keeps all of them.
     #[test]
     fn same_named_xmp_tags_match_pinned_exiftool_winners() {
         #[allow(clippy::type_complexity)]
         let cases: &[(&str, &[(&str, &str)], &[(&str, &str)])] = &[
-            // Generated from pinned ExifTool 13.59 `-j -G0` and `-j -G1` output.
+            // Generated from pinned ExifTool 13.59 `-j -G0` and `-j -G1` output,
+            // restricted to packets where ExifTool's winner is the first
+            // emitted property. The others (review-xmp2 p4/p7 and review-xmp4
+            // n1/n2/v1/px/rx, where FoundTag priorities pick a later one) need
+            // the exact priority model on staging/xmp-exact-priority.
             (
                 // adv/p1.xmp
                 r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><photoshop:Headline>PS</photoshop:Headline></rdf:Description><rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><Iptc4xmpExt:Headline><rdf:Alt><rdf:li xml:lang="x-default">EXT</rdf:li></rdf:Alt></Iptc4xmpExt:Headline></rdf:Description></rdf:RDF></x:xmpmeta>"#,
@@ -1322,18 +1312,6 @@ mod tests {
                 &[("XMP-yyyy:Test", "fromY"), ("XMP-dc:Test", "fromDC")],
             ),
             (
-                // adv/p4.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:yyyy="http://e.com/Y/"><yyyy:Prefs>fromY</yyyy:Prefs></rdf:Description><rdf:Description rdf:about="" xmlns:photomechanic="http://ns.camerabits.com/photomechanic/1.0/"><photomechanic:Prefs>1:2:3:4</photomechanic:Prefs></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:Prefs", "Tagged:1, ColorClass:2, Rating:3, FrameNum:4")],
-                &[
-                    ("XMP-yyyy:Prefs", "fromY"),
-                    (
-                        "XMP-photomech:Prefs",
-                        "Tagged:1, ColorClass:2, Rating:3, FrameNum:4",
-                    ),
-                ],
-            ),
-            (
                 // adv/p5.xmp
                 r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:yyyy="http://e.com/Y/"><yyyy:Test>fromY</yyyy:Test></rdf:Description><rdf:Description rdf:about="" xmlns:iptcCore="http://e.com/IC/"><iptcCore:Test>fromIC</iptcCore:Test></rdf:Description></rdf:RDF></x:xmpmeta>"#,
                 &[("XMP:Test", "fromY")],
@@ -1344,12 +1322,6 @@ mod tests {
                 r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:yyyy="http://e.com/Y/"><yyyy:Test>fromY</yyyy:Test></rdf:Description><rdf:Description rdf:about="" xmlns:photomech="http://e.com/PM/"><photomech:Test>fromPM</photomech:Test></rdf:Description></rdf:RDF></x:xmpmeta>"#,
                 &[("XMP:Test", "fromY")],
                 &[("XMP-yyyy:Test", "fromY"), ("XMP-photomech:Test", "fromPM")],
-            ),
-            (
-                // adv/p7.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:yyyy="http://e.com/Y/"><yyyy:Title>fromY</yyyy:Title></rdf:Description><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">DC</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:Title", "DC")],
-                &[("XMP-yyyy:Title", "fromY"), ("XMP-dc:Title", "DC")],
             ),
             (
                 // adv/p8.xmp
@@ -1417,26 +1389,6 @@ mod tests {
                 &[("XMP-Yyyy:Test", "a"), ("XMP-zzzz:Test", "b")],
             ),
             (
-                // review-xmp4/n1.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/"><pdf:Keywords>PDF</pdf:Keywords></rdf:Description><rdf:Description rdf:about="" xmlns:aaa="http://a.example/"><aaa:Keywords>AAA</aaa:Keywords></rdf:Description><rdf:Description rdf:about="" xmlns:bbb="http://b.example/"><bbb:Keywords>BBB</bbb:Keywords></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:Keywords", "AAA")],
-                &[
-                    ("XMP-pdf:Keywords", "PDF"),
-                    ("XMP-aaa:Keywords", "AAA"),
-                    ("XMP-bbb:Keywords", "BBB"),
-                ],
-            ),
-            (
-                // review-xmp4/n2.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/"><pdf:Keywords>PDF</pdf:Keywords></rdf:Description><rdf:Description rdf:about="" xmlns:aaa="http://a.example/"><aaa:Keywords>AAA</aaa:Keywords></rdf:Description><rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" xmlns:ccc="http://c.example/"><ccc:Keywords>CCC</ccc:Keywords></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:Keywords", "AAA")],
-                &[
-                    ("XMP-pdf:Keywords", "PDF"),
-                    ("XMP-aaa:Keywords", "AAA"),
-                    ("XMP-ccc:Keywords", "CCC"),
-                ],
-            ),
-            (
                 // review-xmp4/k1.xmp
                 r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:aaa="http://a.example/"><aaa:LegalCode>AAA</aaa:LegalCode></rdf:Description><rdf:Description rdf:about="" xmlns:cc="http://creativecommons.org/ns#"><cc:LegalCode>CC</cc:LegalCode></rdf:Description></rdf:RDF></x:xmpmeta>"#,
                 &[("XMP:LegalCode", "AAA")],
@@ -1456,27 +1408,6 @@ mod tests {
                     ("XMP-aaa:DateTimeOriginal", "AAA"),
                     ("XMP-exif:DateTimeOriginal", "EXIF"),
                 ],
-            ),
-            (
-                // review-xmp4/v1.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:aaa="http://a.example/"><aaa:ImageRegionRating>AAA</aaa:ImageRegionRating></rdf:Description><rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"><Iptc4xmpExt:ImageRegion><rdf:Bag><rdf:li rdf:parseType="Resource"><xmp:Rating>5</xmp:Rating></rdf:li></rdf:Bag></Iptc4xmpExt:ImageRegion></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:ImageRegionRating", "5")],
-                &[
-                    ("XMP-aaa:ImageRegionRating", "AAA"),
-                    ("XMP-iptcExt:ImageRegionRating", "5"),
-                ],
-            ),
-            (
-                // review-xmp4/px.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:aaa="http://a.example/"><aaa:Title>AAA</aaa:Title></rdf:Description><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">DC</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:Title", "DC")],
-                &[("XMP-aaa:Title", "AAA"), ("XMP-dc:Title", "DC")],
-            ),
-            (
-                // review-xmp4/rx.xmp
-                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:aaa="http://a.example/"><aaa:Rating>7</aaa:Rating></rdf:Description><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"><xmp:Rating>5</xmp:Rating></rdf:Description></rdf:RDF></x:xmpmeta>"#,
-                &[("XMP:Rating", "5")],
-                &[("XMP-aaa:Rating", "7"), ("XMP-xmp:Rating", "5")],
             ),
         ];
         for (packet, g0, g1) in cases {
@@ -1544,12 +1475,11 @@ mod tests {
         }
     }
 
-    /// Pinned corpus files whose same-named XMP tags exercise the generated
-    /// priorities (pinned ExifTool 13.59, `-G1 -s` unless noted). XMP.xmp
-    /// prints only `[XMP-exif] NativeDigest`: both tables have PRIORITY 0, so
-    /// the first recorded keeps the tag. PhotoMechanic.jpg prints
-    /// `[XMP-iptcCore] CountryCode`, also for `-CountryCode`: the photomech
-    /// copy is priority 0. XMP6.xmp prints `[XMP-xxxx] Test : trout`, and
+    /// Pinned corpus files with same-named XMP tags (pinned ExifTool 13.59,
+    /// `-G1 -s` unless noted). XMP.xmp prints only `[XMP-exif] NativeDigest`
+    /// and PhotoMechanic.jpg `[XMP-iptcCore] CountryCode` (also for
+    /// `-CountryCode`) -- in both, ExifTool's winner is also the first
+    /// emitted. XMP6.xmp prints `[XMP-xxxx] Test : trout`, and
     /// both `Test`s under `-a` and under `-j -G1 -Test`.
     #[test]
     fn pinned_corpus_xmp_winners_match_exiftool() {
@@ -1654,45 +1584,22 @@ mod tests {
         );
     }
 
-    /// Every XMP-group occurrence the readers record for the pinned corpus
-    /// carries the priority the XMP parser derived for it: a key inserted
-    /// without one would silently arbitrate as an unknown (0) tag.
+    /// A reader that re-records an XMP key (EPS re-inserts `XMP-dc:Subject`
+    /// as a list after the parser stored it joined) replaces the earlier
+    /// value: a bare request resolves among each key's own winner, so it
+    /// returns the list, as it did before XMP keys carried their namespace.
     #[test]
-    fn pinned_corpus_xmp_occurrences_carry_parser_priorities() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let Some(sample) = crate::test_support::pinned_fixture_path("XMP.xmp") else {
-            return;
-        };
-        let images = sample.parent().expect("t/images");
-        let mut missing = Vec::new();
-        let mut checked = 0usize;
-        let mut entries: Vec<_> = std::fs::read_dir(images)
-            .expect("t/images lists")
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file())
-            .collect();
-        entries.sort();
-        for path in entries {
-            let Ok(metadata) = crate::core::operations::read_metadata(&path) else {
-                continue;
-            };
-            for (key, occurrence) in metadata.all_occurrences() {
-                if !occurrence.group0.starts_with("XMP-") {
-                    continue;
-                }
-                checked += 1;
-                if occurrence.xmp_priority.is_none() {
-                    missing.push(format!("{}: {key}", path.display()));
-                }
-            }
-        }
-        assert!(checked > 400, "only {checked} XMP occurrences checked");
-        assert!(
-            missing.is_empty(),
-            "XMP occurrences without a priority: {missing:?}"
+    fn requests_use_each_xmp_keys_own_winner() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("XMP-dc:Subject", TagValue::new_string("a, b"));
+        metadata.insert(
+            "XMP-dc:Subject",
+            TagValue::Array(vec![TagValue::new_string("a"), TagValue::new_string("b")]),
         );
+        metadata.insert("XMP-zzz:Subject", TagValue::new_string("later"));
+        let resolved = resolve_requested_tags(&metadata, &["Subject".to_string()], false);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].lookup_key, "XMP-dc:Subject");
+        assert!(matches!(resolved[0].occurrence.raw, TagValue::Array(_)));
     }
 }

@@ -171,26 +171,6 @@ impl MetadataMap {
         previous
     }
 
-    /// [`insert`](Self::insert) for an XMP property, recording the FoundTag
-    /// priority the XMP parser derived for it
-    /// ([`crate::parsers::xmp::priority`]) on the occurrence. That priority
-    /// only arbitrates same-named XMP tags among themselves; the occurrence's
-    /// cross-group `priority` stays the shim's.
-    pub fn insert_xmp<K: Into<String>>(
-        &mut self,
-        key: K,
-        value: TagValue,
-        xmp_priority: i8,
-    ) -> Option<TagValue> {
-        let key = key.into();
-        let previous = self.sink.get(&key).cloned();
-        let order = self.sink.next_order();
-        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
-        occurrence.xmp_priority = Some(xmp_priority);
-        self.sink.record(key, occurrence);
-        previous
-    }
-
     /// Records an occurrence with an explicit priority, family-1 group and
     /// instance identity, following ExifTool's `FoundTag` arbitration
     /// (`ExifTool.pm:9448`+) instead of `insert()`'s flat
@@ -528,6 +508,11 @@ impl MetadataMap {
     /// Returns an iterator over tag values
     pub fn values(&self) -> impl Iterator<Item = &TagValue> {
         self.sink.values()
+    }
+
+    /// The current winner occurrence of `key`, if any.
+    pub(crate) fn winner_occurrence(&self, key: &str) -> Option<&TagOccurrence> {
+        self.sink.winner_occurrence(key)
     }
 
     /// Every key's current winner, paired with its full [`TagOccurrence`]

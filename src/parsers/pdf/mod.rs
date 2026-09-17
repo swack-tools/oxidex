@@ -343,15 +343,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Extract XMP metadata
     match xmp_extractor::extract_xmp_metadata(reader) {
         Ok(xmp_metadata) => {
-            // Merge XMP tags into main metadata, keeping each tag's XMP
-            // priority (see `parsers::xmp::priority`).
-            for (key, occurrence) in xmp_metadata.winner_occurrences() {
-                crate::parsers::xmp::rdf_parser::insert_xmp_tag(
-                    &mut metadata,
-                    key.clone(),
-                    occurrence.raw.clone(),
-                    occurrence.xmp_priority,
-                );
+            // Merge XMP tags into main metadata
+            for (key, value) in xmp_metadata.iter() {
+                metadata.insert(key.clone(), value.clone());
             }
         }
         Err(e) => {

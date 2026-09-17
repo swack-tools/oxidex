@@ -32,13 +32,11 @@
 //! ```
 
 pub mod generated_namespaces;
-pub mod generated_priorities;
 pub mod generic_xml;
 pub mod google_hdrp;
 pub mod history_parser;
 pub mod namespace_resolver;
 pub mod plus_vocab;
-pub mod priority;
 pub mod rdf_parser;
 pub mod struct_flatten;
 
@@ -79,8 +77,7 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     // `parse_xmp_typed_with_rational_forms` for why the composite layer needs
     // it and why this carriage is tactical (Step 8 of
     // OVERHAUL_OXIDEX_PLAN.md, superseded by Step 18).
-    let (xmp_tags, rational_forms) =
-        rdf_parser::parse_xmp_prioritized_with_rational_forms(xmp_data)?;
+    let (xmp_tags, rational_forms) = rdf_parser::parse_xmp_typed_with_rational_forms(xmp_data)?;
 
     // Add every XMP tag exactly as the RDF parser keyed it. (An earlier
     // "Worker 30" step here also synthesized XMP:CreatorTool from the
@@ -89,14 +86,14 @@ pub fn parse_xmp_file(reader: &dyn FileReader) -> Result<MetadataMap> {
     // -- `exiftool -a -G1 -s t/images/XMP.xmp` has XMP-x:XMPToolkit and
     // XMP-xmp:CreateDate/ModifyDate and nothing else -- so they were
     // fabricated tags and are gone.)
-    for (key, typed, priority) in xmp_tags {
+    for (key, typed) in xmp_tags {
         let stored = match typed {
             rdf_parser::XmpValue::List(values) => {
                 TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
             }
             rdf_parser::XmpValue::Scalar(value) => TagValue::new_string(value),
         };
-        rdf_parser::insert_xmp_tag(&mut metadata, key.clone(), stored, priority);
+        metadata.insert(key.clone(), stored);
         // `set_value_form` only attaches to a tag already present in the map,
         // which the insert just above guarantees.
         if let Some((_, raw)) = rational_forms.iter().find(|(tag, _)| *tag == key) {

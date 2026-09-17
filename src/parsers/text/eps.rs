@@ -16,7 +16,7 @@ use crate::error::{ExifToolError, Result};
 use crate::parsers::jpeg::iptc_parser::{
     dataset_to_tag_name, decode_iptc_string, parse_all_iptc_records,
 };
-use crate::parsers::xmp::parse_xmp_history;
+use crate::parsers::xmp::{parse_xmp, parse_xmp_history};
 
 /// Maximum bytes to read from EPS file for parsing
 const MAX_READ_SIZE: usize = 1024 * 1024; // 1MB
@@ -252,16 +252,9 @@ impl EPSParser {
                     let xmp_data = &data[xml_start_pos..xml_start_pos + end_offset];
 
                     // Parse the XMP data
-                    if let Ok(xmp_tags) =
-                        crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(xmp_data)
-                    {
-                        for (key, value, priority) in xmp_tags {
-                            crate::parsers::xmp::rdf_parser::insert_xmp_tag(
-                                metadata,
-                                key,
-                                TagValue::new_string(value.into_joined()),
-                                priority,
-                            );
+                    if let Ok(xmp_tags) = parse_xmp(xmp_data) {
+                        for (key, value) in xmp_tags {
+                            metadata.insert(key, TagValue::new_string(value));
                         }
                     }
 
@@ -277,21 +270,7 @@ impl EPSParser {
                                 .map(|s| TagValue::new_string(s.to_string()))
                                 .collect();
                             if items.len() > 1 {
-                                let (group, name) =
-                                    list_tag.split_once(':').unwrap_or(("", list_tag));
-                                let namespace = group.strip_prefix("XMP-").unwrap_or("");
-                                let local = if namespace == "dc" {
-                                    name.to_ascii_lowercase()
-                                } else {
-                                    name.to_string()
-                                };
-                                metadata.insert_xmp(
-                                    list_tag.to_string(),
-                                    TagValue::Array(items),
-                                    crate::parsers::xmp::priority::simple_property_priority(
-                                        namespace, &local,
-                                    ),
-                                );
+                                metadata.insert(list_tag.to_string(), TagValue::Array(items));
                             }
                         }
                     }
@@ -300,9 +279,7 @@ impl EPSParser {
                     if let Ok(xml_str) = std::str::from_utf8(xmp_data) {
                         if let Ok(history_tags) = parse_xmp_history(xml_str) {
                             for (key, value) in history_tags {
-                                let priority =
-                                    crate::parsers::xmp::history_parser::xmp_history_priority(&key);
-                                metadata.insert_xmp(key, TagValue::new_string(value), priority);
+                                metadata.insert(key, TagValue::new_string(value));
                             }
                         }
 
@@ -314,12 +291,9 @@ impl EPSParser {
                         // inside xmpBJ:JobRef. Extract them directly here.
                         if !metadata.contains_key("XMP-rdf:About") {
                             if let Some(about) = extract_xml_attribute(xml_str, "about") {
-                                metadata.insert_xmp(
+                                metadata.insert(
                                     "XMP-rdf:About".to_string(),
                                     TagValue::new_string(about),
-                                    crate::parsers::xmp::priority::table_entry_priority(
-                                        "rdf", "about",
-                                    ),
                                 );
                             }
                         }
@@ -327,28 +301,18 @@ impl EPSParser {
                             if let Some(toolkit) = extract_xml_attribute(xml_str, "x:xaptk")
                                 .or_else(|| extract_xml_attribute(xml_str, "xmptk"))
                             {
-                                metadata.insert_xmp(
+                                metadata.insert(
                                     "XMP-x:XMPToolkit".to_string(),
                                     TagValue::new_string(toolkit),
-                                    crate::parsers::xmp::priority::table_entry_priority(
-                                        "x", "xmptk",
-                                    ),
                                 );
                             }
                         }
                         if !metadata.contains_key("XMP-xmpBJ:JobRefName") {
                             if let Some(job_name) = extract_xml_element_text(xml_str, "stJob:name")
                             {
-                                use crate::parsers::xmp::priority::{
-                                    PathProperty, property_priority,
-                                };
-                                metadata.insert_xmp(
+                                metadata.insert(
                                     "XMP-xmpBJ:JobRefName".to_string(),
                                     TagValue::new_string(job_name),
-                                    property_priority(&[
-                                        PathProperty::new("xmpBJ", "JobRef"),
-                                        PathProperty::new("stJob", "name"),
-                                    ]),
                                 );
                             }
                         }

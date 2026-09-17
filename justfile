@@ -1411,7 +1411,6 @@ check-staleness version="":
             --exclude quicktime_userdata_native_13_59.json \
             --exclude garmin_fit_source.json \
             --exclude xmp_namespaces_13_59.json \
-            --exclude xmp_priorities_13_59.json \
             --exclude ifd_tables_sample.rs; then
         echo "❌ committed staleness fixtures are stale relative to ExifTool $VERSION." >&2
         echo "   Re-run: python3 tools/exiftool-tables/gen_staleness_facts.py \"$DUMP\" tools/exiftool-tables/fixtures" >&2

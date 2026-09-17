@@ -139,14 +139,6 @@ pub struct TagOccurrence {
     /// broken by file order. See [`SHIM_DEFAULT_PRIORITY`] for what
     /// shim-minted occurrences get and why.
     pub priority: u8,
-    /// ExifTool's FoundTag priority for an XMP property, as the XMP parser
-    /// derived it from the property's raw tag ID path and resolved namespace
-    /// (`parsers::xmp::priority`; it can be -1). `None` for every non-XMP
-    /// occurrence and for XMP keys minted outside the parser. Read only when
-    /// arbitrating same-named XMP tags among themselves
-    /// (`cli::tag_resolution`); `priority` above stays the shim's value, so
-    /// cross-group winners are unaffected.
-    pub xmp_priority: Option<i8>,
     /// Whether this occurrence belongs to a `List`-type tag. Always `false`
     /// for shim-minted occurrences -- `insert()` has no such concept.
     pub is_list: bool,
@@ -198,7 +190,6 @@ impl TagOccurrence {
             print: None,
             stored: None,
             priority,
-            xmp_priority: None,
             is_list: false,
             order,
             origin: Provenance::default(),

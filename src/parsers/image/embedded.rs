@@ -14,7 +14,7 @@ use crate::core::{MetadataMap, TagValue};
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
-use crate::parsers::xmp::rdf_parser::{insert_xmp_tag, parse_xmp_prioritized};
+use crate::parsers::xmp::rdf_parser::parse_xmp;
 use crate::tag_db::lookup_tag_name;
 
 /// EXIF sub-IFD pointer (`ExifOffset`).
@@ -236,16 +236,11 @@ pub fn parse_embedded_xmp(xmp_data: &[u8], metadata: &mut MetadataMap) -> bool {
     if std::str::from_utf8(xmp_data).is_err() {
         return false;
     }
-    match parse_xmp_prioritized(xmp_data) {
+    match parse_xmp(xmp_data) {
         Ok(tags) => {
             let found = !tags.is_empty();
-            for (name, value, priority) in tags {
-                insert_xmp_tag(
-                    metadata,
-                    name,
-                    TagValue::new_string(value.into_joined()),
-                    priority,
-                );
+            for (name, value) in tags {
+                metadata.insert(name, TagValue::new_string(value));
             }
             found
         }

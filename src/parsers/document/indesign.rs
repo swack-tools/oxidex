@@ -22,7 +22,7 @@
 //! - ExifTool source: `lib/Image/ExifTool/InDesign.pm`
 
 use crate::core::{FileReader, MetadataMap, TagValue};
-use crate::parsers::xmp::rdf_parser::XmpValue;
+use crate::parsers::xmp::rdf_parser::{XmpValue, parse_xmp_typed};
 
 /// InDesign.pm:25.
 const MASTER_PAGE_GUID: &[u8; 16] =
@@ -214,16 +214,16 @@ fn xmp_stream_length(peek: &[u8], big_endian: bool) -> Option<u32> {
 
 /// InDesign.pm:174,194: hand the stream to `XMP::Main`.
 fn insert_xmp(xmp: &[u8], metadata: &mut MetadataMap) {
-    let Ok(tags) = crate::parsers::xmp::rdf_parser::parse_xmp_prioritized(xmp) else {
+    let Ok(tags) = parse_xmp_typed(xmp) else {
         return;
     };
-    for (name, value, priority) in tags {
+    for (name, value) in tags {
         let value = match value {
             XmpValue::Scalar(value) => TagValue::new_string(value),
             XmpValue::List(values) => {
                 TagValue::Array(values.into_iter().map(TagValue::new_string).collect())
             }
         };
-        crate::parsers::xmp::rdf_parser::insert_xmp_tag(metadata, name, value, priority);
+        metadata.insert(name, value);
     }
 }

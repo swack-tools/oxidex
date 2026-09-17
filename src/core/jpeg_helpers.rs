@@ -451,7 +451,7 @@ pub fn process_xmp_segments(
     match crate::parsers::jpeg::xmp_parser::extract_xmp_from_segments_with_value_forms(segments) {
         Ok((xmp_tags, value_forms)) => {
             // Add all XMP tags to metadata
-            for (tag_name, value, priority) in xmp_tags {
+            for (tag_name, value) in xmp_tags {
                 // A List keeps its entries apart -- ExifTool reports
                 // dc:subject as a list, not one joined string.
                 let tag_value = match value {
@@ -467,9 +467,7 @@ pub fn process_xmp_segments(
                         TagValue::new_string(value)
                     }
                 };
-                crate::parsers::xmp::rdf_parser::insert_xmp_tag(
-                    metadata, tag_name, tag_value, priority,
-                );
+                metadata.insert(tag_name, tag_value);
             }
             // The ValueConv text of any property whose print formatting
             // discarded precision (exif:FocalLength's `%.1f mm`, the
