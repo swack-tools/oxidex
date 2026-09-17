@@ -1408,15 +1408,39 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // Inserting into a map keeps the *last* write, so the order below is the
     // reverse of ExifTool's processing order: innermost trailer, outermost
     // trailer, then the standard APP13 resource.
+    //
+    // The numbered family-1 groups follow ExifTool's processing order
+    // instead: every trailer IPTC directory is non-standard, so each takes
+    // the next of `IPTC2`, `IPTC3`, ... (see `NonStandardIptcGroups`), handed
+    // out outermost trailer first. A second APP13 IPTC resource would itself
+    // be non-standard and take `IPTC2` ahead of them; this reader merges all
+    // APP13 IPTC under the one standard group, so for such a file the
+    // trailers keep the unnumbered legacy group rather than a number that
+    // would be off by the directories it cannot see.
     if let Ok(file) = reader.read(0, reader.size() as usize) {
-        for (key, value) in crate::parsers::jpeg::afcp::parse_afcp_trailer(file).iter() {
-            metadata.insert(key.clone(), value.clone());
-        }
-        for (key, value) in
-            crate::parsers::jpeg::fotostation::parse_fotostation_trailer(file).iter()
+        use crate::parsers::jpeg::{afcp, fotostation, iptc_parser};
+        // An IFD0 IPTC-NAA block is non-standard too and would be numbered
+        // before the trailers; keep the trailers unnumbered rather than
+        // assign them the number that belongs to it.
+        let mut iptc_groups = if iptc_parser::app13_iptc_resource_count(&segments) <= 1
+            && !crate::core::jpeg_helpers::exif_ifd0_has_iptc_naa(&segments, reader)
         {
-            metadata.insert(key.clone(), value.clone());
+            iptc_parser::NonStandardIptcGroups::first()
+        } else {
+            iptc_parser::NonStandardIptcGroups::unnumbered()
+        };
+        let (afcp_trailer, fotostation_trailer);
+        if fotostation::fotostation_trailer_position(file) > afcp::afcp_trailer_position(file) {
+            fotostation_trailer =
+                fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups);
+            afcp_trailer = afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups);
+        } else {
+            afcp_trailer = afcp::parse_afcp_trailer_grouped(file, &mut iptc_groups);
+            fotostation_trailer =
+                fotostation::parse_fotostation_trailer_grouped(file, &mut iptc_groups);
         }
+        metadata.merge_winners_keeping_group1(&afcp_trailer);
+        metadata.merge_winners_keeping_group1(&fotostation_trailer);
     }
 
     process_iptc_segments(&segments, &mut metadata, diagnostics);

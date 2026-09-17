@@ -172,7 +172,18 @@ fn print_conv(conv: Conv, raw: &Raw) -> TagValue {
     })
 }
 
-/// Reads an InfiRay binary-data record into `<group>:<Name>` keys.
+/// ExifTool's family-1 group for every InfiRay record.
+///
+/// None of the `%Image::ExifTool::InfiRay::*` tables names a family-1 group --
+/// each declares only `GROUPS => { 0 => 'APPn', 2 => 'Image' }` (InfiRay.pm:28,
+/// 62, 94, 116, 133, 153, 168) -- so `GetTagTable` fills it in from the module
+/// name (ExifTool.pm:8982-8985). `JPEG::Main`'s APP3 `ImagingData` spells the
+/// same group out: `Groups => { 0 => 'APP3', 1 => 'InfiRay' }` (JPEG.pm:122).
+/// Family 0 stays the segment's `APPn`, which is why the keys keep it.
+pub(crate) const INFIRAY_GROUP1: &str = "InfiRay";
+
+/// Reads an InfiRay binary-data record into `<group>:<Name>` keys, each under
+/// family-1 group [`INFIRAY_GROUP1`].
 ///
 /// Mirrors `ExifTool::ProcessBinaryData` for the subset these tables use. The
 /// tables declare no `FORMAT`, so the default `int8u` increment applies and
@@ -196,9 +207,10 @@ pub(crate) fn read_record(group: &str, data: &[u8], fields: &[Field]) -> Metadat
         let Some(raw) = read_value(data, field.offset, field.format, field.count, more) else {
             continue;
         };
-        metadata.insert(
+        metadata.insert_with_group1(
             format!("{}:{}", group, field.name),
             print_conv(field.conv, &raw),
+            INFIRAY_GROUP1,
         );
     }
     metadata

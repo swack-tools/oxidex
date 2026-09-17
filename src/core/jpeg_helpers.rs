@@ -125,6 +125,36 @@ pub fn process_jfif_segments(
     }
 }
 
+/// Whether an APP1 EXIF IFD0 carries a non-empty `IPTC-NAA` (0x83BB) block.
+///
+/// ExifTool treats that block as a non-standard IPTC directory in a JPEG, so it
+/// takes the first numbered family-1 group (`IPTC2`) ahead of any trailer
+/// IPTC. Callers that number trailer IPTC use this to avoid handing out a
+/// number that belongs to it.
+pub(crate) fn exif_ifd0_has_iptc_naa(segments: &[Segment], reader: &dyn FileReader) -> bool {
+    segments.iter().filter(|s| s.is_app1()).any(|segment| {
+        if segment.data.len() < 14 || &segment.data[0..6] != b"Exif\0\0" {
+            return false;
+        }
+        let tiff_data = &segment.data[6..];
+        let byte_order = match &tiff_data[0..2] {
+            b"II" => ByteOrder::LittleEndian,
+            b"MM" => ByteOrder::BigEndian,
+            _ => return false,
+        };
+        let header = match byte_order {
+            ByteOrder::LittleEndian => EndianReader::little_endian(tiff_data),
+            ByteOrder::BigEndian => EndianReader::big_endian(tiff_data),
+        };
+        let ifd_offset = header.u32_at(4).unwrap_or(0) as u64;
+        let tiff_reader = TiffSubReader::new(reader, segment.offset + 10);
+        parse_ifd(&tiff_reader, ifd_offset, byte_order).is_ok_and(|tags| {
+            tags.iter()
+                .any(|(tag_id, _, _, bytes)| *tag_id == 0x83BB && !bytes.is_empty())
+        })
+    })
+}
+
 /// Processes EXIF APP1 segments and extracts TIFF-based EXIF metadata.
 ///
 /// EXIF data is stored in APP1 segments with a TIFF structure containing
@@ -963,11 +993,7 @@ pub fn process_app6_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     let is_ijpeg = has_ijpeg_header(segments);
     for segment in segments.iter().filter(|s| s.marker == APP6_MARKER) {
         match parse_app6_ijpeg(segment.data, is_ijpeg) {
-            Ok(app6_metadata) => {
-                for (key, value) in app6_metadata.iter() {
-                    metadata.insert(key.clone(), value.clone());
-                }
-            }
+            Ok(app6_metadata) => metadata.merge_winners_keeping_group1(&app6_metadata),
             Err(e) => {
                 // APP6 data is optional; parse failures are not fatal
                 eprintln!("Warning: Failed to parse APP6 segment: {}", e);
@@ -1233,9 +1259,7 @@ pub fn process_app14_segments(segments: &[Segment], metadata: &mut MetadataMap) 
             match parse_app14_adobe(segment.data) {
                 Ok(adobe_metadata) => {
                     // Merge APP14 Adobe metadata into the main metadata map
-                    for (key, value) in adobe_metadata.iter() {
-                        metadata.insert(key.clone(), value.clone());
-                    }
+                    metadata.merge_winners_keeping_group1(&adobe_metadata);
                 }
                 Err(e) => {
                     // Log warning but continue processing other segments
@@ -1447,9 +1471,7 @@ pub fn process_spiff_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         // ExifTool falls through to InfiRay's isothermal record for any APP8
         // of at least 32 bytes in an IJPEG file (ExifTool.pm:8215).
         if is_ijpeg && segment.data.len() >= INFIRAY_ISOTHERMAL_MIN_LENGTH {
-            for (key, value) in parse_infiray_isothermal(segment.data).iter() {
-                metadata.insert(key.clone(), value.clone());
-            }
+            metadata.merge_winners_keeping_group1(&parse_infiray_isothermal(segment.data));
         }
     }
 }
@@ -1925,19 +1947,19 @@ fn process_infiray_imaging_data(segments: &[Segment], metadata: &mut MetadataMap
             .get(index + 1)
             .is_some_and(|next| next.marker == APP3_MARKER);
         if !run_continues {
-            metadata.insert(
-                "APP3:ImagingData".to_string(),
+            metadata.insert_with_group1(
+                "APP3:ImagingData",
                 binary_data_placeholder(run_len),
+                crate::parsers::jpeg::app_segments::infiray::INFIRAY_GROUP1,
             );
         }
     }
 }
 
-/// Copies every entry of `source` into `metadata`.
+/// Copies every entry of `source` into `metadata`, keeping the family-1
+/// group a sub-parser recorded for it.
 fn merge(source: MetadataMap, metadata: &mut MetadataMap) {
-    for (key, value) in source.iter() {
-        metadata.insert(key.clone(), value.clone());
-    }
+    metadata.merge_winners_keeping_group1(&source);
 }
 
 #[cfg(test)]

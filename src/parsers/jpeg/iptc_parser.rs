@@ -755,6 +755,75 @@ pub fn collapse_iptc_entries(entries: Vec<(u8, u8, String, String)>) -> Vec<(Str
     out
 }
 
+/// Hands out ExifTool's numbered family-1 groups (`IPTC2`, `IPTC3`, ...) to the
+/// IPTC directories a file carries outside its standard location.
+///
+/// `ProcessIPTC` (IPTC.pm:1064-1102) gives the first `IPTC::Main` directory at
+/// a standard path (`%isStandardIPTC`, IPTC.pm:38-54 -- for JPEG only
+/// `JPEG-APP13-Photoshop-IPTC`) the table's own family-1 group `IPTC`. Every
+/// other one bumps `$$et{DIR_COUNT}{IPTC}` and sets `SET_GROUP1 = '+' .
+/// ($count + 1)`, which `GetGroup` appends to `IPTC` (ExifTool.pm:3860): the
+/// first non-standard directory reports `IPTC2`, the next `IPTC3`. The count
+/// advances per directory processed, whether or not it yields a tag.
+///
+/// [`unnumbered`](Self::unnumbered) hands out the empty group instead -- the
+/// legacy `IPTC` label -- for callers that cannot establish how many
+/// non-standard directories ExifTool processed ahead of theirs.
+#[derive(Debug)]
+pub struct NonStandardIptcGroups {
+    next: Option<u32>,
+}
+
+impl NonStandardIptcGroups {
+    /// Numbering that starts at `IPTC2`: no non-standard directory has been
+    /// processed yet.
+    pub fn first() -> Self {
+        Self { next: Some(2) }
+    }
+
+    /// Numbering withheld: every directory gets the empty family-1 group.
+    pub fn unnumbered() -> Self {
+        Self { next: None }
+    }
+
+    /// The family-1 group for the next non-standard directory ExifTool
+    /// processes, advancing the count.
+    pub fn next_group(&mut self) -> String {
+        match self.next {
+            Some(n) => {
+                self.next = Some(n + 1);
+                format!("IPTC{n}")
+            }
+            None => String::new(),
+        }
+    }
+}
+
+/// How many IPTC (0x0404) resources the APP13 Photoshop segments carry, found
+/// by the same walk [`extract_iptc_values_from_segments`] reads them with.
+///
+/// ExifTool treats only the first of them as the standard directory; a second
+/// one is itself non-standard and takes `IPTC2` ahead of any trailer.
+pub fn app13_iptc_resource_count(segments: &[Segment]) -> usize {
+    let mut count = 0;
+    for segment in segments {
+        if segment.marker != APP13_MARKER || !segment.data.starts_with(PHOTOSHOP_SIGNATURE) {
+            continue;
+        }
+        let mut current = &segment.data[PHOTOSHOP_SIGNATURE.len()..];
+        while current.len() > 4 && current.starts_with(EIGHTBIM_SIGNATURE) {
+            let Ok((remaining, block)) = parse_image_resource_block(current) else {
+                break;
+            };
+            if block.id == IPTC_RESOURCE_ID {
+                count += 1;
+            }
+            current = remaining;
+        }
+    }
+    count
+}
+
 /// Extracts IPTC metadata from JPEG segments, keeping repeatable datasets as
 /// lists. See [`extract_iptc_from_segments`] for the string-valued variant.
 pub fn extract_iptc_values_from_segments(segments: &[Segment]) -> Result<Vec<(String, TagValue)>> {
@@ -917,6 +986,58 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(*byline, TagValue::new_string("only".to_string()));
+    }
+
+    /// IPTC.pm:1098-1101: the n-th non-standard directory is `IPTC{n+1}`.
+    #[test]
+    fn non_standard_iptc_groups_number_from_two() {
+        let mut groups = NonStandardIptcGroups::first();
+        assert_eq!(groups.next_group(), "IPTC2");
+        assert_eq!(groups.next_group(), "IPTC3");
+        let mut unnumbered = NonStandardIptcGroups::unnumbered();
+        assert_eq!(unnumbered.next_group(), "");
+        assert_eq!(unnumbered.next_group(), "");
+    }
+
+    #[test]
+    fn app13_iptc_resource_count_counts_every_iptc_resource() {
+        fn resource(id: u16, data: &[u8]) -> Vec<u8> {
+            let mut out = b"8BIM".to_vec();
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&[0, 0]); // empty name, padded
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(data);
+            if data.len() % 2 == 1 {
+                out.push(0);
+            }
+            out
+        }
+        let iptc = b"\x1c\x02\x00\x00\x02\x00\x02";
+        let mut one = PHOTOSHOP_SIGNATURE.to_vec();
+        one.extend(resource(0x0404, iptc));
+        one.extend(resource(0x040c, b"thumb"));
+        let mut two = one.clone();
+        two.extend(resource(0x0404, iptc));
+
+        assert_eq!(
+            app13_iptc_resource_count(&[Segment::new(APP13_MARKER, 0, &one)]),
+            1
+        );
+        assert_eq!(
+            app13_iptc_resource_count(&[Segment::new(APP13_MARKER, 0, &two)]),
+            2
+        );
+        assert_eq!(
+            app13_iptc_resource_count(&[
+                Segment::new(APP13_MARKER, 0, &one),
+                Segment::new(APP13_MARKER, 0, &one)
+            ]),
+            2
+        );
+        assert_eq!(
+            app13_iptc_resource_count(&[Segment::new(0xFFE1, 0, &one)]),
+            0
+        );
     }
 
     #[test]

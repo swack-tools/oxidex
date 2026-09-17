@@ -171,6 +171,45 @@ impl MetadataMap {
         previous
     }
 
+    /// [`insert`](Self::insert) with ExifTool's family-1 group recorded
+    /// beside the key.
+    ///
+    /// Everything `insert()` decides stays exactly as it was -- the lookup
+    /// key, the priority the shim derives from the key's own group, the
+    /// default instance -- so default winners, bare-name lookups and
+    /// composites keyed on `"{family0}:{name}"` see no change. Only the
+    /// family-1 label `-G1`/`-j -G1`/group-qualified requests report moves
+    /// to `group1`. An empty `group1` makes this exactly `insert()`.
+    ///
+    /// For readers whose stored key prefix is already ExifTool's family-0
+    /// group but whose table names a different family-1 group:
+    /// `ID3:Title` under `ID3v2_3`, `APP14:ColorTransform` under `Adobe`.
+    pub(crate) fn insert_with_group1<K: Into<String>>(
+        &mut self,
+        key: K,
+        value: TagValue,
+        group1: &str,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, value, order);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        self.sink.record(key, occurrence);
+        previous
+    }
+
+    /// Copies every winner of `source` into this map through
+    /// [`insert_with_group1`](Self::insert_with_group1), so a family-1 group
+    /// the sub-parser recorded survives the copy. A source built only with
+    /// `insert()` copies exactly as `for (k, v) in source.iter() {
+    /// self.insert(k, v) }` would.
+    pub(crate) fn merge_winners_keeping_group1(&mut self, source: &MetadataMap) {
+        for (key, occurrence) in source.sink.winner_occurrences() {
+            self.insert_with_group1(key.clone(), occurrence.raw.clone(), &occurrence.group1);
+        }
+    }
+
     /// Records an occurrence with an explicit priority, family-1 group and
     /// instance identity, following ExifTool's `FoundTag` arbitration
     /// (`ExifTool.pm:9448`+) instead of `insert()`'s flat

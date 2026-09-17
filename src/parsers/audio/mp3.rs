@@ -207,9 +207,28 @@ fn decode_synchsafe_u32(bytes: &[u8]) -> u32 {
         | (bytes[3] as u32 & 0x7F)
 }
 
+/// ExifTool's family-1 group for the frames of an ID3v2 tag with this major
+/// version.
+///
+/// `ProcessID3` picks the frame table from the header version -- `$vers >=
+/// 0x0400` -> `ID3::v2_4`, `>= 0x0300` -> `ID3::v2_3`, else `ID3::v2_2`
+/// (ID3.pm:1497-1503, `$vers` being major * 256 + revision) -- and those
+/// tables declare `GROUPS => { 1 => 'ID3v2_2' }` (ID3.pm:430), `'ID3v2_3'`
+/// (ID3.pm:675) and `'ID3v2_4'` (ID3.pm:695). Family 0 stays `ID3`, the
+/// module's default (ExifTool.pm:8982-8985), which is why the frames keep
+/// their `ID3:` keys and only `group1` changes.
+pub(crate) fn id3v2_group1(version: u8) -> &'static str {
+    match version {
+        4.. => "ID3v2_4",
+        3 => "ID3v2_3",
+        _ => "ID3v2_2",
+    }
+}
+
 /// Parse ID3v2 frames
 ///
 /// Shared with the AIFF parser, which reaches this through its `ID3 ` chunk.
+/// Every frame is recorded under [`id3v2_group1`] for `version`.
 pub(crate) fn parse_id3v2_frames(
     data: &[u8],
     version: u8,
@@ -217,6 +236,7 @@ pub(crate) fn parse_id3v2_frames(
 ) -> Result<()> {
     let mut offset = 0;
     let reader = EndianReader::big_endian(data);
+    let group1 = id3v2_group1(version);
 
     // ID3v2.2 frame headers are 6 bytes, v2.3/v2.4 headers are 10. The loop
     // bound has to be the header size for *this* version, and it has to be
@@ -285,16 +305,16 @@ pub(crate) fn parse_id3v2_frames(
         if is_text_frame && let Ok(text) = parse_text_frame(frame_data) {
             let name = map_frame_id_to_tag_name(&frame_id);
             let value = apply_text_frame_print_conv(name, &text);
-            metadata.insert(format!("ID3:{name}"), TagValue::new_string(value));
+            metadata.insert_with_group1(format!("ID3:{name}"), TagValue::new_string(value), group1);
         } else if is_comment_frame && let Ok(text) = parse_comment_frame(frame_data) {
-            metadata.insert("ID3:Comment".to_string(), TagValue::new_string(text));
+            metadata.insert_with_group1("ID3:Comment", TagValue::new_string(text), group1);
         } else if is_lyrics_frame && let Ok(text) = parse_comment_frame(frame_data) {
             // Lyrics frame has same structure as comment frame
-            metadata.insert("ID3:Lyrics".to_string(), TagValue::new_string(text));
+            metadata.insert_with_group1("ID3:Lyrics", TagValue::new_string(text), group1);
         } else if is_picture_frame {
-            let _ = parse_picture_frame(frame_data, version, metadata);
+            let _ = parse_picture_frame(frame_data, version, metadata, group1);
         } else if is_rva_frame {
-            let _ = parse_rva_frame(frame_data, &frame_id, metadata);
+            let _ = parse_rva_frame(frame_data, &frame_id, metadata, group1);
         }
     }
 
@@ -992,7 +1012,12 @@ fn get_mpeg_sample_rate(version: f64, index: u8) -> u32 {
 }
 
 /// Parse RVA2/RVAD/RVA (relative volume adjustment) frame
-fn parse_rva_frame(data: &[u8], frame_id: &str, metadata: &mut MetadataMap) -> Result<()> {
+fn parse_rva_frame(
+    data: &[u8],
+    frame_id: &str,
+    metadata: &mut MetadataMap,
+    group1: &str,
+) -> Result<()> {
     if data.is_empty() {
         return Ok(());
     }
@@ -1048,9 +1073,10 @@ fn parse_rva_frame(data: &[u8], frame_id: &str, metadata: &mut MetadataMap) -> R
                 .iter()
                 .map(|(pct, ch)| format!("{:+.1}% {}", pct, ch))
                 .collect();
-            metadata.insert(
-                "ID3:RelativeVolumeAdjustment".to_string(),
+            metadata.insert_with_group1(
+                "ID3:RelativeVolumeAdjustment",
                 TagValue::new_string(formatted.join(", ")),
+                group1,
             );
         }
     } else {
@@ -1088,9 +1114,10 @@ fn parse_rva_frame(data: &[u8], frame_id: &str, metadata: &mut MetadataMap) -> R
         let left_pct = left_sign * (left_raw as f64 / max_val) * 100.0;
 
         let formatted = format!("{:+.1}% Right, {:+.1}% Left", right_pct, left_pct);
-        metadata.insert(
-            "ID3:RelativeVolumeAdjustment".to_string(),
+        metadata.insert_with_group1(
+            "ID3:RelativeVolumeAdjustment",
             TagValue::new_string(formatted),
+            group1,
         );
     }
 
@@ -1107,7 +1134,12 @@ fn read_bytes_as_value(data: &[u8], num_bytes: usize) -> u64 {
 }
 
 /// Parse APIC/PIC (picture) frame
-fn parse_picture_frame(data: &[u8], version: u8, metadata: &mut MetadataMap) -> Result<()> {
+fn parse_picture_frame(
+    data: &[u8],
+    version: u8,
+    metadata: &mut MetadataMap,
+    group1: &str,
+) -> Result<()> {
     if data.is_empty() {
         return Ok(());
     }
@@ -1202,26 +1234,30 @@ fn parse_picture_frame(data: &[u8], version: u8, metadata: &mut MetadataMap) -> 
         &mime_type
     };
 
-    metadata.insert(
-        "ID3:PictureFormat".to_string(),
+    metadata.insert_with_group1(
+        "ID3:PictureFormat",
         TagValue::new_string(format_str),
+        group1,
     );
-    metadata.insert(
-        "ID3:PictureType".to_string(),
+    metadata.insert_with_group1(
+        "ID3:PictureType",
         TagValue::new_string(picture_type_str),
+        group1,
     );
     if !description.is_empty() && description.chars().all(|c| !c.is_control()) {
-        metadata.insert(
-            "ID3:PictureDescription".to_string(),
+        metadata.insert_with_group1(
+            "ID3:PictureDescription",
             TagValue::new_string(description.trim_end_matches('\0').to_string()),
+            group1,
         );
     }
-    metadata.insert(
-        "ID3:Picture".to_string(),
+    metadata.insert_with_group1(
+        "ID3:Picture",
         TagValue::new_string(format!(
             "(Binary data {} bytes, use -b option to extract)",
             picture_size
         )),
+        group1,
     );
 
     Ok(())
@@ -1296,6 +1332,60 @@ mod tests {
         // Bracketed codes embedded in free text keep their brackets.
         assert_eq!(print_genre("(18)(31)"), "(Techno)(Trance)");
         assert_eq!(print_genre("mostly (18) really"), "mostly (Techno) really");
+    }
+
+    /// ID3.pm:1497-1503 picks the frame table from the header version, and
+    /// each table's `GROUPS{1}` is what `-G1` reports (ID3.pm:430, 675, 695);
+    /// family 0 stays `ID3`. Only v2.2 has a carrier in `t/images`
+    /// (`MP3.mp3`, `AIFF.aif`, `APE.mpc`: `[ID3v2_2] Title`), so v2.3 and v2.4
+    /// are pinned here from the table source alone.
+    #[test]
+    fn id3v2_frames_report_the_version_table_family1_group() {
+        use crate::cli::tag_resolution::{family0_label, family1_label};
+
+        fn text_frame(version: u8, value: &str) -> Vec<u8> {
+            let mut body = vec![0u8]; // ISO-8859-1
+            body.extend_from_slice(value.as_bytes());
+            let mut frame = Vec::new();
+            if version >= 3 {
+                frame.extend_from_slice(b"TIT2");
+                // Below 128 a v2.4 synchsafe size spells the same bytes as
+                // a v2.3 plain int32u one.
+                frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                frame.extend_from_slice(&[0, 0]);
+            } else {
+                frame.extend_from_slice(b"TT2");
+                frame.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+            }
+            frame.extend_from_slice(&body);
+            frame
+        }
+
+        for (version, group1) in [
+            (2u8, "ID3v2_2"),
+            (3, "ID3v2_3"),
+            (4, "ID3v2_4"),
+            // `$vers >= 0x0400` also covers anything newer.
+            (5, "ID3v2_4"),
+        ] {
+            let mut metadata = MetadataMap::new();
+            parse_id3v2_frames(
+                &text_frame(version, "ExifTool Test"),
+                version,
+                &mut metadata,
+            )
+            .unwrap();
+            // The storage key -- and so every lookup and the Composite
+            // `ID3:Year`-style family-0 dependencies -- is unchanged.
+            assert_eq!(metadata.get_string("ID3:Title"), Some("ExifTool Test"));
+            let (_, occurrence) = metadata
+                .all_occurrences()
+                .find(|(key, _)| key == "ID3:Title")
+                .expect("ID3:Title occurrence");
+            assert_eq!(family1_label(occurrence), group1, "v2.{version}");
+            assert_eq!(family0_label(occurrence), "ID3", "v2.{version}");
+        }
+        assert_eq!(id3v2_group1(0), "ID3v2_2");
     }
 
     #[test]

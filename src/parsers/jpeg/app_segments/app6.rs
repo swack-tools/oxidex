@@ -445,6 +445,17 @@ fn gopro_print_conv(fourcc: &str, value: TagValue) -> TagValue {
     TagValue::String(mapped.to_string())
 }
 
+/// ExifTool's family-1 group for the GoPro GPMF tags a JPEG APP6 segment
+/// carries.
+///
+/// `JPEG::Main` routes a `GoPro\0` APP6 to `Image::ExifTool::GoPro::GPMF`
+/// (JPEG.pm:196-198), whose `GROUPS => { 2 => 'Camera' }` (GoPro.pm:69) leaves
+/// family 1 to `GetTagTable`'s module-name default, `GoPro` (ExifTool.pm:
+/// 8982-8985); family 0 is the segment's `APP6`, so the keys keep it. Pinned
+/// ExifTool 13.59 on `t/images/GoPro.jpg`: `-G0` `[APP6] Model`, `-G1`
+/// `[GoPro] Model`.
+const GOPRO_GROUP1: &str = "GoPro";
+
 /// Parses GoPro GPMF (GoPro Metadata Format) data.
 ///
 /// GPMF uses a hierarchical TLV (Tag-Length-Value) structure with FourCC tags.
@@ -545,7 +556,7 @@ fn parse_gpmf_records(data: &[u8], metadata: &mut MetadataMap, depth: u8) {
             } else {
                 value
             };
-            metadata.insert(format!("APP6:{}", tag_name), value);
+            metadata.insert_with_group1(format!("APP6:{}", tag_name), value, GOPRO_GROUP1);
         }
     }
 }
