@@ -343,10 +343,9 @@ pub fn parse_pdf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
     // Extract XMP metadata
     match xmp_extractor::extract_xmp_metadata(reader) {
         Ok(xmp_metadata) => {
-            // Merge XMP tags into main metadata
-            for (key, value) in xmp_metadata.iter() {
-                metadata.insert(key.clone(), value.clone());
-            }
+            // Merge XMP tags into main metadata, keeping each occurrence's
+            // family-1 XMP group.
+            metadata.merge(xmp_metadata);
         }
         Err(e) => {
             // Log warning but continue - XMP might not exist
