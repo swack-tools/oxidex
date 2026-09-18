@@ -147,6 +147,11 @@ class WorkflowWiringTests(unittest.TestCase):
         missing = sorted(set(weights) - covered)
         self.assertEqual(
             missing, [], f"{len(missing)} of {len(weights)} tools tests are in no shard ci.yml runs")
+        # And exactly once: the union of the shards ci.yml runs is the
+        # discovered suite, with no id in two shards.
+        ran = [i for index in matrix for i in partitions[index - 1]]
+        self.assertEqual(len(ran), len(set(ran)), "a test id is in more than one shard")
+        self.assertEqual(sorted(ran), sorted(test.id() for test in tests))
 
     def test_a_module_with_no_recorded_timing_still_lands_in_a_run_shard(self):
         """The growth case: tags generate a new test module, unweighted.
@@ -166,3 +171,43 @@ class WorkflowWiringTests(unittest.TestCase):
         partitions = shard.partition(weights, len(matrix))
         covered = {i for index in matrix for i in partitions[index - 1]}
         self.assertEqual(sorted(covered), sorted(newcomers))
+
+
+class WeightsFreshnessTests(unittest.TestCase):
+    """`unittest_weights.json` must cover (nearly) every discovered module.
+
+    An unweighted module is still run -- `weigh` gives it
+    `DEFAULT_MODULE_SECONDS` in total -- so staleness never fails a shard; it
+    only unbalances them, silently. At PR run 35394817483, 16 of 139 modules
+    had no weight and shard wall time spread from 248 s to 436 s. This fails
+    once more than MAX_UNWEIGHTED_MODULES discovered modules lack an entry, so
+    the file is refreshed while the drift is still small. Discovery only; no
+    test is executed.
+    """
+
+    MAX_UNWEIGHTED_MODULES = 5
+    REFRESH = "python3 tools/ci/unittest_weights_from_run.py <green-run-id>"
+    SUITE = WorkflowWiringTests.SUITE
+
+    def test_few_discovered_modules_lack_a_recorded_weight(self):
+        suite = unittest.defaultTestLoader.discover(
+            str(self.SUITE), pattern="test_*.py", top_level_dir=str(self.SUITE))
+        tests = list(shard.flatten(suite))
+        self.assertGreater(len(tests), 100, "discovery found almost nothing; wrong start dir?")
+        seconds = json.loads(
+            pathlib.Path(__file__).with_name("unittest_weights.json").read_text())["seconds"]
+        unweighted = shard.unweighted_modules(tests, seconds)
+        self.assertLessEqual(
+            len(unweighted), self.MAX_UNWEIGHTED_MODULES,
+            f"{len(unweighted)} discovered test modules have no timing in "
+            f"tools/ci/unittest_weights.json (limit {self.MAX_UNWEIGHTED_MODULES}), so the "
+            f"CI tools shards are balanced on guesses: {', '.join(unweighted)}. "
+            f"Refresh from a recent green CI run: {self.REFRESH}")
+
+    def test_unweighted_modules_ignores_import_failures_and_weighted_modules(self):
+        tests = [Fake("test_a.C.test_x"), Fake("test_b.C.test_y"),
+                 Fake("unittest.loader._FailedTest.test_c")]
+        self.assertEqual(shard.unweighted_modules(tests, {"test_a": 3}), ["test_b"])
+        # A full-id entry alone does not weigh its module.
+        self.assertEqual(shard.unweighted_modules(tests, {"test_b.C.test_y": 40, "test_a": 1}),
+                         ["test_b"])

@@ -46,6 +46,17 @@ def weigh(tests, seconds):
     return weights
 
 
+def unweighted_modules(tests, seconds):
+    """Discovered modules with no whole-module entry in the timing file.
+
+    A synthetic `unittest.loader._FailedTest` (a module that failed to
+    import) is not a module of the suite and is not reported.
+    """
+    modules = {test.id().split(".", 1)[0] for test in tests}
+    modules.discard("unittest")
+    return sorted(modules - set(seconds))
+
+
 def partition(weights, shards):
     """-> list of sorted id lists; each id appears in exactly one shard."""
     if shards < 1:
@@ -78,9 +89,20 @@ def main(argv=None):
     ids = [test.id() for test in tests]
     if len(set(ids)) != len(ids):
         raise SystemExit("duplicate test ids; cannot partition deterministically")
-    selected = set(partition(weigh(tests, seconds), args.shards)[args.shard - 1])
+    weights = weigh(tests, seconds)
+    partitions = partition(weights, args.shards)
+    selected = set(partitions[args.shard - 1])
     chosen = [test for test in tests if test.id() in selected]
     if args.list:
+        # The ids go to stdout; the predicted balance goes to stderr so a
+        # consumer of the id list is unaffected.
+        loads = [sum(weights[i] for i in part) for part in partitions]
+        for index, (part, load) in enumerate(zip(partitions, loads), 1):
+            print(f"predicted shard {index}/{args.shards}: {len(part)} tests, {load:.0f}s",
+                  file=sys.stderr)
+        print(f"predicted max/min: {max(loads) / max(min(loads), 1e-9):.2f}; "
+              f"unweighted modules: {', '.join(unweighted_modules(tests, seconds)) or 'none'}",
+              file=sys.stderr)
         print("\n".join(test.id() for test in chosen))
         return 0
     print(f"shard {args.shard}/{args.shards}: {len(chosen)} of {len(tests)} tests", flush=True)
