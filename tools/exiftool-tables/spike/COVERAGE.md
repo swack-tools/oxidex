@@ -11,7 +11,7 @@ python3 tools/exiftool-tables/spike/run_spike.py \
     /Users/allen/oxidex-ops/evidence/20260917-observed-refresh/capture/catalog-writer-source.json
 ```
 
-- repo commit: `v1.2.1-1584-g3837c825` (`3837c825065d450fab1cdbc09e684ab6e25d5898`), tree clean
+- repo commit: `v1.2.1-1586-g53d27645` (`53d276459ddac1e1a5a380ba1846e5c32ff6f9b8`), tree clean
 - dump: `/Users/allen/oxidex-ops/evidence/20260917-observed-refresh/capture/catalog-writer-source.json`
 - dump sha256: `536386691b0df2e6a6ebabed21bb8eb2de5dd66947901a4ea3284c87eecaf461`
 - pinned release declared by the dump: **13.59**
@@ -52,10 +52,10 @@ denominator: **6993 uses / 1529 distinct expressions**
 | c. evaluable PURE ($val + operators + core builtins) | 4865 | 69.6% | 930 | 60.8% |
 | d. + top 5 session keys (no helpers) | 4997 | 71.5% | 969 | 63.4% |
 | d. + top 10 session keys (no helpers) | 5053 | 72.3% | 986 | 64.5% |
-| d. + top 20 session keys (no helpers) | 5101 | 72.9% | 1000 | 65.4% |
+| d. + top 20 session keys (no helpers) | 5098 | 72.9% | 999 | 65.3% |
 | d. + ALL session keys (no helpers) | 5422 | 77.5% | 1233 | 80.6% |
 | e. + all session keys + top 10 helpers | 6560 | 93.8% | 1311 | 85.7% |
-| e. + all session keys + top 25 helpers | 6787 | 97.1% | 1388 | 90.8% |
+| e. + all session keys + top 25 helpers | 6779 | 96.9% | 1382 | 90.4% |
 | e. + all session keys + top 50 helpers | 6908 | 98.8% | 1459 | 95.4% |
 | e. + all session keys + ALL helpers (= b) | 6986 | 99.9% | 1526 | 99.8% |
 
@@ -69,7 +69,7 @@ With every helper available, adding session keys in most-used-first order:
 
 - 90% of uses: **2 session keys** (of 250 distinct keys)
 - 95% of uses: **25 session keys** (of 250 distinct keys)
-- 99% of uses: **183 session keys** (of 250 distinct keys)
+- 99% of uses: **186 session keys** (of 250 distinct keys)
 
 Greedy dependency ladder (session keys and helpers ranked together, each step taking the dependency that unlocks the most uses):
 
@@ -94,7 +94,7 @@ denominator: **13290 uses / 3448 distinct expressions**
 | d. + ALL session keys (no helpers) | 10872 | 81.8% | 2953 | 85.6% |
 | e. + all session keys + top 10 helpers | 12300 | 92.6% | 3070 | 89.0% |
 | e. + all session keys + top 25 helpers | 12713 | 95.7% | 3164 | 91.8% |
-| e. + all session keys + top 50 helpers | 12922 | 97.2% | 3228 | 93.6% |
+| e. + all session keys + top 50 helpers | 12931 | 97.3% | 3229 | 93.6% |
 | e. + all session keys + ALL helpers (= b) | 13254 | 99.7% | 3437 | 99.7% |
 
 With every session key available, adding helper ports in most-used-first order:
@@ -106,7 +106,7 @@ With every session key available, adding helper ports in most-used-first order:
 With every helper available, adding session keys in most-used-first order:
 
 - 90% of uses: **13 session keys** (of 285 distinct keys)
-- 95% of uses: **53 session keys** (of 285 distinct keys)
+- 95% of uses: **52 session keys** (of 285 distinct keys)
 - 99% of uses: **192 session keys** (of 285 distinct keys)
 
 Greedy dependency ladder (session keys and helpers ranked together, each step taking the dependency that unlocks the most uses):
@@ -136,15 +136,15 @@ Greedy dependency ladder (session keys and helpers ranked together, each step ta
 | 13 | `self:FirmwareVersion` | 33 |
 | 14 | `self:LensMount` | 33 |
 | 15 | `self:MakerNoteSigmaVer` | 31 |
-| 16 | `self:FocusPointSchema` | 30 |
-| 17 | `self:FlashControlMode` | 30 |
+| 16 | `self:FlashControlMode` | 30 |
+| 17 | `self:FocusPointSchema` | 30 |
 | 18 | `ctx:$tagInfo` | 28 |
 | 19 | `self:LayoutFlags` | 28 |
 | 20 | `self:DIR_NAME` | 27 |
 | 21 | `self:TIFF_TYPE` | 27 |
 | 22 | `self:NumChannelDescriptions` | 25 |
-| 23 | `self:IntervalShooting` | 23 |
-| 24 | `self:FlashControlBuiltin` | 23 |
+| 23 | `self:FlashControlBuiltin` | 23 |
+| 24 | `self:IntervalShooting` | 23 |
 | 25 | `self:AFDetectionMethod` | 22 |
 
 ## 5. Which helper subs, and whether oxidex already ports them
@@ -177,8 +177,8 @@ Greedy dependency ladder (session keys and helpers ranked together, each step ta
 | 16 | `Exif::PrintFNumber` | 32 | yes | no | no | YES |
 | 17 | `ET->ValidateImage` | 31 | no ($self) | yes | no | - |
 | 18 | `ET->Warn` | 27 | no (engine) | yes | yes | - |
-| 19 | `XMP::ConvertXMPDate` | 27 | yes | no | no | - |
-| 20 | `IsInt` | 27 | yes | no | no | - |
+| 19 | `IsInt` | 27 | yes | no | no | - |
+| 20 | `XMP::ConvertXMPDate` | 27 | yes | no | no | - |
 | 21 | `ET->Encode` | 26 | no ($self) | yes | no | - |
 | 22 | `Samsung::Crypt` | 25 | no ($self) | yes | no | - |
 | 23 | `Nikon::PrintPC` | 23 | yes | no | no | YES |
@@ -187,17 +187,17 @@ Greedy dependency ladder (session keys and helpers ranked together, each step ta
 | 26 | `XMP::DecodeBase64` | 21 | yes | no | no | - |
 | 27 | `ASF::GetGUID` | 20 | yes | no | no | YES |
 | 28 | `Pentax::PrintFilter` | 20 | yes | no | no | - |
-| 29 | `Sony::Decipher` | 17 | yes | no | no | - |
-| 30 | `PrintHex` | 17 | yes | no | no | - |
+| 29 | `PrintHex` | 17 | yes | no | no | - |
+| 30 | `Sony::Decipher` | 17 | yes | no | no | - |
 | 31 | `Nikon::PrintAFPoints` | 16 | yes | no | no | - |
 | 32 | `Nikon::PrintAFPointsInv` | 16 | yes | no | no | - |
-| 33 | `ToFloat` | 12 | yes | no | no | - |
-| 34 | `ET->OverrideFileType` | 12 | no ($self) | yes | no | - |
+| 33 | `ET->OverrideFileType` | 12 | no ($self) | yes | no | - |
+| 34 | `ToFloat` | 12 | yes | no | no | - |
 | 35 | `DecodeBits` | 11 | yes | no | no | - |
-| 36 | `GetByteOrder` | 11 | yes | no | no | - |
-| 37 | `TimeZoneString` | 11 | yes | no | no | - |
-| 38 | `Exif::ExifDate` | 11 | yes | no | no | - |
-| 39 | `IPTC::InverseDateOrTime` | 11 | no ($self) | yes | no | - |
+| 36 | `Exif::ExifDate` | 11 | yes | no | no | - |
+| 37 | `GetByteOrder` | 11 | yes | no | no | - |
+| 38 | `IPTC::InverseDateOrTime` | 11 | no ($self) | yes | no | - |
+| 39 | `TimeZoneString` | 11 | yes | no | no | - |
 | 40 | `Get32u` | 10 | yes | no | no | - |
 
 ## 6. Grammar growth: which production unlocked how much
@@ -246,15 +246,15 @@ Productions are added greedily (the one unlocking the most new uses first). Lite
 | 38 | `c_style_for` | 5 | 5 | 12405 | 93.3% |
 | 39 | `array_funcs` | 2 | 2 | 12407 | 93.4% |
 | 40 | `bareword_call` | 1 | 1 | 12408 | 93.4% |
-| 41 | `deparse_wrapper` | 0 | 0 | 12408 | 93.4% |
-| 42 | `coderef` | 770 | 146 | 13178 | 99.2% |
+| 41 | `coderef` | 0 | 0 | 12408 | 93.4% |
+| 42 | `deparse_wrapper` | 770 | 146 | 13178 | 99.2% |
 | 43 | `amp_call` | 67 | 15 | 13245 | 99.7% |
 | 44 | `regex_interp` | 5 | 2 | 13250 | 99.7% |
 | 45 | `postfix_deref` | 2 | 1 | 13252 | 99.7% |
 | 46 | `quote_ops` | 1 | 1 | 13253 | 99.7% |
-| 47 | `local` | 0 | 0 | 13253 | 99.7% |
+| 47 | `anon_sub` | 0 | 0 | 13253 | 99.7% |
 | 48 | `bare_block` | 0 | 0 | 13253 | 99.7% |
-| 49 | `anon_sub` | 1 | 1 | 13254 | 99.7% |
+| 49 | `local` | 1 | 1 | 13254 | 99.7% |
 
 ## 7. Residue: what the interpreter still cannot do
 
@@ -270,8 +270,8 @@ Refusal reasons by uses:
 | unterminated statement before op:')' | 5 |
 | expected ')', found eof:None | 4 |
 | expected '}', found op:';' | 4 |
-| unterminated statement before ident:'m' | 2 |
 | unterminated quote-like construct | 2 |
+| unterminated statement before ident:'m' | 2 |
 | expected ')', found op:':' | 1 |
 | unterminated statement before str:'\n            my $tzmin = $2 * 60 + $3;\n            $tzmin = -$tzmin if $1 eq ' | 1 |
 
@@ -337,13 +337,13 @@ Regex constructs Rust's `regex` crate cannot compile (an interpreter would need 
 
 1. **The grammar is not the hard part.** A 1301-line recursive-descent parser reaches 99.7% of uses (99.7% of distinct expressions) on the whole surface, and 99.9% on `expr_coverage.py`'s frame. Perl itself refuses everything this parser refuses (section 8), so the grammar is effectively closed at 13.59.
 2. **An interpreter with no ExifTool knowledge is WORSE than what ships today.** PURE-only evaluation -- `$val`, operators, core builtins -- is 4865 uses (69.6%) in Frame A against `exprs.py`'s 5271 (75.4%). The translator already inlines a dozen helpers and the identity cases; a bare AST walker does not.
-3. **The crossover is the helper library.** All session keys plus the 25 most-used helpers puts Frame A at 6787 uses (97.1%, +1516 uses over today) and Frame B at 12713 (95.7%, +3645). In distinct-expression terms the gain is larger: 53.0% -> 91.8%, because the residue `exprs.py` leaves is a long tail of one-off expressions, not a few high-traffic ones.
+3. **The crossover is the helper library.** All session keys plus the 25 most-used helpers puts Frame A at 6779 uses (96.9%, +1508 uses over today) and Frame B at 12713 (95.7%, +3645). In distinct-expression terms the gain is larger: 53.0% -> 91.8%, because the residue `exprs.py` leaves is a long tail of one-off expressions, not a few high-traffic ones.
 4. **Cost, in ports:**
 
    - Frame A, helpers needed (every session key available, most-used first) -- 90%: 5, 95%: 14, 99%: 56 of 112 distinct helper/data dependencies.
-   - Frame A, session keys needed (every helper available, most-used first) -- 90%: 2, 95%: 25, 99%: 183 of 250 distinct keys.
+   - Frame A, session keys needed (every helper available, most-used first) -- 90%: 2, 95%: 25, 99%: 186 of 250 distinct keys.
    - Frame B, helpers needed (every session key available, most-used first) -- 90%: 6, 95%: 22, 99%: 113 of 199 distinct helper/data dependencies.
-   - Frame B, session keys needed (every helper available, most-used first) -- 90%: 13, 95%: 53, 99%: 192 of 285 distinct keys.
+   - Frame B, session keys needed (every helper available, most-used first) -- 90%: 13, 95%: 52, 99%: 192 of 285 distinct keys.
 
    oxidex has 10 complete and 4 partial Rust helper ports today, so the 95% rung is roughly a dozen more ports -- and 103 of the 157 helpers are pure functions of their arguments, which is the cheap kind.
 5. **The residue is bounded, not a long tail.** 36 uses / 11 distinct expressions are outside the grammar, and every one of them is invalid Perl in ExifTool's own source (section 8's cross-check; `'$val m'`, a missing `)` in LNK.pm, a stray `"` in JPEG.pm). A further 32 uses / 20 distinct parse but call into the reader engine (`FoundTag`, `ProcessBinaryPLIST`, `ImageInfo`) -- those are not value conversions at all and no interpreter closes them; they need the engine.
