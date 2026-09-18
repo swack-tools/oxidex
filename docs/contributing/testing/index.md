@@ -4,18 +4,19 @@ OxiDex has a comprehensive testing strategy including unit tests, integration te
 
 ## Testing Overview
 
-- [Integration Test Plan](./integration_test_plan.md) - Comprehensive integration testing strategy
 - [Test Failure Triage](./TEST_FAILURE_TRIAGE.md) - How to handle test failures
+- [Integration test layout](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tests/integration/README.md) - the `tests/integration/` README, kept next to the tests
 
 ## Comparison Testing
 
-The `comparison/` directory contains resources for validating OxiDex against ExifTool:
+OxiDex is validated against the pinned ExifTool release (`.exiftool-version`)
+by measurement, not by a hand-maintained parity report:
 
-- [README](./comparison/README.md) - Overview of comparison testing
-- [Parity Report](./comparison/PARITY_REPORT.md) - Current parity status
-- [Field Naming Guide](./comparison/FIELD_NAMING_GUIDE.md) - Tag naming conventions
-- [Test Coverage](./comparison/TEST_COVERAGE.md) - Coverage analysis
-- [Raw Outputs](./comparison/raw_outputs.md) - Raw comparison data
+- [Measuring Coverage](../measuring-coverage.md) - how extraction coverage is measured and how to add a file type
+- [ExifTool Coverage](/reference/tag-coverage-analysis) - the generated, CI-refreshed conformance report
+- [JPEG Tag Support](/reference/jpeg-tag-support) and [JPEG Tag Matrix](/reference/jpeg-tag-matrix) - generated per-tag reports
+- [Corpus Read Observations](/reference/catalog-corpus-observed) - authenticated read receipts against the source catalog
+- `tests/integration/KNOWN_DISCREPANCIES.md` - documented, accepted differences (in the repository, next to the comparison tests)
 
 ## Running Tests
 
@@ -42,5 +43,5 @@ tests/
 │   ├── tiff/          # TIFF test files
 │   └── ...
 ├── integration/       # Integration tests
-└── comparison/        # ExifTool comparison infrastructure
+└── integration/exiftool_comparison_tests.rs  # ExifTool comparison tests (feature `exiftool-comparison`)
 ```

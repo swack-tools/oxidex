@@ -319,7 +319,7 @@ After resolving a test failure, consider:
 
 ## References
 
-- Integration Test Plan: `docs/testing/integration_test_plan.md`
+- Measuring coverage: `docs/contributing/measuring-coverage.md`
 - Known Discrepancies: `tests/integration/KNOWN_DISCREPANCIES.md`
 - Comparison Tests: `tests/integration/exiftool_comparison_tests.rs`
 - Error Handling Tests: `tests/integration/error_handling_tests.rs`

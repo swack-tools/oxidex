@@ -6,7 +6,7 @@
  * `just compare-exiftool-full-update` and the whole directory is gitignored, so a
  * fresh clone has nothing there. Several committed pages link to
  * /reference/comparison/ (docs/index.md, docs/reference/index.md,
- * docs/reference/jpeg-tag-support.md, docs/guides/MANUAL-WORKFLOW-TRIGGER.md), and
+ * docs/reference/jpeg-tag-support.md), and
  * VitePress treats unresolved internal links as build errors. Without this stub,
  * `npm run docs:build` cannot succeed on a clean checkout.
  *

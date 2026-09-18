@@ -8,7 +8,9 @@ See the main [Contributing Guide](../) for setup instructions, coding standards,
 
 ## Additional Resources
 
-- [Archived Context](./archived-context.md) - Historical development context and notes
+- [Code Quality Patterns](./code-quality-patterns.md) - patterns used to keep parser code small
+- [TagRegistry Refactoring](./tagregistry-refactoring.md) - the table-driven makernote refactor
+- [Tag Machinery Status](/TAG_MACHINERY_STATUS) and the [autogeneration plan](/AUTOGENERATION-PLAN) - where coverage work stands and what comes next
 
 ## Development Environment
 

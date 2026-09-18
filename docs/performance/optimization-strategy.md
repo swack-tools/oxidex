@@ -200,4 +200,4 @@ Our optimization efforts target:
 
 See our [profiling guide](/performance/profiling) for detailed instructions on running profilers and interpreting results.
 
-For current focus areas, check the [optimization design document](https://github.com/swack-tools/oxidex/blob/main/docs/plans/2025-11-18-parsing-performance-optimization-design.md) in the repository.
+Performance is not the current focus of the project; see the [autogeneration plan](/AUTOGENERATION-PLAN) for what is, and the [performance overview](./index.md) for the state of the published benchmarks.
