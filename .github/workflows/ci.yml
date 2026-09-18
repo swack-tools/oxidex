@@ -685,7 +685,7 @@ jobs:
   # committed per-test timings in tools/ci/unittest_weights.json. Every test
   # id lands in exactly one shard, so the shards together run the full suite.
   verify-tables-tools:
-    name: Verify Generated Tables / tools ${{ matrix.shard }}/8
+    name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -705,6 +705,7 @@ jobs:
         env:
           ET_VERSION: ${{ steps.exiftool.outputs.version }}
           SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
         run: |
           set -euo pipefail
           ROOT="$EXIFTOOL_SOURCE"
@@ -732,7 +733,11 @@ jobs:
           export OXIDEX_WORD_PROCESSOR=Image::ExifTool::CanonCustom::ProcessCanonCustom
           export OXIDEX_ALLOW_DIRTY_TREE=1
           cd tools/exiftool-tables
-          python3 ../ci/unittest_shard.py --weights ../ci/unittest_weights.json --shard "$SHARD" --of 8
+          # --of comes from the matrix itself (`strategy.job-total`), never a
+          # second literal: the sharder partitions against --of while the matrix
+          # decides which partitions run, so a drift between them drops tests
+          # with no failure anywhere. See tools/ci/test_unittest_shard.py.
+          python3 ../ci/unittest_shard.py --weights ../ci/unittest_weights.json --shard "$SHARD" --of "$SHARD_TOTAL"
 
   verify-tables-drift:
     name: Verify Generated Tables / staleness and drift
