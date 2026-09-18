@@ -4,8 +4,15 @@
 Only the data section (above the "hand-written below" marker) is
 regenerated; everything below the marker is preserved verbatim so this
 script can be re-run without clobbering the print-conversion functions.
+
+A table the release does not define arrives as `kind: "absent"` with the
+source-level proof dump_af_points.pl recorded. It is emitted as an empty
+constant under a comment carrying that proof, so the output holds exactly
+the points the release defines -- none -- and the hand-written consumers
+still compile. Anything else that is not the expected kind is refused.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +27,33 @@ def rust_name(name: str) -> str:
     # afPoints51 -> AF_POINTS_51
     digits = "".join(c for c in name if c.isdigit())
     return f"AF_POINTS_{digits}"
+
+
+def emit_absent(name: str, entry: dict, rust_type: str) -> str:
+    proof = entry["proof"]
+    if (
+        proof["occurrences_in_source"] != 0
+        or proof["occurrences_in_release"] != 0
+        or proof["release_modules_scanned"] < 1
+        or proof["source"] != "Image/ExifTool/Nikon.pm"
+        or not re.fullmatch(r"[0-9a-f]{64}", proof["source_sha256"])
+    ):
+        raise SystemExit(f"{name}: absence record does not carry a source-level proof: {proof}")
+    return (
+        f"// {name}: absent from this release. Nikon.pm (sha256 {proof['source_sha256'][:16]}...)\n"
+        f"// never names it, nor do the other {proof['release_modules_scanned'] - 1} release modules.\n"
+        f"pub const {rust_name(name)}: {rust_type} = &[];\n"
+    )
+
+
+def emit_table(name: str, entry: dict, kind: str) -> str:
+    if entry["kind"] == "absent":
+        if entry["expected_kind"] != kind:
+            raise SystemExit(f"{name}: absent as {entry['expected_kind']!r}, expected {kind!r}")
+        return emit_absent(name, entry, "&[(u8, &str)]" if kind == "hash" else "&[&str]")
+    if entry["kind"] != kind:
+        raise SystemExit(f"{name}: kind {entry['kind']!r}, expected {kind!r}")
+    return emit_hash(name, entry["points"]) if kind == "hash" else emit_array(name, entry["points"])
 
 
 def emit_hash(name: str, points: dict) -> str:
@@ -47,9 +81,9 @@ def main() -> None:
         "//! the data section below.\n\n",
     ]
     for name in HASH_TABLES:
-        lines.append(emit_hash(name, data[name]["points"]))
+        lines.append(emit_table(name, data[name], "hash"))
     for name in ARRAY_TABLES:
-        lines.append(emit_array(name, data[name]["points"]))
+        lines.append(emit_table(name, data[name], "array"))
     lines.append(f"\n{MARKER}\n")
 
     existing = rs_path.read_text() if rs_path.exists() else ""
