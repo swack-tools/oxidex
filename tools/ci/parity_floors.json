@@ -18,9 +18,9 @@
     "            computed against it has to be re-read, not silently adopted"
   ],
   "measured_at": {
-    "commit": "d8cb6baacfdf",
+    "commit": "6ada109bf5f1",
     "exiftool": "13.59",
-    "note": "observed_read split into credited / native_read_not_matched (OxiDex gap) / not_observed_yet (corpus gap); evidence at d8cb6baa"
+    "note": "observed-read credit refresh: read+write evidence regenerated at 6ada109b (after #800/#801/#813); source join unchanged; 0 credited entries lost, 113 gained"
   },
   "metrics": {
     "join:counts.catalog_ordinary_entries": {
@@ -81,16 +81,16 @@
     },
     "observed:counts.corpus_read_attribution.credited_catalog_entries": {
       "direction": "at_least",
-      "floor": 2265,
+      "floor": 2378,
       "share_of": "observed:counts.corpus_read_attribution.native_catalog_entries"
     },
     "observed:counts.corpus_read_attribution.metric_c.credited_source_coordinates": {
       "direction": "at_least",
-      "floor": 2642
+      "floor": 2766
     },
     "observed:counts.corpus_read_attribution.metric_c.distinct_group1_tag_identities_matched": {
       "direction": "at_least",
-      "floor": 2969,
+      "floor": 3089,
       "note": "Group1:TagName identities matching in BOTH print and raw modes"
     },
     "observed:counts.corpus_read_attribution.native_catalog_entries": {
@@ -101,7 +101,7 @@
     },
     "observed:counts.observed_read.native_read_not_matched": {
       "direction": "at_most",
-      "floor": 2005,
+      "floor": 1892,
       "note": "the OxiDex read gap: entries pinned ExifTool reads in the corpus whose exact source row OxiDex earned no credit for",
       "share_of": "observed:counts.corpus_read_attribution.native_catalog_entries"
     },
@@ -112,7 +112,7 @@
     },
     "observed:counts.observed_read.observed_matched_read": {
       "direction": "at_least",
-      "floor": 2265,
+      "floor": 2378,
       "note": "catalog entries proven read against pinned ExifTool on the corpus",
       "share_of": [
         "observed:counts.corpus_read_attribution.native_catalog_entries",
