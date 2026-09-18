@@ -21,6 +21,7 @@ def ms(x): return x * 1000
 
 def short(cmd):
     cmd = re.sub(r"/tmp/oxidex-perl538-build-\S+/perl5\.38\.2 -I\S+ \S+/exiftool", "exiftool", cmd)
+    cmd = re.sub(r"/tmp/oxidex-exiftool-cache/exiftool/exiftool", "exiftool", cmd)
     cmd = re.sub(r"\S+/target/release/oxidex", "oxidex", cmd)
     cmd = re.sub(r"/tmp/oxidex-exiftool-cache/exiftool/t/images/", "", cmd)
     if cmd.count(" ") > 8:
@@ -92,8 +93,8 @@ bs_nef = seen[("exif_main", "nikon_nef")]["bsearch"]
 def buckets(name):
     txt = open(os.path.join(E, name)).read()
     stage = dict((k, float(p)) for p, _, k in re.findall(r"^\s*([0-9.]+)%\s+(\d+)\s+(.+)$", txt.split("== allocator/memcpy")[0], re.M))
-    alloc = dict((k, float(p)) for p, _, k in re.findall(r"^\s*([0-9.]+)%\s+(\d+)\s+(.+)$", txt.split("== allocator/memcpy leaf share")[1].split("==")[0], re.M))
-    by_stage = dict((k, float(p)) for p, _, k in re.findall(r"^\s*([0-9.]+)%\s+(\d+)\s+(.+)$", txt.split("by owning stage ==")[1].split("==")[0], re.M))
+    alloc = dict((k, float(p)) for p, _, k in re.findall(r"^\s*([0-9.]+)%\s+(\d+)\s+(.+)$", txt.split("== allocator/memcpy leaf share")[1].split("\n==")[0], re.M))
+    by_stage = dict((k, float(p)) for p, _, k in re.findall(r"^\s*([0-9.]+)%\s+(\d+)\s+(.+)$", txt.split("by owning stage ==")[1].split("\n==")[0], re.M))
     incl = dict((k.strip(), float(p)) for p, _, k in re.findall(r"^\s*([0-9.]+)%\s+(\d+)\s+(.+)$", txt.split("== inclusive time per oxidex function")[1].split("== by library")[0], re.M))
     return stage, alloc, by_stage, incl, txt
 cs, ca, cb, ci, ctxt = buckets("samply-stages-corpus-locked.buckets.txt")
@@ -118,12 +119,12 @@ V = {
  "READ_ALLOCS_NEF": nef["read_allocs"], "READ_REALLOCS_NEF": nef["read_reallocs"], "JSON_ALLOCS_CANON": canon["json_allocs"],
  "READ_ALLOCS_CORPUS": tot["read_allocs"], "ALLOCS_PER_TAG": f"{int(tot['read_allocs'])/int(tot['tags']):.0f}",
  "COMPOSITE_PCT": f"{cs.get('composite',0):.1f}", "COMPOSITE_CLI_PCT": f"{ls.get('composite',0):.1f}",
- "FILETYPE_PCT": f"{incl(li_, 'filetype::COMPILED'):.1f}", "TAGDB_PCT": f"{incl(li_, 'tag_db::lookup_tag_name') + incl(li_, 'CAMERA_TAGS') + incl(li_, 'SPECIALTY_TAGS') + incl(li_, 'MEDIA_TAGS') + incl(li_, 'CORE_TAGS'):.1f}",
+ "FILETYPE_PCT": f"{incl(li_, 'filetype::COMPILED'):.1f}", "TAGDB_PCT": f"{incl(li_, 'tag_db::lookup_tag_name'):.1f}",
  "REGEX_PCT": f"{incl(li_, 'cond::regex_match_str'):.1f}",
  "IO_PCT": f"{cs.get('fs+mmap+detect',0):.1f}", "HAND_PCT": f"{cs.get('hand parsers',0):.1f}", "HAND_CLI_PCT": f"{ls.get('hand parsers',0):.1f}",
  "CONV_PCT": f"{cs.get('value/printconv',0):.2f}", "SINK_PCT": f"{cs.get('map/sink insert',0):.2f}", "SINK_CLI_PCT": f"{ls.get('map/sink insert',0):.2f}",
  "JSON_PCT": f"{cs.get('json-output',0):.2f}", "JSON_CLI_PCT": f"{ls.get('json-output',0):.2f}",
- "ALLOC_PCT": f"{sum(ca.values()):.1f}", "ALLOC_CLI_PCT": f"{sum(la.values()):.1f}", "ALLOC_COMPOSITE_PCT": f"{cb.get('composite',0):.1f}",
+ "ALLOC_PCT": f"{sum(ca.values()):.1f}", "ALLOC_MALLOC_PCT": f"{next((v for k, v in ca.items() if 'malloc' in k), 0):.0f}", "ALLOC_MEMMOVE_PCT": f"{next((v for k, v in ca.items() if 'memmove' in k), 0):.0f}", "ALLOC_CLI_PCT": f"{sum(la.values()):.1f}", "ALLOC_COMPOSITE_PCT": f"{cb.get('composite',0):.1f}",
  "RATIO_CANON": f"{ratios['canon_jpg']:.2f}", "RATIO_NEF": f"{ratios['nikon_nef']:.2f}", "RATIO_CORPUS_1T": f"{ratios['corpus_1thread']:.2f}", "RATIO_CORPUS_PAR": f"{ratios['corpus_parallel']:.2f}",
  "NOOP_MS": f"{ms(noop_ox):.1f}", "STUB_MS": "@@STUB_MS@@",
  "HF_TABLE": HF_TABLE, "STAGES": STAGES, "CRITERION": CRITERION,

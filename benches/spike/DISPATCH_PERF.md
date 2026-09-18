@@ -20,12 +20,12 @@ for merge as-is). **Base** `6ada109b` (`origin/refactor/tag-machinery`,
 | Is table dispatch > 5 % of runtime? | **No. It is ~0.01 %.** `IfdTable::tag` (binary search) costs 5.9 ns per lookup; Canon.jpg walks 81 IFD entries (ExifTool `-v2`), i.e. **~0.48 µs of a 6.6 ms read**. The whole generated IFD engine, conditions and regexes included, is 0.66 % inclusive of the in-process corpus read. | criterion `benches/spike/benches/dispatch.rs`; samply `stages --reps 100 t/images/*` |
 | Would `match` arms move the wall clock? | **No.** A generated `match id` is 1.5 ns/lookup vs 5.9 ns -- faster per lookup, but the saving is **~0.36 µs per file** out of 6.6 ms (0.0055 %). Even the critique's own picture (linear `iter().find`, 43.9 ns/lookup) would only be ~3.6 µs per file. | criterion, same |
 | Is `ifd_engine.rs:1479` the per-tag lookup? | **No.** The per-entry lookup is `ifd_engine::resolve` -> `IfdTable::tag` (`ifd_schema.rs:89`), a `binary_search_by_key` over id-sorted `tags`. Line 1479 (`direct_serial_no_match`) is reached only from the serial-subdirectory fallback at `ifd_engine.rs:948`. The binary-data engine (`engine.rs`, ProcessBinaryData) does not look ids up at all: it iterates the table's fields in `visit_order`. | source read |
-| What IS the dominant cost? | **Composite resolution's allocation storm**: `composite::apply` -> `resolve_dependency` -> `cli::tag_resolution::resolve_requested_tags` -> `MetadataMap::all_occurrences()`, which `format!`s a fresh `"{group0}:{name}"` `String` for **every occurrence, on every dependency lookup**, and the filter never reads it. 327 dependency literals across 106 composites x up to 8 fixpoint passes x 160-250 occurrences/file = **167637 heap allocations (+113484 reallocs) to read Canon.jpg's 157 tags**; 580 of them are retained by the map. This is **91.6 % of the in-process corpus read** and 39.7 % of a single CLI invocation; 53 % of all CPU samples have their leaf inside `libsystem_malloc`, another 13 % in `memmove`. | samply + counting `#[global_allocator]` (`benches/spike/src/bin/stages.rs`) |
-| Second and third | Per-process startup: `filetype::COMPILED` (a `LazyLock` that compiles every `%magicNumber` regex) is **40.5 %** of a single-file CLI run and `tag_db::TAG_ID_TO_NAME_INDEX` + the `oxidex-tags-*` `LazyLock`s another **16.5 %** -- paid on every invocation, so `oxidex` on a 112-byte JPEG stub is @@STUB_MS@@ ms of which `oxidex --version` is 5.0 ms. Inside the engine, `cond::regex_match_str` builds a new `regex::Regex` on **every** Condition evaluation (`cond.rs`, no cache): 3.3 % of the CLI run, i.e. most of the engine's own cost. | samply, `oxidex -j -a -G1 Canon.jpg` x40 |
+| What IS the dominant cost? | **Composite resolution's allocation storm**: `composite::apply` -> `resolve_dependency` -> `cli::tag_resolution::resolve_requested_tags` -> `MetadataMap::all_occurrences()`, which `format!`s a fresh `"{group0}:{name}"` `String` for **every occurrence, on every dependency lookup**, and the filter never reads it. 327 dependency literals across 106 composites x up to 8 fixpoint passes x 160-250 occurrences/file = **167637 heap allocations (+113484 reallocs) to read Canon.jpg's 157 tags**; 580 of them are retained by the map. This is **91.6 % of the in-process corpus read** and 39.7 % of a single CLI invocation; 54 % of all CPU time in the corpus read has its leaf inside `libsystem_malloc`, another 15 % in `memmove`. | samply + counting `#[global_allocator]` (`benches/spike/src/bin/stages.rs`) |
+| Second and third | Per-process startup: `filetype::COMPILED` (a `LazyLock` that compiles every `%magicNumber` regex) is **40.5 %** of a single-file CLI run and `tag_db::TAG_ID_TO_NAME_INDEX` + the `oxidex-tags-*` `LazyLock`s another **8.7 %** -- paid on every invocation, so `oxidex` on a 112-byte JPEG stub is 9.1 ms of which `oxidex --version` is 5.0 ms. Inside the engine, `cond::regex_match_str` builds a new `regex::Regex` on **every** Condition evaluation (`cond.rs`, no cache): 3.3 % of the CLI run, i.e. most of the engine's own cost. | samply, `oxidex -j -a -G1 Canon.jpg` x40 |
 | Is "50-100x faster than Perl" supported? | **No.** Measured today against the pinned ExifTool 13.59 under perl 5.38.2: **3.15x** on Canon.jpg, **3.11x** on Nikon.nef, **1.80x** on the 194-file corpus single-threaded (**6.02x** with rayon on 10 cores). Per core, oxidex is a small-integer multiple of Perl, and the reasons are allocation and startup, not dispatch. | hyperfine, exclusive lock, `--warmup 5 --runs 30`, both commands in one invocation |
 
 Everything the critique names is already the cheap part. Compiling tables to
-`match` arms would optimise ~1 µs of a ~10 ms read.
+`match` arms would optimise ~0.48 µs of a 6.6 ms read.
 
 ## 1. What was already on file (benches/)
 
@@ -70,26 +70,29 @@ falling, and ratios are reported on medians **and on minima** (the minimum is
 the statistic least sensitive to background load). Where σ/mean is large the
 number is marked, not trusted. oxidex `target/release/oxidex` built with the
 shipped `[profile.release]` (**fat LTO on**, codegen-units=1, opt-level=3,
-panic=abort, strip=none on darwin), sha256 `eeca6789d7ae7ceeecc04d4a26409a0249cb0f838a02d60d0f6c5f83ebf29c37`, from commit
-`6ada109b` (tree dirty only with this spike's new files under
-`benches/spike/`, `tools/exiftool-tables/spike/`, `benches/`). ExifTool:
+panic=abort, strip=none on darwin), sha256 `eeca6789d7ae7ceeecc04d4a26409a0249cb0f838a02d60d0f6c5f83ebf29c37`, rebuilt at commit
+`fa83d70f` (byte-identical to the build at base `6ada109b`: no commit on
+this branch touches `src/`; the tree was clean apart from the untracked
+`HANDOFF.md`). ExifTool:
 `/tmp/oxidex-exiftool-cache/exiftool/exiftool` under
 `perl5.38.2` (`-ver` -> 13.59, `-s3 -FileType OOXML.docx` -> DOCX, both
 asserted by the script before any number). Machine: Apple M5, 10 cores,
-32 GB, macOS 27.0. Load (1-min) at each run is in the table.
+32 GB, macOS 27.0. Load (1-min) before and after each run is in the table. The one large σ
+(ExifTool on Canon.jpg, 26 %) is a single 100 ms outlier; its median and
+minimum ratios agree to 4 %.
 
 | Scenario | Command | Median | Min | Mean ± σ | Max | Runs | load1 before -> after | Ratio ExifTool/oxidex (median; min) |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | (a) Canon.jpg `-j -a -G1` | `oxidex -j -a -G1 Canon.jpg` | 15.5 ms | 15.0 ms | 15.6 ± 0.3 (2 %) | 16.4 ms | 30 | 6.68 -> 6.68 | **3.15x**; 3.04x |
-|  | `/tmp/oxidex-exiftool-cache/exiftool/exiftool -j -a -G1 Canon.jpg` | 49.0 ms | 45.5 ms | 53.8 ± 14.1 (26 %) | 100.1 ms | 30 | 6.68 -> 6.68 |  |
+|  | `exiftool -j -a -G1 Canon.jpg` | 49.0 ms | 45.5 ms | 53.8 ± 14.1 (26 %) | 100.1 ms | 30 | 6.68 -> 6.68 |  |
 | (b) Nikon.nef `-j -a -G1` | `oxidex -j -a -G1 Nikon.nef` | 19.1 ms | 18.4 ms | 19.1 ± 0.4 (2 %) | 20.0 ms | 30 | 6.68 -> 6.55 | **3.11x**; 3.14x |
-|  | `/tmp/oxidex-exiftool-cache/exiftool/exiftool -j -a -G1 Nikon.nef` | 59.3 ms | 57.7 ms | 59.2 ± 0.7 (1 %) | 60.7 ms | 30 | 6.68 -> 6.55 |  |
+|  | `exiftool -j -a -G1 Nikon.nef` | 59.3 ms | 57.7 ms | 59.2 ± 0.7 (1 %) | 60.7 ms | 30 | 6.68 -> 6.55 |  |
 | (c) 194-file t/images `-j -a -G1`, oxidex rayon 10 cores | `oxidex -j -a -G1 <194 files>` | 117.7 ms | 102.1 ms | 118.0 ± 8.7 (7 %) | 134.6 ms | 30 | 6.55 -> 8.20 | **6.02x**; 6.72x |
-|  | `/tmp/oxidex-exiftool-cache/exiftool/exiftool -j -a -G1 <194 files>` | 708.9 ms | 686.6 ms | 737.3 ± 70.2 (10 %) | 997.0 ms | 30 | 6.55 -> 8.20 |  |
+|  | `exiftool -j -a -G1 <194 files>` | 708.9 ms | 686.6 ms | 737.3 ± 70.2 (10 %) | 997.0 ms | 30 | 6.55 -> 8.20 |  |
 | (c') same, oxidex `RAYON_NUM_THREADS=1` | `oxidex -j -a -G1 <194 files>` | 390.7 ms | 381.9 ms | 404.8 ± 47.0 (12 %) | 575.8 ms | 30 | 8.20 -> 7.41 | **1.80x**; 1.79x |
-|  | `/tmp/oxidex-exiftool-cache/exiftool/exiftool -j -a -G1 <194 files>` | 703.4 ms | 684.0 ms | 727.0 ± 59.1 (8 %) | 899.9 ms | 30 | 8.20 -> 7.41 |  |
+|  | `exiftool -j -a -G1 <194 files>` | 703.4 ms | 684.0 ms | 727.0 ± 59.1 (8 %) | 899.9 ms | 30 | 8.20 -> 7.41 |  |
 | process floor | `oxidex --version` | 5.0 ms | 4.5 ms | 5.0 ± 0.3 (7 %) | 5.9 ms | 30 | 7.41 -> 7.41 | **6.12x**; 6.60x |
-|  | `/tmp/oxidex-exiftool-cache/exiftool/exiftool -ver` | 30.5 ms | 29.6 ms | 30.6 ± 0.4 (1 %) | 31.5 ms | 30 | 7.41 -> 7.41 |  |
+|  | `exiftool -ver` | 30.5 ms | 29.6 ms | 30.6 ± 0.4 (1 %) | 31.5 ms | 30 | 7.41 -> 7.41 |  |
 
 Machine state around each run (load 1/5/15 and top-5 CPU consumers):
 
@@ -205,7 +208,7 @@ Notes:
 - Multi-file oxidex runs use rayon across all 10 cores; ExifTool is
   single-threaded. The `RAYON_NUM_THREADS=1` row is the like-for-like ratio.
 - The `--version` / `-ver` row is the process floor. oxidex's floor is
-  5.0 ms but a 112-byte JPEG costs @@STUB_MS@@ ms: the difference is
+  5.0 ms but a 112-byte JPEG costs 9.1 ms: the difference is
   the lazy `filetype::COMPILED` regex compile and `tag_db` index build
   (section 3).
 
@@ -214,8 +217,12 @@ Notes:
 Instrument: `samply record --rate 4000 --unstable-presymbolicate` (function
 level; fat LTO inlines aggressively, so attribution is to the outermost
 surviving symbol), bucketed by
-`tools/exiftool-tables/spike/samply_buckets.py`: a sample is owned by the
-first stage regex matched walking its stack root -> leaf; weights are
+`tools/exiftool-tables/spike/samply_buckets.py`: a sample with any frame
+inside a generated engine (`ifd_engine`, `engine`, `serial_engine`,
+`keyed_engine`, `cond`/`exprs`) is the engine's -- the engines are always
+entered through a hand parser, and the question is what they cost;
+otherwise the first stage regex matched walking the stack root -> leaf owns
+it (a `malloc` under Composite is Composite's). Weights are
 `threadCPUDelta` (CPU time, idle excluded). Two workloads:
 
 **(a) In-process corpus read** -- `benches/spike/target/release/stages
@@ -323,10 +330,10 @@ Reading the buckets:
 | File I/O + detection | 3.0 % | 40.5 % | corpus: `stat`/`open`/`mmap` per file; CLI: dominated by the one-time `filetype::COMPILED` regex compile |
 | Hand-written parsers (`parsers::`, `tiff_helpers`, makernotes) | 2.7 % | 0.9 % | the actual parsing |
 | Generated engines (`ifd_engine`, `engine`, `cond`) | 0.66 % | 4.04 % | of which `cond::regex_match_str` (per-eval `Regex::new`) is most |
-| Value/PrintConv, tag_db | 0.07 % | 16.5 % | CLI: `TAG_ID_TO_NAME_INDEX` + `*_TAGS` `LazyLock` builds |
+| Value/PrintConv, tag_db | 0.07 % | 8.7 % | CLI: `TAG_ID_TO_NAME_INDEX` + `*_TAGS` `LazyLock` builds |
 | MetadataMap/TagSink insert + interning | 0.72 % | 0.29 % | `record`, `from_insert_shim`, `intern` (a global `Mutex<HashSet>` per occurrence x3) |
 | JSON output | 0.89 % | 0.68 % | `JsonFormatter` |
-| Allocator + memmove (leaf, any bucket) | 0.0 % | 0.0 % | 53 % `libsystem_malloc` + 13 % `_platform_memmove`; 67.0 points of it under Composite |
+| Allocator + memmove (leaf, any bucket) | 69.2 % | 59.0 % | corpus: 54 % `libsystem_malloc` + 15 % `_platform_memmove`, 67.0 points of it under Composite |
 
 ## 4. Dispatch microbench (criterion, `benches/spike/benches/dispatch.rs`)
 
