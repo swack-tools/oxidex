@@ -1306,6 +1306,49 @@ mod tests {
         }
     }
 
+    /// One row per boundary of the `EscapeJSON` number pattern, each the
+    /// exact token pinned 13.59 wrote (second hand-built PNG, `-j` and
+    /// `-j -n` identical). The pattern carries `/i`, so an uppercase `E`
+    /// exponent is a bare number too -- it is not a lowercase-only rule.
+    #[test]
+    fn json_number_pattern_boundaries_match_pinned_exiftool() {
+        for (input, expected) in [
+            // integer part: at most 15 digits, no leading zero, no `+`
+            ("123456789012345", "123456789012345"),
+            ("1234567890123456", "\"1234567890123456\""),
+            ("-123456789012345", "-123456789012345"),
+            ("-1234567890123456", "\"-1234567890123456\""),
+            ("007", "\"007\""),
+            ("+1", "\"+1\""),
+            // fraction: 1-16 digits, both sides of the point required
+            ("0.1234567890123456", "0.1234567890123456"),
+            ("0.12345678901234567", "\"0.12345678901234567\""),
+            ("1.", "\"1.\""),
+            ("-1.", "\"-1.\""),
+            (".5", "\".5\""),
+            // exponent: 1-3 digits, either case, optional sign
+            ("1e123", "1e123"),
+            ("1e-123", "1e-123"),
+            ("1e1234", "\"1e1234\""),
+            ("1e+1234", "\"1e+1234\""),
+            ("1E5", "1E5"),
+            ("1E-5", "1E-5"),
+            ("1.5E+3", "1.5E+3"),
+            ("0e0", "0e0"),
+            ("1e", "\"1e\""),
+            ("e5", "\"e5\""),
+            // not numbers at all
+            ("--1", "\"--1\""),
+            ("1.0.0", "\"1.0.0\""),
+        ] {
+            assert_eq!(
+                json_string_value(input).to_pretty_string(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
     /// The whole writer, not just the scalar test: a literal inside the
     /// file object and inside a list keeps its spelling, and the layout is
     /// otherwise serde_json's pretty layout.
