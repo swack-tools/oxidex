@@ -18,9 +18,9 @@
     "            computed against it has to be re-read, not silently adopted"
   ],
   "measured_at": {
-    "commit": "7547ec5bcf92",
+    "commit": "d8cb6baacfdf",
     "exiftool": "13.59",
-    "note": "first authenticated public-API write observations (19 entries, 902 operations) plus refreshed read evidence, both at 7547ec5b"
+    "note": "observed_read split into credited / native_read_not_matched (OxiDex gap) / not_observed_yet (corpus gap); evidence at d8cb6baa"
   },
   "metrics": {
     "join:counts.catalog_ordinary_entries": {
@@ -81,7 +81,8 @@
     },
     "observed:counts.corpus_read_attribution.credited_catalog_entries": {
       "direction": "at_least",
-      "floor": 2265
+      "floor": 2265,
+      "share_of": "observed:counts.corpus_read_attribution.native_catalog_entries"
     },
     "observed:counts.corpus_read_attribution.metric_c.credited_source_coordinates": {
       "direction": "at_least",
@@ -92,16 +93,31 @@
       "floor": 2969,
       "note": "Group1:TagName identities matching in BOTH print and raw modes"
     },
+    "observed:counts.corpus_read_attribution.native_catalog_entries": {
+      "direction": "at_least",
+      "floor": 4270,
+      "note": "the reachability ceiling: catalog entries whose exact source row pinned ExifTool reads in at least one corpus file",
+      "share_of": "join:counts.catalog_ordinary_entries"
+    },
+    "observed:counts.observed_read.native_read_not_matched": {
+      "direction": "at_most",
+      "floor": 2005,
+      "note": "the OxiDex read gap: entries pinned ExifTool reads in the corpus whose exact source row OxiDex earned no credit for",
+      "share_of": "observed:counts.corpus_read_attribution.native_catalog_entries"
+    },
     "observed:counts.observed_read.not_observed_yet": {
       "direction": "at_most",
-      "floor": 31222,
-      "note": "the read backlog; falls as the corpus receipt credits more entries"
+      "floor": 29217,
+      "note": "the corpus gap: entries no corpus file exercises (ExifTool never reads their source row); falls only as the corpus grows"
     },
     "observed:counts.observed_read.observed_matched_read": {
       "direction": "at_least",
       "floor": 2265,
       "note": "catalog entries proven read against pinned ExifTool on the corpus",
-      "share_of": "join:counts.catalog_ordinary_entries"
+      "share_of": [
+        "observed:counts.corpus_read_attribution.native_catalog_entries",
+        "join:counts.catalog_ordinary_entries"
+      ]
     },
     "observed:counts.observed_write.not_observed_yet": {
       "direction": "at_most",
