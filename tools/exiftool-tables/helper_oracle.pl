@@ -20,6 +20,19 @@
 # Truthiness cases ({"truthy": ARG}) answer {"out":[{"hex":"31"|""}]} from
 # Perl's own boolean context, so Session::is_truthy is pinned to perl, not
 # to anyone's memory of perlsyn.
+#
+# An option-defaults case ({"option_defaults": [NAME...]}) answers
+# {"out": [OUT...]}: each option's value in a fresh Image::ExifTool->new.
+#
+# Decode/Encode cases may also carry "byte_order" ("II"/"MM": SetByteOrder
+# before the call; absent: the module default 'MM', which the Rust side
+# never reads -- it refuses whatever would consult GetByteOrder) and
+# "members" ({KEY: ARG}, set in $$et before the call). Their result adds
+# "set_members" ({KEY: OUT} for every non-reference member the call created
+# or changed) and "warnings" ([OUT...], each message the call passed to
+# $self->Warn, recorded instead of issued -- Decode ignores Warn's return).
+# They run with $^W = 1, as the exiftool script sets it: Charset.pm has no
+# `use warnings`, so its unpack/pack see the global flag.
 use strict;
 use warnings;
 use JSON::PP;
@@ -75,7 +88,10 @@ my %CALL = (
     'Image::ExifTool::Canon::CanonEv'          => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::Canon::CanonEv(@a)) },
     'Image::ExifTool::Canon::CanonEvInv'       => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::Canon::CanonEvInv(@a)) },
     'Image::ExifTool::XMP::ConvertXMPDate'     => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::XMP::ConvertXMPDate(@a)) },
+    'Image::ExifTool::Decode' => sub { my ($et, @a) = @_; local $^W = 1; (scalar &Image::ExifTool::Decode($et, @a)) },
+    'Image::ExifTool::Encode' => sub { my ($et, @a) = @_; local $^W = 1; (scalar &Image::ExifTool::Encode($et, @a)) },
 );
+my %SIDE_EFFECTS = map { $_ => 1 } qw(Image::ExifTool::Decode Image::ExifTool::Encode);
 
 my $json = JSON::PP->new->canonical;
 local $/;
@@ -85,6 +101,11 @@ for my $case (@$cases) {
     if (exists $$case{truthy}) {
         my $v = arg($$case{truthy});
         push @results, { out => [ out($v ? '1' : '') ] };
+        next;
+    }
+    if (exists $$case{option_defaults}) {
+        my $et = Image::ExifTool->new;
+        push @results, { out => [ map { out($$et{OPTIONS}{$_}) } @{$$case{option_defaults}} ] };
         next;
     }
     my $fn = $CALL{$$case{helper}} or die "no call for $$case{helper}\n";
@@ -100,11 +121,38 @@ for my $case (@$cases) {
     my @a = map { arg($_) } @{$$case{args}};
     # ConvertFileSize reads OPTIONS only through an optional trailing $et.
     $main::WITH_SESSION = $$case{with_session};
-    my @r = eval { $fn->($et, @a) };
+    unless ($SIDE_EFFECTS{$$case{helper}}) {
+        my @r = eval { $fn->($et, @a) };
+        if ($@) {
+            push @results, { die => 1 };
+        } else {
+            push @results, { out => [ map { out($_) } @r ] };
+        }
+        next;
+    }
+    Image::ExifTool::SetByteOrder($$case{byte_order} || 'MM');
+    my $mem = $$case{members} || {};
+    $$et{$_} = arg($$mem{$_}) foreach sort keys %$mem;
+    my %before = map { $_ => $$et{$_} } keys %$et;
+    my @warned;
+    my @r = eval {
+        no warnings 'redefine';
+        local *Image::ExifTool::Warn = sub { push @warned, $_[1]; return 1 };
+        $fn->($et, @a);
+    };
     if ($@) {
         push @results, { die => 1 };
-    } else {
-        push @results, { out => [ map { out($_) } @r ] };
+        next;
     }
+    my %set;
+    foreach my $k (sort keys %$et) {
+        my $v = $$et{$k};
+        next if exists $before{$k} and ((defined $v ? "$v" : "\0undef") eq
+            (defined $before{$k} ? "$before{$k}" : "\0undef"));
+        die "$$case{helper}: reference-valued member $k changed\n" if ref $v;
+        $set{$k} = out($v);
+    }
+    push @results, { out => [ map { out($_) } @r ], set_members => \%set,
+                     warnings => [ map { out($_) } @warned ] };
 }
 print $json->encode(\@results), "\n";

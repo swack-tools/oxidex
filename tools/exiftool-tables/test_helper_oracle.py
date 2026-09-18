@@ -20,6 +20,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import codegen_charsets
 import helper_oracle as H
 
 CAPTURE = json.loads(H.CAPTURE.read_text(encoding="utf-8"))
@@ -44,9 +45,9 @@ class Capture(unittest.TestCase):
         by_helper = {}
         for case in H.cases():
             by_helper.setdefault(case["helper"], []).append(
-                (case["args"], case.get("options"), case.get("with_session")))
+                (case["args"],) + tuple(case.get(k) for k in H.CASE_KEYS))
         for name, h in CAPTURE["helpers"].items():
-            got = [(c["args"], c.get("options"), c.get("with_session")) for c in h["cases"]]
+            got = [(c["args"],) + tuple(c.get(k) for k in H.CASE_KEYS) for c in h["cases"]]
             self.assertEqual(got, by_helper.get(name, []), name)
         self.assertEqual([t["value"] for t in CAPTURE["truthiness"]],
                          [c["truthy"] for c in H.truthiness_cases()])
@@ -55,6 +56,27 @@ class Capture(unittest.TestCase):
         for name, h in CAPTURE["helpers"].items():
             for c in h["cases"]:
                 self.assertTrue(("out" in c) ^ ("die" in c), (name, c["args"]))
+
+    def test_side_effects_are_recorded_for_decode_and_encode_only(self):
+        for name, h in CAPTURE["helpers"].items():
+            mutating = name in ("Image::ExifTool::Decode", "Image::ExifTool::Encode")
+            for c in h["cases"]:
+                self.assertEqual("set_members" in c and "warnings" in c, mutating,
+                                 (name, c["args"]))
+
+    def test_probe_charsets_are_the_generated_cs_type(self):
+        cs, tables, _ = codegen_charsets.generated_tables()
+        self.assertEqual(sorted(H.CHARSETS), sorted(cs))
+        self.assertFalse(set(H.NOT_CHARSETS) & set(cs))
+        self.assertEqual(sorted(H.FIXED_MULTI), sorted(n for n, t in cs.items() if t & 0x600))
+        self.assertEqual(set(tables), {n for n, t in cs.items() if t & 0x001})
+
+    def test_decode_dependencies_are_recorded(self):
+        for name in ("Image::ExifTool::Decode", "Image::ExifTool::Encode"):
+            deps = CAPTURE["helpers"][name]["dependencies"]
+            want = [h["deps"] for h in H.HELPERS if h["perl"] == name][0]
+            self.assertEqual(sorted(deps), sorted(want))
+            self.assertTrue(all(len(d) == 64 for d in deps.values()), name)
 
     def test_recorded_digests_are_of_the_recorded_sources(self):
         for name, h in CAPTURE["helpers"].items():
@@ -106,6 +128,39 @@ class PinnedTree(unittest.TestCase):
         sources = H.pinned_sources(PINNED / "lib")
         for name, h in CAPTURE["helpers"].items():
             self.assertEqual(sources[name][1], h["source_sha256"], name)
+
+    def test_pinned_dependencies_and_charset_modules_match_the_capture(self):
+        deps = H.dependency_sources(PINNED / "lib")
+        for name, h in CAPTURE["helpers"].items():
+            for dep, digest in h.get("dependencies", {}).items():
+                self.assertEqual(deps[dep], digest, (name, dep))
+        self.assertEqual(codegen_charsets.charset_sources(PINNED / "lib"),
+                         CAPTURE["charset_sources"])
+
+
+class GeneratedTables(unittest.TestCase):
+    """The committed charset_tables.rs names the sources the capture names."""
+
+    def test_generated_file_records_the_captured_sources(self):
+        text = codegen_charsets.OUT.read_text(encoding="utf-8")
+        for path, digest in list(CAPTURE["charset_sources"].items()) + list(
+                CAPTURE["perl_sources"].items()):
+            self.assertIn(f'("{path}", "{digest}"),', text)
+
+    def test_generator_refuses_what_the_rust_port_relies_on_not_happening(self):
+        ok = {"csType": {"Latin": 0x101, "MacThai": 0x803},
+              "unicode2byte": {"Latin": {"8364": 128}},
+              "tables": {"Latin": {"128": {"u": 8364}},
+                         "MacThai": {"128": {"u": 65}, "129": {"u": 65}}}}
+        codegen_charsets.validate(ok)   # a source-only table may repeat values
+        dup = json.loads(json.dumps(ok))
+        dup["tables"]["Latin"]["129"] = {"u": 8364}
+        with self.assertRaises(SystemExit):
+            codegen_charsets.validate(dup)
+        pre = json.loads(json.dumps(ok))
+        pre["unicode2byte"]["Latin"] = {"8364": 129}
+        with self.assertRaises(SystemExit):
+            codegen_charsets.validate(pre)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ use std::sync::LazyLock;
 
 use regex::bytes::Regex;
 
+use super::charset;
 use super::session::{MemberVal, PerlNum, Session};
 
 /// Why a port did not produce a value.
@@ -167,20 +168,52 @@ pub const PORTS: &[HelperPort] = &[
         source_sha256: "887af9c8aba0dc68e93b90e9d4c30dc80edf813d73050b9b6917a85e83e7679e",
         rust: "convert_file_size",
     },
+    HelperPort {
+        perl: "Image::ExifTool::Decode",
+        module: "Image/ExifTool.pm",
+        source_sha256: "e2a3b6777541f21a4a61f655c84a1f5443337e085453018565a04e43aa33e6f3",
+        rust: "decode",
+    },
+    HelperPort {
+        perl: "Image::ExifTool::Encode",
+        module: "Image/ExifTool.pm",
+        source_sha256: "c0d7e605eaf26f64da3c2a81f9a95e876498264b9a48c142c1532f7a526f5fdc",
+        rust: "encode",
+    },
+];
+
+/// The subs `Decode` reaches beyond its own body, by folded-source sha256 in
+/// the pinned tree (module, sub, digest). The Decode/Encode ports are proven
+/// only for a tree where every one of these matches; the helper oracle
+/// records them and `tests::every_port_names_the_pinned_source_it_was_proven_against`
+/// holds this list to the capture. The data those subs read (`%csType`, the
+/// `Charset/*.pm` tables, `%unicode2byte`) is generated, and tied to the same
+/// tree by [`super::charset_tables::SOURCES`].
+pub const DECODE_DEPENDENCIES: &[(&str, &str, &str)] = &[
+    (
+        "Image/ExifTool/Charset.pm",
+        "Decompose",
+        "dc0bb7b02055a4ae63a33d16337a780ff46a200b4556079d7b223af7a0350ed5",
+    ),
+    (
+        "Image/ExifTool/Charset.pm",
+        "Recompose",
+        "9095f69c6b79ca635234369ff8a4fcf519420836bb9e7bff48cbd7ad280513fe",
+    ),
+    (
+        "Image/ExifTool/Charset.pm",
+        "LoadCharset",
+        "4f36c876756b736fbdcc215d38d1ab1a168f26bd2b631cd98c696ca2f90be90f",
+    ),
 ];
 
 /// Top-22 helpers (by the spike's use count) this library does NOT port,
-/// and why. Each is a sub whose exact behaviour needs something this slice
+/// and why (`Decode` and `Encode`, once here, are ported below). Each is a sub whose exact behaviour needs something this slice
 /// does not have; none is approximated.
 pub const REFUSED_HELPERS: &[(&str, &str)] = &[
     (
         "Image::ExifTool::InverseDateTime",
         "write-side inverse: reads DateFormat/StrictDate, strptime-style parsing and Time::Local",
-    ),
-    (
-        "Image::ExifTool::Decode",
-        "takes a byte string (UCS2/Latin input) MemberVal::Str cannot carry, and needs \
-         Charset::Decompose/Recompose and %csType; exprs.rs keeps its UCS2-only v1 partial",
     ),
     (
         "Image::ExifTool::ValidateImage",
@@ -189,10 +222,6 @@ pub const REFUSED_HELPERS: &[(&str, &str)] = &[
     (
         "Image::ExifTool::Warn",
         "engine side effect (warning list, IgnoreMinorErrors); needs the session warning sink",
-    ),
-    (
-        "Image::ExifTool::Encode",
-        "write-side charset encode; needs Charset.pm, as Decode",
     ),
     (
         "Image::ExifTool::Samsung::Crypt",
@@ -282,8 +311,8 @@ fn sprintf_f(prec: usize, v: f64) -> String {
 
 /// Perl's `looks_like_number` for a string: optional surrounding whitespace
 /// around one complete decimal number (or `Inf`/`Infinity`/`NaN`).
-fn looks_like_number(s: &str) -> bool {
-    LOOKS_LIKE_NUMBER.is_match(s.as_bytes())
+fn looks_like_number(s: &[u8]) -> bool {
+    LOOKS_LIKE_NUMBER.is_match(s)
 }
 
 /// Unary minus on a scalar that is negative in numeric context. On a string
@@ -296,9 +325,11 @@ fn looks_like_number(s: &str) -> bool {
 /// string). Such an input is refused; a real number is negated normally.
 fn guard_string_negation(val: &MemberVal) -> Result<(), HelperError> {
     match val {
-        MemberVal::Str(s) if !looks_like_number(s) => Err(HelperError::Refused(
-            "unary minus on a non-numeric string (pp_negate string form, stale numeric cache)",
-        )),
+        MemberVal::Str(_) | MemberVal::Bytes(_) if !looks_like_number(&val.perl_bytes()) => {
+            Err(HelperError::Refused(
+                "unary minus on a non-numeric string (pp_negate string form, stale numeric cache)",
+            ))
+        }
         _ => Ok(()),
     }
 }
@@ -361,8 +392,13 @@ perl_re!(UNIX_TIME_ZONE, r"(?i-u)(?:Z|([-+])([0-9]+):([0-9]+))");
 perl_re!(UNIX_TIME_FRAC, r"(?-u)^(\.[0-9]+)");
 
 fn bytes_str(b: &[u8]) -> &str {
-    // Every capture below is taken from a `&str` at ASCII boundaries.
+    // Only captures of ASCII-only groups (digits, signs, `:`) come here.
     std::str::from_utf8(b).expect("ASCII capture")
+}
+
+/// `$s =~ tr/<from>/<to>/` for one byte.
+fn tr_byte(s: &[u8], from: u8, to: u8) -> Vec<u8> {
+    s.iter().map(|&b| if b == from { to } else { b }).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -383,21 +419,24 @@ fn bytes_str(b: &[u8]) -> &str {
 /// rewritten form (`PrintFNumber("-1,5")` returns `-1.5`).
 #[must_use]
 pub fn is_float(val: &MemberVal) -> (MemberVal, MemberVal) {
-    let s = val.perl_string();
-    if IS_FLOAT.is_match(s.as_bytes()) {
+    let s = val.perl_bytes();
+    if IS_FLOAT.is_match(&s) {
         return (MemberVal::Int(1), val.clone());
     }
-    if !IS_FLOAT_COMMA.is_match(s.as_bytes()) {
+    if !IS_FLOAT_COMMA.is_match(&s) {
         return (MemberVal::Int(0), val.clone());
     }
-    (MemberVal::Int(1), MemberVal::Str(s.replace(',', ".")))
+    (
+        MemberVal::Int(1),
+        MemberVal::from_bytes(tr_byte(&s, b',', b'.')),
+    )
 }
 
 /// `Image::ExifTool::IsInt($val)`: `scalar($_[0] =~ /^[+-]?\d+$/)` -- Perl's
 /// yes (`1`) or no (`""`).
 #[must_use]
 pub fn is_int(val: &MemberVal) -> MemberVal {
-    MemberVal::Bool(IS_INT.is_match(val.perl_string().as_bytes()))
+    MemberVal::Bool(IS_INT.is_match(&val.perl_bytes()))
 }
 
 /// `Image::ExifTool::Exif::ConvertFraction($val)`:
@@ -412,8 +451,8 @@ pub fn is_int(val: &MemberVal) -> MemberVal {
 /// `$2` is tested as a STRING: `"00"` is true, so `"5/00"` divides by zero
 /// and dies, exactly as the Perl does.
 pub fn convert_fraction(val: &MemberVal) -> HelperResult {
-    let s = val.perl_string();
-    let Some(c) = FRACTION.captures(s.as_bytes()) else {
+    let s = val.perl_bytes();
+    let Some(c) = FRACTION.captures(&s) else {
         return Ok(val.clone());
     };
     let num_s = MemberVal::Str(bytes_str(&c[1]).to_string());
@@ -621,21 +660,21 @@ pub fn canon_ev_inv(val: &MemberVal) -> HelperResult {
 /// return $deg;
 /// ```
 pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> HelperResult {
-    let mut s = val.perl_string();
-    if TO_DEG_INVALID.is_match(s.as_bytes()) {
+    let mut s = val.perl_bytes().into_owned();
+    if TO_DEG_INVALID.is_match(&s) {
         return Ok(MemberVal::Str(String::new()));
     }
     if coord.is_truthy() {
-        let c = coord.perl_string();
-        if c == "lat" || c == "lon" {
-            if let Some(m) = TO_DEG_PAIR.captures(s.as_bytes()) {
-                let pick = if c == "lat" { &m[1] } else { &m[2] };
-                s = bytes_str(pick).to_string();
+        let c = coord.perl_bytes();
+        if c.as_ref() == b"lat" || c.as_ref() == b"lon" {
+            if let Some(m) = TO_DEG_PAIR.captures(&s) {
+                let pick = if c.as_ref() == b"lat" { &m[1] } else { &m[2] };
+                s = pick.to_vec();
             }
         }
     }
     let nums: Vec<String> = TO_DEG_NUM
-        .find_iter(s.as_bytes())
+        .find_iter(&s)
         .take(3)
         .map(|m| bytes_str(m.as_bytes()).to_string())
         .collect();
@@ -656,7 +695,7 @@ pub fn to_degrees(val: &MemberVal, do_sign: &MemberVal, coord: &MemberVal) -> He
         return Err(BEYOND_2_53);
     }
     let negate = if do_sign.is_truthy() {
-        TO_DEG_SOUTH_WEST.is_match(s.as_bytes())
+        TO_DEG_SOUTH_WEST.is_match(&s)
     } else {
         deg < 0.0
     };
@@ -674,8 +713,8 @@ pub fn to_dms(
     do_print_conv: &MemberVal,
     ref_: &MemberVal,
 ) -> HelperResult {
-    let dpc_str = do_print_conv.perl_string();
-    let dpc_is = |s: &str| do_print_conv.is_truthy() && dpc_str == s;
+    let dpc_bytes = do_print_conv.perl_bytes();
+    let dpc_is = |s: &str| do_print_conv.is_truthy() && dpc_bytes.as_ref() == s.as_bytes();
     // unless (length $val)
     if val.perl_length().unwrap_or(0) == 0 {
         return Ok(if dpc_is("1") {
@@ -688,17 +727,17 @@ pub fn to_dms(
     let mut do_print = do_print_conv.is_truthy();
     let mut neg = false;
     // `$ref` after the sign logic: None is Perl's undef.
-    let ref_s: Option<String>;
+    let ref_s: Option<Vec<u8>>;
     if ref_.is_truthy() {
-        let r = ref_.perl_string();
+        let r = ref_.perl_bytes().into_owned();
         if v < 0.0 {
             guard_string_negation(val)?;
         }
         let mapped = if v < 0.0 {
             v = -v;
-            match r.as_str() {
-                "N" => Some("S".to_string()),
-                "E" => Some("W".to_string()),
+            match r.as_slice() {
+                b"N" => Some(b"S".to_vec()),
+                b"E" => Some(b"W".to_vec()),
                 _ => None,
             }
         } else {
@@ -707,7 +746,9 @@ pub fn to_dms(
         ref_s = if dpc_is("2") {
             mapped
         } else {
-            Some(format!(" {}", mapped.unwrap_or_default()))
+            let mut spaced = b" ".to_vec();
+            spaced.extend(mapped.unwrap_or_default());
+            Some(spaced)
         };
     } else {
         if dpc_is("3") {
@@ -715,20 +756,21 @@ pub fn to_dms(
             do_print = false;
         }
         v = v.abs();
-        ref_s = Some(String::new());
+        ref_s = Some(Vec::new());
     }
-    let ref_text = ref_s.clone().unwrap_or_default();
-    if ref_text
-        .bytes()
-        .any(|b| !(b.is_ascii_alphanumeric() || b == b' '))
+    let ref_bytes = ref_s.unwrap_or_default();
+    if ref_bytes
+        .iter()
+        .any(|&b| !(b.is_ascii_alphanumeric() || b == b' '))
     {
         return Err(HelperError::Refused(
             "$ref with a format or regex metacharacter",
         ));
     }
+    let ref_text = bytes_str(&ref_bytes).to_string();
     // With CoordFormat unset the format is fixed: three specs for the
     // degree form (%d %d %.2f), two for XMP (%d %.8f).
-    let xmp = do_print && dpc_str != "1";
+    let xmp = do_print && dpc_bytes.as_ref() != b"1";
     if do_print && !xmp && session.option("CoordFormat").is_truthy() {
         return Err(HelperError::Refused(
             "CoordFormat option (user sprintf format)",
@@ -779,7 +821,7 @@ pub fn to_dms(
         let f = |p: usize, x: &MemberVal| sprintf_f(p, x.perl_num().as_f64());
         if xmp {
             let mut out = format!("{},{}{}", d(&c[0]), f(8, &c[1]), ref_text);
-            if dpc_str == "2" {
+            if dpc_bytes.as_ref() == b"2" {
                 out = trim_xmp_zeros(&out, &ref_text);
             }
             Ok(MemberVal::Str(out))
@@ -915,19 +957,19 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 /// second out of range) and any year outside 1000-9999 (its two-digit-year
 /// window depends on the current date).
 pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult {
-    let s = time_str.perl_string();
-    if s == "0000:00:00 00:00:00" {
+    let s = time_str.perl_bytes();
+    if s.as_ref() == b"0000:00:00 00:00:00" {
         return Ok(MemberVal::Int(0));
     }
-    let Some(c) = UNIX_TIME_STR.captures(s.as_bytes()) else {
+    let Some(c) = UNIX_TIME_STR.captures(&s) else {
         return Ok(MemberVal::Undef);
     };
     let field = |i: usize| bytes_str(&c[i]).to_string();
-    let tz_str = field(7);
+    let tz_str = c[7].to_vec();
     let mut tz_sec: i64 = 0;
     let mut local = is_local.is_truthy();
     if local {
-        if let Some(z) = UNIX_TIME_ZONE.captures(tz_str.as_bytes()) {
+        if let Some(z) = UNIX_TIME_ZONE.captures(&tz_str) {
             if let (Some(sign), Some(h), Some(m)) = (z.get(1), z.get(2), z.get(3)) {
                 let (h, m) = (bytes_str(h.as_bytes()), bytes_str(m.as_bytes()));
                 if h.len() > 6 || m.len() > 6 {
@@ -937,7 +979,7 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
                 tz_sec = (h * 60 + m) * if sign.as_bytes() == b"-" { -60 } else { 60 };
             }
             local = false;
-        } else if is_local.perl_string() == "2" {
+        } else if is_local.perl_bytes().as_ref() == b"2" {
             local = false;
         }
     }
@@ -971,7 +1013,7 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
         ));
     }
     let t = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + min * 60 + sec - tz_sec;
-    if let Some(f) = UNIX_TIME_FRAC.captures(tz_str.as_bytes()) {
+    if let Some(f) = UNIX_TIME_FRAC.captures(&tz_str) {
         let frac = MemberVal::Str(bytes_str(&f[1]).to_string())
             .perl_num()
             .as_f64();
@@ -994,23 +1036,27 @@ pub fn get_unix_time(time_str: &MemberVal, is_local: &MemberVal) -> HelperResult
 /// ```
 #[must_use]
 pub fn convert_xmp_date(val: &MemberVal, unsure: &MemberVal) -> MemberVal {
-    let s = val.perl_string();
-    if let Some(c) = XMP_DATE.captures(s.as_bytes()) {
-        let g = |i: usize| c.get(i).map_or("", |m| bytes_str(m.as_bytes()));
-        let secs = MemberVal::Str(g(5).to_string());
-        let secs = if secs.is_truthy() { g(5) } else { "" };
-        return MemberVal::Str(format!(
-            "{}:{}:{} {}{}{}",
-            g(1),
-            g(2),
-            g(3),
-            g(4),
-            secs,
-            g(6)
-        ));
+    let s = val.perl_bytes();
+    if let Some(c) = XMP_DATE.captures(&s) {
+        let g = |i: usize| c.get(i).map_or(&b""[..], |m| m.as_bytes());
+        let secs = MemberVal::from_bytes(g(5).to_vec());
+        let secs = if secs.is_truthy() { g(5) } else { b"" };
+        let mut out = Vec::with_capacity(s.len());
+        for (part, sep) in [
+            (g(1), &b":"[..]),
+            (g(2), b":"),
+            (g(3), b" "),
+            (g(4), b""),
+            (secs, b""),
+            (g(6), b""),
+        ] {
+            out.extend_from_slice(part);
+            out.extend_from_slice(sep);
+        }
+        return MemberVal::from_bytes(out);
     }
-    if !unsure.is_truthy() && XMP_DATE_PREFIX.is_match(s.as_bytes()) {
-        return MemberVal::Str(s.replace('-', ":"));
+    if !unsure.is_truthy() && XMP_DATE_PREFIX.is_match(&s) {
+        return MemberVal::from_bytes(tr_byte(&s, b'-', b':'));
     }
     val.clone()
 }
@@ -1019,9 +1065,13 @@ pub fn convert_xmp_date(val: &MemberVal, unsure: &MemberVal) -> MemberVal {
 /// ones when `$et` is given and its `ByteUnit` option is exactly `Binary`.
 /// Both branches are ported (the v1 `exprs.rs` port has the SI one only).
 pub fn convert_file_size(val: &MemberVal, session: Option<&Session>) -> HelperResult {
-    let binary = session.is_some_and(|s| s.option("ByteUnit").perl_string() == "Binary");
+    let binary = session.is_some_and(|s| s.option("ByteUnit").perl_bytes().as_ref() == b"Binary");
     let v = val.perl_num().as_f64();
-    let bytes = || MemberVal::Str(format!("{} bytes", val.perl_string()));
+    let bytes = || {
+        let mut out = val.perl_bytes().into_owned();
+        out.extend_from_slice(b" bytes");
+        MemberVal::from_bytes(out)
+    };
     let unit =
         |p: usize, div: f64, u: &str| MemberVal::Str(format!("{} {u}", sprintf_f(p, v / div)));
     let out = if binary {
@@ -1058,6 +1108,119 @@ pub fn convert_file_size(val: &MemberVal, session: Option<&Session>) -> HelperRe
     Ok(out)
 }
 
+/// `$self->Decode($val, $from [, $fromOrder [, $to [, $toOrder]]])`
+/// (ExifTool.pm, pinned 13.59):
+///
+/// ```perl
+/// $from or $from = $$self{OPTIONS}{Charset};
+/// $to or $to = $$self{OPTIONS}{Charset};
+/// if ($from ne $to and length $val) {
+///     require Image::ExifTool::Charset;
+///     my $cs1 = $Image::ExifTool::Charset::csType{$from};
+///     my $cs2 = $Image::ExifTool::Charset::csType{$to};
+///     if ($cs1 and $cs2 and not $cs2 & 0x002) {
+///         # treat as straight ASCII if no character will need remapping
+///         if (($cs1 | $cs2) & 0x680 or $val =~ /[\x80-\xff]/) {
+///             my $uni = Image::ExifTool::Charset::Decompose($self, $val, $from, $fromOrder);
+///             $val = Image::ExifTool::Charset::Recompose($self, $uni, $to, $toOrder);
+///         }
+///     } elsif ($self) {
+///         my $set = $cs1 ? $to : $from;
+///         unless ($$self{"DecodeWarn$set"}) {
+///             $self->Warn("Unsupported character set ($set)");
+///             $$self{"DecodeWarn$set"} = 1;
+///         }
+///     }
+/// }
+/// return $val;
+/// ```
+///
+/// Every charset `%csType` names is ported, as a source and (where Perl
+/// allows it, i.e. without the 0x002 flag) as a destination; a destination
+/// Perl refuses takes the same `Unsupported character set` path here. The
+/// value is a Perl byte string in and out ([`MemberVal::Bytes`] when it is
+/// not UTF-8). Side effects are the Perl's: the `DecodeWarn<set>`,
+/// `WarnBadUTF8`, `WrongByteOrder` and `EncodingError` members, and `Warn`
+/// requests recorded on the Session ([`Session::warn`]).
+///
+/// Refused: a 2-/4-byte charset whose byte order comes from `GetByteOrder()`
+/// (no `$fromOrder`/`$toOrder`, or `Unknown`) when the Session has no
+/// `byte_order`; a charset name that is not UTF-8 on the unsupported path
+/// (it would name a member). Not modelled: the global
+/// `$Image::ExifTool::evalWarning` that Decompose's UTF-8 branch leaves set
+/// after a malformation (the Perl's value does not depend on it, and every
+/// ExifTool reader of it clears it first).
+pub fn decode(
+    session: &mut Session,
+    val: &MemberVal,
+    from: &MemberVal,
+    from_order: &MemberVal,
+    to: &MemberVal,
+    to_order: &MemberVal,
+) -> HelperResult {
+    let from = if from.is_truthy() {
+        from.clone()
+    } else {
+        session.option("Charset")
+    };
+    let to = if to.is_truthy() {
+        to.clone()
+    } else {
+        session.option("Charset")
+    };
+    let (from_b, to_b) = (from.perl_bytes(), to.perl_bytes());
+    if from_b == to_b || val.perl_length().unwrap_or(0) == 0 {
+        return Ok(val.clone());
+    }
+    let (cs1, cs2) = (charset::cs_type(&from_b), charset::cs_type(&to_b));
+    match (cs1, cs2) {
+        (Some(t1), Some(t2)) if t2 & 0x002 == 0 => {
+            let bytes = val.perl_bytes();
+            if (t1 | t2) & 0x680 == 0 && !bytes.iter().any(|&b| b >= 0x80) {
+                return Ok(val.clone());
+            }
+            // both names are %csType keys, so ASCII
+            let (from_s, to_s) = (bytes_str(&from_b), bytes_str(&to_b));
+            let uni = charset::decompose(session, &bytes, from_s, from_order)?;
+            let out = charset::recompose(session, uni, to_s, to_order)?;
+            Ok(MemberVal::from_bytes(out))
+        }
+        _ => {
+            let set = if cs1.is_some() { &to_b } else { &from_b };
+            let set = std::str::from_utf8(set).map_err(|_| {
+                HelperError::Refused("an unsupported charset name that is not UTF-8")
+            })?;
+            let key = format!("DecodeWarn{set}");
+            if !session.member(&key).is_truthy() {
+                session.warn(MemberVal::Str(format!("Unsupported character set ({set})")));
+                session
+                    .set_member(&key, MemberVal::Int(1))
+                    .map_err(|_| HelperError::Refused("member typed on Session"))?;
+            }
+            Ok(val.clone())
+        }
+    }
+}
+
+/// `$self->Encode($val, $to [, $toOrder])` (ExifTool.pm, pinned 13.59):
+/// `return $self->Decode($val, undef, undef, $to, $toOrder);` -- from the
+/// `Charset` option into `$to`.
+pub fn encode(
+    session: &mut Session,
+    val: &MemberVal,
+    to: &MemberVal,
+    to_order: &MemberVal,
+) -> HelperResult {
+    decode(
+        session,
+        val,
+        &MemberVal::Undef,
+        &MemberVal::Undef,
+        to,
+        to_order,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,18 +1234,17 @@ mod tests {
         serde_json::from_str(CAPTURE).expect("capture is JSON")
     }
 
-    fn hex_str(h: &str) -> String {
-        let bytes: Vec<u8> = (0..h.len())
+    fn hex_bytes(h: &str) -> Vec<u8> {
+        (0..h.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&h[i..i + 2], 16).expect("hex"))
-            .collect();
-        String::from_utf8(bytes).expect("probes are UTF-8")
+            .collect()
     }
 
     fn arg(v: &Value) -> MemberVal {
         match v["t"].as_str().expect("type") {
             "undef" => MemberVal::Undef,
-            "s" => MemberVal::Str(hex_str(v["hex"].as_str().expect("hex"))),
+            "s" => MemberVal::from_bytes(hex_bytes(v["hex"].as_str().expect("hex"))),
             "i" => MemberVal::Int(v["v"].as_str().expect("v").parse().expect("int")),
             "f" => MemberVal::Float(v["v"].as_str().expect("v").parse().expect("float")),
             t => panic!("arg type {t}"),
@@ -1090,17 +1252,49 @@ mod tests {
     }
 
     /// Perl's stringification of one output, as the harness recorded it.
-    fn out_bytes(v: &MemberVal) -> Option<String> {
-        v.is_defined().then(|| v.perl_string())
+    fn out_bytes(v: &MemberVal) -> Option<Vec<u8>> {
+        v.is_defined().then(|| v.perl_bytes().into_owned())
     }
 
-    fn expected(o: &Value) -> Option<String> {
-        o.get("hex").map(|h| hex_str(h.as_str().expect("hex")))
+    fn expected(o: &Value) -> Option<Vec<u8>> {
+        o.get("hex").map(|h| hex_bytes(h.as_str().expect("hex")))
     }
 
-    /// Run one captured case through the port. `Ok(outputs)` or the port's
-    /// refusal / death.
-    fn run(helper: &str, case: &Value) -> Result<Vec<MemberVal>, HelperError> {
+    /// What a port did to the Session besides returning: the members it
+    /// created or changed and the `Warn` requests it made, in the harness's
+    /// shape (`set_members` sorted by key, `warnings` in order).
+    type SideEffects = (BTreeMap<String, Option<Vec<u8>>>, Vec<Option<Vec<u8>>>);
+
+    fn side_effects(before: &Session, after: &Session) -> SideEffects {
+        let set = after
+            .member_names()
+            .filter(|k| before.member(k) != after.member(k))
+            .map(|k| (k.to_string(), out_bytes(&after.member(k))))
+            .collect();
+        let warned = after.warnings()[before.warnings().len()..]
+            .iter()
+            .map(out_bytes)
+            .collect();
+        (set, warned)
+    }
+
+    fn expected_side_effects(case: &Value) -> SideEffects {
+        let set = case
+            .get("set_members")
+            .and_then(Value::as_object)
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), expected(v))).collect())
+            .unwrap_or_default();
+        let warned = case
+            .get("warnings")
+            .and_then(Value::as_array)
+            .map(|w| w.iter().map(expected).collect())
+            .unwrap_or_default();
+        (set, warned)
+    }
+
+    /// Run one captured case through the port. `Ok(outputs, side effects)`
+    /// or the port's refusal / death.
+    fn run(helper: &str, case: &Value) -> Result<(Vec<MemberVal>, SideEffects), HelperError> {
         let args: Vec<MemberVal> = case["args"]
             .as_array()
             .expect("args")
@@ -1114,7 +1308,34 @@ mod tests {
                 session.set_option(k, arg(v));
             }
         }
-        let one = |r: HelperResult| r.map(|v| vec![v]);
+        if let Some(members) = case.get("members").and_then(Value::as_object) {
+            for (k, v) in members {
+                session.set_member(k, arg(v)).expect("untyped member");
+            }
+        }
+        session.byte_order = match case.get("byte_order").and_then(Value::as_str) {
+            Some("II") => Some(super::super::session::ByteOrder::LittleEndian),
+            Some("MM") => Some(super::super::session::ByteOrder::BigEndian),
+            None => None,
+            Some(o) => panic!("byte order {o}"),
+        };
+        let before = session.clone();
+        let mut mutating = session.clone();
+        let effects =
+            |r: HelperResult, after: &Session| r.map(|v| (vec![v], side_effects(&before, after)));
+        match helper {
+            "Image::ExifTool::Decode" => {
+                let r = decode(&mut mutating, &a(0), &a(1), &a(2), &a(3), &a(4));
+                return effects(r, &mutating);
+            }
+            "Image::ExifTool::Encode" => {
+                let r = encode(&mut mutating, &a(0), &a(1), &a(2));
+                return effects(r, &mutating);
+            }
+            _ => {}
+        }
+        let none = || side_effects(&before, &before);
+        let one = |r: HelperResult| r.map(|v| (vec![v], none()));
         match helper {
             "Image::ExifTool::ConvertDateTime" => one(convert_date_time(&session, &a(0))),
             "Image::ExifTool::Exif::ConvertFraction" => one(convert_fraction(&a(0))),
@@ -1126,7 +1347,7 @@ mod tests {
             "Image::ExifTool::ConvertDuration" => one(convert_duration(&a(0))),
             "Image::ExifTool::IsFloat" => {
                 let (r, after) = is_float(&a(0));
-                Ok(vec![r, after])
+                Ok((vec![r, after], none()))
             }
             "Image::ExifTool::ConvertBitrate" => one(convert_bitrate(&a(0))),
             "Image::ExifTool::Exif::PrintFraction" => one(print_fraction(&a(0))),
@@ -1135,8 +1356,10 @@ mod tests {
             "Image::ExifTool::Canon::CanonEvInv" => one(canon_ev_inv(&a(0))),
             "Image::ExifTool::GetUnixTime" => one(get_unix_time(&a(0), &a(1))),
             "Image::ExifTool::Exif::PrintFNumber" => one(print_f_number(&a(0))),
-            "Image::ExifTool::IsInt" => Ok(vec![is_int(&a(0))]),
-            "Image::ExifTool::XMP::ConvertXMPDate" => Ok(vec![convert_xmp_date(&a(0), &a(1))]),
+            "Image::ExifTool::IsInt" => Ok((vec![is_int(&a(0))], none())),
+            "Image::ExifTool::XMP::ConvertXMPDate" => {
+                Ok((vec![convert_xmp_date(&a(0), &a(1))], none()))
+            }
             "Image::ExifTool::ConvertFileSize" => {
                 let with = case.get("with_session").is_some();
                 one(convert_file_size(&a(0), with.then_some(&session)))
@@ -1216,21 +1439,21 @@ mod tests {
                         .entry(port.perl)
                         .or_default()
                         .push(fail("returned; perl died".to_string())),
-                    Ok(outs) => {
-                        let want: Vec<Option<String>> = case["out"]
+                    Ok((outs, effects)) => {
+                        let want: Vec<Option<Vec<u8>>> = case["out"]
                             .as_array()
                             .expect("out")
                             .iter()
                             .map(expected)
                             .collect();
-                        let have: Vec<Option<String>> = outs.iter().map(out_bytes).collect();
-                        if want == have {
+                        let have: Vec<Option<Vec<u8>>> = outs.iter().map(out_bytes).collect();
+                        let want_effects = expected_side_effects(case);
+                        if want == have && want_effects == effects {
                             matched += 1;
                         } else {
-                            failures
-                                .entry(port.perl)
-                                .or_default()
-                                .push(fail(format!("perl {want:?} rust {have:?}")));
+                            failures.entry(port.perl).or_default().push(fail(format!(
+                                "perl {want:02x?} {want_effects:02x?} rust {have:02x?} {effects:02x?}"
+                            )));
                         }
                     }
                 }
@@ -1297,8 +1520,61 @@ mod tests {
         let cap = capture();
         for t in cap["truthiness"].as_array().expect("truthiness") {
             let v = arg(&t["value"]);
-            let want = expected(&t["out"][0]).expect("defined") == "1";
+            let want = expected(&t["out"][0]).expect("defined") == b"1";
             assert_eq!(v.is_truthy(), want, "{v:?}");
+        }
+    }
+
+    /// `Session::new()`'s options are `Image::ExifTool->new`'s, as the
+    /// pinned perl reports them (string context; `undef` absent).
+    #[test]
+    fn session_option_defaults_match_the_pinned_perl() {
+        let cap = capture();
+        let session = Session::new();
+        for (name, want) in cap["option_defaults"].as_object().expect("option_defaults") {
+            assert_eq!(out_bytes(&session.option(name)), expected(want), "{name}");
+        }
+    }
+
+    /// Decode's dependencies (Charset.pm subs) and the generated charset
+    /// tables name the same pinned sources as the capture.
+    #[test]
+    fn decode_dependencies_and_charset_tables_match_the_capture() {
+        let cap = capture();
+        for helper in ["Image::ExifTool::Decode", "Image::ExifTool::Encode"] {
+            let deps = cap["helpers"][helper]["dependencies"]
+                .as_object()
+                .expect("dependencies");
+            for (module, sub, digest) in DECODE_DEPENDENCIES {
+                assert_eq!(
+                    deps[&format!("{module}::{sub}")].as_str(),
+                    Some(*digest),
+                    "{helper}: {module}::{sub}"
+                );
+            }
+        }
+        let decode = PORTS
+            .iter()
+            .find(|p| p.perl == "Image::ExifTool::Decode")
+            .expect("Decode");
+        assert_eq!(
+            cap["helpers"]["Image::ExifTool::Encode"]["dependencies"]["Image/ExifTool.pm::Decode"]
+                .as_str(),
+            Some(decode.source_sha256)
+        );
+        let sources = cap["charset_sources"].as_object().expect("charset_sources");
+        assert_eq!(sources.len(), super::super::charset_tables::SOURCES.len());
+        for (path, digest) in super::super::charset_tables::SOURCES {
+            assert_eq!(sources[*path].as_str(), Some(*digest), "{path}");
+        }
+        assert_eq!(
+            super::super::charset_tables::EXIFTOOL_VERSION,
+            cap["capture"]["exiftool_version"]
+        );
+        let perl = cap["perl_sources"].as_object().expect("perl_sources");
+        assert_eq!(perl.len(), super::super::charset_tables::PERL_SOURCES.len());
+        for (path, digest) in super::super::charset_tables::PERL_SOURCES {
+            assert_eq!(perl[*path].as_str(), Some(*digest), "{path}");
         }
     }
 }

@@ -45,6 +45,7 @@ from pathlib import Path
 
 # The fold #805/#818 select ConvertUnixTime and AF-point ports with.
 from exprs import sub_source
+import codegen_charsets
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -63,6 +64,12 @@ PINNED_PERL_VERSION = "v5.38.2"
 # ---------------------------------------------------------------------------
 PORTED = "ported"
 REFUSED = "refused"
+
+# Subs Decode reaches beyond its own body ("<module>::<sub>"); their folded
+# sources are captured beside Decode's and named by the Rust
+# `helpers::DECODE_DEPENDENCIES`.
+DECODE_DEPS = ["Image/ExifTool/Charset.pm::Decompose", "Image/ExifTool/Charset.pm::Recompose",
+               "Image/ExifTool/Charset.pm::LoadCharset"]
 
 HELPERS = [
     # rank, spike name, qualified Perl sub, module file, spike uses, status, note
@@ -94,11 +101,13 @@ HELPERS = [
          module="Image/ExifTool.pm", uses=75, status=PORTED,
          note="complete, including the in-place `tr/,/./` of its argument"),
     dict(rank=9, spike="ET->Decode", perl="Image::ExifTool::Decode",
-         module="Image/ExifTool.pm", uses=64, status=REFUSED,
-         note="takes a BYTE string (UCS2/Latin input), which MemberVal::Str (UTF-8 text) "
-              "cannot carry, and needs Charset::Decompose/Recompose and %csType; exprs.rs "
-              "keeps its UCS2-only partial for the v1 path. Exif::Main's top blocker (20 "
-              "read-side uses) -- next slice, with a byte-string MemberVal"),
+         module="Image/ExifTool.pm", uses=64, status=PORTED,
+         deps=DECODE_DEPS,
+         note="complete over byte strings (MemberVal::Bytes) for every %csType charset, "
+              "source and destination, incl. BOMs, 'Unknown' byte-order guessing, UTF-16 "
+              "surrogates, Perl's lax UTF-8 and its malformations, and the DecodeWarn/"
+              "WarnBadUTF8/WrongByteOrder/EncodingError members and Warn requests; a "
+              "2-/4-byte charset needing GetByteOrder() with no Session byte order refuses"),
     dict(rank=10, spike="ConvertBitrate", perl="Image::ExifTool::ConvertBitrate",
          module="Image/ExifTool.pm", uses=41, status=PORTED,
          note="complete; numeric core is the existing core::formatters port"),
@@ -133,8 +142,9 @@ HELPERS = [
          note="complete in scalar context (every table call site); the list-context "
               "($val, 1) return is not modelled"),
     dict(rank=21, spike="ET->Encode", perl="Image::ExifTool::Encode",
-         module="Image/ExifTool.pm", uses=26, status=REFUSED,
-         note="write-side charset encode; needs Charset.pm (as Decode)"),
+         module="Image/ExifTool.pm", uses=26, status=PORTED,
+         deps=["Image/ExifTool.pm::Decode"] + DECODE_DEPS,
+         note="complete: Decode from the Charset option (see Decode)"),
     dict(rank=22, spike="Samsung::Crypt", perl="Image::ExifTool::Samsung::Crypt",
          module="Image/ExifTool/Samsung.pm", uses=25, status=REFUSED,
          note="reads the array-valued EncryptionKey member, $tagInfo and the "
@@ -170,15 +180,27 @@ def helper_source(module_text, sub):
     return None
 
 
+def folded(et_lib, module, sub):
+    """(folded source, sha256) of `sub` in `module` under `et_lib`."""
+    text = (Path(et_lib) / module).read_text(encoding="latin-1")
+    src = helper_source(text, sub)
+    return src, (hashlib.sha256(src.encode("latin-1")).hexdigest() if src is not None else None)
+
+
 def pinned_sources(et_lib):
     """{perl name: (folded source, sha256)} for every HELPERS entry, read from
     the tree at `et_lib` (the directory holding `Image/`)."""
+    return {h["perl"]: folded(et_lib, h["module"], h["perl"].rsplit("::", 1)[1])
+            for h in HELPERS}
+
+
+def dependency_sources(et_lib):
+    """{"<module>::<sub>": sha256} for every dependency a HELPERS entry names."""
     out = {}
     for h in HELPERS:
-        text = (Path(et_lib) / h["module"]).read_text(encoding="latin-1")
-        src = helper_source(text, h["perl"].rsplit("::", 1)[1])
-        out[h["perl"]] = (src, hashlib.sha256(src.encode("latin-1")).hexdigest()
-                          if src is not None else None)
+        for dep in h.get("deps", []):
+            module, sub = dep.rsplit("::", 1)
+            out[dep] = folded(et_lib, module, sub)[1]
     return out
 
 
@@ -226,15 +248,217 @@ def truthiness_cases():
     return [{"truthy": v} for v in vals]
 
 
+def Bx(b):
+    """A probe byte string given as `bytes`."""
+    return {"t": "s", "hex": bytes(b).hex()}
+
+
+def utf8(cps):
+    """Perl's `pack('C0U*', @cps)` for code points up to 0x7FFFFFFF."""
+    return b"".join(chr(c).encode("utf-8", "surrogatepass") if c < 0x110000
+                    else _utf8_long(c) for c in cps)
+
+
+def _utf8_long(c):
+    n, lead = (4, 0xf0) if c < 0x200000 else (5, 0xf8) if c < 0x4000000 else (6, 0xfc)
+    out = [lead | (c >> (6 * (n - 1)))]
+    out += [0x80 | ((c >> (6 * k)) & 0x3f) for k in range(n - 2, -1, -1)]
+    return bytes(out)
+
+
+# `%csType` names (the probe set exercises each as a source and destination;
+# test_helper_oracle holds this list to the generated CS_TYPE) and names it
+# does not hold (the Unsupported-character-set path).
+CHARSETS = ["ASCII", "Arabic", "Baltic", "Cyrillic", "DOSCyrillic", "DOSLatin1",
+            "DOSLatinUS", "Greek", "Hebrew", "JIS", "Latin", "Latin2", "MacArabic",
+            "MacChineseCN", "MacChineseTW", "MacCroatian", "MacCyrillic", "MacGreek",
+            "MacHebrew", "MacIceland", "MacJapanese", "MacKorean", "MacLatin2", "MacRSymbol",
+            "MacRoman", "MacRomanian", "MacThai", "MacTurkish", "PDFDoc", "ShiftJIS", "Symbol",
+            "Thai", "Turkish", "UCS2", "UCS4", "UTF16", "UTF8", "Unicode", "Vietnam"]
+NOT_CHARSETS = ["Bogus", "utf8", "RSymbol", "latin1"]
+# 2-/4-byte fixed-width sets: their byte order argument matters.
+FIXED_MULTI = ["JIS", "Symbol", "UCS2", "UCS4", "UTF16", "Unicode"]
+
+# Byte strings every source charset decodes: ASCII, NUL placement, every
+# 1-byte value, UTF-8 (valid, lax and malformed), UCS-2/UTF-16 in both
+# orders with and without BOMs, odd lengths, surrogates, UCS-4, JIS and
+# Shift-JIS-style double bytes (valid, truncated, bad trail byte).
+DECODE_VALUES = [
+    b"A", b"Hello, World", b"a\0b", b"\0", b"\0abc", b"\xe9", b"caf\xe9", b"\x80",
+    b"\x9f", b"\xa0", b"\xff", b"\x80\x81", bytes(range(1, 256)), b"\xe9\0\xe9",
+    b"caf\xc3\xa9", b"\xe2\x82\xac", b"\xf0\x9f\x98\x80", b"\xed\xa0\x80",
+    b"\xf4\x90\x80\x80", b"\xfe\x82\x80\x80\x80\x80\x80", b"\xef\xbf\xbf",
+    b"\xc3", b"\xc3\x41", b"\xe2\x82", b"\xe2\x82\x41", b"\xc0\x80", b"\xc3\xc3",
+    b"\xff" + b"\x80" * 11 + b"\x81", b"\xff\x80\x87" + b"\xbf" * 10,
+    b"H\0i\0", b"\0H\0i", b"\xff\xfeH\0i\0", b"\xfe\xff\0H\0i", b"\xff\xfe",
+    b"\xfe\xff", b"H\0i", b"H", b"\x3d\xd8\x00\xde", b"\xd8\x3d\xde\x00", b"\x3d\xd8",
+    b"\x00\xde\x3d\xd8", b"\xff\xfe\x3d\xd8\x00\xde", b"\xfe\xff\xd8\x3d\xde\x00",
+    b"\xd8\x3d\xd8\x3d\xde\x00", b"A\0\0\0B\0\0\0", b"\0\0\0A\0\0\0B",
+    b"\0\0\xfe\xff\0\0\0A", b"\xff\xfe\0\0A\0\0\0", b"\xff\xff\xff\xff",
+    b"\0\x11\0\0", b"\x7f\xff\xff\xff", b"A\0\0\0B\0", b"\x30\x21", b"\x21\x30",
+    b"\x24\x22\x24\x24", b"\x7f\x7f", b"\x30\x21\x7f\x7f\x7f\x7f",
+    b"\x21\x30\x7f\x7f\x7f\x7f\x22\x24", b"\x82\xa0", b"\x82", b"\x82\x20",
+    b"\x88\x9f", b"\xa6", b"A\x82\xa0B", b"\x81", b"\x81\x81\x82", b"\xa1\xa1\xb0\xa1",
+    b"\xa1", b"\xa1\x20", b"\x80\x80\xfd\xfe\xff",
+]
+
+# Code point strings every destination is asked to encode, as UTF-8.
+RECOMPOSE_VALUES = [
+    [0x48, 0x65, 0x6c, 0x6c, 0x6f], list(range(1, 256)), [0xe9, 0, 0xe9], [0x61, 0, 0x62],
+    [0x4e2d, 0x6587], [0x3042, 0x3044], [0x1f600], [0x10ffff], [0x10fffe, 0x10000],
+    [0xffff], [0xd800], [0xdc00, 0xd800], [0x20ac, 0x2122, 0x152], [0x2018, 0x201c],
+    [0x391, 0x3b1, 0x410, 0x5d0, 0x627, 0xe01], [0x80, 0x9f, 0xa0], [0x7f, 0x80],
+    [0x2c7, 0x2d8, 0x2dd], [0x3000, 0xff01, 0xff61], [0x200000], [0x7fffffff],
+]
+
+
+def decode_cases(add):
+    """Probes for Decode and Encode (added to `cases()`)."""
+    import codegen_charsets
+    D, E = "Image::ExifTool::Decode", "Image::ExifTool::Encode"
+    II = {"byte_order": "II"}
+    MM = {"byte_order": "MM"}
+
+    # Decode's own branches: from/to defaulting, eq, empty/undef/numeric
+    # values, the ASCII shortcut (no NUL truncation), the unsupported path
+    # (once per set), and each Charset option.
+    vals = [U, S(""), S("0"), I(5), F("1.5"), S("abc"), S("a\0b"), S("\xe9"),
+            S("a\xe9\0\xe9"), S("\xc3\xa9\0x")]
+    pairs = [("Latin", "UTF8"), ("UTF8", "UTF8"), ("Latin", "Latin"), ("PDFDoc", "UTF8"),
+             ("UCS2", "UTF8"), ("UTF8", "Latin"), ("Bogus", "UTF8"), ("UTF8", "Bogus"),
+             ("Latin", "MacJapanese"), ("MacJapanese", "UTF8"), ("UTF8", "UCS2"),
+             ("Latin", "ASCII"), ("ASCII", "Latin"), (None, None), ("", "Latin"),
+             ("0", None), (None, "Latin"), ("Latin", "0"), ("Bogus", "Bogus2")]
+    for opts in [None, {"Charset": S("Latin")}, {"Charset": S("UTF8")}, {"Charset": U},
+                 {"Charset": S("Bogus")}, {"Charset": S("UCS2")}]:
+        for f, t in pairs:
+            for v in vals:
+                fa = U if f is None else S(f)
+                ta = U if t is None else S(t)
+                add(D, [v, fa, U, ta, U], opts, extra=II)
+    # members already set: the warning / flag is not repeated
+    add(D, [S("x"), S("Bogus")], None, extra={**II, "members": {"DecodeWarnBogus": I(1)}})
+    add(D, [S("x"), S("Bogus")], None, extra={**II, "members": {"DecodeWarnBogus": S("0")}})
+    add(D, [S("x"), S("UTF8"), U, S("Bogus")], None,
+        extra={**II, "members": {"DecodeWarnBogus": I(1)}})
+    add(D, [S("\xc3"), S("UTF8"), U, S("Latin")], None,
+        extra={**II, "members": {"WarnBadUTF8": I(1)}})
+    add(D, [S("\xe4\xb8\xad"), S("UTF8"), U, S("Latin")], None,
+        extra={**II, "members": {"EncodingError": I(1)}})
+    add(D, [S("\xe4\xb8\xad\xc3"), S("UTF8"), U, S("Latin")], None, extra=II)
+    add(D, [S("H\0i\0"), S("UCS2"), S("Unknown")], None,
+        extra={**MM, "members": {"WrongByteOrder": I(0)}})
+    # GetByteOrder with no byte order on the Session: refused on the Rust side
+    for args in ([S("H\0i\0"), S("UCS2")], [S("H\0i\0"), S("UCS2"), S("Unknown")],
+                 [S("Hi"), S("UTF8"), U, S("UCS2")], [S("H\0i\0"), S("UCS2"), S("II")],
+                 [S("Hi"), S("UTF8"), U, S("UCS2"), S("MM")], [S("caf\xe9"), S("Latin")]):
+        add(D, args)
+
+    # Decompose: every source charset (to the UTF8 default) over DECODE_VALUES;
+    # the fixed multi-byte sets under every byte-order argument and Session order.
+    for cs in CHARSETS + NOT_CHARSETS:
+        for v in DECODE_VALUES:
+            add(D, [Bx(v), S(cs)], None, extra=II)
+    for cs in FIXED_MULTI:
+        for v in DECODE_VALUES:
+            add(D, [Bx(v), S(cs)], None, extra=MM)
+            for order, bo in (("II", MM), ("MM", II), ("Unknown", II), ("Unknown", MM),
+                              ("x", MM), ("0", MM)):
+                add(D, [Bx(v), S(cs), S(order)], None, extra=bo)
+
+    # Every generated table entry, decoded.
+    _, tables, scalars = codegen_charsets.generated_tables()
+    for cs, (ty, entries) in sorted(tables.items()):
+        if ty & 0x600:
+            for order in ("MM", "II"):
+                units = sorted(entries)
+                data = b"".join(k.to_bytes(2, "big" if order == "MM" else "little")
+                                for k in units)
+                add(D, [Bx(data), S(cs), S(order)], None, extra=II)
+        elif ty & 0x800:
+            data = bytearray()
+            for lead in sorted(entries):
+                e = entries[lead]
+                if isinstance(e, dict):
+                    for trail in sorted(e):
+                        data += bytes([lead, trail])
+                else:
+                    data.append(lead)
+            add(D, [Bx(data), S(cs)], None, extra=II)
+            # every lead byte with a trail byte it lacks, and at the end
+            bad = bytearray()
+            for lead in sorted(entries):
+                e = entries[lead]
+                if isinstance(e, dict):
+                    miss = next((b for b in range(256) if b not in e), None)
+                    if miss is not None:
+                        bad += bytes([lead, miss])
+                    bad.append(lead)
+            add(D, [Bx(bad), S(cs)], None, extra=II)
+
+    # Recompose: every destination (from UTF8) over RECOMPOSE_VALUES, and the
+    # multi-byte destinations under every byte-order argument.
+    for cs in CHARSETS + NOT_CHARSETS:
+        for cps in RECOMPOSE_VALUES:
+            add(D, [Bx(utf8(cps)), S("UTF8"), U, S(cs)], None, extra=II)
+    for cs in FIXED_MULTI:
+        for cps in RECOMPOSE_VALUES:
+            add(D, [Bx(utf8(cps)), S("UTF8"), U, S(cs)], None, extra=MM)
+            for order in ("II", "MM", "x", "Unknown"):
+                add(D, [Bx(utf8(cps)), S("UTF8"), U, S(cs), S(order)], None, extra=MM)
+    # code points past U+10FFFF and 0x7FFFFFFF, via UCS4 and UTF-8
+    for src, order in ((b"\x7f\xff\xff\xff\0\0\0A", "MM"), (b"\xff\xff\xff\xff", "MM"),
+                       (b"\0\0\x11\0\0\x10\xff\xff", "MM"), (b"\0\x01\xf6\x00", "MM")):
+        for cs in ("UTF8", "UCS2", "UTF16", "UCS4", "Latin", "JIS"):
+            add(D, [Bx(src), S("UCS4"), S(order), S(cs), S("MM")], None, extra=II)
+    for src in (b"\xff\x80\x87" + b"\xbf" * 10, b"\xff" + b"\x80" * 5 + b"\x81" + b"\x80" * 6):
+        for cs in ("UTF8", "UCS2", "UTF16", "UCS4", "Latin"):
+            add(D, [Bx(src), S("UTF8"), U, S(cs), S("MM")], None, extra=II)
+    # Every inverse entry of every destination table, encoded.
+    for cs, vals_ in sorted(scalars.items()):
+        ty = tables[cs][0]
+        if not ty & 0x001 or ty & 0x802:
+            continue
+        cps = [u for u, _ in sorted(vals_, key=lambda x: x[1])]
+        add(D, [Bx(utf8(cps)), S("UTF8"), U, S(cs), S("MM")], None, extra=II)
+
+    # A deterministic set of short random byte strings (UTF-8-shaped and
+    # not), for the UTF-8 decoder: malformations, and perl's DFA fast path
+    # walking from its reject state (a class-1 lead -- C0, C1, ED, F5-FF --
+    # followed by another lead byte).
+    import random
+    rng = random.Random(1359)
+    frags = [b"\x80", b"\x8f", b"\x9f", b"\xa0", b"\xbf", b"\xc0", b"\xc1", b"\xc2",
+             b"\xdf", b"\xe0", b"\xed", b"\xef", b"\xf0", b"\xf4", b"\xf5", b"\xf7",
+             b"\xf8", b"\xfc", b"\xfd", b"\xfe", b"\xff", b"A", b"\0", b"\xc3\xa9",
+             b"\xe2\x82\xac", b"\x80\x80\x80", b"\xf0\x9f\x98\x80", b"\xef\xbf\xbf"]
+    for _ in range(600):
+        v = b"".join(rng.choice(frags) for _ in range(rng.randint(1, 8)))
+        add(D, [Bx(v), S("UTF8"), U, S(rng.choice(["Latin", "UCS2", "UTF16"])), S("MM")],
+            None, extra=II)
+
+    # Encode: from the Charset option into each destination.
+    for opts in [None, {"Charset": S("Latin")}, {"Charset": S("UCS2")}, {"Charset": U}]:
+        for v in [U, S(""), S("abc"), S("caf\xc3\xa9"), S("caf\xe9"), S("\xe4\xb8\xad"),
+                  S("H\0i\0")]:
+            for t in [U, S("UTF8"), S("Latin"), S("UCS2"), S("UTF16"), S("Bogus"),
+                      S("MacJapanese")]:
+                for order in ([], [S("MM")], [S("II")]):
+                    add(E, [v, t] + order, opts, extra=II)
+    add(E, [S("abc"), S("UCS2")])
+
+
 def cases():
     out = []
 
-    def add(helper, args, options=None, with_session=False):
+    def add(helper, args, options=None, with_session=False, extra=None):
         c = {"helper": helper, "args": args}
         if options:
             c["options"] = options
         if with_session:
             c["with_session"] = 1
+        if extra:
+            c.update(extra)
         out.append(c)
 
     one_arg = ["Image::ExifTool::Exif::ConvertFraction",
@@ -325,7 +549,19 @@ def cases():
         for bu in [None, {"ByteUnit": S("SI")}, {"ByteUnit": S("Binary")},
                    {"ByteUnit": S("binary")}, {"ByteUnit": U}]:
             add("Image::ExifTool::ConvertFileSize", [a], bu, with_session=True)
+
+    decode_cases(add)
     return out
+
+
+# Options whose `Image::ExifTool->new` value Session::new must reproduce.
+OPTION_DEFAULTS = ["ByteUnit", "Charset", "CharsetEXIF", "CharsetFileName", "CharsetID3",
+                   "CharsetIPTC", "CharsetPhotoshop", "CharsetQuickTime", "CharsetRIFF",
+                   "CoordFormat", "DateFormat", "GlobalTimeShift", "KeepUTCTime",
+                   "StrictDate", "SystemTimeRes"]
+
+# Keys a case carries besides helper/args (copied into the capture).
+CASE_KEYS = ("options", "with_session", "byte_order", "members")
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +618,11 @@ def build(perl, et_dir):
     results = run_perl(perl, et_lib, cs)
     tr_cases = truthiness_cases()
     tr_results = run_perl(perl, et_lib, tr_cases)
+    [defaults] = run_perl(perl, et_lib, [{"option_defaults": OPTION_DEFAULTS}])
+    deps = dependency_sources(et_lib)
+    missing = [d for d, digest in deps.items() if digest is None]
+    if missing:
+        sys.exit(f"dependency subs absent from the pinned tree: {missing}")
     helpers = {}
     for h in HELPERS:
         src, digest = sources[h["perl"]]
@@ -389,9 +630,11 @@ def build(perl, et_dir):
             "module": h["module"], "status": h["status"], "spike_rank": h["rank"],
             "spike_uses": h["uses"], "note": h["note"], "sub_source": src,
             "source_sha256": digest, "cases": []}
+        if h.get("deps"):
+            helpers[h["perl"]]["dependencies"] = {d: deps[d] for d in h["deps"]}
     for c, r in zip(cs, results):
         entry = {"args": c["args"]}
-        for k in ("options", "with_session"):
+        for k in CASE_KEYS:
             if k in c:
                 entry[k] = c[k]
         entry.update(r)
@@ -406,6 +649,9 @@ def build(perl, et_dir):
                     "return value as hex bytes, `die` means the call died",
         },
         "truthiness": [dict(value=c["truthy"], **r) for c, r in zip(tr_cases, tr_results)],
+        "option_defaults": dict(zip(OPTION_DEFAULTS, defaults["out"])),
+        "charset_sources": codegen_charsets.charset_sources(et_lib),
+        "perl_sources": codegen_charsets.perl_sources(codegen_charsets.perl_core(perl, oracle_env())),
         "helpers": helpers,
     }
 
@@ -414,6 +660,11 @@ def render(capture):
     """Deterministic text: the envelope indented, each case on one line, so
     a re-capture diffs case by case and the file stays reviewable."""
     lines = ["{", '"capture": ' + json.dumps(capture["capture"], sort_keys=True) + ",",
+             '"charset_sources": ' + json.dumps(capture["charset_sources"], sort_keys=True)
+             + ",",
+             '"option_defaults": ' + json.dumps(capture["option_defaults"], sort_keys=True)
+             + ",",
+             '"perl_sources": ' + json.dumps(capture["perl_sources"], sort_keys=True) + ",",
              '"helpers": {']
     names = sorted(capture["helpers"])
     for i, name in enumerate(names):
@@ -458,8 +709,15 @@ def main():
         print(f"MISMATCH: re-running the pinned Perl does not reproduce "
               f"{CAPTURE.relative_to(REPO)}", file=sys.stderr)
         return 1
+    tables = codegen_charsets.generate(args.perl, args.exiftool_dir, oracle_env(),
+                                       capture["capture"]["exiftool_version"])
+    if codegen_charsets.OUT.read_text(encoding="utf-8") != tables:
+        print(f"MISMATCH: the pinned tree does not regenerate "
+              f"{codegen_charsets.OUT.relative_to(REPO)}", file=sys.stderr)
+        return 1
     print(f"PASS: pinned Perl reproduces {CAPTURE.relative_to(REPO)} byte for byte "
-          f"({n} helper cases, {len(capture['truthiness'])} truthiness cases)")
+          f"({n} helper cases, {len(capture['truthiness'])} truthiness cases), and the "
+          f"pinned tree regenerates {codegen_charsets.OUT.relative_to(REPO)}")
     return 0
 
 
