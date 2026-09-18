@@ -36,5 +36,5 @@ MakerNotes:LensID   → Lens identification (vendor-specific)
 
 ## See Also
 
-- [Tag Database Reference](/reference/tag-database) - Complete tag listing
-- [Architecture: Multi-Crate Tags](/architecture/multi-crate-tags) - How tags are organized across crates
+- [Tag database](/architecture/tag-database) - how the definitions are synced from ExifTool and organised into the `oxidex-tags-*` crates
+- [ExifTool parity](/guide/exiftool-parity) - what OxiDex actually extracts, which the definition lists do not measure

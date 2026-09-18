@@ -128,11 +128,21 @@ export default defineConfig({
           text: 'Architecture',
           items: [
             { text: 'Overview', link: '/architecture/' },
-            { text: 'Tag Database', link: '/architecture/tag-database' },
-            { text: 'Multi-Crate Tags', link: '/architecture/multi-crate-tags' },
-            { text: 'Parser Shared Infrastructure', link: '/architecture/parser-shared-infrastructure' },
-            { text: 'Parser Migration Guide', link: '/architecture/parser-migration-guide' },
-            { text: 'OxiDex Tags Shared', link: '/architecture/oxidex-tags-shared' }
+            { text: 'Tag database', link: '/architecture/tag-database' },
+            { text: 'oxidex-tags-shared', link: '/architecture/oxidex-tags-shared' },
+            { text: 'Parser shared infrastructure', link: '/architecture/parser-shared-infrastructure' },
+            { text: 'Parser migration guide', link: '/architecture/parser-migration-guide' }
+          ]
+        },
+        {
+          text: 'Generation',
+          items: [
+            { text: 'Transcription', link: '/TRANSCRIPTION' },
+            { text: 'Autogeneration plan', link: '/AUTOGENERATION-PLAN' },
+            { text: 'Autogeneration v2 design', link: '/AUTOGENERATION-V2-DESIGN' },
+            { text: 'Autogeneration progress', link: '/AUTOGENERATION-PROGRESS' },
+            { text: 'Upgrade rehearsal 11.78 / 12.64', link: '/reference/upgrade-rehearsal-11.78-12.64' },
+            { text: 'Tag machinery status', link: '/TAG_MACHINERY_STATUS' }
           ]
         }
       ],
