@@ -103,20 +103,31 @@ fn parse_flif_header(reader: &dyn FileReader, metadata: &mut MetadataMap) -> Res
         return Err(ExifToolError::parse_error("Invalid FLIF header"));
     }
 
-    // A character with no name is still reported, as the raw value -- that is
-    // what an ExifTool PrintConv does when a value is not in its table.
+    // A character with no name prints `Unknown (<char>)`, ExifTool's
+    // PrintConv hash-miss form. `-n` prints the stored character itself
+    // (pinned 13.59: `"File:ImageType": 3` for FLIF.flif).
+    let type_char = (image_type as char).to_string();
     let type_name = image_type_name(image_type)
         .map(str::to_string)
-        .unwrap_or_else(|| (image_type as char).to_string());
-    metadata.insert("File:ImageType".to_string(), TagValue::String(type_name));
+        .unwrap_or_else(|| format!("Unknown ({type_char})"));
+    metadata.insert_with_group1_and_value(
+        "File:ImageType",
+        TagValue::String(type_name),
+        TagValue::String(type_char),
+        "",
+    );
 
-    metadata.insert(
-        "File:BitDepth".to_string(),
+    // PrintConv { '0' => 'Custom', '1' => 8, '2' => 16 }: `-n` prints the
+    // header character (`"File:BitDepth": 1`), not the bit count.
+    metadata.insert_with_group1_and_value(
+        "File:BitDepth",
         match bit_depth_code {
             b'1' => TagValue::Integer(8),
             b'2' => TagValue::Integer(16),
             _ => TagValue::String("Custom".to_string()),
         },
+        TagValue::String((bit_depth_code as char).to_string()),
+        "",
     );
 
     // Width and height are each stored one less than their value.
@@ -173,13 +184,16 @@ fn parse_flif_metadata_chunks(
         };
         if first < 0x20 {
             // ExifTool emits tag 5 for whatever this byte is; only 0 has a
-            // PrintConv name, and anything else prints as the raw number.
-            metadata.insert(
-                "File:Encoding".to_string(),
+            // PrintConv name, and anything else is a hash miss,
+            // `Unknown (<n>)`. `-n` prints the byte (`"File:Encoding": 0`).
+            metadata.insert_with_group1_and_value(
+                "File:Encoding",
                 match first {
                     0 => TagValue::String("FLIF16".to_string()),
-                    other => TagValue::Integer(other as i64),
+                    other => TagValue::String(format!("Unknown ({other})")),
                 },
+                TagValue::Integer(i64::from(first)),
+                "",
             );
             break;
         }
@@ -359,6 +373,13 @@ mod tests {
         assert_eq!(metadata.get_integer("File:ImageWidth"), Some(16));
         assert_eq!(metadata.get_integer("File:ImageHeight"), Some(16));
         assert_eq!(metadata.get_string("File:Encoding"), Some("FLIF16"));
+
+        // Pinned 13.59 `-j -G1 -n` on FLIF.flif (same header):
+        // ImageType 3, BitDepth 1, Encoding 0.
+        let raw = metadata.without_print_conv();
+        assert_eq!(raw.get_string("File:ImageType"), Some("3"));
+        assert_eq!(raw.get_string("File:BitDepth"), Some("1"));
+        assert_eq!(raw.get_integer("File:Encoding"), Some(0));
     }
 
     #[test]

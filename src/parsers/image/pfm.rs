@@ -26,6 +26,9 @@ struct PfmHeader {
     width: u32,
     height: u32,
     scale: f64,
+    /// The scale exactly as written: ByteOrder's ValueConv form, which `-n`
+    /// prints (`-1.000000` for PFM.pfm).
+    scale_text: String,
 }
 
 /// Parses the ASCII PFM header from the start of `bytes`, mirroring
@@ -81,6 +84,7 @@ fn parse_header(bytes: &[u8]) -> Option<PfmHeader> {
         width,
         height,
         scale,
+        scale_text: scale_str.to_string(),
     })
 }
 
@@ -127,8 +131,11 @@ impl FormatParser for PFMParser {
         // MIMEType. Writing it here only produced a second, ungrouped copy of an
         // answer the tables had already given correctly.
         metadata.insert("FileType".to_string(), TagValue::String("PFM".to_string()));
-        metadata.insert(
-            "File:ColorSpace".to_string(),
+        // PrintConv { PF => 'RGB', Pf => 'Monochrome' } over the magic
+        // number; `-n` prints the magic itself (pinned 13.59:
+        // `"File:ColorSpace": "PF"` for PFM.pfm).
+        metadata.insert_with_group1_and_value(
+            "File:ColorSpace",
             TagValue::String(
                 match header.color_space {
                     "PF" => "RGB",
@@ -137,6 +144,8 @@ impl FormatParser for PFMParser {
                 }
                 .to_string(),
             ),
+            TagValue::String(header.color_space.to_string()),
+            "",
         );
         metadata.insert(
             "File:ImageWidth".to_string(),
@@ -146,8 +155,10 @@ impl FormatParser for PFMParser {
             "File:ImageHeight".to_string(),
             TagValue::Integer(header.height as i64),
         );
-        metadata.insert(
-            "File:ByteOrder".to_string(),
+        // PrintConv `$val > 0 ? "Big-endian" : "Little-endian"` over the
+        // scale; `-n` prints the scale as written.
+        metadata.insert_with_group1_and_value(
+            "File:ByteOrder",
             TagValue::String(
                 if header.scale > 0.0 {
                     "Big-endian"
@@ -156,6 +167,8 @@ impl FormatParser for PFMParser {
                 }
                 .to_string(),
             ),
+            TagValue::String(header.scale_text.clone()),
+            "",
         );
 
         Ok(metadata)
@@ -216,6 +229,11 @@ mod tests {
             meta.get("File:ByteOrder"),
             Some(&TagValue::String("Little-endian".to_string()))
         );
+        // `-n` prints the magic and the scale text: pinned 13.59 gives
+        // `"File:ColorSpace": "PF"` for PFM.pfm, and the scale verbatim.
+        let raw = meta.without_print_conv();
+        assert_eq!(raw.get_string("File:ColorSpace"), Some("Pf"));
+        assert_eq!(raw.get_string("File:ByteOrder"), Some("-1.0"));
     }
 
     #[test]

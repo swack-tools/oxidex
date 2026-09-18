@@ -821,7 +821,11 @@ impl NikonParser {
                     let start = tiff_start + entry.value_offset as usize;
                     let end = start.saturating_add(entry.value_count as usize);
                     if let Some(block) = data.get(start..end) {
-                        nikon_capture_data::parse_nikon_capture_data(block, tags);
+                        nikon_capture_data::parse_nikon_capture_data(
+                            block,
+                            tags,
+                            &mut parsed_value_forms,
+                        );
                     }
                 }
 
@@ -993,6 +997,7 @@ impl NikonParser {
                         order,
                         preview_ifd_base,
                         tags,
+                        &mut parsed_value_forms,
                     );
                 }
 

@@ -207,16 +207,19 @@ pub fn parse_app0_extended(data: &[u8], metadata: &mut MetadataMap) -> Result<()
     // APP0:InterleavedField.
     if data.len() >= 6 && &data[0..5] == b"AVI1\0" {
         let interleaved = data[5];
+        // A PrintConv hash miss prints `Unknown (<raw>)`, never a bare label.
         let interleaved_str = match interleaved {
-            0 => "Not Interleaved",
-            1 => "Odd",
-            2 => "Even",
-            _ => "Unknown",
+            0 => "Not Interleaved".to_string(),
+            1 => "Odd".to_string(),
+            2 => "Even".to_string(),
+            other => format!("Unknown ({other})"),
         };
         // `%JPEG::AVI1` is `GROUPS => { 0 => 'APP0', 1 => 'AVI1' }` (JPEG.pm:675).
-        metadata.insert_with_group1(
+        // The label is the PrintConv of the stored byte, which `-n` prints.
+        metadata.insert_with_group1_and_value(
             "APP0:InterleavedField",
-            TagValue::String(interleaved_str.to_string()),
+            TagValue::String(interleaved_str),
+            TagValue::Integer(i64::from(interleaved)),
             "AVI1",
         );
         return Ok(());
@@ -730,6 +733,31 @@ pub fn parse_casio_qvci_segment(data: &[u8], metadata: &mut MetadataMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ExifTool.jpg's APP0 `AVI1` record: pinned 13.59 prints
+    /// `"AVI1:InterleavedField": "Not Interleaved"`, and with `-n` the stored
+    /// byte `0`. An unlisted byte prints `Unknown (<raw>)` (PrintConv hash
+    /// miss), never a bare `Unknown`.
+    #[test]
+    fn avi1_interleaved_field_keeps_its_stored_byte_for_no_print_conv() {
+        let mut metadata = MetadataMap::new();
+        parse_app0_extended(b"AVI1\0\0", &mut metadata).unwrap();
+        assert_eq!(
+            metadata.get_string("APP0:InterleavedField"),
+            Some("Not Interleaved")
+        );
+        assert_eq!(
+            metadata.without_print_conv().get("APP0:InterleavedField"),
+            Some(&TagValue::Integer(0))
+        );
+
+        let mut metadata = MetadataMap::new();
+        parse_app0_extended(b"AVI1\0\x07", &mut metadata).unwrap();
+        assert_eq!(
+            metadata.get_string("APP0:InterleavedField"),
+            Some("Unknown (7)")
+        );
+    }
 
     #[test]
     fn test_parse_comment_segment() {

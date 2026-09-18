@@ -1584,10 +1584,16 @@ pub fn process_ricoh_rmeta_segments(segments: &[Segment], metadata: &mut Metadat
             } else {
                 None
             };
-            if let Some((key, value)) = mapped {
+            if let Some((key, printed)) = mapped {
                 // `%Ricoh::RMETA` is `GROUPS => { 0 => 'APP5', 1 => 'RMETA' }`
-                // (Ricoh.pm:831).
-                metadata.insert_with_group1(key, TagValue::new_string(value), "RMETA");
+                // (Ricoh.pm:831). The label is the PrintConv of the stored
+                // int16u, which is what `-n` prints (`Azimuth` 5, not `E`).
+                metadata.insert_with_group1_and_value(
+                    key,
+                    TagValue::new_string(printed),
+                    TagValue::Integer(i64::from(value)),
+                    "RMETA",
+                );
             }
         }
     }
@@ -2376,6 +2382,12 @@ mod tests {
         process_ricoh_rmeta_segments(&[segment], &mut metadata);
 
         assert_eq!(metadata.get_string("APP5:Azimuth"), Some("E"));
+        // `-n` is the stored int16u, not the label: pinned 13.59 prints
+        // `"RMETA:Azimuth": 5` for Ricoh2.jpg and ExifTool.jpg.
+        assert_eq!(
+            metadata.without_print_conv().get("APP5:Azimuth"),
+            Some(&TagValue::Integer(5))
+        );
     }
 
     #[test]
@@ -2426,6 +2438,18 @@ mod tests {
         assert_eq!(metadata.get_string("APP5:Lit"), Some("No"));
         assert_eq!(metadata.get_string("APP5:Location"), Some("Roundabout"));
         assert_eq!(metadata.get_string("APP5:SignType"), Some("Information"));
+        // Pinned 13.59 `-j -G1 -n`: Condition 1, Lit 2, Location 4,
+        // SignType 3, Azimuth 5.
+        let raw = metadata.without_print_conv();
+        for (key, expected) in [
+            ("APP5:Condition", 1),
+            ("APP5:Lit", 2),
+            ("APP5:Location", 4),
+            ("APP5:SignType", 3),
+            ("APP5:Azimuth", 5),
+        ] {
+            assert_eq!(raw.get(key), Some(&TagValue::Integer(expected)), "{key}");
+        }
     }
 
     /// `IPTC:ReferenceNumber` (record 2, dataset 50) is IPTC.pm's

@@ -549,14 +549,45 @@ fn render_sub(bytes: &[u8], format: SubFormat) -> Option<String> {
     })
 }
 
-fn parse_sub_table(data: &[u8], table: &SubTable, tags: &mut HashMap<String, String>) {
+/// The value `-n` prints for a sub-table field whose [`render_sub`] output is
+/// a PrintConv: the stored code for an enum, and the unrounded double for
+/// ExposureAdj2's `sprintf("%.4f")`. `None` where the rendering already is
+/// the ValueConv form.
+fn sub_value_form(bytes: &[u8], format: SubFormat) -> Option<String> {
+    match format {
+        SubFormat::U8Enum(_) => Some(bytes.first()?.to_string()),
+        SubFormat::U16Enum(_) => {
+            Some(u16::from_le_bytes([*bytes.first()?, *bytes.get(1)?]).to_string())
+        }
+        SubFormat::Double4dp => Some(perl_number(f64::from_le_bytes(
+            bytes.get(..8)?.try_into().ok()?,
+        ))),
+        _ => None,
+    }
+}
+
+fn parse_sub_table(
+    data: &[u8],
+    table: &SubTable,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) {
     for f in table.fields {
         let at = f.key * table.stride;
         if at >= data.len() {
             continue;
         }
         if let Some(v) = render_sub(&data[at..], f.format) {
-            tags.insert(format!("Nikon:{}", f.name), v);
+            let key = format!("Nikon:{}", f.name);
+            match sub_value_form(&data[at..], f.format).filter(|_| owns_value_form(f.name)) {
+                Some(raw) => {
+                    value_forms.insert(key.clone(), raw);
+                }
+                None => {
+                    value_forms.remove(&key);
+                }
+            }
+            tags.insert(key, v);
         }
     }
 }
@@ -597,6 +628,25 @@ fn render(value: &[u8], format: Format) -> Option<String> {
     })
 }
 
+/// Whether a `Nikon:<name>` value form can only belong to this module's tag.
+///
+/// Value forms attach to whichever occurrence wins the `Nikon:<name>` key, so
+/// a name another Nikon table also writes (`NoiseReduction`,
+/// `VignetteControl`, `Rotation`) could hand this module's stored code to
+/// that table's value. Those keep their printed value under `-n` instead.
+fn owns_value_form(name: &str) -> bool {
+    !NAMES_SHARED_WITH_OTHER_NIKON_TABLES.contains(&name)
+}
+
+/// The value `-n` prints for a main-table scalar whose [`render`] output is a
+/// PrintConv (the Off/On and No/Yes tables): the stored byte.
+fn value_form(value: &[u8], format: Format) -> Option<String> {
+    match format {
+        Format::Int8uOffOn | Format::Int8uNoYes => Some(value.first()?.to_string()),
+        Format::Int16u | Format::Int16s | Format::Double => None,
+    }
+}
+
 /// Walks the NikonCaptureData record stream, inserting every recognised tag.
 ///
 /// Mirrors ExifTool's loop: start 22 bytes in, read the id at the record
@@ -604,7 +654,16 @@ fn render(value: &[u8], format: Format) -> Option<String> {
 /// then step over header and value together. A record claiming more bytes
 /// than remain ends the walk rather than erroring, matching ExifTool's
 /// `last if ... $pos + $size > $dirEnd`.
-pub fn parse_nikon_capture_data(data: &[u8], tags: &mut HashMap<String, String>) {
+///
+/// `value_forms` receives, under the same `Nikon:<name>` key, the value
+/// `--no-print-conv` shows for every tag whose rendered value is a PrintConv
+/// (pinned 13.59 `-n` prints `"NikonCapture:UnsharpMask": 0` where the
+/// default output prints `Off`).
+pub fn parse_nikon_capture_data(
+    data: &[u8],
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) {
     let mut pos = RECORD_HEADER;
     while pos + RECORD_HEADER < data.len() {
         let id = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
@@ -624,11 +683,21 @@ pub fn parse_nikon_capture_data(data: &[u8], tags: &mut HashMap<String, String>)
         }
 
         if let Some((_, name, format)) = MAIN_TAGS.iter().find(|(tid, _, _)| *tid == id) {
-            if let Some(rendered) = render(&data[pos..pos + size], *format) {
-                tags.insert(format!("Nikon:{}", name), rendered);
+            let value = &data[pos..pos + size];
+            if let Some(rendered) = render(value, *format) {
+                let key = format!("Nikon:{}", name);
+                match value_form(value, *format).filter(|_| owns_value_form(name)) {
+                    Some(raw) => {
+                        value_forms.insert(key.clone(), raw);
+                    }
+                    None => {
+                        value_forms.remove(&key);
+                    }
+                }
+                tags.insert(key, rendered);
             }
         } else if let Some((_, _, table)) = SUBDIRS.iter().find(|(tid, _, _)| *tid == id) {
-            parse_sub_table(&data[pos..pos + size], table, tags);
+            parse_sub_table(&data[pos..pos + size], table, tags, value_forms);
         }
 
         pos += size;
@@ -694,7 +763,7 @@ mod tests {
             (0xac6b_d5c0, &[0xf6, 0xff]), // VignetteControlIntensity = -10
         ]);
         let mut tags = HashMap::new();
-        parse_nikon_capture_data(&data, &mut tags);
+        parse_nikon_capture_data(&data, &mut tags, &mut HashMap::new());
 
         assert_eq!(
             tags.get("Nikon:AdvancedRaw").map(String::as_str),
@@ -711,6 +780,61 @@ mod tests {
                 .map(String::as_str),
             Some("-10")
         );
+    }
+
+    /// `-n` prints the stored code of every PrintConv'd field. Pinned 13.59
+    /// `-j -G1 -n` on Nikon.nef: UnsharpMask 0, AdvancedRaw 1,
+    /// FlipHorizontal 0, WBAdjLighting 1027, WBAdjMode 3,
+    /// NoiseReductionMethod 0, ColorBoostType 1, ExposureAdj2 0.3.
+    #[test]
+    fn print_converted_fields_carry_their_stored_code() {
+        let mut wb = vec![0u8; 26];
+        wb[16] = 3; // WBAdjMode = Use Temperature
+        wb[20..22].copy_from_slice(&1027u16.to_le_bytes()); // WBAdjLighting
+        let mut exposure = vec![0u8; 26];
+        exposure[18..26].copy_from_slice(&0.3f64.to_le_bytes()); // ExposureAdj2
+        let mut noise = vec![0u8; 19];
+        noise[17..19].copy_from_slice(&0u16.to_le_bytes()); // NoiseReductionMethod
+        let data = stream(&[
+            (0x76a4_3200, &[0]), // UnsharpMask = Off
+            (0x76a4_3203, &[1]), // AdvancedRaw = On
+            (0x76a4_3206, &[0]), // FlipHorizontal = No
+            (0x753d_cbc0, &[0]), // NoiseReduction: shared name, no form
+            (0xbf3c_6c20, &wb),
+            (0x56a5_4260, &exposure),
+            (0x926f_13e0, &noise),
+            (0xb999_a36f, &[1, 0, 0, 0, 0]), // ColorBoostType = People
+        ]);
+        let mut tags = HashMap::new();
+        let mut forms = HashMap::new();
+        parse_nikon_capture_data(&data, &mut tags, &mut forms);
+
+        let form = |key: &str| forms.get(key).map(String::as_str);
+        assert_eq!(
+            tags.get("Nikon:UnsharpMask").map(String::as_str),
+            Some("Off")
+        );
+        assert_eq!(form("Nikon:UnsharpMask"), Some("0"));
+        assert_eq!(form("Nikon:AdvancedRaw"), Some("1"));
+        assert_eq!(form("Nikon:FlipHorizontal"), Some("0"));
+        assert_eq!(
+            tags.get("Nikon:WBAdjLighting").map(String::as_str),
+            Some("High Color Rendering Fluorescent (5000K)")
+        );
+        assert_eq!(form("Nikon:WBAdjLighting"), Some("1027"));
+        assert_eq!(form("Nikon:WBAdjMode"), Some("3"));
+        assert_eq!(
+            tags.get("Nikon:ExposureAdj2").map(String::as_str),
+            Some("0.3000")
+        );
+        assert_eq!(form("Nikon:ExposureAdj2"), Some("0.3"));
+        assert_eq!(form("Nikon:NoiseReductionMethod"), Some("0"));
+        assert_eq!(form("Nikon:ColorBoostType"), Some("1"));
+        // Plain numbers print the same under `-n`: no form.
+        assert_eq!(form("Nikon:WBAdjTemperature"), None);
+        // A name another Nikon table also writes never gets a form: it would
+        // attach to whichever table's value wins the shared key.
+        assert_eq!(form("Nikon:NoiseReduction"), None);
     }
 
     /// NikonCapture-only names take the `NikonCapture` family-1 group; names
@@ -734,13 +858,13 @@ mod tests {
     fn ids_are_full_width() {
         let data = stream(&[(0x008a_e85e, &[1])]);
         let mut tags = HashMap::new();
-        parse_nikon_capture_data(&data, &mut tags);
+        parse_nikon_capture_data(&data, &mut tags, &mut HashMap::new());
         assert_eq!(tags.get("Nikon:LCHEditor").map(String::as_str), Some("On"));
 
         // The low 16 bits alone must NOT be accepted as the same tag.
         let truncated = stream(&[(0x0000_e85e, &[1])]);
         let mut other = HashMap::new();
-        parse_nikon_capture_data(&truncated, &mut other);
+        parse_nikon_capture_data(&truncated, &mut other, &mut HashMap::new());
         assert!(other.is_empty());
     }
 
@@ -755,7 +879,7 @@ mod tests {
         data.extend_from_slice(&hdr);
 
         let mut tags = HashMap::new();
-        parse_nikon_capture_data(&data, &mut tags);
+        parse_nikon_capture_data(&data, &mut tags, &mut HashMap::new());
         assert_eq!(
             tags.get("Nikon:AdvancedRaw").map(String::as_str),
             Some("On")

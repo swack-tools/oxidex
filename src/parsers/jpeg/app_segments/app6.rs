@@ -772,8 +772,13 @@ fn parse_nitf(data: &[u8]) -> MetadataMap {
     // (JPEG.pm:708); the `APP6:` key prefix is family 0.
     const NITF_GROUP1: &str = "NITF";
     let mut metadata = MetadataMap::new();
-    let mut put = |name: &str, value: TagValue| {
-        metadata.insert_with_group1(format!("APP6:{}", name), value, NITF_GROUP1);
+    // `raw` is what `-n` prints when `value` is a PrintConv's output.
+    let mut put = |name: &str, value: TagValue, raw: Option<TagValue>| {
+        let key = format!("APP6:{}", name);
+        match raw {
+            Some(raw) => metadata.insert_with_group1_and_value(key, value, raw, NITF_GROUP1),
+            None => metadata.insert_with_group1(key, value, NITF_GROUP1),
+        };
     };
     // PrintConv hash misses report the raw code, never a neighbouring label.
     let lookup = |code: i64, table: &[(i64, &str)]| -> TagValue {
@@ -792,6 +797,7 @@ fn parse_nitf(data: &[u8]) -> MetadataMap {
         put(
             "NITFVersion",
             TagValue::String(format!("{}.{:02}", pair[0], pair[1])),
+            None,
         );
     }
     // 2: ImageFormat, ValueConv chr($val & 0xff), PrintConv { B => 'IMode B' }
@@ -804,19 +810,24 @@ fn parse_nitf(data: &[u8]) -> MetadataMap {
             } else {
                 TagValue::String(format!("Unknown ({})", letter))
             },
+            Some(TagValue::String(letter.to_string())),
         );
     }
     if let Some(v) = be_u16(3) {
-        put("BlocksPerRow", TagValue::Integer(v as i64));
+        put("BlocksPerRow", TagValue::Integer(v as i64), None);
     }
     if let Some(v) = be_u16(5) {
-        put("BlocksPerColumn", TagValue::Integer(v as i64));
+        put("BlocksPerColumn", TagValue::Integer(v as i64), None);
     }
     if let Some(&code) = data.get(7) {
-        put("ImageColor", lookup(code as i64, &[(0, "Monochrome")]));
+        put(
+            "ImageColor",
+            lookup(code as i64, &[(0, "Monochrome")]),
+            Some(TagValue::Integer(code as i64)),
+        );
     }
     if let Some(&v) = data.get(8) {
-        put("BitDepth", TagValue::Integer(v as i64));
+        put("BitDepth", TagValue::Integer(v as i64), None);
     }
     if let Some(&code) = data.get(9) {
         put(
@@ -825,6 +836,7 @@ fn parse_nitf(data: &[u8]) -> MetadataMap {
                 code as i64,
                 &[(0, "General Purpose"), (4, "Tactical Imagery")],
             ),
+            Some(TagValue::Integer(code as i64)),
         );
     }
     if let Some(&code) = data.get(10) {
@@ -837,21 +849,30 @@ fn parse_nitf(data: &[u8]) -> MetadataMap {
                     (4, "Extended sequential DCT, Huffman coding, 12-bit samples"),
                 ],
             ),
+            Some(TagValue::Integer(code as i64)),
         );
     }
     if let Some(&v) = data.get(11) {
-        put("Quality", TagValue::Integer(v as i64));
+        put("Quality", TagValue::Integer(v as i64), None);
     }
     if let Some(&code) = data.get(12) {
-        put("StreamColor", lookup(code as i64, &[(0, "Monochrome")]));
+        put(
+            "StreamColor",
+            lookup(code as i64, &[(0, "Monochrome")]),
+            Some(TagValue::Integer(code as i64)),
+        );
     }
     if let Some(&v) = data.get(13) {
-        put("StreamBitDepth", TagValue::Integer(v as i64));
+        put("StreamBitDepth", TagValue::Integer(v as i64), None);
     }
     // 14: Flags, int32u, PrintConv sprintf("0x%x", $val)
     if let Some(bytes) = data.get(14..18) {
         let flags = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        put("Flags", TagValue::String(format!("0x{:x}", flags)));
+        put(
+            "Flags",
+            TagValue::String(format!("0x{:x}", flags)),
+            Some(TagValue::Integer(i64::from(flags))),
+        );
     }
 
     metadata
@@ -1067,6 +1088,24 @@ mod tests {
         assert_eq!(m.len(), 12);
         // The raw-blob placeholder this table replaced must be gone
         assert!(m.get("APP6:NITFData").is_none());
+
+        // `-n`: pinned 13.59 `-j -G1 -n` on ExifTool.jpg prints the
+        // ValueConv form of every PrintConv'd field -- ImageFormat "B",
+        // ImageColor 0, ImageClass 0, JPEGProcess 1, StreamColor 0,
+        // Flags 16842752.
+        let raw = m.without_print_conv();
+        assert_eq!(raw.get_string("APP6:ImageFormat"), Some("B"));
+        for (key, expected) in [
+            ("APP6:ImageColor", 0),
+            ("APP6:ImageClass", 0),
+            ("APP6:JPEGProcess", 1),
+            ("APP6:StreamColor", 0),
+            ("APP6:Flags", 16842752),
+            ("APP6:BitDepth", 8),
+        ] {
+            assert_eq!(raw.get_integer(key), Some(expected), "{key}");
+        }
+        assert_eq!(raw.get_string("APP6:NITFVersion"), Some("2.00"));
     }
 
     #[test]
