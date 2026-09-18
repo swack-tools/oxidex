@@ -90,6 +90,19 @@ class Selection(unittest.TestCase):
         self.assertEqual(self.detect("mixed", source("12.64", SUBS[0]), source("13.59", SUBS[1])),
                          {SUBS[0]: "center_one_plus_half", SUBS[1]: "center_half"})
 
+    def test_the_version_label_plays_no_part(self):
+        # A tree claiming to be 13.59 but carrying 12.64's bodies selects
+        # 12.64's port, and the reverse: only the source decides.
+        for label, release, port in (("13.59", "12.64", "center_one_plus_half"),
+                                     ("12.64", "13.59", "center_half"),
+                                     ("11.78", "13.59", "center_half")):
+            root = write_nikon(self.tmp / f"as{label}-{release}",
+                               source(release, SUBS[0]), source(release, SUBS[1]))
+            (Path(root) / "Image" / "ExifTool.pm").write_text(
+                f"package Image::ExifTool;\n$VERSION = '{label}';\n1;\n", encoding="latin-1")
+            self.assertEqual({s: exprs.detect_helper_semantics(root, s)[0] for s in SUBS},
+                             dict.fromkeys(SUBS, port), (label, release))
+
     def test_comment_and_indentation_edits_are_not_semantic(self):
         text = source("12.64", SUBS[0]).replace("    ", "\t").replace(
             "#out of focus", "# column zero: out of focus")
