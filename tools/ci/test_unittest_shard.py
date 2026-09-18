@@ -74,7 +74,6 @@ class WorkflowWiringTests(unittest.TestCase):
 
     CI_YAML = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
     SUITE = pathlib.Path(__file__).resolve().parents[1] / "exiftool-tables"
-    JOB_TOTAL = "${{ strategy.job-total }}"
 
     def job(self):
         text = self.CI_YAML.read_text()
@@ -107,8 +106,15 @@ class WorkflowWiringTests(unittest.TestCase):
             r"--of\s+\d",
             "a literal --of reintroduces the drift this job was rewired to remove",
         )
-        self.assertIn(self.JOB_TOTAL, re.search(r"name:[^\n]*", body).group(0),
-                      "the display name should report strategy.job-total too")
+        # Tolerant of spacing inside `${{ }}`, like the SHARD_TOTAL check
+        # above: a reformat should not fail this, only a real second literal.
+        # Anchored on the job's own `name:` (the first in the body), not a
+        # step's `- name:`.
+        self.assertRegex(
+            body.split("\n", 1)[0] if body.startswith("    name:")
+            else re.search(r"^    name:[^\n]*", body, re.M).group(0),
+            r"tools \$\{\{\s*matrix\.shard\s*\}\}/\$\{\{\s*strategy\.job-total\s*\}\}",
+            "the display name should report strategy.job-total too, not a literal")
 
     def test_the_matrix_enumerates_every_index_from_one(self):
         matrix = self.matrix()
