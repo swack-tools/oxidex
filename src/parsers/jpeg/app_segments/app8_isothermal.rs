@@ -18,10 +18,14 @@ use crate::core::MetadataMap;
 // Spelled as a literal rather than aliased to the generated constant because
 // cbindgen exports this one to `api/oxidex.h`, and the doc comment goes with
 // it -- editing either churns the header. The assertion below is what keeps
-// the literal equal to the generated value.
+// the literal equal to the generated value. A release without InfiRay.pm
+// generates `usize::MAX` for every gate (no record is ever read, and the
+// empty `ISOTHERMAL` table yields no tags), so the literal has nothing to match.
 /// Minimum APP8 payload length before ExifTool reads an isothermal record.
 pub const INFIRAY_ISOTHERMAL_MIN_LENGTH: usize = 32;
-const _: () = assert!(INFIRAY_ISOTHERMAL_MIN_LENGTH == ISOTHERMAL_MIN_LENGTH);
+const _: () = assert!(
+    ISOTHERMAL_MIN_LENGTH == usize::MAX || INFIRAY_ISOTHERMAL_MIN_LENGTH == ISOTHERMAL_MIN_LENGTH
+);
 
 /// Parses an InfiRay APP8 isothermal record.
 ///
