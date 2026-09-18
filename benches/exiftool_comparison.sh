@@ -191,10 +191,10 @@ benchmark_corpus() {
 # Ratios are ExifTool/oxidex on medians and on minima (the minimum is the
 # least load-sensitive statistic on a host that is never idle).
 table() { # json
-    jq -r '
+    jq -r --arg tmp "$TEMP_DIR/" --arg root "$PROJECT_ROOT/" '
       def ms: . * 1000 | . * 10 | round / 10;
       "| Command | Median | Min | Mean ± σ | Max | Runs |", "|:---|---:|---:|---:|---:|---:|",
-      (.results[] | "| `" + (.command | gsub("/tmp/oxidex-perl538-build-[^ ]+/perl5.38.2 -I[^ ]+ [^ ]+/exiftool"; "exiftool") | gsub("[^ ]+/target/release/oxidex"; "oxidex") | gsub("/tmp/oxidex-exiftool-cache/exiftool/t/images/"; "") | if (split(" ") | length) > 8 then (split(" ")[0:4] | join(" ")) + " <" + ((split(" ") | length) - 4 | tostring) + " files>" else . end) + "` | " + (.median | ms | tostring) + " ms | " + (.min | ms | tostring) + " ms | " + (.mean | ms | tostring) + " ± " + (.stddev | ms | tostring) + " | " + (.max | ms | tostring) + " ms | " + (.times | length | tostring) + " |")' "$1"
+      (.results[] | "| `" + (.command | gsub("/tmp/oxidex-perl538-build-[^ ]+/perl5.38.2 -I[^ ]+ [^ ]+/exiftool"; "exiftool") | gsub("[^ ]+/target/release/oxidex"; "oxidex") | gsub("/tmp/oxidex-exiftool-cache/exiftool/t/images/"; "") | gsub($tmp; "") | gsub($root; "") | if (split(" ") | length) > 8 then (split(" ")[0:4] | join(" ")) + " <" + ((split(" ") | length) - 4 | tostring) + " files>" else . end) + "` | " + (.median | ms | tostring) + " ms | " + (.min | ms | tostring) + " ms | " + (.mean | ms | tostring) + " ± " + (.stddev | ms | tostring) + " | " + (.max | ms | tostring) + " ms | " + (.times | length | tostring) + " |")' "$1"
 }
 speedup() { # json -> ratios on median and on min
     jq -r '"**ExifTool / oxidex**: " + (.results[0].median / .results[1].median * 100 | round / 100 | tostring) + "x on medians, " + (.results[0].min / .results[1].min * 100 | round / 100 | tostring) + "x on minima (σ/mean: exiftool " + (.results[0].stddev / .results[0].mean * 100 | round | tostring) + " %, oxidex " + (.results[1].stddev / .results[1].mean * 100 | round | tostring) + " %)"' "$1"
@@ -225,7 +225,7 @@ $( [ -n "$OXIDEX_STALENESS" ] && echo "- **Staleness note**: $OXIDEX_STALENESS" 
 - **Machine**: $MACHINE; $(sw_vers -productName 2>/dev/null || uname -s) $(sw_vers -productVersion 2>/dev/null || uname -r)
 - **Load (1/5/15 min)**: $LOADAVG at preflight; load1 at each scenario start: 1a $LOAD_1a, 1b $LOAD_1b, 2 $LOAD_2, 3 $LOAD_3, 4 $LOAD_4, 5 $LOAD_5 / $LOAD_5b; $LOAD_END at the end. This host is never idle (top CPU at preflight: $TOP_CPU); the full \`uptime\` and top-5 CPU lines before and after every scenario are in \`benches/benchmark_results.log\`. Both commands of a scenario run in one hyperfine invocation so they see the same background; ratios are given on medians and on minima.$( [ -n "${OXIDEX_MAX_LOAD:-}" ] && echo " Load gate: $OXIDEX_MAX_LOAD${OXIDEX_ALLOW_LOAD:+ (overridden)}")
 - **Date**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-- **hyperfine**: $(hyperfine --version), \`--warmup 3 --min-runs 10 -N\`
+- **hyperfine**: $(hyperfine --version), \`--warmup ${HYPERFINE_WARMUP:-5} --runs ${HYPERFINE_RUNS:-30} -N\`, both commands per invocation
 
 ## Benchmark Results
 
