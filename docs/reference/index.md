@@ -1,55 +1,39 @@
-# Reference Documentation
+# Reference
 
-Technical reference for the library, the CLI's FFI, the tag database and the
-measured state of ExifTool parity. Where a page carries numbers, it names the
-instrument and commit they came from; a page without both is a record, not a
-claim about the current tip.
+Technical reference for OxiDex v2.0.0-beta.1 (the `refactor/tag-machinery`
+line). Where a page carries numbers, it names the instrument and commit that
+produced them. A page without both is a record, not a claim about the
+current tip.
 
-## Where the work stands
+## Using OxiDex
 
-- [Autogeneration plan](/AUTOGENERATION-PLAN) - the goal, the measured state and the ordered next steps
-- [Autogeneration v2 design](/AUTOGENERATION-V2-DESIGN) - the mechanism: generated conversions over a session, a real grammar, a helper library, per-field mixed mode
-- [Autogeneration progress](/AUTOGENERATION-PROGRESS) - the working scoreboard, newest checkpoint first
-- [Tag machinery status](/TAG_MACHINERY_STATUS) - dated integration status and evidence limits
-- [Transcription](/TRANSCRIPTION) - the method, with its historical experiments
+- [Supported formats](/reference/formats/): what is parsed, what is parsed generically, what is only identified, and what can be written
+- [Rust API](/reference/api-reference): the public read and write API, with signatures
+- [C API](/reference/ffi-api): the 15 `exiftool_*` functions, the error codes and the headers
+- [MakerNotes](/reference/makernotes): how vendor blocks are dispatched
+- [Camera RAW](/reference/formats/camera-raw) and [executables](/reference/formats/pe-executable)
+- [Packaging](/reference/packaging/): building .deb, .rpm and other packages
 
-## Contents
+## Parity reports
 
-### [Architecture](/reference/architecture)
-OxiDex's internal design: the hexagonal layering, parser dispatch and core abstractions.
+These are generated. Never hand-edit them; the named tool refreshes each one.
 
-### [API Reference](/reference/api-reference)
-The Rust library API with examples. The longer [Rust API document](/reference/api/) covers the same surface in more detail.
+- [ExifTool comparison](/reference/comparison/): per-format tables against the pinned ExifTool, generated when the site is deployed
+- [ExifTool coverage](/reference/tag-coverage-analysis): `scripts/generate_tag_coverage.py`; tag definitions counted separately from measured extraction
+- [JPEG tag support](/reference/jpeg-tag-support) and [JPEG tag matrix](/reference/jpeg-tag-matrix): the `jpeg-tag-matrix` binary
+- [Corpus read observations](/reference/catalog-corpus-observed) and [verified read and write observations](/reference/catalog-hydrated-observed): `catalog_observed_snapshot.py --report`, the receipts behind the proven-read and proven-write counts
+- [Source catalog baseline](/reference/catalog-baseline): `catalog_snapshot.py --report`
+- [Catalog to source ledger](/reference/catalog-hydrated-join): `join_catalog_hydrated.py`, which the parity ratchet reads
+- [Hydrated reader source](/reference/hydrated-reader-layout-baseline) (hand-written companion): what the hydrated-layout capture makes available to source selectors
 
-### [FFI API](/reference/ffi-api)
-The C-compatible interface for other languages (Python, Node.js, Go).
+## Direction and status
 
-### [Tag Database](/reference/tag-database)
-How tag definitions are synced from ExifTool and organised into the `oxidex-tags-*` crates.
-
-### [MakerNotes](/reference/makernotes)
-Manufacturer-specific metadata support.
-
-### [ExifTool Coverage](/reference/tag-coverage-analysis)
-The generated, CI-refreshed conformance report: definitions counted separately from measured extraction.
-
-### [ExifTool Compatibility](/reference/comparison/)
-Per-format comparison against the pinned ExifTool, regenerated at deploy time, with the generated [JPEG Tag Support](/reference/jpeg-tag-support) and [JPEG Tag Matrix](/reference/jpeg-tag-matrix) reports.
-
-### Source catalog and observations
-Generated reports (never hand-edited; the named tool refreshes each):
-- [Source Catalog Baseline](/reference/catalog-baseline) - `catalog_snapshot.py --report`
-- [Catalog to Source Ledger](/reference/catalog-hydrated-join) - `join_catalog_hydrated.py`; the parity ratchet reads it
-- [Verified Read and Write Observations](/reference/catalog-hydrated-observed) and [Corpus Read Observations](/reference/catalog-corpus-observed) - `catalog_observed_snapshot.py --report`
-
-Hand-written companion:
-- [Hydrated Reader Source](/reference/hydrated-reader-layout-baseline) - what the hydrated-layout capture makes available to source selectors
-
-### [Supported Formats](/reference/formats/)
-Format families with implementation notes.
-
-### [Packaging](/reference/packaging/)
-Building and distributing OxiDex.
+- [Status](/status/): the current measured state in one place
+- [Autogeneration plan](/AUTOGENERATION-PLAN): the goal, the measured state and the ordered next steps
+- [Autogeneration v2 design](/AUTOGENERATION-V2-DESIGN): the mechanism, which generates conversions over a session with per-field mixed mode
+- [Autogeneration progress](/AUTOGENERATION-PROGRESS): the working scoreboard
+- [Upgrade rehearsal 11.78 / 12.64](/reference/upgrade-rehearsal-11.78-12.64): the first end-to-end regeneration against older ExifTool releases
+- [Tag machinery status](/TAG_MACHINERY_STATUS) and [Transcription](/TRANSCRIPTION): dated status and the method
 
 ## Records and checkpoints
 
@@ -88,8 +72,3 @@ names and is kept as evidence; none is a statement about the current tip.
 - [Step 33 format backlog](/reference/step-33-format-backlog)
 - Bump exercises: [13.55 to 13.59](/reference/bump-reports/13.55-to-13.59), [13.58 to 13.59](/reference/bump-reports/13.58-to-13.59)
 
-## Quick Links
-
-- **Getting Started**: the [Guide section](/guide/) for installation and usage
-- **Performance**: the [performance page](/performance/), including the status of the published benchmarks
-- **Contributing**: the [Contributing guide](/contributing/)

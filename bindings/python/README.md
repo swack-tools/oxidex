@@ -310,6 +310,6 @@ This Python binding follows the same license as the OxiDex project.
 
 ## See Also
 
-- [OxiDex C FFI Documentation](../../docs/reference/api/ffi_api.md)
+- [OxiDex C FFI Documentation](../../docs/reference/ffi-api.md)
 - [C Header File](../../include/oxidex.h)
 - [Rust FFI Implementation](../../src/ffi/mod.rs)

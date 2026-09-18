@@ -85,7 +85,7 @@ RULES = [
          r"(?P<pre>\| Total Tags \| )(?P<val>[\d,]+)(?P<post> \(tag definitions)",
          "definitions"),
     Rule("docs/reference/formats/index.md",
-         r"(?P<pre>\*\*Total Tags:\*\* )(?P<val>[\d,]+)(?P<post> tag definitions)",
+         r"(?P<pre>The tag database holds )(?P<val>[\d,]+)(?P<post> tag definitions)",
          "definitions"),
     Rule("docs/architecture/index.md",
          r"(?P<pre>The six `oxidex-tags-\*` crates hold )(?P<val>[\d,]+)(?P<post> tag definitions)",

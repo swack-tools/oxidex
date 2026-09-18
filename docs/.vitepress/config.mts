@@ -102,49 +102,45 @@ export default defineConfig({
           text: 'Reference',
           items: [
             { text: 'Overview', link: '/reference/' },
-            { text: 'Architecture', link: '/reference/architecture' },
-            { text: 'API Reference', link: '/reference/api-reference' },
-            { text: 'FFI API', link: '/reference/ffi-api' },
-            { text: 'Tag Database', link: '/reference/tag-database' },
+            { text: 'Supported formats', link: '/reference/formats/' },
+            { text: 'Rust API', link: '/reference/api-reference' },
+            { text: 'C API', link: '/reference/ffi-api' },
             { text: 'MakerNotes', link: '/reference/makernotes' },
-            { text: 'ExifTool Coverage', link: '/reference/tag-coverage-analysis' },
-            { text: 'Source Catalog Baseline', link: '/reference/catalog-baseline' },
-            { text: 'Hydrated Reader Source', link: '/reference/hydrated-reader-layout-baseline' },
-            { text: 'Catalog to Source Ledger', link: '/reference/catalog-hydrated-join' },
-            { text: 'Verified Read and Write Observations', link: '/reference/catalog-hydrated-observed' },
-            { text: 'Corpus Read Observations', link: '/reference/catalog-corpus-observed' },
-            { text: 'Metadata Parity Resume Guide', link: '/reference/metadata-parity-resume' },
-            { text: 'BinaryData Engine', link: '/reference/binary-data-engine' }
+            { text: 'Camera RAW', link: '/reference/formats/camera-raw' },
+            { text: 'Executables', link: '/reference/formats/pe-executable' },
+            { text: 'Packaging', link: '/reference/packaging/' }
           ]
         },
         {
-          text: 'Compatibility',
+          text: 'Parity reports (generated)',
+          collapsed: false,
+          items: [
+            { text: 'ExifTool comparison', link: '/reference/comparison/' },
+            { text: 'ExifTool coverage', link: '/reference/tag-coverage-analysis' },
+            { text: 'Corpus read observations', link: '/reference/catalog-corpus-observed' },
+            { text: 'Read and write observations', link: '/reference/catalog-hydrated-observed' },
+            { text: 'JPEG tag support', link: '/reference/jpeg-tag-support' },
+            { text: 'JPEG tag matrix', link: '/reference/jpeg-tag-matrix' },
+            { text: 'Source catalog baseline', link: '/reference/catalog-baseline' },
+            { text: 'Catalog to source ledger', link: '/reference/catalog-hydrated-join' },
+            { text: 'Hydrated reader source', link: '/reference/hydrated-reader-layout-baseline' }
+          ]
+        },
+        {
+          text: 'Per-format comparison',
+          collapsed: true,
+          items: getComparisonFormats()
+        },
+        {
+          text: 'Records',
           collapsed: true,
           items: [
-            { text: 'Overview', link: '/reference/comparison/' },
-            { text: 'JPEG Tag Support', link: '/reference/jpeg-tag-support' },
-            { text: 'JPEG Tag Matrix', link: '/reference/jpeg-tag-matrix' },
-            ...getComparisonFormats()
-          ]
-        },
-        {
-          text: 'Formats',
-          items: [
-            { text: 'Overview', link: '/reference/formats/' },
-            { text: 'Camera RAW', link: '/reference/formats/camera-raw' },
-            { text: 'PE Executable', link: '/reference/formats/pe-executable' }
-          ]
-        },
-        {
-          text: 'API Documentation',
-          items: [
-            { text: 'Rust API', link: '/reference/api/' }
-          ]
-        },
-        {
-          text: 'Packaging',
-          items: [
-            { text: 'Distribution', link: '/reference/packaging/' }
+            { text: 'All records and checkpoints', link: '/reference/#records-and-checkpoints' },
+            { text: 'Upgrade rehearsal 11.78 / 12.64', link: '/reference/upgrade-rehearsal-11.78-12.64' },
+            { text: 'Bump 13.55 → 13.59', link: '/reference/bump-reports/13.55-to-13.59' },
+            { text: 'Bump 13.58 → 13.59', link: '/reference/bump-reports/13.58-to-13.59' },
+            { text: 'BinaryData engine (Step 28)', link: '/reference/binary-data-engine' },
+            { text: 'Metadata parity resume guide', link: '/reference/metadata-parity-resume' }
           ]
         }
       ],

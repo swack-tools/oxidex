@@ -1,5 +1,13 @@
 # Office Document Forensic Metadata Extraction
 
+::: warning These are OxiDex's own tags
+The `OOXML:` tags described below have no ExifTool counterpart. ExifTool
+13.59 reports the same document properties under the `XML:` group, and
+OxiDex emits those `XML:` tags as well. When you compare with ExifTool, or
+need output ExifTool would also produce, use the `XML:` tags. This page is
+an implementation note, not a statement of ExifTool parity.
+:::
+
 This document describes the enhanced forensic metadata extraction capabilities for Office Open XML (OOXML) documents.
 
 ## Overview

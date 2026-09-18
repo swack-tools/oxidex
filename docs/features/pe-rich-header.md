@@ -1,5 +1,11 @@
 # PE Rich Header Extraction
 
+::: warning OxiDex-only tags
+ExifTool 13.59 does not decode the Rich header (its `EXE.pm` has no Rich
+header tags). The `EXE:Rich*` tags below are OxiDex's own. They appear in
+default output and count as EXTRA in ExifTool comparisons.
+:::
+
 ## Overview
 
 The PE parser has been enhanced to extract the **Rich Header**, an undocumented Microsoft structure embedded in PE files compiled with Visual Studio and related Microsoft toolchains. The Rich Header contains forensically valuable information about the compilers and tools used to build the executable.
@@ -21,12 +27,12 @@ The entire header is XOR-encrypted with a checksum key that follows the "Rich" m
 
 | Tag Name | Type | Description |
 |----------|------|-------------|
-| `PE:RichHeaderPresent` | String | "Yes" if Rich Header found |
-| `PE:RichHeaderChecksum` | String | XOR key/checksum in hex format |
-| `PE:RichHeaderEntries` | Integer | Number of compiler/tool entries |
-| `PE:RichCompilerInfo` | String | Formatted list of "ProductID.BuildNumber xCount" |
-| `PE:RichProductIDs` | String | Comma-separated unique product IDs |
-| `PE:RichHeaderHash` | String | MD5 hash of decrypted header (for forensic comparison) |
+| `EXE:RichHeaderPresent` | String | "Yes" if Rich Header found |
+| `EXE:RichHeaderChecksum` | String | XOR key/checksum in hex format |
+| `EXE:RichHeaderEntries` | Integer | Number of compiler/tool entries |
+| `EXE:RichCompilerInfo` | String | Formatted list of "ProductID.BuildNumber xCount" |
+| `EXE:RichProductIDs` | String | Comma-separated unique product IDs |
+| `EXE:RichHeaderHash` | String | MD5 hash of decrypted header (for forensic comparison) |
 
 ## Product ID Mapping
 
@@ -105,12 +111,12 @@ All tests pass successfully.
 
 ```json
 {
-  "PE:RichHeaderPresent": "Yes",
-  "PE:RichHeaderChecksum": "0x12345678",
-  "PE:RichHeaderEntries": 2,
-  "PE:RichCompilerInfo": "149.30729 x5, 154.30729 x1",
-  "PE:RichProductIDs": "149, 154",
-  "PE:RichHeaderHash": "a1b2c3d4e5f6..."
+  "EXE:RichHeaderPresent": "Yes",
+  "EXE:RichHeaderChecksum": "0x12345678",
+  "EXE:RichHeaderEntries": 2,
+  "EXE:RichCompilerInfo": "149.30729 x5, 154.30729 x1",
+  "EXE:RichProductIDs": "149, 154",
+  "EXE:RichHeaderHash": "a1b2c3d4e5f6..."
 }
 ```
 

@@ -169,6 +169,13 @@ sudo rpm -e oxidex
 
 ### 3. Homebrew Formula (macOS)
 
+::: danger The formula is an unpublished template
+`packaging/homebrew/oxidex.rb` still points at `github.com/oxidex/oxidex`
+at tag `v0.1.0`, and its `sha256` is the placeholder
+`UPDATE_THIS_SHA256_AFTER_RELEASE`. It is not a working install path.
+Update the URL, tag and checksum before using or publishing it.
+:::
+
 The Homebrew formula is located at `packaging/homebrew/oxidex.rb`.
 
 #### Configuration
