@@ -1,17 +1,32 @@
 # Performance
 
-OxiDex is compiled Rust and is expected to outperform the Perl ExifTool; the published figures that quantify that are currently stale.
+OxiDex is compiled Rust and outperforms the Perl ExifTool by a small-integer factor per core.
 
-::: warning Published benchmark figures are stale
-The comparison table below was produced on 2025-12-03 against an unpinned
-"latest" ExifTool and OxiDex 1.1.0; the [autogeneration plan](/AUTOGENERATION-PLAN)
-records these figures as stale and untrustworthy and a refresh against the
-current binary and pinned ExifTool 13.59 as in progress. The CI `metrics` job
-runs only on `main`. Until the refresh lands, treat the numbers as a historical
-record, not a performance claim.
+## Current results (pinned ExifTool 13.59)
+
+Measured by `benches/exiftool_comparison.sh` at commit `8f04e288` (oxidex 1.2.1
+release build, fat LTO) against ExifTool 13.59 from the pinned tree under perl
+5.38.2 with the OOXML.docx capability probe asserted; hyperfine `--warmup 5
+--runs 30`, both commands in one invocation, Apple M5 (10 cores). The host was
+not idle (load1 6.7-8.4); load and top CPU consumers are recorded in
+`benches/benchmark_results.log`. Full tables: `benches/benchmark_results.md`.
+
+| Scenario | Perl ExifTool | OxiDex | ExifTool / OxiDex (median) |
+|----------|---------------|--------|---------------------------|
+| 112-byte JPEG (process startup) | 30.8 ms | 8.4 ms | 3.66x |
+| `Canon.jpg -j -a -G1` | 45.5 ms | 15.0 ms | 3.03x |
+| 1000-file batch `-r` (OxiDex parallel) | 1169.6 ms | 273.3 ms | 4.28x |
+| Write one tag | 80.8 ms | 14.6 ms | 5.53x |
+| Format detection (one JPEG) | 30.9 ms | 8.3 ms | 3.74x |
+| 194-file `t/images -j -a -G1`, parallel | 704.0 ms | 114.6 ms | 6.15x |
+| same, `RAYON_NUM_THREADS=1` | 707 ms | 386 ms | 1.83x |
+
+## Historical results (2025-12-03)
+
+::: warning Historical record, not a performance claim
+The table below was produced on 2025-12-03 against an unpinned "latest"
+ExifTool and OxiDex 1.1.0. It is kept for comparison only.
 :::
-
-## Benchmark Results
 
 The following benchmarks compare OxiDex against the original Perl ExifTool running on identical hardware.
 

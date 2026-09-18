@@ -1,0 +1,35 @@
+# MEASUREMENT SPIKE (staging/spike-dispatch-perf). Not a workspace member on
+# purpose: the `[workspace]` table below detaches it so nothing in the shipped
+# manifest changes. Build from this directory:
+#
+#     cp ../../Cargo.lock .   # pin the same dependency versions as the parent
+#     cargo build --release --bin stages
+#     cargo bench --bench dispatch
+#
+# `[profile.release]` mirrors the parent's shipped profile exactly (fat LTO,
+# one codegen unit, panic=abort) so inlining inside `oxidex` matches the
+# binary hyperfine times.
+[package]
+name = "oxidex-spike-dispatch-perf"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+oxidex = { path = "../.." }
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "dispatch"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = false
