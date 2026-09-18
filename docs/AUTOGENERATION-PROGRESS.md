@@ -1,15 +1,70 @@
 # Autogeneration progress
 
-Latest landed checkpoint: PR #764 is squash-merged as
+This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md). The
+mechanism is specified in [`AUTOGENERATION-V2-DESIGN.md`](AUTOGENERATION-V2-DESIGN.md).
+Newest checkpoint first; older sections are accurate for the commits they name
+and are kept as the record. Every number names its instrument and commit.
+
+## Checkpoint -- 2026-09-18 (tip `fe0e8709`, #815)
+
+**Direction.** Autogeneration v2 approved: generated conversions over a
+`Session` (`$self`), a real grammar instead of template transpilation, a helper
+library selected by exact source match, per-field mixed mode replacing
+table-level Gate A. Design doc and rewritten plan in PR #816.
+
+**Measured state.**
+
+| Axis | Value | Instrument, commit |
+| --- | --- | --- |
+| Reads, catalog entries proven | 2,265 / 33,487 (6.76%); 53.04% of the 4,270 ExifTool reads in the corpus | published `catalog-corpus-observed-13.59.json` at `d8cb6baa` (#804 split the gap) |
+| Reads, corpus identities | 3,089 matched both modes; 2,766 credited coordinates | `corpus_read_receipt.py`, 194 files, `af106a5a` (#813) |
+| Writes | 19 / 14,169 entries (0.13%); 1020/1020 public-API scalar ops | `generated_tiff_write_matrix.py --route public-api`, `7547ec5b` (#797) |
+| Generated share of correct output | 38.34% at `72eae8a5` -- **stale**, re-measure after the first v2 family | probe census |
+| Expression coverage | `exprs.py` 75.4% of uses; grammar 99.7%; session + 22 helpers 95% | `run_spike.py` at `07d808a0` (#817), seed-stable |
+| Upgrade rehearsal 11.78 / 12.64 | 15 generation-stage blockers: 14 merged, #818 in PR; pin never moved; end-to-end run not yet executed | `regen-all.sh` per release, `verify_exprs.py` |
+
+**Landed since the previous checkpoint** (all squash-merged into
+`refactor/tag-machinery`, each PR body names its instrument):
+
+| PR | What | Evidence |
+| --- | --- | --- |
+| #793 | Family-1 groups: Sigma, Nikon PreviewIFD/NikonCapture, Kodak MetaIFD, JPEG NITF/HDR/AdobeCM/GraphConv/AVI1, RMETA; bare-key File/FITS readers | receipt 2,843 -> 2,969 identities, 0 lost |
+| #794 | CI shard count derived from `strategy.job-total`; 4 guard tests | a `--of`/matrix drift dropped 312 of 1,512 tests silently |
+| #795 | Parity ratchet, `tools/ci/parity_ratchet.py` + floors | lint job, 0.4 s, committed JSON only |
+| #797 | First authenticated public-API writes: 19 entries, 902 ops; reads refreshed in the same snapshot | snapshot `--verify` PASS/MATCH |
+| #798 | SetNewValue whole-body templates for 11.78/12.64 + ConvInv operand proof | `compile_addressing` passes both; 13.59 rows/report byte-identical |
+| #799, #802, #809, #812, #815 | Source-proven absence at module / table / entry level (afPoints, Garmin, InfiRay+NikonSettings, Canon RF, Sony ids); shared `module_absence.py` | 13.59 artifacts byte-identical in every case |
+| #800 | `-n` value forms for RMETA, Sigma, NikonCapture, PreviewIFD, NITF, FLIF, PFM | receipt 2,969 -> 3,019, 0 lost |
+| #801 | FITS invented dimensions deleted; SVG dims and Composite:ImageSize as ExifTool (exact `IsFloat` port) | +2 matched, -7 extras, 0 lost |
+| #803, #805, #806, #807, #808, #810 | Rehearsal: serial routine v0, per-release ConvertUnixTime, Qualcomm VARS, DICOM/lens, Nikon encrypted label->content gate, Sony per-release Conditions (2,375 evaluations, 0 disagreements) | each 13.59 byte-identical; 11.78/12.64 pass their stage |
+| #804 | Observed-read split: `native_read_not_matched` 2,005 (OxiDex gap) vs `not_observed_yet` 29,217 (corpus gap) | snapshot at `d8cb6baa`, PASS/MATCH |
+| #811 | Lint-level guard: nothing lands in `fixtures/` CI cannot account for | two PRs had hit the staleness job first |
+| #813 | JSON numeric literals verbatim per `EscapeJSON` (`/i`, `$` before newline, ASCII `\d`); FITS card text kept | receipt 3,021 -> 3,089, 0 lost |
+| #814 | Corpus read-regression gate on every PR: a lost proven read fails CI; timeouts refuse as degraded, crashes fail | non-vacuous: a broken reader named the lost entry |
+
+**Open / in progress:** #816 (design + plan), #817 (coverage spike, draft),
+#818 (12.64 AF-point helper ports); snapshot refresh onto the new tip;
+benchmark refresh (published table is `exiftool-rs 0.1.0` vs ExifTool 13.36
+via a bare `exiftool`; CI `metrics` runs only on `main`); per-module split of
+the generated monoliths; `expr_coverage.py` denominator fix (its frame omits
+`_variants` and `*Inv`).
+
+**Next:** merge #818 and run the 11.78 / 12.64 rehearsal end to end; start
+v2 step 1 (`Session` + top helpers on `Exif::Main`), gated by #814 and
+re-measured by the generated-share census.
+
+## Record through 2026-09-14 (previous checkpoint, PR #764)
+
+Latest landed checkpoint at that time: PR #764 squash-merged as
 `8988302c0aeb923b650a7dd50eee8ee01b507cd5`. All five required hosted checks
 passed on `56fba56e`: lint, docs, build/tests, release build and generated-table
 verification. The prior scalar helpers from PR #763 are also merged.
 CheckExif now composes generated CheckValue rules; this remains inactive in
-public writes. The next work is source-derived input normalization, followed
+public writes. The next work was source-derived input normalization, followed
 by inverse conversions, charset/count rules and complete file operations.
+The artifact counts below (28, 31, 32, 34) are as recorded then; the manifest
+is 44 at the 2026-09-18 checkpoint.
 
-
-This is the working scoreboard for [the plan](AUTOGENERATION-PLAN.md).
 
 ## Reader migration record — September 13
 
