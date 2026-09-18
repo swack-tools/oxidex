@@ -793,6 +793,9 @@ jobs:
   # is split into balanced shards by tools/ci/unittest_shard.py using the
   # committed per-test timings in tools/ci/unittest_weights.json. Every test
   # id lands in exactly one shard, so the shards together run the full suite.
+  # Refresh the timings with `python3 tools/ci/unittest_weights_from_run.py
+  # <green-run-id>`; tools/ci/test_unittest_shard.py fails once more than a
+  # handful of discovered modules have none.
   verify-tables-tools:
     name: Verify Generated Tables / tools ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [verify-tables-capture]
