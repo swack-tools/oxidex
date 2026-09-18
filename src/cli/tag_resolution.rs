@@ -152,7 +152,7 @@ pub fn joined_family_label(occurrence: &TagOccurrence, families: &[u8]) -> Strin
 /// colon -- single-colon requests are the overwhelming case, and this still
 /// isolates the tag name correctly for the rare multi-colon XMP-family
 /// names.
-fn split_request(token: &str) -> (Option<&str>, &str) {
+pub(crate) fn split_request(token: &str) -> (Option<&str>, &str) {
     match token.rsplit_once(':') {
         Some((qualifier, short_name)) => (Some(qualifier), short_name),
         None => (None, token),
@@ -163,7 +163,7 @@ fn split_request(token: &str) -> (Option<&str>, &str) {
 /// against its family-1 label (its own `group0`/`group1`, whichever is
 /// real -- i.e. a request like `-IFD0:Make` or `-CIFF:Make`), or its
 /// resolved family-0 label (`-EXIF:Make`, `-MakerNotes:Make`).
-fn occurrence_matches_qualifier(occurrence: &TagOccurrence, qualifier: &str) -> bool {
+pub(crate) fn occurrence_matches_qualifier(occurrence: &TagOccurrence, qualifier: &str) -> bool {
     qualifier.eq_ignore_ascii_case(family1_label(occurrence))
         || qualifier.eq_ignore_ascii_case(family0_label(occurrence))
 }
@@ -178,10 +178,112 @@ pub struct ResolvedOccurrence<'a> {
     pub lookup_key: String,
 }
 
+/// The occurrences `token` names: every active occurrence whose short name
+/// matches and, when `token` carries a group qualifier, whose family-0 or
+/// family-1 label matches it -- in file order.
+///
+/// Reads only each occurrence's interned `name`/`group0`/`group1`, so it
+/// allocates nothing. It used to walk
+/// [`MetadataMap::all_occurrences`], which builds a `"{group0}:{name}"` key
+/// per occurrence that this filter never read; the Composite layer pays this
+/// walk per dependency per pass, and #821 measured that as the bulk of a
+/// read's heap traffic.
+fn matching_occurrences<'a, 'm>(
+    metadata: &'m MetadataMap,
+    token: &'a str,
+) -> impl Iterator<Item = &'m TagOccurrence> {
+    let (qualifier, short_name) = split_request(token);
+    metadata
+        .occurrences()
+        .filter(move |occurrence| occurrence.name.eq_ignore_ascii_case(short_name))
+        .filter(move |occurrence| {
+            qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
+        })
+}
+
+/// The single occurrence a bare or group-qualified `token` resolves to under
+/// ExifTool's own arbitration ([`arbitrate`]), or `None` when nothing
+/// matches. This is [`resolve_requested_tags`]'s non-`-a` answer for one
+/// token, without allocating: no request vector, no match vector, no lookup
+/// key.
+pub fn resolve_requested_tag<'m>(
+    metadata: &'m MetadataMap,
+    token: &str,
+) -> Option<&'m TagOccurrence> {
+    arbitrate(matching_occurrences(metadata, token))
+}
+
+/// Picks the winner among one request's `candidates`, which must arrive in
+/// file order (ascending `order`).
+///
+/// `FoundTag`'s own tie rule (`ExifTool.pm:9541-9564`), replicated here
+/// exactly as `TagSink::record` applies it incrementally rather than as a
+/// flat `max_by_key((priority, order))`: fold the matches in file order, and
+/// an arrival displaces the running winner only when `new.priority >=
+/// effective_old_priority` AND the instance guard below allows it, where a
+/// running winner whose own priority is `0` is promoted to `1` for that
+/// comparison (`ExifTool.pm:9541-9551`, "promote existing 0-priority tag so
+/// it takes precedence over a new 0-tag"). A flat `max_by_key` gets
+/// `Priority => 0` families wrong: among several 0-priority arrivals it
+/// picks the one with the largest `order` (the LAST), the opposite of the
+/// FIRST-wins default JPEG COM's `Comment` and JUMBF's
+/// `JUMDType`/`JUMDLabel` both need and that `TagSink::record`'s own winner
+/// projection already gives `-j`'s default (non-`-TAG`) output path -- this
+/// bug was invisible for `Comment` (an explicit `-Comment` request silently
+/// returned the wrong one of two occurrences) until the Stage 4
+/// duplicate-loss scan (`tools/exiftool-tables/duplicate_loss_scan.py`)
+/// started retaining JUMBF's occurrences too and made the same
+/// mis-resolution visible there.
+///
+/// Rule 2, the DOC_NUM/`Instance` guard, rides along in the same fold: an
+/// occurrence recorded under a non-default sub-document/track `Instance`
+/// never displaces a winner recorded under a *different* `Instance`,
+/// regardless of priority (`ExifTool.pm:9564`'s `(not $$self{DOC_NUM} or
+/// ...)`). Without it, `-TrackID` against `CanonRaw.cr3` returns Track4's
+/// `4` here (largest `order` among four equal-priority ties) where the
+/// correct answer, matching `TagSink::record`'s own winner projection (what
+/// default non-`-TAG` `-j` output uses) and the pinned oracle's `-TrackID`
+/// default, is Track1's `1`.
+///
+/// Both callers feed this in [`MetadataMap::occurrences`]' own iteration
+/// order: every occurrence's `order` is the sink's `next_order()` at record
+/// time (see [`TagOccurrence::order`]), so that iteration is already sorted
+/// by `order` and folding it directly is the same fold as sorting first.
+pub(crate) fn arbitrate<'m>(
+    candidates: impl Iterator<Item = &'m TagOccurrence>,
+) -> Option<&'m TagOccurrence> {
+    let mut remaining = candidates;
+    let mut winner = remaining.next()?;
+    for candidate in remaining {
+        debug_assert!(
+            candidate.order > winner.order,
+            "candidates must arrive in ascending `order`"
+        );
+        // ExifTool.pm:9541-9551: promote an existing Priority => 0
+        // winner to 1 for the comparison, so a later Priority => 0
+        // arrival never displaces the first one.
+        let effective_old_priority = if winner.priority == 0 {
+            1
+        } else {
+            winner.priority
+        };
+        // ExifTool.pm:9564's `(not $$self{DOC_NUM} or ...)`: an
+        // occurrence recorded under a non-default sub-document/track
+        // Instance never displaces a winner recorded under a
+        // *different* Instance, regardless of priority.
+        let instance_ok =
+            candidate.instance == Instance::default() || candidate.instance == winner.instance;
+        if candidate.priority >= effective_old_priority && instance_ok {
+            winner = candidate;
+        }
+    }
+    Some(winner)
+}
+
 /// Resolves every requested token against every occurrence ever recorded in
 /// `metadata` (not just each literal key's own winner), applying group
 /// qualifiers and, unless `all_occurrences`, ExifTool's own priority/order
-/// arbitration (see the module doc comment) to pick exactly one per request.
+/// arbitration ([`resolve_requested_tag`]) to pick exactly one per request.
 ///
 /// A token that matches nothing is silently skipped -- matching
 /// `output_formatter::tag_matches_filter`'s existing behavior for an
@@ -193,80 +295,14 @@ pub fn resolve_requested_tags<'a>(
 ) -> Vec<ResolvedOccurrence<'a>> {
     let mut out = Vec::new();
     for token in requested {
-        let (qualifier, short_name) = split_request(token);
-        let mut matches: Vec<&TagOccurrence> = metadata
-            .all_occurrences()
-            .map(|(_, occurrence)| occurrence)
-            .filter(|occurrence| occurrence.name.eq_ignore_ascii_case(short_name))
-            .filter(|occurrence| {
-                qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
-            })
-            .collect();
-        if matches.is_empty() {
-            continue;
-        }
         if all_occurrences {
+            let mut matches: Vec<&TagOccurrence> = matching_occurrences(metadata, token).collect();
             matches.sort_by_key(|occurrence| occurrence.order);
             out.extend(matches.into_iter().map(|occurrence| ResolvedOccurrence {
                 lookup_key: occurrence.lookup_key(),
                 occurrence,
             }));
-        } else {
-            // `FoundTag`'s own tie rule (`ExifTool.pm:9541-9564`), replicated
-            // here exactly as `TagSink::record` applies it incrementally
-            // rather than as a flat `max_by_key((priority, order))`: fold
-            // the matches in file order, and an arrival displaces the
-            // running winner only when `new.priority >= effective_old_
-            // priority` AND the instance guard below allows it, where a
-            // running winner whose own priority is `0` is promoted to `1`
-            // for that comparison (`ExifTool.pm:9541-9551`, "promote
-            // existing 0-priority tag so it takes precedence over a new
-            // 0-tag"). A flat `max_by_key` gets `Priority => 0` families
-            // wrong: among several 0-priority arrivals it picks the one
-            // with the largest `order` (the LAST), the opposite of the
-            // FIRST-wins default JPEG COM's `Comment` and JUMBF's
-            // `JUMDType`/`JUMDLabel` both need and that `TagSink::record`'s
-            // own winner projection already gives `-j`'s default
-            // (non-`-TAG`) output path -- this bug was invisible for
-            // `Comment` (an explicit `-Comment` request silently returned
-            // the wrong one of two occurrences) until the Stage 4
-            // duplicate-loss scan (`tools/exiftool-tables/
-            // duplicate_loss_scan.py`) started retaining JUMBF's
-            // occurrences too and made the same mis-resolution visible
-            // there.
-            //
-            // Rule 2, the DOC_NUM/`Instance` guard, rides along in the same
-            // fold: an occurrence recorded under a non-default
-            // sub-document/track `Instance` never displaces a winner
-            // recorded under a *different* `Instance`, regardless of
-            // priority (`ExifTool.pm:9564`'s `(not $$self{DOC_NUM} or ...)`).
-            // Without it, `-TrackID` against `CanonRaw.cr3` returns Track4's
-            // `4` here (largest `order` among four equal-priority ties)
-            // where the correct answer, matching `TagSink::record`'s own
-            // winner projection (what default non-`-TAG` `-j` output uses)
-            // and the pinned oracle's `-TrackID` default, is Track1's `1`.
-            matches.sort_by_key(|occurrence| occurrence.order);
-            let mut remaining = matches.into_iter();
-            let mut winner = remaining.next().expect("matches is non-empty");
-            for candidate in remaining {
-                // ExifTool.pm:9541-9551: promote an existing Priority => 0
-                // winner to 1 for the comparison, so a later Priority => 0
-                // arrival never displaces the first one.
-                let effective_old_priority = if winner.priority == 0 {
-                    1
-                } else {
-                    winner.priority
-                };
-                // ExifTool.pm:9564's `(not $$self{DOC_NUM} or ...)`: an
-                // occurrence recorded under a non-default sub-document/track
-                // Instance never displaces a winner recorded under a
-                // *different* Instance, regardless of priority.
-                let instance_ok = candidate.instance == Instance::default()
-                    || candidate.instance == winner.instance;
-                if candidate.priority >= effective_old_priority && instance_ok {
-                    winner = candidate;
-                }
-            }
+        } else if let Some(winner) = resolve_requested_tag(metadata, token) {
             out.push(ResolvedOccurrence {
                 lookup_key: winner.lookup_key(),
                 occurrence: winner,
