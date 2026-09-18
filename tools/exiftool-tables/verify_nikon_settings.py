@@ -9,6 +9,10 @@ assignment is deliberately reported as unpropagated by the Rust interpreter.
 The existing BracketProgram Mask is reported separately: the native custom
 processor does not apply it, while the Rust interpreter does. PASS describes
 this bounded declaration projection, not runtime equivalence for those rows.
+
+When the selected release has no NikonSettings.pm, module_absence.py re-proves
+the absence from that release's lib/ (never from its version label) and the
+emitted Rust must be exactly the empty table bound to that proof.
 """
 from __future__ import annotations
 
@@ -25,6 +29,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from rust_source import lexical_source  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from module_absence import NotAbsent, prove_module_absent  # noqa: E402
 
 PERL_FACTS = r'''
 use strict; use warnings;
@@ -435,6 +441,36 @@ def verify_text(text, native):
             'runtime_mask_residual': masks}
 
 
+def module_file_present(source):
+    """True unless stat proves lib/Image/ExifTool/NikonSettings.pm absent."""
+    try:
+        (Path(source) / 'lib/Image/ExifTool/NikonSettings.pm').stat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def verify_absent(text, source):
+    """PASS only for the empty table bound to a fresh absence proof."""
+    try:
+        record = prove_module_absent(Path(source) / 'lib', 'NikonSettings', ['ProcessNikonSettings'])
+    except NotAbsent as exc:
+        raise VerificationError(f'NikonSettings.pm is missing but not proven absent: {exc}') from exc
+    r = Reader(text)
+    r.expect('use', 'super', '::', 'settings', '::', 'SettingsTag', 'as', 'E', ';',
+             'pub', '(', 'super', ')', 'const', 'SETTINGS_TAGS', ':', '&', '[', 'E', ']',
+             '=', '&', '[', ']', ';')
+    if r.i != len(r.tokens):
+        raise VerificationError('absent NikonSettings table carries extra declarations')
+    for key in ('exiftool_pm_sha256', 'release_inventory_sha256'):
+        if f'sha256 {record[key]}' not in text:
+            raise VerificationError(f'absent NikonSettings table is not bound to this release ({key})')
+    return {'status': 'PASS', 'module_absent': True, 'rows': 0,
+            'release_files_scanned': record['release_files_scanned'],
+            'exiftool_pm_sha256': record['exiftool_pm_sha256'],
+            'release_inventory_sha256': record['release_inventory_sha256']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--exiftool-dir', required=True, type=Path)
@@ -444,14 +480,17 @@ def main():
     print('=== instrument: verify_nikon_settings.py ===')
     try:
         before = args.input.read_bytes()
-        native = native_facts(args.exiftool_dir, args.perl)
-        result = verify_text(before.decode('utf-8'), native)
+        if not module_file_present(args.exiftool_dir):
+            result = verify_absent(before.decode('utf-8'), args.exiftool_dir)
+        else:
+            native = native_facts(args.exiftool_dir, args.perl)
+            result = verify_text(before.decode('utf-8'), native)
+            result['identity'] = native['identity']
+            result['version'] = native['version']
         if args.input.read_bytes() != before:
             raise VerificationError('input changed during verification')
         result['input_sha256'] = hashlib.sha256(before).hexdigest()
-        result['identity'] = native['identity']
         result['instrument'] = 'verify_nikon_settings.py'
-        result['version'] = native['version']
         print(json.dumps(result, sort_keys=True))
         return 0
     except (VerificationError, OSError, ValueError, subprocess.SubprocessError) as exc:

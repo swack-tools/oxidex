@@ -13,6 +13,13 @@ recovering this producer does not resolve cross-directory state propagation.
 It also applies the one existing BracketProgram mask that the native custom
 processor does not apply. Preserve that declaration but report the discrepancy;
 new masks need runtime review instead of inheriting that interpretation.
+
+A release without NikonSettings.pm (11.78 has none) is an explicit state, not
+a KeyError. The dump alone cannot say so -- dump_tables.pl also omits a
+module that failed to load -- so the absence is proven from the release's own
+lib/ (``--exiftool-lib``) by module_absence.py, never from a version label,
+and the emitted table is empty under a comment carrying that proof. A present
+module missing from the dump is refused as a failed load.
 """
 from __future__ import annotations
 
@@ -21,6 +28,8 @@ import json
 from pathlib import Path
 import re
 import sys
+
+from module_absence import NotAbsent, prove_module_absent, validate_absence_record
 
 
 class Unsupported(ValueError):
@@ -212,22 +221,69 @@ def render(data):
     return "\n".join(lines), counts
 
 
+def prove_absent(data, lib):
+    """Absence record for NikonSettings, proven from ``lib``, or raise."""
+    if lib is None:
+        raise Unsupported("NikonSettings is missing from the dump; pass --exiftool-lib so its "
+                          "absence can be proven from the release (a failed load is also missing)")
+    modules = data.get("modules")
+    if not isinstance(modules, dict) or not modules:
+        raise Unsupported("dump carries no modules")
+    # The dump must come from this tree: each dumped module ships in it.
+    strays = sorted(m for m in modules if not (Path(lib) / "Image" / "ExifTool" / f"{m}.pm").is_file())
+    if strays:
+        raise Unsupported(f"dump modules not in {lib}: {strays[:5]}")
+    try:
+        record = prove_module_absent(lib, "NikonSettings", ["ProcessNikonSettings"])
+    except (NotAbsent, OSError) as error:
+        raise Unsupported(f"NikonSettings is missing from the dump but not proven absent: {error}") from error
+    return validate_absence_record(record, "NikonSettings")
+
+
+def render_absent(record):
+    validate_absence_record(record, "NikonSettings")
+    lines = [
+        "//! `Image::ExifTool::NikonSettings::Main` -- generated, do not hand-edit.",
+        "//!",
+        "//! NikonSettings module absent from this release, proven from its own `lib/`",
+        "//! by `tools/exiftool-tables/module_absence.py` (the version label is not used):",
+        "//! `Image/ExifTool/NikonSettings.pm` does not exist, and none of its",
+        f"//! {record['release_files_scanned']} files names `NikonSettings` or `ProcessNikonSettings`.",
+        f"//! `Image/ExifTool.pm` sha256 {record['exiftool_pm_sha256']};",
+        f"//! release inventory sha256 {record['release_inventory_sha256']}.",
+        "",
+        "use super::settings::SettingsTag as E;",
+        "",
+        "/// This release has no NikonSettings directory, so there are no rows.",
+        "pub(super) const SETTINGS_TAGS: &[E] = &[];",
+        "",
+    ]
+    counts = {"module_absent": True, "rows": 0, "release_files_scanned": record["release_files_scanned"]}
+    return "\n".join(lines), counts
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dump", type=Path)
     parser.add_argument("-o", "--output", required=True, type=Path)
+    parser.add_argument("--exiftool-lib", type=Path,
+                        help="release lib/ the dump came from; proves a missing module absent")
     args = parser.parse_args()
     try:
         data = json.loads(args.dump.read_text())
         pin = (Path(__file__).resolve().parents[2] / ".exiftool-version").read_text().strip()
         if data.get("exiftool_version") != pin:
             raise Unsupported(f"dump version {data.get('exiftool_version')!r} != pinned {pin}")
-        text, counts = render(data)
+        modules = data.get("modules")
+        if isinstance(modules, dict) and "NikonSettings" not in modules:
+            text, counts = render_absent(prove_absent(data, args.exiftool_lib))
+        else:
+            text, counts = render(data)
         # Encode before opening: malformed Unicode cannot truncate an old file.
         payload = text.encode("utf-8")
         args.output.write_bytes(payload)
         print("gen_nikon_settings_tables: " + json.dumps(counts, sort_keys=True), file=sys.stderr)
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, NotAbsent) as error:
         parser.exit(1, f"gen_nikon_settings_tables: {error}\n")
 
 

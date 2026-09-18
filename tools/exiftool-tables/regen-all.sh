@@ -226,7 +226,7 @@ python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
 python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
     -o "$(artifact_path minolta-a100)"
 python3 "$HERE/gen_nikon_settings_tables.py" "$JSON" \
-    -o "$(artifact_path nikon-settings)"
+    -o "$(artifact_path nikon-settings)" --exiftool-lib "$LIB"
 python3 "$HERE/gen_nikon_encrypted_tables.py" "$JSON" \
     -o "$(artifact_path nikon-encrypted)"
 python3 "$HERE/gen_sony_plain_tables.py" "$JSON" \

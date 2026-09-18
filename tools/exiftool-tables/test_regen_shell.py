@@ -144,7 +144,11 @@ else:
     elif name=='gen_nikon_encrypted_tables.py':
         dump(args[0]);assert flag('-o')==artifact('gen_nikon_encrypted_tables')
         output(flag('-o'),name)
-    elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_nikon_settings_tables.py','gen_sony_plain_tables.py'):
+    elif name=='gen_nikon_settings_tables.py':
+        # The release lib/ proves a module missing from the dump absent.
+        assert flag('--exiftool-lib')==lib
+        dump(args[0]);output(flag('-o'),name)
+    elif name in ('codegen_filetypes.py','codegen_fits.py','gen_sony_main_extra_tables.py','gen_minolta_a100_tables.py','gen_sony_plain_tables.py'):
         dump(args[0]);output(flag('-o'),name)
     elif name=='codegen_composite.py':
         dump(args[0]);output(flag('-o'),'composite');output(flag('--generated-out'),'composite-compute')
