@@ -5,9 +5,9 @@ This is a historical native receipt. It does not assert that a later source or r
 [Download the authenticated observation snapshot](/measurements/catalog-corpus-observed-13.59.json).
 [Compare source classifications and remaining work](goal-checkpoint-20260914.md).
 
-- Observed runtime commit: `6ada109bf5f17663eec0c0bae134668a20bf3da3`
-- Runtime input manifest: `eacbffac0c89b246c79fbdb9ebabc188d224837a7ebf24adafc8506aad3c3191`
-- Historical source join SHA-256: `67c7a7d6f3e5809aa37b1baf9b477c936aae7f038b0fc7c9f9d8c85a908957d8`
+- Observed runtime commit: `7a9c7576dcb9d799cab79b837f3699063bc246b8`
+- Runtime input manifest: `8dd10300d59610bbe776f91651f363a104fee56eaff7f2b16b2f6d86e7181599`
+- Historical source join SHA-256: `3e82bd5334783e8071603e960a2179a7260b7c893aa657a9c162f8bd57f756cb`
 - Current source applicability: not compared
 - Source denominator: `33487`
 - Catalog entries with observed reads: `2378`
