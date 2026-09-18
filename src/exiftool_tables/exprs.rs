@@ -704,26 +704,78 @@ pub fn convert_unix_time(time: f64, to_local: bool) -> String {
     if time == 0.0 {
         return "0000:00:00 00:00:00".to_string();
     }
-    let overflow = || {
-        if to_local {
-            format!(
-                "{GMTIME_OVERFLOW}{}",
-                crate::io::timestamp::timezone_string(0)
-            )
-        } else {
-            GMTIME_OVERFLOW.to_string()
-        }
-    };
     let floor = time.floor();
     if !floor.is_finite() || floor.abs() >= 9.2e18 {
         // Past i64: Perl's gmtime fails on the year regardless of the path.
-        return overflow();
+        return unix_time_overflow(to_local);
     }
     let frac = time - floor;
     let carry = i64::from(format!("{frac:.0}") == "1");
     let Some(itime) = (floor as i64).checked_add(carry) else {
-        return overflow();
+        return unix_time_overflow(to_local);
     };
+    render_unix_time(itime, to_local)
+}
+
+/// `Image::ExifTool::ConvertUnixTime($time [, $toLocal])` as ExifTool
+/// 11.78 and 12.64 write it (ExifTool.pm, `$dec` undefined -- no table
+/// passes one):
+///
+/// ```perl
+/// return '0000:00:00 00:00:00' if $time == 0;
+/// $time = int($time + 1e-6) if $time != int($time);  # avoid round-off errors
+/// @tm = $toLocal ? localtime($time) : gmtime($time);
+/// ```
+///
+/// A different conversion from [`convert_unix_time`], not a variant of it:
+/// the seconds are TRUNCATED TOWARD ZERO after a `1e-6` nudge instead of
+/// floored and rounded half-to-even, so `0.6` prints `1970:01:01 00:00:00`
+/// (13.59: `..:01`) and `-0.5` prints `1970:01:01 00:00:00` (13.59:
+/// `1969:12:31 23:59:59`). The sub text is byte-identical in 11.78 and
+/// 12.64; the pinned 13.59 has the floor-and-round form. The generator
+/// selects this port only when the pinned tree's `ConvertUnixTime` source
+/// is, token for token, that body (`exprs.py`'s `CONVERT_UNIX_TIME_SEMANTICS`), and
+/// `verify_exprs.py` then proves it against that tree's own Perl; the
+/// shipped 13.59 tables never reference it. Calendar rendering, the
+/// `gmtime` overflow text and the local-time suffix are shared with the
+/// 13.59 port -- the rendering half of the sub is unchanged between the two
+/// releases.
+#[must_use]
+pub fn convert_unix_time_trunc_epsilon(time: f64, to_local: bool) -> String {
+    if time == 0.0 {
+        return "0000:00:00 00:00:00".to_string();
+    }
+    // `$time != int($time)` is false for an integral value and for +-Inf
+    // (int(Inf) is Inf); NaN compares unequal and takes the nudge, which
+    // leaves it NaN. Either way a non-finite value reaches gmtime and fails.
+    let itime = if time == time.trunc() {
+        time
+    } else {
+        (time + 1e-6).trunc()
+    };
+    if !itime.is_finite() || itime.abs() >= 9.2e18 {
+        return unix_time_overflow(to_local);
+    }
+    render_unix_time(itime as i64, to_local)
+}
+
+/// ExifTool's rendering of a failed `gmtime`/`localtime`, with the zone
+/// suffix `$toLocal` adds.
+fn unix_time_overflow(to_local: bool) -> String {
+    if to_local {
+        format!(
+            "{GMTIME_OVERFLOW}{}",
+            crate::io::timestamp::timezone_string(0)
+        )
+    } else {
+        GMTIME_OVERFLOW.to_string()
+    }
+}
+
+/// The rendering half of `ConvertUnixTime`, from the whole-second time on:
+/// `gmtime`/`localtime`, `TimeZoneString`, and the `%4d:%.2d:...` sprintf.
+/// Identical in 11.78 and 13.59; see [`convert_unix_time`] for each detail.
+fn render_unix_time(itime: i64, to_local: bool) -> String {
     if to_local {
         use chrono::{Datelike, Offset, Timelike};
         if let Some(utc) = chrono::DateTime::from_timestamp(itime, 0) {
@@ -745,12 +797,12 @@ pub fn convert_unix_time(time: f64, to_local: bool) -> String {
                 "{y:>4}:{mo:02}:{d:02} {h:02}:{mi:02}:{s:02}{}",
                 crate::io::timestamp::timezone_string(0)
             ),
-            None => overflow(),
+            None => unix_time_overflow(true),
         };
     }
     match gm_components(itime) {
         Some((y, mo, d, h, mi, s)) => format!("{y:>4}:{mo:02}:{d:02} {h:02}:{mi:02}:{s:02}"),
-        None => overflow(),
+        None => unix_time_overflow(false),
     }
 }
 
@@ -1530,6 +1582,74 @@ mod tests {
             "1900:01:00 00:00:00"
         );
         assert_eq!(convert_unix_time(f64::NAN, false), "1900:01:00 00:00:00");
+    }
+
+    /// Every expectation below was printed by ExifTool 11.78's own
+    /// `Image::ExifTool::ConvertUnixTime` under the pinned perl 5.38.2
+    /// (`TZ=UTC`), and the contrasting 13.59 value is the pinned 13.59 lib on
+    /// the same interpreter -- the inputs are the ones the 11.78 rehearsal's
+    /// `verify_exprs.py` run disagreed on (evidence:
+    /// oxidex-ops/evidence/20260917-convertunixtime). The two ports must
+    /// differ exactly there and agree on every integral input.
+    #[test]
+    fn convert_unix_time_trunc_epsilon_matches_exiftool_11_78() {
+        let old = |t| convert_unix_time_trunc_epsilon(t, false);
+        let new = |t| convert_unix_time(t, false);
+        assert_eq!(
+            convert_unix_time_trunc_epsilon(0.0, true),
+            "0000:00:00 00:00:00"
+        );
+        assert_eq!(old(0.0), "0000:00:00 00:00:00");
+        // Truncation toward zero after a 1e-6 nudge, where 13.59 rounds.
+        for (t, v1178, v1359) in [
+            (0.6, "1970:01:01 00:00:00", "1970:01:01 00:00:01"),
+            (-0.5, "1970:01:01 00:00:00", "1969:12:31 23:59:59"),
+            (
+                -2_082_844_800.5,
+                "1904:01:01 00:00:00",
+                "1903:12:31 23:59:59",
+            ),
+            (
+                -2_082_844_799.999_999,
+                "1904:01:01 00:00:01",
+                "1904:01:01 00:00:00",
+            ),
+            (
+                -11_644_473_599.999_999,
+                "1601:01:01 00:00:01",
+                "1601:01:01 00:00:00",
+            ),
+        ] {
+            assert_eq!(old(t), v1178, "11.78 at {t}");
+            assert_eq!(new(t), v1359, "13.59 at {t}");
+        }
+        // Same text in both releases.
+        for (t, v) in [
+            (0.4, "1970:01:01 00:00:00"),
+            (0.5, "1970:01:01 00:00:00"),
+            (0.999_999, "1970:01:01 00:00:01"),
+            (1.5, "1970:01:01 00:00:01"),
+            (2.5, "1970:01:01 00:00:02"),
+            (-0.4, "1970:01:01 00:00:00"),
+            (-1.5, "1969:12:31 23:59:59"),
+            (-0.000_000_5, "1970:01:01 00:00:00"),
+            (1e-6, "1970:01:01 00:00:00"),
+            (946_684_799.9999, "1999:12:31 23:59:59"),
+            (1e9 + 0.5, "2001:09:09 01:46:40"),
+            (-62_135_596_800.0, "   1:01:01 00:00:00"),
+            (2_147_483_648.0, "2038:01:19 03:14:08"),
+            (-2_147_483_648.0, "1901:12:13 20:45:52"),
+            (253_402_300_800.0, "10000:01:01 00:00:00"),
+            (9_007_199_254_740_992.0, "285428751:11:12 07:36:32"),
+            (-9_007_199_254_740_992.0, "-285424812:02:20 16:23:28"),
+            (1e18, "1900:01:00 00:00:00"),
+            (-1e18, "1900:01:00 00:00:00"),
+            (f64::INFINITY, "1900:01:00 00:00:00"),
+            (f64::NEG_INFINITY, "1900:01:00 00:00:00"),
+            (f64::NAN, "1900:01:00 00:00:00"),
+        ] {
+            assert_eq!(old(t), v, "11.78 at {t}");
+        }
     }
 
     #[test]

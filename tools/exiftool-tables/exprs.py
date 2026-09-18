@@ -256,6 +256,126 @@ for _deparse, _key in CODE_REFS.items():
         )
 
 
+# =============================================================================
+# ConvertUnixTime semantics -- which Rust port a `ConvertUnixTime(...)` call
+# compiles to, chosen by PROVING which Perl sub the pinned tree carries.
+#
+# ExifTool rewrote the sub between 12.64 and 13.59. The old body (11.78 and
+# 12.64, byte-identical) truncates toward zero after a 1e-6 nudge when `$dec`
+# is unset: `$time = int($time + 1e-6) if $time != int($time)`. The new body
+# floors and then rounds the fraction half-to-even through `sprintf('%.*f')`.
+# They disagree by one second on every non-integral negative time and on
+# every fraction >= 0.5 (0.6 -> `..:00` vs `..:01`), which is exactly the 10
+# expressions the 11.78 rehearsal's verify_exprs.py run failed on. Neither
+# port approximates the other, so the choice cannot be a version label: the
+# sub's source text is extracted from the pinned `Image/ExifTool.pm`,
+# comments and whitespace are folded, and it must equal one of the bodies
+# below EXACTLY. Anything else -- a future rewrite -- selects nothing, and
+# every ConvertUnixTime expression is then refused (omitted and counted),
+# never compiled against a sub nobody has checked. verify_exprs.py still
+# runs the selected port against that tree's own Perl before anything ships.
+#
+# The committed generated tables are 13.59's, and codegen's other callers
+# (expr_coverage.py, codegen_composite.py) hold no ledger, so the default is
+# the 13.59 port -- the one every committed ledger was proven with.
+CONVERT_UNIX_TIME_SEMANTICS = {
+    # ExifTool 13.59 (pinned) -- floor, then round the fraction.
+    "floor_round": (
+        "convert_unix_time",
+        "sub ConvertUnixTime($;$$) { my ($time, $toLocal, $dec) = @_; "
+        "return '0000:00:00 00:00:00' if $time == 0; my (@tm, $tz, $trim); "
+        "$dec = $static_vars{SystemTimeRes} || 0 unless defined $dec; "
+        "$dec < 0 and $dec = -$dec, $trim = 1; my $itime = int($time); "
+        "my $frac = $time - $itime; $frac < 0 and $frac += 1, $itime -= 1; "
+        "$dec = sprintf('%.*f', $dec, $frac); "
+        "$dec =~ s/^(\\d)// and $1 eq '1' and $itime += 1; "
+        "$dec =~ s/\\.?0+$// if $trim; "
+        "if (not $toLocal) { @tm = gmtime($itime); $tz = ''; } "
+        "elsif ($static_vars{KeepUTCTime}) { @tm = gmtime($itime); $tz = 'Z'; } "
+        "else { @tm = localtime($itime); $tz = TimeZoneString(\\@tm, $itime); } "
+        'my $str = sprintf("%4d:%.2d:%.2d %.2d:%.2d:%.2d$dec%s", '
+        "$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0], $tz); "
+        "return $str; }",
+    ),
+    # ExifTool 11.78 and 12.64 -- truncate toward zero after a 1e-6 nudge.
+    "trunc_epsilon": (
+        "convert_unix_time_trunc_epsilon",
+        "sub ConvertUnixTime($;$$) { my ($time, $toLocal, $dec) = @_; "
+        "return '0000:00:00 00:00:00' if $time == 0; my (@tm, $tz); "
+        "if ($dec) { my $frac = $time - int($time); $time = int($time); "
+        "$frac < 0 and $frac += 1, $time -= 1; "
+        "$dec = sprintf('%.*f', $dec, $frac); "
+        "$dec =~ s/^(\\d)// and $1 eq '1' and $time += 1; } "
+        "else { $time = int($time + 1e-6) if $time != int($time); $dec = ''; } "
+        "if ($toLocal) { @tm = localtime($time); $tz = TimeZoneString(\\@tm, $time); } "
+        "else { @tm = gmtime($time); $tz = ''; } "
+        'my $str = sprintf("%4d:%.2d:%.2d %.2d:%.2d:%.2d$dec%s", '
+        "$tm[5]+1900, $tm[4]+1, $tm[3], $tm[2], $tm[1], $tm[0], $tz); "
+        "return $str; }",
+    ),
+}
+DEFAULT_CONVERT_UNIX_TIME_SEMANTICS = "floor_round"
+_CONVERT_UNIX_TIME_RUST = "crate::exiftool_tables::exprs::convert_unix_time("
+_BASE_TRANSLATIONS = dict(TRANSLATIONS)
+_convert_unix_time_semantics = DEFAULT_CONVERT_UNIX_TIME_SEMANTICS
+
+
+def convert_unix_time_source(exiftool_pm_text):
+    """`sub ConvertUnixTime ... }` from ExifTool.pm's text, comments and
+    whitespace folded; None when the sub is absent. Only a `#` at line start
+    or after whitespace opens a comment -- neither known body carries a `#`
+    anywhere else, and a fold that went wrong could only make the text match
+    nothing, which refuses."""
+    m = re.search(r"^sub ConvertUnixTime\b.*?^\}", exiftool_pm_text, re.S | re.M)
+    if m is None:
+        return None
+    body = re.sub(r"(?m)(^|\s)#.*$", r"\1", m.group(0))
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def detect_convert_unix_time_semantics(et_lib):
+    """(semantics name or None, folded source) for the pinned tree at
+    `et_lib` -- the directory holding `Image/ExifTool.pm`. No readable
+    ExifTool.pm proves nothing, so it selects nothing (refuses)."""
+    from pathlib import Path
+    try:
+        text = (Path(et_lib) / "Image" / "ExifTool.pm").read_text(encoding="latin-1")
+    except OSError:
+        return None, None
+    source = convert_unix_time_source(text)
+    name = next((n for n, (_fn, body) in CONVERT_UNIX_TIME_SEMANTICS.items()
+                 if body == source), None)
+    return name, source
+
+
+def convert_unix_time_semantics():
+    return _convert_unix_time_semantics
+
+
+def set_convert_unix_time_semantics(name):
+    """Select the ConvertUnixTime port for every later translation. `None`
+    refuses ConvertUnixTime outright. Clears the compile caches and rebuilds
+    TRANSLATIONS in place, so nothing compiled under the previous selection
+    survives the switch."""
+    global _convert_unix_time_semantics
+    if name is not None and name not in CONVERT_UNIX_TIME_SEMANTICS:
+        raise ValueError(f"unknown ConvertUnixTime semantics {name!r}")
+    _convert_unix_time_semantics = name
+    rebuilt = {}
+    for key, (rty, code) in _BASE_TRANSLATIONS.items():
+        if _CONVERT_UNIX_TIME_RUST in code:
+            if name is None:
+                continue
+            fn = CONVERT_UNIX_TIME_SEMANTICS[name][0]
+            code = code.replace(_CONVERT_UNIX_TIME_RUST,
+                                f"crate::exiftool_tables::exprs::{fn}(")
+        rebuilt[key] = (rty, code)
+    TRANSLATIONS.clear()
+    TRANSLATIONS.update(rebuilt)
+    _COMPILE_CACHE.clear()
+    _COMPOSITE_COMPILE_CACHE.clear()
+
+
 def _code_ref_pattern(body):
     """Match audited registry text, varying only whitespace outside literals.
 
@@ -843,7 +963,12 @@ class _Parser:
         avt, ac = _as_f64(arg)
         if avt not in _NUMERIC_VTYPES:
             raise ExprCompileError("ConvertUnixTime needs a numeric argument")
-        return ("string", f"crate::exiftool_tables::exprs::convert_unix_time({ac}, {to_local})")
+        # The port proven to match the pinned tree's sub; see
+        # CONVERT_UNIX_TIME_SEMANTICS. None = unproven, refused.
+        if _convert_unix_time_semantics is None:
+            raise ExprCompileError("pinned ConvertUnixTime source matches no ported semantics")
+        fn = CONVERT_UNIX_TIME_SEMANTICS[_convert_unix_time_semantics][0]
+        return ("string", f"crate::exiftool_tables::exprs::{fn}({ac}, {to_local})")
 
     def _parse_sprintf(self):
         self._eat("LPAREN")
