@@ -69,11 +69,6 @@
       "direction": "exact",
       "floor": 7068
     },
-    "join:counts.write_parity.observed_matched_write": {
-      "direction": "at_least",
-      "floor": 0,
-      "note": "the honest zero: no write has yet been observed to match an ExifTool read-back"
-    },
     "join:counts.writer_implementation.writer_not_declared": {
       "direction": "at_most",
       "floor": 14150,
@@ -122,7 +117,7 @@
     "observed:counts.write_parity.observed_matched_write": {
       "direction": "at_least",
       "floor": 19,
-      "note": "same measure on the observed snapshot's own write_parity block"
+      "note": "catalog entries with a write proven against a pinned ExifTool read-back. Tracked on the OBSERVED snapshot only: the evidence-free join CI regenerates never binds --writer-read-evidence, so its own copy of this count is structurally 0 and would be a metric that can never move"
     },
     "observed:counts.write_readback.catalog_matched_write_operations": {
       "direction": "at_least",
