@@ -42,11 +42,14 @@ Verified at `efe8c062`:
 - **Monoliths.** `binary_tables.rs` 6.8 MB, `ifd_tables.rs` 4.4 MB.
 
 What is *also* not the problem: the grammar. The spike shows it is small and
-closed (§1). What is *not* the problem: speed. `benches/benchmark_results.md` already shows
-16x (single JPEG) and 65x (1000-file batch) over Perl ExifTool, measured
-against 13.36 at an early build; the dispatch-perf spike re-measures at the
-pin. Compiling to `match` arms is chosen for coverage and idiom, not because
-the table walk is known to be hot.
+closed (§1). What is *not* the problem: table dispatch. The dispatch-perf spike (#821,
+`benches/spike/DISPATCH_PERF.md`) measured the IFD id lookup at 5.9 ns
+(binary search; a generated `match` is 1.5 ns), about 0.5 µs of a 6.6 ms read,
+and the whole generated engine at 0.66 % of the corpus read. Against the
+pinned 13.59 oxidex is 3.0x on a single JPEG and 1.83x per core on the
+194-file corpus; the dominant costs are Composite dependency resolution's
+allocations and per-process regex/tag-db initialisation. Compiling to `match`
+arms is chosen for coverage and idiom, not speed.
 
 ## The shape
 

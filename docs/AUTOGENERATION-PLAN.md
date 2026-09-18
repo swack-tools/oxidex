@@ -49,7 +49,7 @@ unexercised behaviour.
 | Generated artifacts | **44** manifest outputs (22 tier 1, 22 tier 2) | `artifacts.py paths` |
 | Upgrade rehearsal 11.78 → 12.64 | **15 generation-stage blockers found; 14 merged, 1 in PR (#818).** The pin has never moved; the end-to-end run (generate → build → read/write per release) has not yet been executed | `regen-all.sh` per release, `verify_exprs.py`; ledger in `HANDOFF.md` |
 | CI guarantees | shard count derived from the matrix (#794); parity ratchet, 23 metrics (#795); corpus read-regression gate on every PR (#814); fixtures-directory guard (#811) | `tools/ci/` |
-| Benchmarks | **Stale and untrustworthy**: published table is `exiftool-rs 0.1.0` vs ExifTool **13.36** via a bare `exiftool` on PATH; CI `metrics` runs only on `main`. Refresh in progress | `benches/benchmark_results.md`, `ci.yml` `metrics` |
+| Benchmarks | **Refreshed against the pin (#821)**: oxidex vs ExifTool **13.59** (perl 5.38.2, DOCX probe asserted), measured at `8f04e288` under the exclusive lock: 3.0x on Canon.jpg, 1.83x per core on the 194-file corpus (6.15x with rayon). The 2025 `exiftool-rs 0.1.0` vs bare 13.36 table is kept below it as historical. CI `metrics` still runs only on `main` (proposal in #821) | `benches/benchmark_results.md`, `ci.yml` `metrics` |
 
 Two things these numbers say that shape the plan:
 
