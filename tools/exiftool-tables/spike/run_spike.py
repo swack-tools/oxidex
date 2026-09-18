@@ -259,6 +259,22 @@ def covered(infos, allowed_keys=None, allowed_helpers=None):
     return uses, distinct
 
 
+def _tie(name):
+    """Deterministic tie-break for max(): alphabetically first wins."""
+    text = name if isinstance(name, str) else "/".join(name)
+    return tuple(-ord(c) for c in text)
+
+
+def ranked(counter, n=None):
+    """Counter.most_common with a deterministic tie-break (count desc, then
+    name asc). Counter.most_common alone keeps insertion order for ties, and
+    insertion order here comes from set iteration -- hash-randomised per
+    process -- so tied rows swapped between runs and COVERAGE.md was not
+    byte-identical across regenerations."""
+    rows = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return rows if n is None else rows[:n]
+
+
 def rank_deps(infos, which):
     counter = collections.Counter()
     for info in infos:
@@ -275,7 +291,7 @@ def threshold_counts(infos, total_uses, mode, targets=(0.90, 0.95, 0.99)):
     session keys (with every helper available), the top-N-by-uses order has
     to reach before N% of uses are evaluable."""
     rank = rank_deps(infos, "helper" if mode == "helpers" else "session")
-    order = [dep for dep, _ in rank.most_common()]
+    order = [dep for dep, _ in ranked(rank)]
     out = {}
     for n in range(0, len(order) + 1):
         allowed = set(order[:n])
@@ -321,9 +337,10 @@ def greedy_ladder(infos, targets, total_uses):
         if not frac:
             break
         if gain:
-            pick, _ = max(gain.items(), key=lambda kv: (kv[1], frac[kv[0]]))
+            pick, _ = max(gain.items(),
+                          key=lambda kv: (kv[1], frac[kv[0]], _tie(kv[0])))
         else:
-            pick, _ = max(frac.items(), key=lambda kv: kv[1])
+            pick, _ = max(frac.items(), key=lambda kv: (kv[1], _tie(kv[0])))
         (have_keys if pick[0] == "k" else have_helpers).add(pick[1])
         order.append(pick)
         still = []
@@ -363,13 +380,13 @@ def frame_report(name, infos, total_uses, total_distinct, lib, rust_ported):
             ("c. evaluable PURE ($val + operators + core builtins)",
              pure_uses, pure_distinct)]
     for n in (5, 10, 20):
-        keys = {k for k, _ in session_rank.most_common(n)}
+        keys = {k for k, _ in ranked(session_rank, n)}
         u, d = covered(infos, keys, set())
         rows.append((f"d. + top {n} session keys (no helpers)", u, d))
     u, d = covered(infos, None, set())
     rows.append(("d. + ALL session keys (no helpers)", u, d))
     for n in (10, 25, 50):
-        hs = {h for h, _ in helper_rank.most_common(n)}
+        hs = {h for h, _ in ranked(helper_rank, n)}
         u, d = covered(infos, None, hs)
         rows.append((f"e. + all session keys + top {n} helpers", u, d))
     u_all, d_all = covered(infos, None, None)
@@ -388,8 +405,8 @@ def frame_report(name, infos, total_uses, total_distinct, lib, rust_ported):
         "total_uses": total_uses,
         "total_distinct": total_distinct,
         "rows": rows,
-        "session_rank": session_rank.most_common(40),
-        "helper_rank": helper_rank.most_common(60),
+        "session_rank": ranked(session_rank, 40),
+        "helper_rank": ranked(helper_rank, 60),
         "greedy_order": [(kind, dep) for kind, dep in order[:80]],
         "greedy_marks": marks,
         "greedy_total": len(order),
@@ -472,7 +489,7 @@ def main():
     # helper library facts
     helper_rank = rank_deps(all_infos, "helper")
     helper_facts = []
-    for name, uses in helper_rank.most_common():
+    for name, uses in ranked(helper_rank):
         if name.startswith(("%", "$", "@", "<")):
             kind = "data" if name[0] in "%$@" else "special"
             helper_facts.append({"name": name, "uses": uses, "kind": kind,
@@ -556,9 +573,10 @@ def feature_growth(infos, total_uses):
         if not frac:
             break
         if gain:
-            pick = max(gain.items(), key=lambda kv: (kv[1], frac[kv[0]]))[0]
+            pick = max(gain.items(),
+                       key=lambda kv: (kv[1], frac[kv[0]], _tie(kv[0])))[0]
         else:
-            pick = max(frac.items(), key=lambda kv: kv[1])[0]
+            pick = max(frac.items(), key=lambda kv: (kv[1], _tie(kv[0])))[0]
         enabled.add(pick)
         still, new_uses, new_distinct = [], 0, 0
         for info in pending:
@@ -616,7 +634,7 @@ def residue(infos, lib):
     return {
         "unparsed_uses": sum(i.uses for i in unparsed),
         "unparsed_distinct": len(unparsed),
-        "reasons": reasons.most_common(25),
+        "reasons": ranked(reasons, 25),
         "top_unparsed": [(i.uses, i.form, i.sites[0].slot,
                           normalize(i.text)[:220], i.refusal)
                          for i in unparsed[:20]],
@@ -673,7 +691,7 @@ def regex_fancy(infos):
             continue
         for f in i.deps.regex_fancy:
             c[f] += i.uses
-    return c.most_common()
+    return ranked(c)
 
 
 # ---------------------------------------------------------------------------
