@@ -14,11 +14,13 @@ Output keeps the sharder's format: one whole-module total per module, plus a
 full test id for any single test at or above EXPLICIT_ID_SECONDS so it can be
 placed on its own. `source` records the run ids and head SHAs.
 
-Pass several green runs to average them. One run is a noisy sample: the
-shards land on runners whose speed differs by up to ~1.6x (measured across
-runs 35394817483 and 35401749984, on light and heavy tests alike), and the
-heaviest compile-and-Perl tests swing by +-50% from run to run. Each test's
-weight is its mean over the runs that contain it.
+Pass several green runs to average them; each test's weight is its mean over
+the runs that contain it. One run is a noisy sample. Across runs 35394817483,
+35401749984 and 35403375307 a shard's runner ran the same tests at 0.69x-1.21x
+their three-run mean, and single heavy tests varied up to 2x between runs. That
+runner noise is a floor no weight file removes: expect a max/min shard-wall
+ratio around 1.3-1.5 even with fresh weights, and judge a refresh over several
+runs, not one.
 
 Every shard is cross-checked before anything is written: the parsed test count
 must equal the shard's `Ran N tests`, the measured seconds must account for the
@@ -33,6 +35,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -90,8 +93,15 @@ def parse_shard(lines):
     return banner, seconds, int(ran_match.group(1)), float(ran_match.group(2))
 
 
-def gh(*args):
-    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
+def gh(*args, attempts=3):
+    # `gh run view --job --log` fails transiently now and then; retry, then fail loudly.
+    for attempt in range(1, attempts + 1):
+        done = subprocess.run(["gh", *args], capture_output=True, text=True)
+        if done.returncode == 0:
+            return done.stdout
+        if attempt == attempts:
+            raise SystemExit(f"gh {' '.join(args)} failed {attempts}x: {done.stderr.strip()}")
+        time.sleep(5 * attempt)
 
 
 def collect(run_id):
