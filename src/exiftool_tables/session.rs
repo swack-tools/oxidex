@@ -273,6 +273,30 @@ impl MemberVal {
         }
     }
 
+    /// Perl NV context (`sv_2nv`, what `sprintf("%f")`, a mixed IV/NV
+    /// operator or a comparison against a double reads): [`Self::perl_num`]
+    /// as a double, except that a STRING spelling a negative zero in integer
+    /// form (`"-0"`, `" -00"`, `"-0abc"`) is `-0.0` -- `grok_number` gives the
+    /// IV 0 but `Atof` keeps the sign, so `sprintf("%.1f", "-0")` is `-0.0`
+    /// while `"-0" + 0` is `0`. A signed rational 0/-1 reaches a conversion as
+    /// exactly that string (`RoundFloat` prints `-0`).
+    #[must_use]
+    pub fn perl_nv(&self) -> f64 {
+        match self {
+            MemberVal::Str(s) => match numify_str(s) {
+                PerlNum::Int(0)
+                    if s
+                        .trim_start_matches(|c: char| c.is_ascii() && is_perl_space(c as u8))
+                        .starts_with('-') =>
+                {
+                    -0.0
+                }
+                n => n.as_f64(),
+            },
+            other => other.perl_num().as_f64(),
+        }
+    }
+
     /// `length $x`: `None` for `undef` (Perl's `length undef` is `undef`).
     #[must_use]
     pub fn perl_length(&self) -> Option<usize> {
@@ -400,6 +424,19 @@ impl Session {
             "Make" => typed(&self.make),
             "Model" => typed(&self.model),
             _ => self.members.get(key).cloned().unwrap_or(MemberVal::Undef),
+        }
+    }
+
+    /// Whether `$$self{key}` was supplied (set, even to `undef`). A generated
+    /// conversion that reads a member the caller never supplied declines
+    /// rather than read it as `undef` -- ExifTool always has, e.g.,
+    /// `TIFF_TYPE` set, and "absent here" is not "undef there".
+    #[must_use]
+    pub fn has_member(&self, key: &str) -> bool {
+        match key {
+            "Make" => self.make.is_some(),
+            "Model" => self.model.is_some(),
+            _ => self.members.contains_key(key),
         }
     }
 

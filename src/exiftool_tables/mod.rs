@@ -46,6 +46,7 @@ pub mod binary_tables;
 pub mod charset;
 pub mod charset_tables;
 pub mod cond;
+pub mod conv;
 pub mod enabled;
 pub mod enabled_ifd;
 pub mod enabled_serial;
@@ -171,15 +172,20 @@ pub fn find_ifd_table(module: &str, table: &str) -> Option<&'static IfdTable> {
 }
 
 /// Whether the IFD engine reports entry `id` of `table` at all: a plain tag
-/// the walk reports ([`tag_is_reported`]), or a `_variants` group with an
-/// alternative it reports ([`alternative_is_reported`]). This is the static
-/// half of "engine or hand" every IFD call site that splits a directory
-/// between the two asks (Canon::Main's `main_engine::owns`, the
-/// ExifIFD/InteropIFD walk in `core::exif_dir_engine`), derived from the
-/// generated table and never from a hand list.
+/// the walk reports ([`tag_is_reported`]) or whose conversion a generated
+/// arm takes ([`conv::claims`], Autogeneration v2 mixed mode), or a
+/// `_variants` group with an alternative it reports
+/// ([`alternative_is_reported`]). This is the static half of "engine or
+/// hand" every IFD call site that splits a directory between the two asks
+/// (Canon::Main's `main_engine::owns`, the ExifIFD/InteropIFD walk in
+/// `core::exif_dir_engine`), derived from the generated table and arms and
+/// never from a hand list. Where an arm declines one entry at run time the
+/// walk marks it [`EntryRead::Unread`], so the caller's hand arm still runs.
 #[must_use]
 pub fn engine_reports(table: &IfdTable, id: u16) -> bool {
-    table.tag(id).is_some_and(tag_is_reported)
+    table
+        .tag(id)
+        .is_some_and(|tag| tag_is_reported(tag) || conv::claims(table, tag))
         || table.variant_group(id).is_some_and(|group| {
             group
                 .alternatives

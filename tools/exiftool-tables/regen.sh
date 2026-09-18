@@ -130,6 +130,17 @@ python3 "$HERE/codegen.py" "$JSON" -o "$OUT" --ifd-out "$IFD_OUT" \
     --expr-ledger "$EXPR_LEDGER" --value-conv-ledger-out "$VALUE_CONV_LEDGER"
 
 echo
+echo ">> generating Autogeneration v2 conversion arms (Exif::Main) and proving them"
+# conv_codegen.py compiles each field's RawConv/ValueConv/PrintConv from this
+# dump; conv_oracle.py then runs every generated arm's source through the
+# pinned tree's own FoundTag/GetValue and captures the bytes the Rust test
+# (`conv::tests`) must reproduce.
+python3 "$HERE/conv_codegen.py" "$JSON" --table Exif::Main \
+    -o "$(artifact_path conv-exif-main)" --ledger "$(artifact_path conv-exif-main-ledger)"
+python3 "$HERE/conv_oracle.py" --write --table Exif::Main \
+    --perl "$PERL" --exiftool-dir "$LIB/.."
+
+echo
 echo ">> writing the bounded Garmin FIT source the FIT spec tests replay"
 python3 "$HERE/garmin_fit_specs.py" "$JSON" --expr-ledger "$EXPR_LEDGER" \
     --protocol-fact "$FIT_FACT" --write-bounded "$(artifact_path garmin-fit-source)" > /dev/null

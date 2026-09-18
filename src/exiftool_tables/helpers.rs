@@ -247,7 +247,7 @@ const BEYOND_2_53: HelperError =
 /// Perl's `int()` (pp_int): an IV when the truncated value fits one, a UV
 /// when it fits that (refused -- a UV prints its digits, a double `%.15g`),
 /// otherwise the truncated double.
-fn perl_int(n: PerlNum) -> Result<PerlNum, HelperError> {
+pub(crate) fn perl_int(n: PerlNum) -> Result<PerlNum, HelperError> {
     match n {
         PerlNum::Int(_) => Ok(n),
         PerlNum::Float(v) if !v.is_finite() => Ok(n),
@@ -266,7 +266,7 @@ fn perl_int(n: PerlNum) -> Result<PerlNum, HelperError> {
 /// `sprintf("%d")` / `sprintf("%+d")` of a Perl number, including Perl's own
 /// `Inf`/`NaN` rendering and its IV cast of an out-of-range double (a UV
 /// reinterpreted as signed, `UV_MAX` as -1 beyond that).
-fn sprintf_d(n: PerlNum, plus: bool) -> String {
+pub(crate) fn sprintf_d(n: PerlNum, plus: bool) -> String {
     let i = match n {
         PerlNum::Int(i) => i,
         PerlNum::Float(v) if v.is_nan() => return "NaN".to_string(),
@@ -299,7 +299,7 @@ fn sprintf_d(n: PerlNum, plus: bool) -> String {
 }
 
 /// `sprintf("%.<prec>f")`, with Perl's `Inf`/`-Inf`/`NaN`.
-fn sprintf_f(prec: usize, v: f64) -> String {
+pub(crate) fn sprintf_f(prec: usize, v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()
     } else if v.is_infinite() {
@@ -483,7 +483,8 @@ pub fn print_exposure_time(val: &MemberVal) -> HelperResult {
     if !ok.is_truthy() {
         return Ok(secs);
     }
-    let v = secs.perl_num().as_f64();
+    // NV context: `sprintf("%.1f", "-0")` is `-0.0` (see `MemberVal::perl_nv`).
+    let v = secs.perl_nv();
     if v < 0.25001 && v > 0.0 {
         let q = 0.5 + 1.0 / v;
         if q >= TWO_63 {

@@ -1,0 +1,5514 @@
+{
+ "counts": {
+  "generated": 528,
+  "not_conversion_fields": 29,
+  "refused": 40
+ },
+ "exiftool_version": "13.59",
+ "generated": [
+  {
+   "flags": [],
+   "hash_keys": [
+    "R03",
+    "R98",
+    "THM"
+   ],
+   "id": "0x0001",
+   "name": "InteropIndex",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "365fdce6e39d5b758b42215966f4b54e23e7d5724b4b808a83d38f48be2912d8"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0002",
+   "name": "InteropVersion",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "b617ea1786a5a5fe9859e25517e8265bd7cf7ac8af5dfb72523d3b0c38a54d81"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x000b",
+   "name": "ProcessingSoftware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0100",
+   "name": "ImageWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0101",
+   "name": "ImageHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0102",
+   "name": "BitsPerSample",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "10",
+    "2",
+    "3",
+    "32803",
+    "32844",
+    "32845",
+    "32892",
+    "34892",
+    "4",
+    "5",
+    "51177",
+    "52527",
+    "6",
+    "8",
+    "9"
+   ],
+   "id": "0x0106",
+   "name": "PhotometricInterpretation",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "b7c20999ccb38da2ad45bb1182583c797d065919d8f99971e081b63fe9529693"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0x0107",
+   "name": "Thresholding",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "37a286bed1bac5d2aff967d8115a806c7d9c4459622d018a38759dd61aba82e9"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0108",
+   "name": "CellWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0109",
+   "name": "CellLength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2"
+   ],
+   "id": "0x010a",
+   "name": "FillOrder",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "e2447defce23f7c5d4e8ce36501295b55835c01ffc7c72f7e881ea49de2e5ff8"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x010d",
+   "name": "DocumentName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x010e",
+   "name": "ImageDescription",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x010f",
+   "name": "Make",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "0f5110ee5a20fc908b8575c065ecd780478faeba405b00ab5a943b158d441a92"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0110",
+   "name": "Model",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "ad53e990f2e964c9dff1d677df687db55e92e7b26af3d4346a3669035fa17ec3"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ],
+   "id": "0x0112",
+   "name": "Orientation",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "957fd783b200ef8f4f6a3df182606b5f2ee99e45f3e8dcc07f2eb7099eb288e3"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0115",
+   "name": "SamplesPerPixel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0116",
+   "name": "RowsPerStrip",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0118",
+   "name": "MinSampleValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0119",
+   "name": "MaxSampleValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x011a",
+   "name": "XResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x011b",
+   "name": "YResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2"
+   ],
+   "id": "0x011c",
+   "name": "PlanarConfiguration",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "6e83393599d0dc23611ec12879475b37834540bda744c8f56add4f391516ea8b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x011d",
+   "name": "PageName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x011e",
+   "name": "XPosition",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x011f",
+   "name": "YPosition",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0120",
+   "name": "FreeOffsets",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "7aff8a6c9dff2a9b8372d5aa87d9d0fec443c0ce51e7e9f6fb25d8550f072280"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0121",
+   "name": "FreeByteCounts",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "7aff8a6c9dff2a9b8372d5aa87d9d0fec443c0ce51e7e9f6fb25d8550f072280"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+   ],
+   "id": "0x0122",
+   "name": "GrayResponseUnit",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "abde4f7a1db826109ca056f3e193fe11b70c61d45ade09696c8a1b005b8b791b"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x0123",
+   "name": "GrayResponseCurve",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0124",
+   "name": "T4Options",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "65b3670d2138cbe5caf29c603be2f6a773565579272f3d9a06d30f25e8e0036f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0125",
+   "name": "T6Options",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "880fb7258947435aef75f0f8198072c19032c82795bbd95567741b87d5e54943"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0x0128",
+   "name": "ResolutionUnit",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "afed3d42ef1c747a33a759114bb1c1bbbc64b8078b2f5b001f34b5c6ac131bd3"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0129",
+   "name": "PageNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x012c",
+   "name": "ColorResponseUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x012d",
+   "name": "TransferFunction",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0131",
+   "name": "Software",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "e4d32e7f739acb6e469eb74ff0059511ef1ad93d901032142c0748c6ac651f47"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0132",
+   "name": "ModifyDate",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "20ad29bf7c913b977cffd04748bcd1b3ab2f856db7a411637be4ae6e98d8759d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x013b",
+   "name": "Artist",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "a6069fd3f7f54d752d067b98ba23fd913374bc8891ddf8994f143cda5ae710b1"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x013c",
+   "name": "HostComputer",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "34892",
+    "34893",
+    "34894",
+    "34895"
+   ],
+   "id": "0x013d",
+   "name": "Predictor",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d1d1b317d8d4af5324411472440ce8293ae5026175a69a509320cc22ff96e46c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x013e",
+   "name": "WhitePoint",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x013f",
+   "name": "PrimaryChromaticities",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x0140",
+   "name": "ColorMap",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0141",
+   "name": "HalftoneHints",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0142",
+   "name": "TileWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0143",
+   "name": "TileLength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0144",
+   "name": "TileOffsets",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "7aff8a6c9dff2a9b8372d5aa87d9d0fec443c0ce51e7e9f6fb25d8550f072280"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0145",
+   "name": "TileByteCounts",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "7aff8a6c9dff2a9b8372d5aa87d9d0fec443c0ce51e7e9f6fb25d8550f072280"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0146",
+   "name": "BadFaxLines",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0x0147",
+   "name": "CleanFaxData",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "1a6ef36e44ac9251889040d731a1540f5a8f148e73d88a8a04c270e9ec7ca2ba"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0148",
+   "name": "ConsecutiveBadFaxLines",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2"
+   ],
+   "id": "0x014c",
+   "name": "InkSet",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d752504d9041e9cac9cc902e529572a519659007b3fe927373e628e25cbff38b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x014d",
+   "name": "InkNames",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x014e",
+   "name": "NumberofInks",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0150",
+   "name": "DotRange",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0151",
+   "name": "TargetPrinter",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0x0152",
+   "name": "ExtraSamples",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "0a061360a871d52480c161127e4e924547311c7360c7b03458e3c236c5213a3b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6"
+   ],
+   "id": "0x0153",
+   "name": "SampleFormat",
+   "slots": {
+    "PrintConv": "list"
+   },
+   "source_sha256": "b909b7698c9fdf05d97cfa24ca74751998b02b20750d08cea5fd7700f02b1f42"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0154",
+   "name": "SMinSampleValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0155",
+   "name": "SMaxSampleValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0156",
+   "name": "TransferRange",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0157",
+   "name": "ClipPath",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0158",
+   "name": "XClipPathUnits",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0159",
+   "name": "YClipPathUnits",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0x015a",
+   "name": "Indexed",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "ab6d5e66835d5c14511c88206e91d2cd61ce26d224f16d93f763a1c34927c620"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x015b",
+   "name": "JPEGTables",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0x015f",
+   "name": "OPIProxy",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "01db091e6df34253e1b7bc83722962e9a144a54fe2458ee33572dad1c1042064"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0x0191",
+   "name": "ProfileType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "7079844104af40f2ce4a24bbf2c0bf15af5e4d7522e40831e433cf4bda0f345b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "255",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7"
+   ],
+   "id": "0x0192",
+   "name": "FaxProfile",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "f1dbf01f11759f7db3f13769fd477f83a0a96a871f51f2adef9adfb95a10a1f4"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0193",
+   "name": "CodingMethods",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "22b2a009d4895c43c86b7604a26d1eb19620684683160662581bf3f103474cb8"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0194",
+   "name": "VersionYear",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0195",
+   "name": "ModeNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x01b1",
+   "name": "Decode",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x01b2",
+   "name": "DefaultImageColor",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x01b3",
+   "name": "T82Options",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x01b5",
+   "name": "JPEGTables",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "14"
+   ],
+   "id": "0x0200",
+   "name": "JPEGProc",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "fa60bd1b1f8ba0fd040512605a959470ba1cfb3b80085b216b70ea609a513a3b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0203",
+   "name": "JPEGRestartInterval",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0205",
+   "name": "JPEGLosslessPredictors",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0206",
+   "name": "JPEGPointTransforms",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0207",
+   "name": "JPEGQTables",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0208",
+   "name": "JPEGDCTables",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0209",
+   "name": "JPEGACTables",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0211",
+   "name": "YCbCrCoefficients",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1 1",
+    "1 2",
+    "1 4",
+    "2 1",
+    "2 2",
+    "2 4",
+    "4 1",
+    "4 2"
+   ],
+   "id": "0x0212",
+   "name": "YCbCrSubSampling",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "f9bfda527e51dd6e54a97e0bf63cee8d94b88d7f43c4c87c1ae1178d24949fa4"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2"
+   ],
+   "id": "0x0213",
+   "name": "YCbCrPositioning",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "20a54bb88ba2ab861b0bd47351f8684e7c0773fe642d5ea58703dffccfa90fb2"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x0214",
+   "name": "ReferenceBlackWhite",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x022f",
+   "name": "StripRowCounts",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0x0303",
+   "name": "RenderingIntent",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "9998aca9a1149eb8e45eb2180109abf1e05b5f323b79b937e03337700f72635f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x03e7",
+   "name": "USPTOMiscellaneous",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x1000",
+   "name": "RelatedImageFileFormat",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x1001",
+   "name": "RelatedImageWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x1002",
+   "name": "RelatedImageHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x4746",
+   "name": "Rating",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x4749",
+   "name": "RatingPercent",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5001",
+   "name": "ResolutionXUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5002",
+   "name": "ResolutionYUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5003",
+   "name": "ResolutionXLengthUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5004",
+   "name": "ResolutionYLengthUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5005",
+   "name": "PrintFlags",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5006",
+   "name": "PrintFlagsVersion",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5007",
+   "name": "PrintFlagsCrop",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5008",
+   "name": "PrintFlagsBleedWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5009",
+   "name": "PrintFlagsBleedWidthScale",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x500a",
+   "name": "HalftoneLPI",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x500b",
+   "name": "HalftoneLPIUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x500c",
+   "name": "HalftoneDegree",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x500d",
+   "name": "HalftoneShape",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x500e",
+   "name": "HalftoneMisc",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x500f",
+   "name": "HalftoneScreen",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5010",
+   "name": "JPEGQuality",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x5011",
+   "name": "GridSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5012",
+   "name": "ThumbnailFormat",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5013",
+   "name": "ThumbnailWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5014",
+   "name": "ThumbnailHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5015",
+   "name": "ThumbnailColorDepth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5016",
+   "name": "ThumbnailPlanes",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5017",
+   "name": "ThumbnailRawBytes",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5018",
+   "name": "ThumbnailLength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5019",
+   "name": "ThumbnailCompressedSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x501a",
+   "name": "ColorTransferFunction",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x501b",
+   "name": "ThumbnailData",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5020",
+   "name": "ThumbnailImageWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5021",
+   "name": "ThumbnailImageHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5022",
+   "name": "ThumbnailBitsPerSample",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5023",
+   "name": "ThumbnailCompression",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5024",
+   "name": "ThumbnailPhotometricInterp",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5025",
+   "name": "ThumbnailDescription",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5026",
+   "name": "ThumbnailEquipMake",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5027",
+   "name": "ThumbnailEquipModel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5028",
+   "name": "ThumbnailStripOffsets",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5029",
+   "name": "ThumbnailOrientation",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x502a",
+   "name": "ThumbnailSamplesPerPixel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x502b",
+   "name": "ThumbnailRowsPerStrip",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x502c",
+   "name": "ThumbnailStripByteCounts",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x502d",
+   "name": "ThumbnailResolutionX",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x502e",
+   "name": "ThumbnailResolutionY",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x502f",
+   "name": "ThumbnailPlanarConfig",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5030",
+   "name": "ThumbnailResolutionUnit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5031",
+   "name": "ThumbnailTransferFunction",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5032",
+   "name": "ThumbnailSoftware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5033",
+   "name": "ThumbnailDateTime",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5034",
+   "name": "ThumbnailArtist",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5035",
+   "name": "ThumbnailWhitePoint",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5036",
+   "name": "ThumbnailPrimaryChromaticities",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5037",
+   "name": "ThumbnailYCbCrCoefficients",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5038",
+   "name": "ThumbnailYCbCrSubsampling",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5039",
+   "name": "ThumbnailYCbCrPositioning",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x503a",
+   "name": "ThumbnailRefBlackWhite",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x503b",
+   "name": "ThumbnailCopyright",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5090",
+   "name": "LuminanceTable",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5091",
+   "name": "ChrominanceTable",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5100",
+   "name": "FrameDelay",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5101",
+   "name": "LoopCount",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5102",
+   "name": "GlobalPalette",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5103",
+   "name": "IndexBackground",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5104",
+   "name": "IndexTransparent",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5110",
+   "name": "PixelUnits",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5111",
+   "name": "PixelsPerUnitX",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5112",
+   "name": "PixelsPerUnitY",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x5113",
+   "name": "PaletteHistogram",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "6"
+   ],
+   "id": "0x7000",
+   "name": "SonyRawFileType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "5646bd822881621e4bc1dc017c70102ee34aa05f9f523ee86ec92708960247ef"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7010",
+   "name": "SonyToneCurve",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "256",
+    "257",
+    "272",
+    "511"
+   ],
+   "id": "0x7031",
+   "name": "VignettingCorrection",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "7cc86225fb66111d0ccaa54d38559057661e0b806cb90910bbce5bbe1599c7a9"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7032",
+   "name": "VignettingCorrParams",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "255"
+   ],
+   "id": "0x7034",
+   "name": "ChromaticAberrationCorrection",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d980bd68faa6dce159c9b74da6a8768b79a7b4f00ba9756c4799a839a2dc1fea"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7035",
+   "name": "ChromaticAberrationCorrParams",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "17",
+    "255"
+   ],
+   "id": "0x7036",
+   "name": "DistortionCorrection",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "34d64ea7b9fe36446fb8e455b38b3390205aeec8d66a3346b37da81a74321f24"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7037",
+   "name": "DistortionCorrParams",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7038",
+   "name": "SonyRawImageSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7310",
+   "name": "BlackLevel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x7313",
+   "name": "WB_RGGBLevels",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x74c7",
+   "name": "SonyCropTopLeft",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x74c8",
+   "name": "SonyCropSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x800d",
+   "name": "ImageID",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x80a3",
+   "name": "WangTag1",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x80a4",
+   "name": "WangAnnotation",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x80a5",
+   "name": "WangTag3",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80a6",
+   "name": "WangTag4",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "0c0b82329f5ce78adcd8b97e2e132d71b2322725fc58cf2afd4b0a2b430ab0ab"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80b9",
+   "name": "ImageReferencePoints",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80ba",
+   "name": "RegionXformTackPoint",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80bb",
+   "name": "WarpQuadrilateral",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80bc",
+   "name": "AffineTransformMat",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80e3",
+   "name": "Matteing",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80e4",
+   "name": "DataType",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80e5",
+   "name": "ImageDepth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x80e6",
+   "name": "TileDepth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8214",
+   "name": "ImageFullWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8215",
+   "name": "ImageFullHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8216",
+   "name": "TextureFormat",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8217",
+   "name": "WrapModes",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8218",
+   "name": "FovCot",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8219",
+   "name": "MatrixWorldToScreen",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x821a",
+   "name": "MatrixWorldToCamera",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x827d",
+   "name": "Model2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x828d",
+   "name": "CFARepeatPatternDim",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x828e",
+   "name": "CFAPattern2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x828f",
+   "name": "BatteryLevel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x829a",
+   "name": "ExposureTime",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "14167ba517867bc61e7a2f3361bf500e62a941e599568bd695523c1db688bbcf"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x829d",
+   "name": "FNumber",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "06c110554c5c45d18a7bfa56e450992862c4fbbb977581c784c924cbf5373977"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82a5",
+   "name": "MDFileTag",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82a6",
+   "name": "MDScalePixel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82a7",
+   "name": "MDColorTable",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82a8",
+   "name": "MDLabName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82a9",
+   "name": "MDSampleInfo",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82aa",
+   "name": "MDPrepDate",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82ab",
+   "name": "MDPrepTime",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x82ac",
+   "name": "MDFileUnits",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x830e",
+   "name": "PixelScale",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8335",
+   "name": "AdventScale",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8336",
+   "name": "AdventRevision",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x835c",
+   "name": "UIC1Tag",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x835d",
+   "name": "UIC2Tag",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x835e",
+   "name": "UIC3Tag",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x835f",
+   "name": "UIC4Tag",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x847e",
+   "name": "IntergraphPacketData",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x847f",
+   "name": "IntergraphFlagRegisters",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8480",
+   "name": "IntergraphMatrix",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8481",
+   "name": "INGRReserved",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8482",
+   "name": "ModelTiePoint",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e0",
+   "name": "Site",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e1",
+   "name": "ColorSequence",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e2",
+   "name": "IT8Header",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "10",
+    "2",
+    "9"
+   ],
+   "id": "0x84e3",
+   "name": "RasterPadding",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "3c3678f8c8e53e6c08dde19262772618fef5cf1cafd38419efd276cbf945ac28"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e4",
+   "name": "BitsPerRunLength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e5",
+   "name": "BitsPerExtendedRunLength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e6",
+   "name": "ColorTable",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0x84e7",
+   "name": "ImageColorIndicator",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "e5559801b30e21cd3164dc72babccee6eca2ea27ea22191993ecc8530579bfdd"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0x84e8",
+   "name": "BackgroundColorIndicator",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "824a8a6f5a2bf777ca40508535529f568792936b0c10e8c93721777cad3dd337"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84e9",
+   "name": "ImageColorValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84ea",
+   "name": "BackgroundColorValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84eb",
+   "name": "PixelIntensityRange",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84ec",
+   "name": "TransparencyIndicator",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84ed",
+   "name": "ColorCharacterization",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0x84ee",
+   "name": "HCUsage",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "23495c45ffed9ca4e2f6d5df04ec0c6150ed16345ea3ff6a53dea64dc715674f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84ef",
+   "name": "TrapIndicator",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x84f0",
+   "name": "CMYKEquivalent",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8546",
+   "name": "SEMInfo",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x85b8",
+   "name": "PixelMagicJBIGOptions",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x85d7",
+   "name": "JPLCartoIFD",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x85d8",
+   "name": "ModelTransform",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8602",
+   "name": "WB_GRGBLevels",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x877f",
+   "name": "TIFF_FXExtensions",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "30dd27e91151f588ba905780e3a0535db2036a71fd37555758608d3a45fff71e"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8780",
+   "name": "MultiProfiles",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "b26129ac6e10d856174892249a05019b5ec6690fd04d3d1737e333bea7e7c9be"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8781",
+   "name": "SharedData",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8782",
+   "name": "T88Options",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x87ac",
+   "name": "ImageLayer",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x87af",
+   "name": "GeoTiffDirectory",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "f921acd4444c83e38a077be8b78c96ecfac7abbb90a7e171a5f94c0fbc2ce715"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x87b0",
+   "name": "GeoTiffDoubleParams",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "f921acd4444c83e38a077be8b78c96ecfac7abbb90a7e171a5f94c0fbc2ce715"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x87b1",
+   "name": "GeoTiffAsciiParams",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x87be",
+   "name": "JBIGOptions",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+   ],
+   "id": "0x8822",
+   "name": "ExposureProgram",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d01b8ecf203c9425b296836501a76bae818982eb4235c0f43b55b15bcdd30200"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8824",
+   "name": "SpectralSensitivity",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8827",
+   "name": "ISO",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "fadc05c1a8859fed207d67877a8bb1f5a02502ad153f597c0ea0629e705ccf98"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x8828",
+   "name": "Opto-ElectricConvFactor",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8829",
+   "name": "Interlace",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x882a",
+   "name": "TimeZoneOffset",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x882b",
+   "name": "SelfTimerMode",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7"
+   ],
+   "id": "0x8830",
+   "name": "SensitivityType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d3649f180d9eab5ed51c41831f694f5743b235387aa1c59a904d9f270f31f80e"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8831",
+   "name": "StandardOutputSensitivity",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8832",
+   "name": "RecommendedExposureIndex",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8833",
+   "name": "ISOSpeed",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8834",
+   "name": "ISOSpeedLatitudeyyy",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8835",
+   "name": "ISOSpeedLatitudezzz",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x885c",
+   "name": "FaxRecvParams",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x885d",
+   "name": "FaxSubAddress",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x885e",
+   "name": "FaxRecvTime",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8871",
+   "name": "FedexEDR",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9000",
+   "name": "ExifVersion",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "b617ea1786a5a5fe9859e25517e8265bd7cf7ac8af5dfb72523d3b0c38a54d81"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9003",
+   "name": "DateTimeOriginal",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "20ad29bf7c913b977cffd04748bcd1b3ab2f856db7a411637be4ae6e98d8759d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9004",
+   "name": "CreateDate",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "20ad29bf7c913b977cffd04748bcd1b3ab2f856db7a411637be4ae6e98d8759d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9009",
+   "name": "GooglePlusUploadCode",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9010",
+   "name": "OffsetTime",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9011",
+   "name": "OffsetTimeOriginal",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9012",
+   "name": "OffsetTimeDigitized",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6"
+   ],
+   "id": "0x9101",
+   "name": "ComponentsConfiguration",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "7f3ad0d61d3b2136a648991d9e11c36a7c19675523b9611d10fef67d6ff34542"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9102",
+   "name": "CompressedBitsPerPixel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9201",
+   "name": "ShutterSpeedValue",
+   "slots": {
+    "PrintConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "b678639fe13e2e8407776642b437b590063628f6897bfc4314ead7cb45f52d6c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9202",
+   "name": "ApertureValue",
+   "slots": {
+    "PrintConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "87526bcb54d71f8e0ccaae03e68a6a00789c3b147bdf2d2d690994c26e6e077c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9203",
+   "name": "BrightnessValue",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9204",
+   "name": "ExposureCompensation",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "a984b5a8528c1dc2eefb3b866639e70a0aca6482a893238a9e7787784f29cb7e"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9205",
+   "name": "MaxApertureValue",
+   "slots": {
+    "PrintConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "87526bcb54d71f8e0ccaae03e68a6a00789c3b147bdf2d2d690994c26e6e077c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9206",
+   "name": "SubjectDistance",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "240e75cb2c116feb5646b22b398eb6a26e4fec9edafcb6390e74e7641244d73c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "255",
+    "3",
+    "4",
+    "5",
+    "6"
+   ],
+   "id": "0x9207",
+   "name": "MeteringMode",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d258f8ce20377a0912789de2c56d7715455df7e78eebfacfa24bc30cd07958a4"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "2",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "255",
+    "26",
+    "27",
+    "28",
+    "29",
+    "3",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "4",
+    "9"
+   ],
+   "id": "0x9208",
+   "name": "LightSource",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "87735c57c4b3bfd5ca1bf8cf86895b1218cadf4bd696eecb42fdc211d9174e4f"
+  },
+  {
+   "flags": [
+    "PrintHex"
+   ],
+   "hash_keys": [
+    "0",
+    "1",
+    "13",
+    "15",
+    "16",
+    "20",
+    "24",
+    "25",
+    "29",
+    "31",
+    "32",
+    "48",
+    "5",
+    "65",
+    "69",
+    "7",
+    "71",
+    "73",
+    "77",
+    "79",
+    "8",
+    "80",
+    "88",
+    "89",
+    "9",
+    "93",
+    "95"
+   ],
+   "id": "0x9209",
+   "name": "Flash",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "5aa36e7aa2be4e3407c5829cea327505785a54e3414daf35163fe79dfbbcbfab"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x920a",
+   "name": "FocalLength",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "f5e04af397c6ba67c7b0739772dce10991fbcd404eaf4a30baefe96ba1ff5529"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x920b",
+   "name": "FlashEnergy",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x920c",
+   "name": "SpatialFrequencyResponse",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x920d",
+   "name": "Noise",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x920e",
+   "name": "FocalPlaneXResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x920f",
+   "name": "FocalPlaneYResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+   ],
+   "id": "0x9210",
+   "name": "FocalPlaneResolutionUnit",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "0d9379a9fef9bfbac2848ad750b6c57867b66b6e91c401581772cff2c06ab187"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9211",
+   "name": "ImageNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "C",
+    "R",
+    "S",
+    "T",
+    "U"
+   ],
+   "id": "0x9212",
+   "name": "SecurityClassification",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "126e5fe567e0de44fb9378f39a0ded820ba8a0c14724334317a6d314dbf4a876"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9213",
+   "name": "ImageHistory",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9214",
+   "name": "SubjectArea",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9215",
+   "name": "ExposureIndex",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9216",
+   "name": "TIFF-EPStandardID",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "94e0bba7d4af1248e01065123654822798a6909e43d10280f0484366e042cfc7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+   ],
+   "id": "0x9217",
+   "name": "SensingMethod",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "babcdd59855bf1036f353f54580094801ccaaf1a2daf2ed5ff901870064d246a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x923a",
+   "name": "CIP3DataFile",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x923b",
+   "name": "CIP3Sheet",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x923c",
+   "name": "CIP3Side",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x923f",
+   "name": "StoNits",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9290",
+   "name": "SubSecTime",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "943a43e0fd40d67276703dbb29d7f41f0e138c2f8bd5a67b0249e971606b9ff0"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9291",
+   "name": "SubSecTimeOriginal",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "943a43e0fd40d67276703dbb29d7f41f0e138c2f8bd5a67b0249e971606b9ff0"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9292",
+   "name": "SubSecTimeDigitized",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "943a43e0fd40d67276703dbb29d7f41f0e138c2f8bd5a67b0249e971606b9ff0"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x932f",
+   "name": "MSDocumentText",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x9330",
+   "name": "MSPropertySetStorage",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0x9331",
+   "name": "MSDocumentTextPosition",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9400",
+   "name": "AmbientTemperature",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "0831d56bfe887feeefd9adb0726155e0dc75d466d23cc7aac3050599bdfae85c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9401",
+   "name": "Humidity",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9402",
+   "name": "Pressure",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9403",
+   "name": "WaterDepth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9404",
+   "name": "Acceleration",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9405",
+   "name": "CameraElevationAngle",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9a00",
+   "name": "XiaomiModel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa000",
+   "name": "FlashpixVersion",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "b617ea1786a5a5fe9859e25517e8265bd7cf7ac8af5dfb72523d3b0c38a54d81"
+  },
+  {
+   "flags": [
+    "PrintHex"
+   ],
+   "hash_keys": [
+    "1",
+    "2",
+    "65533",
+    "65534",
+    "65535"
+   ],
+   "id": "0xa001",
+   "name": "ColorSpace",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "f7e1af495d662be7e642d9e763616a09cc89a8d69a6c01bc1cdc470252adf611"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa002",
+   "name": "ExifImageWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa003",
+   "name": "ExifImageHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa004",
+   "name": "RelatedSoundFile",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa010",
+   "name": "SamsungRawPointersOffset",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa011",
+   "name": "SamsungRawPointersLength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa101",
+   "name": "SamsungRawByteOrder",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa20b",
+   "name": "FlashEnergy",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa20d",
+   "name": "Noise",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa20e",
+   "name": "FocalPlaneXResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa20f",
+   "name": "FocalPlaneYResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+   ],
+   "id": "0xa210",
+   "name": "FocalPlaneResolutionUnit",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "0d9379a9fef9bfbac2848ad750b6c57867b66b6e91c401581772cff2c06ab187"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa211",
+   "name": "ImageNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa212",
+   "name": "SecurityClassification",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa213",
+   "name": "ImageHistory",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa214",
+   "name": "SubjectLocation",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa215",
+   "name": "ExposureIndex",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa216",
+   "name": "TIFF-EPStandardID",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "94e0bba7d4af1248e01065123654822798a6909e43d10280f0484366e042cfc7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "7",
+    "8"
+   ],
+   "id": "0xa217",
+   "name": "SensingMethod",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "055d3177c45282fbd158734ac53a8868d5a14160e1d564e009c68309fb2d8fcd"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "\u0003\u0000\u0000\u0000",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0xa300",
+   "name": "FileSource",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "95b27345d599ecff093ef4205883999e4a863be0cfedfa529c29008bff312c6f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1"
+   ],
+   "id": "0xa301",
+   "name": "SceneType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "3a358dc41c30c242d06aaf82c02f2253b4a1d07205115e41389b596eeafaba4c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "6",
+    "7",
+    "8"
+   ],
+   "id": "0xa401",
+   "name": "CustomRendered",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "b8ff77598400557cf40693d5b69631a2916acee8f014cd75924061f8a6d5cfc2"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xa402",
+   "name": "ExposureMode",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "ca0c163c7bd938f7ef6b5edb5b447c531de56854f16ced44e920b678b561bde5"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xa403",
+   "name": "WhiteBalance",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "bc07af3da082e6434d68d818467c2e1ac7397efef82738a03da3f3c8fc60f010"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa404",
+   "name": "DigitalZoomRatio",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa405",
+   "name": "FocalLengthIn35mmFormat",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "f411d716707c85b3e8dc80d98e4ca80eef73b3e19f47f89da169807e4bdc3651"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ],
+   "id": "0xa406",
+   "name": "SceneCaptureType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "a1feb44ac502022b1978d8c390272be234c05ea0e44ce215b6dc4b8eaa330179"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ],
+   "id": "0xa407",
+   "name": "GainControl",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "5453f4778a595847952de14d7869172b4738e07829070d2021169dd0ab228407"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xa408",
+   "name": "Contrast",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "fc5296e978cdb15e5e5dc362eadec627eb1f0ccd1379daab8535e5b31236b08a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xa409",
+   "name": "Saturation",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "fc5296e978cdb15e5e5dc362eadec627eb1f0ccd1379daab8535e5b31236b08a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xa40a",
+   "name": "Sharpness",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "50d837ff613fcb732ced7638f8766acacd41a24e9e9c4ab7e06f5201ab93f240"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xa40b",
+   "name": "DeviceSettingDescription",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0xa40c",
+   "name": "SubjectDistanceRange",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "4c573249f77f0771aa2b143701218c731fa95c3e1008f23cea644f0cc09ccfb2"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "4"
+   ],
+   "id": "0xa40d",
+   "name": "DevelopmentType",
+   "slots": {
+    "PrintConv": "list",
+    "ValueConv": "str"
+   },
+   "source_sha256": "5dcb9954f58d7e9b5d4b181ac2f6e9420101600c9acbbf0bfb5987a0175cad66"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xa40f",
+   "name": "DistortionCorrection",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "14181516301214629e3e3f2db897737b120ecd394f53ab351f57ba007b49b064"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xa410",
+   "name": "ChromaticAberrationCorrection",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "14181516301214629e3e3f2db897737b120ecd394f53ab351f57ba007b49b064"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xa411",
+   "name": "ShadingCorrection",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "14181516301214629e3e3f2db897737b120ecd394f53ab351f57ba007b49b064"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xa412",
+   "name": "NoiseReduction",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "14181516301214629e3e3f2db897737b120ecd394f53ab351f57ba007b49b064"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa420",
+   "name": "ImageUniqueID",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa430",
+   "name": "OwnerName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa431",
+   "name": "SerialNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa432",
+   "name": "LensInfo",
+   "slots": {
+    "PrintConv": "code"
+   },
+   "source_sha256": "2a1497c5784fb07273c6e050272c5f154e19353fc6273c3146841b5cd3480678"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa433",
+   "name": "LensMake",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa434",
+   "name": "LensModel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa435",
+   "name": "LensSerialNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa436",
+   "name": "ImageTitle",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa437",
+   "name": "Photographer",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa438",
+   "name": "ImageEditor",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa439",
+   "name": "CameraFirmware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa43a",
+   "name": "RAWDevelopingSoftware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa43b",
+   "name": "ImageEditingSoftware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa43c",
+   "name": "MetadataEditingSoftware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0xa460",
+   "name": "CompositeImage",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "9d14fd28d2d3ed0e65994d1b28d18122ddd5ee2c7168df6705d119d3db711247"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa461",
+   "name": "CompositeImageCount",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa480",
+   "name": "GDALMetadata",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa481",
+   "name": "GDALNoData",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa500",
+   "name": "Gamma",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xafc0",
+   "name": "ExpandSoftware",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xafc1",
+   "name": "ExpandLens",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xafc2",
+   "name": "ExpandFilm",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xafc3",
+   "name": "ExpandFilterLens",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xafc4",
+   "name": "ExpandScanner",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xafc5",
+   "name": "ExpandFlashLamp",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xb4c3",
+   "name": "HasselbladRawImage",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7"
+   ],
+   "id": "0xbc02",
+   "name": "Transformation",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "b48a0a5b7f4806cfc30a70d5c971194aaf0dbc71bfb42e755ce25f720ccdc0cd"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xbc03",
+   "name": "Uncompressed",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "14181516301214629e3e3f2db897737b120ecd394f53ab351f57ba007b49b064"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbc04",
+   "name": "ImageType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "bdc639d1d1cc20ff8b35032523d637ac5c62109389555bb0dc3e4ee975213680"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbc80",
+   "name": "ImageWidth",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbc81",
+   "name": "ImageHeight",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbc82",
+   "name": "WidthResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbc83",
+   "name": "HeightResolution",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbcc0",
+   "name": "ImageOffset",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbcc1",
+   "name": "ImageByteCount",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbcc2",
+   "name": "AlphaOffset",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xbcc3",
+   "name": "AlphaByteCount",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0xbcc4",
+   "name": "ImageDataDiscard",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "052e937128cc62082d985900f5f0fc94baa6c01a4870d9833672faa31e92acf4"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0xbcc5",
+   "name": "AlphaDataDiscard",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "052e937128cc62082d985900f5f0fc94baa6c01a4870d9833672faa31e92acf4"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc427",
+   "name": "OceScanjobDesc",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc428",
+   "name": "OceApplicationSelector",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc429",
+   "name": "OceIDNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc42a",
+   "name": "OceImageLogic",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xc44f",
+   "name": "Annotations",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc573",
+   "name": "OriginalFileName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xc580",
+   "name": "USPTOOriginalContentType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "e6c02e4a0c6d345ec658eebce036be46c773045709a4bf1213c342278de9957b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0 1 1 2",
+    "1",
+    "1 0 2 1",
+    "1 2 0 1",
+    "2",
+    "2 1 1 0",
+    "3",
+    "4"
+   ],
+   "id": "0xc5e0",
+   "name": "CR2CFAPattern",
+   "slots": {
+    "PrintConv": "hash",
+    "ValueConv": "hash"
+   },
+   "source_sha256": "e55ab87d04248e971144bfbdeaa1d18e0e4dbe83cfae4c1eb8cc8f72960d06cb"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc612",
+   "name": "DNGVersion",
+   "slots": {
+    "PrintConv": "str",
+    "RawConv": "str"
+   },
+   "source_sha256": "d98e2f79671105b3c313156772cfc57c90782467f3ce0aafb442607e7d9384f6"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc613",
+   "name": "DNGBackwardVersion",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "94e0bba7d4af1248e01065123654822798a6909e43d10280f0484366e042cfc7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc614",
+   "name": "UniqueCameraModel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc616",
+   "name": "CFAPlaneColor",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "4ab698a5c85208a77cc1e2e660af3652eec8f69401a5ff69b01a41c6c74316f9"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+   ],
+   "id": "0xc617",
+   "name": "CFALayout",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "3d0638c77bbda3555e2809424ebdcb618f10f0d6b5850553478d8d9320017957"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xc618",
+   "name": "LinearizationTable",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc619",
+   "name": "BlackLevelRepeatDim",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc61a",
+   "name": "BlackLevel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc61b",
+   "name": "BlackLevelDeltaH",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc61c",
+   "name": "BlackLevelDeltaV",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc61d",
+   "name": "WhiteLevel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc61e",
+   "name": "DefaultScale",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc61f",
+   "name": "DefaultCropOrigin",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc620",
+   "name": "DefaultCropSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc621",
+   "name": "ColorMatrix1",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc622",
+   "name": "ColorMatrix2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc623",
+   "name": "CameraCalibration1",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc624",
+   "name": "CameraCalibration2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc625",
+   "name": "ReductionMatrix1",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc626",
+   "name": "ReductionMatrix2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc627",
+   "name": "AnalogBalance",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc628",
+   "name": "AsShotNeutral",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc629",
+   "name": "AsShotWhiteXY",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc62a",
+   "name": "BaselineExposure",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc62b",
+   "name": "BaselineNoise",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc62c",
+   "name": "BaselineSharpness",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc62d",
+   "name": "BayerGreenSplit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc62e",
+   "name": "LinearResponseLimit",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc62f",
+   "name": "CameraSerialNumber",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc630",
+   "name": "DNGLensInfo",
+   "slots": {
+    "PrintConv": "code"
+   },
+   "source_sha256": "2a1497c5784fb07273c6e050272c5f154e19353fc6273c3146841b5cd3480678"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc631",
+   "name": "ChromaBlurRadius",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc632",
+   "name": "AntiAliasStrength",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc633",
+   "name": "ShadowScale",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xc635",
+   "name": "MakerNoteSafety",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "1bfed62de748968d36897b33aca691db78e87746481d888a600a86bc0535f2a0"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc640",
+   "name": "RawImageSegmentation",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "2",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "255",
+    "26",
+    "27",
+    "28",
+    "29",
+    "3",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "4",
+    "9"
+   ],
+   "id": "0xc65a",
+   "name": "CalibrationIlluminant1",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "87735c57c4b3bfd5ca1bf8cf86895b1218cadf4bd696eecb42fdc211d9174e4f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "2",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "255",
+    "26",
+    "27",
+    "28",
+    "29",
+    "3",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "4",
+    "9"
+   ],
+   "id": "0xc65b",
+   "name": "CalibrationIlluminant2",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "87735c57c4b3bfd5ca1bf8cf86895b1218cadf4bd696eecb42fdc211d9174e4f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc65c",
+   "name": "BestQualityScale",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc65d",
+   "name": "RawDataUniqueID",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "6fd8d89132ad5be4503da7b91c188d7c7b3fe353ba2f451f48bd47c34f363623"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc660",
+   "name": "AliasLayerMetadata",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc68d",
+   "name": "ActiveArea",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc68e",
+   "name": "MaskedAreas",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc690",
+   "name": "AsShotPreProfileMatrix",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc692",
+   "name": "CurrentPreProfileMatrix",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xc6bf",
+   "name": "ColorimetricReference",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "477fd5f9904bf401a20500df931b29d7730226b59c9afdd2437874b2c55d12b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6c5",
+   "name": "SRawType",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6f7",
+   "name": "NoiseReductionApplied",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6f9",
+   "name": "ProfileHueSatMapDims",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6fa",
+   "name": "ProfileHueSatMapData1",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6fb",
+   "name": "ProfileHueSatMapData2",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6fc",
+   "name": "ProfileToneCurve",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3"
+   ],
+   "id": "0xc6fd",
+   "name": "ProfileEmbedPolicy",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "d4b3665b19b25b64aef7284c83e12df41fcca4a720fd63c0fcee009a89578e4e"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc714",
+   "name": "ForwardMatrix1",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc715",
+   "name": "ForwardMatrix2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc719",
+   "name": "PreviewSettingsDigest",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "4e3644d93916711dc2ecf2d2768008c28ce343fbed21645403c616bdab411be6"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4"
+   ],
+   "id": "0xc71a",
+   "name": "PreviewColorSpace",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "ded251f37f36c4c18710dff5bc6417e950767b41c9b48498beb0ee7ad7a6fe74"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc71b",
+   "name": "PreviewDateTime",
+   "slots": {
+    "PrintConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "b318104154a0a2be5e94660f1e424e1474c39527cd6a0796106c4ac6d77a672a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc71c",
+   "name": "RawImageDigest",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "4e3644d93916711dc2ecf2d2768008c28ce343fbed21645403c616bdab411be6"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc71d",
+   "name": "OriginalRawFileDigest",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "4e3644d93916711dc2ecf2d2768008c28ce343fbed21645403c616bdab411be6"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc71e",
+   "name": "SubTileBlockSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc71f",
+   "name": "RowInterleaveFactor",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc725",
+   "name": "ProfileLookTableDims",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc726",
+   "name": "ProfileLookTableData",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc761",
+   "name": "NoiseProfile",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc764",
+   "name": "FrameRate",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "6cbb08c62e9b9c1591d26ba8b3b1d137b9735cd011f9cc255ae872afc8d73d5c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc772",
+   "name": "TStop",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "f388d8661050e3b03e5855a8088cfa495af2313609ee37ac305a5e77b16275c5"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc789",
+   "name": "ReelName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc791",
+   "name": "OriginalDefaultFinalSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc792",
+   "name": "OriginalBestQualitySize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc793",
+   "name": "OriginalDefaultCropSize",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7a1",
+   "name": "CameraLabel",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xc7a3",
+   "name": "ProfileHueSatMapEncoding",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "7405c6076d8b359bc0a2596224cc6087088aaaf5acaa1a1a7ec49fafc1961898"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xc7a4",
+   "name": "ProfileLookTableEncoding",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "7405c6076d8b359bc0a2596224cc6087088aaaf5acaa1a1a7ec49fafc1961898"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7a5",
+   "name": "BaselineExposureOffset",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xc7a6",
+   "name": "DefaultBlackRender",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "da4af8e5a77a17fff58b52aa795dce31bcfbad2569361f80f4a7a8910b648e04"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7a7",
+   "name": "NewRawImageDigest",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "4e3644d93916711dc2ecf2d2768008c28ce343fbed21645403c616bdab411be6"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7a8",
+   "name": "RawToPreviewGain",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7aa",
+   "name": "CacheVersion",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "94e0bba7d4af1248e01065123654822798a6909e43d10280f0484366e042cfc7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7b5",
+   "name": "DefaultUserCrop",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xc7d7",
+   "name": "ZIFMetadata",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xc7d8",
+   "name": "ZIFAnnotations",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xc7e9",
+   "name": "DepthFormat",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "dd4101860ca69b4f4edb17f9e7e434a1fb355fbacc495cb76e812d52b2ad0f9b"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7ea",
+   "name": "DepthNear",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7eb",
+   "name": "DepthFar",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1"
+   ],
+   "id": "0xc7ec",
+   "name": "DepthUnits",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "136827fc5dbd02785a482fad8b4f5976b065c85cdfb943bd2da300aa21fc57c3"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "2"
+   ],
+   "id": "0xc7ed",
+   "name": "DepthMeasureType",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "1078c9297f9cc6a9de867bc1e11d58fd9e7bbbb363dac85cf2d5908817246db4"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc7ee",
+   "name": "EnhanceParams",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xcd2d",
+   "name": "ProfileGainTableMap",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd2e",
+   "name": "SemanticName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd30",
+   "name": "SemanticInstanceID",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [
+    "0",
+    "1",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "2",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "255",
+    "26",
+    "27",
+    "28",
+    "29",
+    "3",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "4",
+    "9"
+   ],
+   "id": "0xcd31",
+   "name": "CalibrationIlluminant3",
+   "slots": {
+    "PrintConv": "hash"
+   },
+   "source_sha256": "87735c57c4b3bfd5ca1bf8cf86895b1218cadf4bd696eecb42fdc211d9174e4f"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd32",
+   "name": "CameraCalibration3",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd33",
+   "name": "ColorMatrix3",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd34",
+   "name": "ForwardMatrix3",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd35",
+   "name": "IlluminantData1",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd36",
+   "name": "IlluminantData2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd37",
+   "name": "IlluminantData3",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd38",
+   "name": "MaskSubArea",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd39",
+   "name": "ProfileHueSatMapData3",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "8ebeeee3d31bcbfbf670a5ad57f459947eab49f4bb7bf76a0c5340051fd3e444"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd3a",
+   "name": "ReductionMatrix3",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xcd3f",
+   "name": "RGBTables",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xcd40",
+   "name": "ProfileGainTableMap2",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd43",
+   "name": "ColumnInterleaveFactor",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xcd46",
+   "name": "ImageStats",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd48",
+   "name": "ProfileGroupName",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd49",
+   "name": "JXLDistance",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd4a",
+   "name": "JXLEffort",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xcd4b",
+   "name": "JXLDecodeSpeed",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [
+    "Binary"
+   ],
+   "hash_keys": [],
+   "id": "0xea1c",
+   "name": "Padding",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xea1d",
+   "name": "OffsetSchema",
+   "slots": {},
+   "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfde8",
+   "name": "OwnerName",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfde9",
+   "name": "SerialNumber",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfdea",
+   "name": "Lens",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe4c",
+   "name": "RawFile",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe4d",
+   "name": "Converter",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe4e",
+   "name": "WhiteBalance",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe51",
+   "name": "Exposure",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe52",
+   "name": "Shadows",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe53",
+   "name": "Brightness",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe54",
+   "name": "Contrast",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe55",
+   "name": "Saturation",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe56",
+   "name": "Sharpness",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe57",
+   "name": "Smoothness",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xfe58",
+   "name": "MoireFilter",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "512d14aa99f63bb00f9f0936a6d5c38b816ece90522c24033a9973b2b4538b58"
+  }
+ ],
+ "helpers_called": [
+  "Image::ExifTool::ConvertDateTime",
+  "Image::ExifTool::Exif::PrintExposureTime",
+  "Image::ExifTool::Exif::PrintFNumber",
+  "Image::ExifTool::Exif::PrintFraction",
+  "Image::ExifTool::IsFloat",
+  "Image::ExifTool::XMP::ConvertXMPDate"
+ ],
+ "not_conversion_fields": [
+  {
+   "id": "0x0190",
+   "name": "GlobalParametersIFD",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x02bc",
+   "name": "ApplicationNotes",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x4748",
+   "name": "StitchInfo",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8290",
+   "name": "KodakIFD",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x83bb",
+   "name": "IPTC-NAA",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8568",
+   "name": "AFCP_IPTC",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8606",
+   "name": "LeafData",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8649",
+   "name": "PhotoshopSettings",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8769",
+   "name": "ExifOffset",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8773",
+   "name": "ICC_Profile",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x8825",
+   "name": "GPSInfo",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x888a",
+   "name": "LeafSubIFD",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x935c",
+   "name": "ImageSourceData",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0x9999",
+   "name": "XiaomiSettings",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xa005",
+   "name": "InteropOffset",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xa102",
+   "name": "SamsungRawUnknown",
+   "reason": "Unknown => 1: reported only under -u"
+  },
+  {
+   "id": "0xc4a5",
+   "name": "PrintIM",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc519",
+   "name": "HasselbladXML",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc51b",
+   "name": "HasselbladExif",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc68c",
+   "name": "OriginalRawFileData",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc68f",
+   "name": "AsShotICCProfile",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc691",
+   "name": "CurrentICCProfile",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc6f5",
+   "name": "ProfileIFD",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xc7d5",
+   "name": "NikonNEFInfo",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xcd41",
+   "name": "JUMBF",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xcd44",
+   "name": "ImageSequenceInfo",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xcd47",
+   "name": "ProfileDynamicRange",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xcea1",
+   "name": "SEAL",
+   "reason": "SubDirectory edge: walked, never reported"
+  },
+  {
+   "id": "0xfe00",
+   "name": "KDC_IFD",
+   "reason": "SubDirectory edge: walked, never reported"
+  }
+ ],
+ "refused": [
+  {
+   "id": "0x00fe",
+   "name": "SubfileType",
+   "reason": "method SetPriorityDir has no proven port"
+  },
+  {
+   "id": "0x00ff",
+   "name": "OldSubfileType",
+   "reason": "method SetPriorityDir has no proven port"
+  },
+  {
+   "id": "0x0103",
+   "name": "Compression",
+   "reason": "helper Image::ExifTool::Exif::IdentifyRawFile has no proven port"
+  },
+  {
+   "id": "0x0111",
+   "name": "StripOffsets/OtherImageStart/PreviewJXLStart/PreviewImageStart/JpgFromRawStart",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0x0117",
+   "name": "StripByteCounts/OtherImageLength/PreviewJXLLength/PreviewImageLength/JpgFromRawLength",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0x014a",
+   "name": "SubIFD/A100DataOffset",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0x0201",
+   "name": "ThumbnailOffset/PreviewImageStart/JpgFromRawStart/OtherImageStart",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0x0202",
+   "name": "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0x4747",
+   "name": "XP_DIP_XML",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0x8298",
+   "name": "Copyright",
+   "reason": "method Options has no proven port"
+  },
+  {
+   "id": "0x927c",
+   "name": "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteGoogle/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyxHyperFire/MakerNoteReconyxUltraFire/MakerNoteReconyxHyperFire2/MakerNoteReconyxMicroFire/MakerNoteReconyxHyperFire4K/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0x9286",
+   "name": "UserComment",
+   "reason": "helper Image::ExifTool::Exif::ConvertExifText has no proven port"
+  },
+  {
+   "id": "0x9287",
+   "name": "LearningOptOutIn",
+   "reason": "builtin shift not modelled"
+  },
+  {
+   "id": "0x9c9b",
+   "name": "XPTitle",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0x9c9c",
+   "name": "XPComment",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0x9c9d",
+   "name": "XPAuthor",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0x9c9e",
+   "name": "XPKeywords",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0x9c9f",
+   "name": "XPSubject",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xa20c",
+   "name": "SpatialFrequencyResponse",
+   "reason": "helper Image::ExifTool::Exif::PrintSFR has no proven port"
+  },
+  {
+   "id": "0xa302",
+   "name": "CFAPattern",
+   "reason": "helper Image::ExifTool::Exif::DecodeCFAPattern has no proven port"
+  },
+  {
+   "id": "0xa40e",
+   "name": "DevelopmentTypeDescription",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xa462",
+   "name": "CompositeImageExposureTimes",
+   "reason": "AST node decl not modelled"
+  },
+  {
+   "id": "0xbc01",
+   "name": "PixelFormat",
+   "reason": "helper Image::ExifTool::ASF::GetGUID has no proven port"
+  },
+  {
+   "id": "0xc615",
+   "name": "LocalizedCameraModel",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc634",
+   "name": "SR2Private/DNGAdobeData/MakerNotePentax/MakerNotePentax5/MakerNoteRicohPentax/MakerNoteDJIInfo/DNGPrivateData",
+   "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
+  },
+  {
+   "id": "0xc68b",
+   "name": "OriginalRawFileName",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6d2",
+   "name": "PanasonicTitle",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6d3",
+   "name": "PanasonicTitle2",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6f3",
+   "name": "CameraCalibrationSig",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6f4",
+   "name": "ProfileCalibrationSig",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6f6",
+   "name": "AsShotProfileName",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6f8",
+   "name": "ProfileName",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc6fe",
+   "name": "ProfileCopyright",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc716",
+   "name": "PreviewApplicationName",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc717",
+   "name": "PreviewApplicationVersion",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc718",
+   "name": "PreviewSettingsName",
+   "reason": "method Decode has no proven port"
+  },
+  {
+   "id": "0xc740",
+   "name": "OpcodeList1",
+   "reason": "AST node deref not modelled"
+  },
+  {
+   "id": "0xc741",
+   "name": "OpcodeList2",
+   "reason": "AST node deref not modelled"
+  },
+  {
+   "id": "0xc74e",
+   "name": "OpcodeList3",
+   "reason": "AST node deref not modelled"
+  },
+  {
+   "id": "0xc763",
+   "name": "TimeCodes",
+   "reason": "AST node decl not modelled"
+  }
+ ],
+ "rust_sha256": "7c62c71f1593cc89854c8268903afc072bf2b33a2d812a70e1c299878dd618c9",
+ "schema": "oxidex_conv_ledger_v1",
+ "table": "Exif::Main",
+ "table_sha256": "7e46afd009047f158b5460b4d7cc4014d58eed686e1962b2fca922c5cb048ff1",
+ "tool": "tools/exiftool-tables/conv_codegen.py"
+}
