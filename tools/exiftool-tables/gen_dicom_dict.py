@@ -15,6 +15,17 @@ model:
   ``PrintConv => { 0 => 'Unsigned', 1 => 'Signed' }`` on PixelRepresentation;
 * ``'GGGG,EEEE' => 'Name',`` (the three FFFE item/delimiter entries).
 
+The one lexical allowance: the comma between ``VR`` and ``Name`` may be
+followed by no space. ExifTool 11.78 and 12.64 spell exactly one entry that
+way -- ``'60xx,4000' => { VR => 'LT',Name => 'OverlayComments' },`` -- and
+13.59 respaces it to ``'LT', Name``. Perl list whitespace is not significant:
+the loaded ``$Main{'60xx,4000'}`` is ``{ VR => 'LT', Name =>
+'OverlayComments' }`` in all three releases, and ProcessDICOM's five wildcard
+substitutions (``60xx`` included) are byte-identical across them, so the entry
+is the same repeating-group row the 13.59 table already transcribes. Every
+parsed row is still cross-checked against the live Perl hash below; no other
+spacing, ordering or attribute variation is admitted.
+
 Keys keep ExifTool's literal spelling, including the wildcard 'x' digits
 ('7Fxx,0010', '1010,xxxx', ...): ProcessDICOM matches those by substituting
 into the formatted tag string, and the Rust lookup mirrors that, so the keys
@@ -58,7 +69,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # docstring) but transcribed verbatim.
 ENTRY_FULL = re.compile(
     r"^\s*'(?P<key>[0-9A-Fa-fx]{4},[0-9A-Fa-fx]{4})' => \{ "
-    r"VR => '(?P<vr>[A-Z]{2})', Name => '(?P<name>[^'\\]+)'"
+    r"VR => '(?P<vr>[A-Z]{2})', ?Name => '(?P<name>[^'\\]+)'"
     r"(?P<extra>, PrintConv => \{ 0 => 'Unsigned', 1 => 'Signed' \}|, Binary => 1)?"
     r" \},?\s*(#.*)?$"
 )

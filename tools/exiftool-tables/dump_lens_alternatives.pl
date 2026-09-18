@@ -76,9 +76,16 @@ sub rows {
     my (%base, %fractional, %labels);
     my $id_pattern = $label =~ /^canon(?:_rf)?$/ ? qr/(?:0|-?[1-9]\d*)/ : qr/-?\d+(?: \d+)*/;
     for my $key (sort keys %$table) {
-        # Pentax's known unknown-ID PrintConv hook is not a lens ID. No other
-        # metadata or nonliteral row is silently dropped.
-        if (($label eq 'pentax' || $label eq 'olympus') && $key eq 'Notes') {
+        # `Notes` is tag-table documentation, never a lens ID. The Canon table
+        # carries one in ExifTool 11.78 (removed by 12.64). Proven from the
+        # source, not the version: every read of these hashes is an exact-key
+        # lookup of a numeric raw ID or "$id.$i" (GetValue, PrintLensID,
+        # Exif/Minolta adapter paths); Writer.pl's reverse lookup skips it via
+        # %ignorePrintConv (OTHER BITMASK Notes); TagInfoXML and BuildTagLookup
+        # only render or skip it as documentation. It must still be a truthy
+        # string. Pentax's known unknown-ID PrintConv hook is not a lens ID
+        # either. No other metadata or nonliteral row is silently dropped.
+        if (($label eq 'pentax' || $label eq 'olympus' || $label eq 'canon') && $key eq 'Notes') {
             string_value($label, $key, $table->{$key});
             next;
         }

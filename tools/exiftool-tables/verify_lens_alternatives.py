@@ -125,7 +125,9 @@ def compare(facts, rust):
         bases, chains, labels = {}, {}, {}
         id_pattern = r'(?:0|-?[1-9]\d*)' if family in ('canon', 'canon_rf') else r'-?\d+(?: \d+)*'
         for key, value in entries.items():
-            if family in ('pentax', 'olympus') and key == 'Notes':
+            # Documentation-only key (see dump_lens_alternatives.pl): Canon's
+            # table carries one in ExifTool 11.78; it is never a lens ID.
+            if family in ('pentax', 'olympus', 'canon') and key == 'Notes':
                 try:
                     text_value(value)
                 except (ValueError, KeyError) as exc:

@@ -185,6 +185,35 @@ class LensProducerTests(unittest.TestCase):
         self.olympus("'0 01 00'=>'Olympus Lens',Notes=>[]")
         self.refuses('expected a truthy string scalar')
 
+    def test_canon_notes_is_documentation_only_and_other_keys_still_refuse(self):
+        # ExifTool 11.78's %canonLensTypes opens with a `Notes => q{...}`
+        # documentation entry (gone by 12.64). It must be validated and
+        # excluded -- the emitted module is byte-identical to the same table
+        # without it -- while every other unknown key keeps refusing.
+        self.canon("1=>'Base Canon','1.1'=>'Alt Canon',2=>'Solo Canon'")
+        plain=self.run_producer('--out',self.out)
+        self.assertEqual(plain.returncode,0,plain.stderr)
+        expected=self.out.read_bytes()
+        self.canon("Notes=>q{\n  Decimal values have been added to differentiate lenses\n},"
+                   "1=>'Base Canon','1.1'=>'Alt Canon',2=>'Solo Canon'")
+        noted=self.run_producer('--out',self.out)
+        self.assertEqual(noted.returncode,0,noted.stderr)
+        self.assertEqual(self.out.read_bytes(),expected)
+        checked=self.run_verifier()
+        self.assertEqual(checked.returncode,0,checked.stdout+checked.stderr)
+        for value in ["[]","''","undef"]:
+            with self.subTest(notes=value):
+                self.canon("Notes=>"+value+",1=>'Base Canon','1.1'=>'Alt Canon'")
+                self.refuses('expected a truthy string scalar')
+        for key in ['NOTES','notes','Notes2','OTHER']:
+            with self.subTest(key=key):
+                self.canon("1=>'Base Canon','1.1'=>'Alt Canon','"+key+"'=>'Documentation'")
+                self.refuses("canon: unsupported key '"+key+"'")
+        self.canon("1=>'Base Canon','1.1'=>'Alt Canon'")
+        with (self.lib / 'Canon.pm').open('a') as handle:
+            handle.write("$FileInfo{61}{PrintConv}{Notes}='Documentation'; 1;\n")
+        self.refuses("canon_rf: unsupported key 'Notes'")
+
     def test_unambiguous_duplicate_labels_remain_allowed(self):
         self.canon("1=>'Base','1.1'=>'Alt',2=>'Same',3=>'Same'")
         result = self.run_producer('--out',self.out)
