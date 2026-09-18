@@ -470,6 +470,30 @@ impl MetadataMap {
         self.sink.occurrences().map(|o| (o.lookup_key(), o))
     }
 
+    /// [`all_occurrences`](Self::all_occurrences) without the lookup key:
+    /// the same active occurrences in the same file order, for consumers
+    /// that only read an occurrence's own fields. Building the key costs one
+    /// `format!` per occurrence, which the Composite layer's dependency
+    /// resolution was paying per dependency per pass (#821's profile).
+    pub(crate) fn occurrences(&self) -> impl Iterator<Item = &TagOccurrence> {
+        self.sink.occurrences()
+    }
+
+    /// How many occurrences this map has ever recorded, retired ones
+    /// included. Positions `0..recorded_len()` are what
+    /// [`active_occurrence`](Self::active_occurrence) accepts, and a later
+    /// insert only ever appends past the end -- so a consumer can index what
+    /// it has seen and pick up only what arrived since.
+    pub(crate) fn recorded_len(&self) -> usize {
+        self.sink.recorded_len()
+    }
+
+    /// The occurrence at file-order position `idx`, or `None` if it was
+    /// removed (or never recorded).
+    pub(crate) fn active_occurrence(&self, idx: usize) -> Option<&TagOccurrence> {
+        self.sink.active_occurrence(idx)
+    }
+
     /// Attaches a full-precision value form to an existing visible tag.
     ///
     /// The value is intentionally absent from iteration and serialization

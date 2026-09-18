@@ -132,11 +132,87 @@ fn occurrence_value_string(occurrence: &TagOccurrence) -> Option<String> {
 /// binds to it, not to `Canon:BaseISO * Canon:AutoISO / 100`. No separate
 /// demoted-composite special case is needed for this anymore: it is the
 /// same rule as every other name.
-fn resolve_dependency(map: &MetadataMap, key: &str) -> Option<String> {
-    let requested = [key.to_string()];
-    let resolved = crate::cli::tag_resolution::resolve_requested_tags(map, &requested, false);
-    let occurrence = resolved.into_iter().next()?.occurrence;
+fn resolve_dependency(map: &MetadataMap, index: &mut NameIndex, key: &str) -> Option<String> {
+    let occurrence = index.resolve(map, key)?;
     occurrence_value_string(occurrence)
+}
+
+/// Every occurrence position in a [`MetadataMap`], grouped by the
+/// ASCII-lowercased tag name -- so one [`apply`] dependency lookup visits
+/// the handful of occurrences sharing its name rather than all of them.
+///
+/// This is an access path, not a second resolution rule: [`NameIndex::
+/// resolve`] feeds exactly the occurrences
+/// [`crate::cli::tag_resolution::resolve_requested_tag`] would have matched
+/// (same name test, `eq_ignore_ascii_case` being equality of ASCII
+/// lowercases; same qualifier test; same file order) into the same
+/// [`crate::cli::tag_resolution::arbitrate`] fold, and debug builds assert
+/// the two agree on every lookup. Before this, each of `apply`'s lookups --
+/// 327 dependency literals, per fixpoint pass -- walked every occurrence in
+/// the file.
+///
+/// The map only ever appends occurrences (a remove retires one in place),
+/// so the index catches up lazily: each lookup first indexes whatever was
+/// recorded since the last one, which covers the composites `apply` itself
+/// inserts mid-pass. A retired position stays indexed and is skipped when
+/// [`MetadataMap::active_occurrence`] no longer returns it.
+#[derive(Default)]
+struct NameIndex {
+    by_name: std::collections::HashMap<String, Vec<usize>>,
+    indexed: usize,
+}
+
+impl NameIndex {
+    fn catch_up(&mut self, map: &MetadataMap) {
+        let end = map.recorded_len();
+        for idx in self.indexed..end {
+            if let Some(occurrence) = map.active_occurrence(idx) {
+                self.by_name
+                    .entry(occurrence.name.to_ascii_lowercase())
+                    .or_default()
+                    .push(idx);
+            }
+        }
+        self.indexed = end;
+    }
+
+    fn resolve<'m>(&mut self, map: &'m MetadataMap, token: &str) -> Option<&'m TagOccurrence> {
+        use crate::cli::tag_resolution::{arbitrate, occurrence_matches_qualifier, split_request};
+        self.catch_up(map);
+        let (qualifier, short_name) = split_request(token);
+        // Lowercase on the stack: every generated dependency name fits, and
+        // an allocation here would be one per lookup again.
+        let mut buf = [0u8; 64];
+        let owned;
+        let lower: &str = if short_name.len() <= buf.len() {
+            let bytes = &mut buf[..short_name.len()];
+            bytes.copy_from_slice(short_name.as_bytes());
+            bytes.make_ascii_lowercase();
+            // ASCII lowercasing maps valid UTF-8 to valid UTF-8.
+            std::str::from_utf8(bytes).expect("ASCII lowercasing preserves UTF-8")
+        } else {
+            owned = short_name.to_ascii_lowercase();
+            &owned
+        };
+        let positions = self.by_name.get(lower).map(Vec::as_slice).unwrap_or(&[]);
+        let winner = arbitrate(
+            positions
+                .iter()
+                .filter_map(|&idx| map.active_occurrence(idx))
+                .filter(|occurrence| {
+                    qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
+                }),
+        );
+        debug_assert!(
+            std::ptr::eq(
+                winner.map_or(std::ptr::null(), |o| o as *const TagOccurrence),
+                crate::cli::tag_resolution::resolve_requested_tag(map, token)
+                    .map_or(std::ptr::null(), |o| o as *const TagOccurrence),
+            ),
+            "NameIndex disagrees with resolve_requested_tag for {token:?}"
+        );
+        winner
+    }
 }
 
 /// LensID needs display, numeric identity and table identity from one winner.
@@ -145,9 +221,7 @@ fn resolve_lens_occurrence(
     map: &MetadataMap,
     key: &str,
 ) -> Option<(String, String, Option<String>)> {
-    let requested = [key.to_string()];
-    let resolved = crate::cli::tag_resolution::resolve_requested_tags(map, &requested, false);
-    let occurrence = resolved.into_iter().next()?.occurrence;
+    let occurrence = crate::cli::tag_resolution::resolve_requested_tag(map, key)?;
     let display = crate::cli::tag_resolution::resolved_display_value(occurrence, false);
     Some((
         occurrence.group0.to_string(),
@@ -174,9 +248,20 @@ fn resolve_lens_occurrence(
 /// to normalize the two dependency-name notations ExifTool's generated
 /// tables use (`Module::Tag` for QuickTime, `Group:Tag` for everything
 /// parsed) onto one separator before delegating.
+fn resolve_indexed(map: &MetadataMap, index: &mut NameIndex, name: &str) -> Option<String> {
+    // Only QuickTime's `Module::Tag` names need rewriting; borrowing the
+    // rest keeps this per-dependency, per-pass call allocation-free.
+    if name.contains("::") {
+        resolve_dependency(map, index, &name.replacen("::", ":", 1))
+    } else {
+        resolve_dependency(map, index, name)
+    }
+}
+
+/// [`resolve_indexed`] against a fresh index, for tests that resolve one name.
+#[cfg(test)]
 fn resolve(map: &MetadataMap, name: &str) -> Option<String> {
-    let key = name.replacen("::", ":", 1);
-    resolve_dependency(map, &key)
+    resolve_indexed(map, &mut NameIndex::default(), name)
 }
 
 /// Iteration order for one [`apply`] pass: every non-`Inhibit` Composite
@@ -210,10 +295,11 @@ fn pass_order() -> Vec<usize> {
 /// value the parser actually read from the file always beats a derived one.
 pub fn apply(map: &mut MetadataMap) -> usize {
     let mut added = 0;
+    let mut names = NameIndex::default();
     // ExifTool branches on manufacturer for Canon sensor geometry, so resolve
     // it once up front rather than per composite.
-    let make = resolve(map, "Make");
-    let file_type = resolve(map, "FileType");
+    let make = resolve_indexed(map, &mut names, "Make");
+    let file_type = resolve_indexed(map, &mut names, "FileType");
     // Which manufacturer's `LensType` lookup won the bare name -- the one piece
     // of context `Composite:LensID` needs that a positional input cannot carry.
     // Resolved once here rather than per pass; no Composite in this table
@@ -231,8 +317,8 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // exempt a body: `PanasonicDC-GH7.jpg` is `0 20 10`. The table is not
     // transcribed here, so `lens_id` refuses those bodies; see
     // `lens_id::OMITTED`.
-    let olympus_lens_type_pair =
-        resolve(map, "LensTypeMake").is_some() && resolve(map, "LensTypeModel").is_some();
+    let olympus_lens_type_pair = resolve_indexed(map, &mut names, "LensTypeMake").is_some()
+        && resolve_indexed(map, &mut names, "LensTypeModel").is_some();
     // Composites this run produced, keyed by each definition's own index
     // into COMPOSITES -- NOT by `comp.name`. Two distinct table rows can
     // share one output Name (`Exif::LensID` and `Exif::LensID-2` both
@@ -245,13 +331,18 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // prior guess" and "someone else already claimed this name" distinct.
     let mut ours: HashSet<usize> = HashSet::new();
     let order = pass_order();
+    // Each definition's output key, built once rather than once per pass.
+    let keys: Vec<String> = COMPOSITES
+        .iter()
+        .map(|comp| format!("Composite:{}", comp.name))
+        .collect();
 
     for _pass in 0..MAX_PASSES {
         let mut added_this_pass = 0;
 
         for &idx in &order {
             let comp = &COMPOSITES[idx];
-            let key = format!("Composite:{}", comp.name);
+            let key = keys[idx].as_str();
             let already_ours = ours.contains(&idx);
             // Exif.pm guards this join with
             // `not defined $$self{VALUE}{DateTimeOriginal}`. An extracted
@@ -260,7 +351,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // the Composite output key.
             if comp.module == "Exif"
                 && comp.name == "DateTimeOriginal"
-                && resolve(map, "DateTimeOriginal").is_some()
+                && resolve_indexed(map, &mut names, "DateTimeOriginal").is_some()
             {
                 continue;
             }
@@ -273,7 +364,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // This ALSO blocks any other Composite definition that shares
             // this output name once one of them has claimed the key -- see
             // `ours`'s own doc comment just above.
-            if !already_ours && (map.contains_key(&key) || map.contains_key(comp.name)) {
+            if !already_ours && (map.contains_key(key) || map.contains_key(comp.name)) {
                 continue;
             }
 
@@ -290,7 +381,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             if comp
                 .inhibit
                 .iter()
-                .any(|&(_, dep)| resolve(map, dep).is_some())
+                .any(|&(_, dep)| resolve_indexed(map, &mut names, dep).is_some())
             {
                 continue;
             }
@@ -308,7 +399,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             let mut owned: Vec<Option<String>> = vec![None; input_len];
             let mut satisfied = true;
             for &(index, dep) in comp.require {
-                match resolve(map, dep) {
+                match resolve_indexed(map, &mut names, dep) {
                     Some(v) => owned[index] = Some(v),
                     None => {
                         satisfied = false;
@@ -320,16 +411,16 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 continue;
             }
             for &(index, dep) in comp.desire {
-                owned[index] = resolve(map, dep);
+                owned[index] = resolve_indexed(map, &mut names, dep);
             }
             if comp.module == "QuickTime" && comp.name == "AvgBitrate" {
                 // QuickTime.pm:8657-8665 walks every MediaDataSize occurrence
                 // with NextTagKey. The sum belongs only to this composite's
                 // input: each mdat-size's own ValueConv is its payload length.
                 let total = map
-                    .all_occurrences()
-                    .filter(|(key, _)| key == "QuickTime:MediaDataSize")
-                    .try_fold(0u64, |sum, (_, occurrence)| {
+                    .occurrences()
+                    .filter(|occurrence| occurrence.lookup_key_eq("QuickTime:MediaDataSize"))
+                    .try_fold(0u64, |sum, occurrence| {
                         sum.checked_add(occurrence_value_string(occurrence)?.parse::<u64>().ok()?)
                     });
                 let Some(total) = total else { continue };
@@ -438,7 +529,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             };
             if let Some(c) = computed {
                 // Count only genuine changes, so the fixpoint still terminates.
-                let changed = map.get_string(&key) != Some(c.print.as_str());
+                let changed = map.get_string(key) != Some(c.print.as_str());
                 // Carrying the composite's own declared `Composite::priority`
                 // (ExifTool.pm:9442's `Priority`, clamped at 0 -- the lowest
                 // this crate's u8 `TagOccurrence::priority` can represent,
@@ -477,7 +568,7 @@ pub fn apply(map: &mut MetadataMap) -> usize {
                 // second source contending for its name, and this is what
                 // keeps the two from being conflated.
                 if already_ours {
-                    map.remove(&key);
+                    map.remove(key);
                 }
                 map.insert_occurrence_with_raw(
                     key,

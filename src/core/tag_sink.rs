@@ -363,6 +363,22 @@ impl TagSink {
             .map(|(_, occurrence)| occurrence)
     }
 
+    /// How many occurrences have ever been recorded, retired ones included:
+    /// one past the largest index [`TagSink::active_occurrence`] accepts.
+    pub fn recorded_len(&self) -> usize {
+        self.occurrences.len()
+    }
+
+    /// The occurrence recorded at position `idx` (its `order`), unless
+    /// [`TagSink::remove`] has retired it or no such position exists yet.
+    pub fn active_occurrence(&self, idx: usize) -> Option<&TagOccurrence> {
+        if idx < self.occurrences.len() && self.is_active(idx) {
+            Some(&self.occurrences[idx])
+        } else {
+            None
+        }
+    }
+
     /// Consumes the sink, returning every **active** occurrence ever
     /// recorded -- winners and losers alike -- in file order.
     ///

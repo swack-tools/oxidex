@@ -210,6 +210,17 @@ impl TagOccurrence {
             format!("{}:{}", self.group0, self.name)
         }
     }
+
+    /// `self.lookup_key() == key`, without building the key.
+    pub(crate) fn lookup_key_eq(&self, key: &str) -> bool {
+        if self.group0.is_empty() {
+            *self.name == *key
+        } else {
+            key.strip_prefix(&*self.group0)
+                .and_then(|rest| rest.strip_prefix(':'))
+                .is_some_and(|name| *self.name == *name)
+        }
+    }
 }
 
 /// A process-wide interner for tag/group names.
