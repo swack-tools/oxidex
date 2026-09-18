@@ -180,6 +180,26 @@ class DicomProducerTests(unittest.TestCase):
                 self.pm.write_text(table)
                 self.refuse_preserving_output(reason)
 
+    def test_historical_unspaced_vr_name_comma_is_the_same_row(self):
+        # ExifTool 11.78 and 12.64 spell one entry
+        # `'60xx,4000' => { VR => 'LT',Name => 'OverlayComments' },`; 13.59
+        # respaces it. Perl whitespace is insignificant, so both spellings
+        # must emit identical bytes -- and the repeating-group key verbatim.
+        spaced = TABLE.replace("    'FFFE,E000' => 'Item',",
+                               "    '60xx,4000' => { VR => 'LT', Name => 'OverlayComments' },\n"
+                               "    'FFFE,E000' => 'Item',")
+        self.pm.write_text(spaced)
+        expected = self.generate()
+        self.assertEqual(verifier.rust_facts(expected)['main']['60xx,4000'],
+                         ['OverlayComments', 'LT', 0, 0])
+        self.pm.write_text(spaced.replace("'LT', Name", "'LT',Name"))
+        self.assertEqual(self.generate(), expected)
+        # Only that one historical spacing is admitted; others still refuse.
+        for variant in ("'LT',  Name", "'LT' , Name", "'LT',\tName"):
+            with self.subTest(variant=variant):
+                self.pm.write_text(spaced.replace("'LT', Name", variant))
+                self.refuse_preserving_output('unmodeled Main entry')
+
     def test_empty_source_tables_are_not_success(self):
         self.pm.write_text("package Image::ExifTool::DICOM; our (%Main, %uid); 1;\n")
         self.refuse_preserving_output('empty DICOM')
