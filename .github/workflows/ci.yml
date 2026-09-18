@@ -440,6 +440,99 @@ jobs:
       # time in release.yml rather than here.
       - run: cargo build --profile fixloop --all-features
 
+  # Corpus read regression gate. The parity ratchet in Lint & Audit guards the
+  # COMMITTED measurements, which only move when someone regenerates them, so a
+  # PR that breaks a reader passes every other check and the loss surfaces at
+  # the next manual refresh. This measures the merge result itself: one
+  # authenticated corpus read receipt over the pinned ExifTool's t/images, then
+  # tools/ci/read_regression_gate.py requires every catalog entry the published
+  # snapshot marks observed_matched_read to still be credited, naming each one
+  # lost. Newly credited entries are printed as information only.
+  #
+  # Exit 1 is a code regression; exit 2 is a refused MEASUREMENT (a public
+  # read timed out under runner load, the receipt failed its integrity replay,
+  # or the oracle/corpus is not the snapshot's). Re-run on 2; read the LOST
+  # lines on 1.
+  #
+  # Not a required check, and nothing `needs:` it: it sits beside the other
+  # jobs rather than in front of them. A new check name is not required until
+  # an admin adds it to branch protection.
+  read-regression-gate:
+    name: Corpus Read Regression Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The receipt's build command is fixed (`cargo build --release --bin
+      # oxidex`), so the profile is relaxed through env instead: fat LTO with
+      # one codegen unit costs ~100s of link time (see Release Build) and
+      # changes no behaviour this gate reads -- it compares values, not speed.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # HEAD^1 must exist for the change detection below.
+          fetch-depth: 2
+      # ci.yml carries no `paths:` filter (see the note under `on:`), so the
+      # gate lives in a step, as in Benchmarks. On a pull_request the checkout
+      # is the merge commit, so HEAD^1..HEAD is exactly what the PR changes.
+      # The list is everything that can move a public read or the measurement:
+      # the runtime inputs runtime_evidence_inputs.py hashes, the pin, the
+      # receipt/gate tooling, the published snapshot, and this workflow.
+      - name: Check whether anything that can move a read changed
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          CHANGED=$(git diff --name-only HEAD^1 HEAD)
+          if printf '%s\n' "$CHANGED" | grep -qE '^(src/|\.cargo/|oxidex-tags[^/]*/|Cargo\.(toml|lock)$|build\.rs$|\.exiftool-version$|scripts/instrument\.py$|tools/ci/read_regression_gate\.py$|tools/exiftool-tables/(corpus_read_receipt\.py|capture_corpus_sources\.pl|catalog_corpus_reads\.py|runtime_evidence_inputs\.py|native_write_matrix\.py|verify_quicktime_userdata_reader\.py|quicktime_baseline\.py)$|docs/public/measurements/catalog-(corpus-observed|source)-[0-9.]+\.json$|\.github/(workflows/ci\.yml|actions/pinned-exiftool/))'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no reader, runtime, pin or gate change; skipping the corpus read gate"
+          fi
+      - id: exiftool
+        if: steps.changes.outputs.run == 'true'
+        uses: ./.github/actions/pinned-exiftool
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        if: steps.changes.outputs.run == 'true'
+      # Its own shared-key: this is the release profile with the env overrides
+      # above, a fingerprint no other job builds.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.changes.outputs.run == 'true'
+        with:
+          cache-on-failure: true
+          shared-key: read-regression-gate
+      # build + observe refuse a dirty checkout, and re-assert the pinned
+      # version, the OOXML.docx -> DOCX capability probe and canonical Perl
+      # v5.38.2 (ubuntu-24.04's system perl) before recording anything.
+      - name: Corpus read receipt at the merge result
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          unset PERL5LIB PERLLIB PERL5OPT
+          OUT="$RUNNER_TEMP/read-gate"
+          python3 tools/exiftool-tables/corpus_read_receipt.py build --output "$OUT/build"
+          python3 tools/exiftool-tables/corpus_read_receipt.py observe \
+            --build-proof "$OUT/build/build-proof.json" \
+            --perl "$(command -v perl)" \
+            --exiftool-dir "$EXIFTOOL_SOURCE" \
+            --corpus "$EXIFTOOL_SOURCE/t/images" \
+            --output "$OUT/observe"
+      - name: Every published read is still credited
+        if: steps.changes.outputs.run == 'true'
+        run: python3 tools/ci/read_regression_gate.py --receipt "$RUNNER_TEMP/read-gate/observe/receipt.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && steps.changes.outputs.run == 'true'
+        with:
+          name: corpus-read-receipt
+          path: ${{ runner.temp }}/read-gate/observe
+          retention-days: 7
+
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
   # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a

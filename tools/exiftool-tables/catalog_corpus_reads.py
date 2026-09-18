@@ -43,20 +43,21 @@ def native_coordinates(receipt) -> set:
     return coordinates
 
 
-def observed_reads(receipt, catalog, root) -> tuple[set, set, dict]:
-    """-> (credited catalog identities, natively read catalog identities, counts) for a validated receipt."""
-    if receipt is None:
-        return set(), set(), {}
-    derived = corpus_read_receipt.validate(receipt, catalog["exiftool_version"])
-    # Credit applies to the runtime being joined, not to an older build.
-    if receipt["producer"]["runtime_input_manifest_sha256"] != runtime_inputs.runtime_input_manifest(root):
-        raise ValueError("corpus read receipt runtime differs from the joined checkout")
-    # Every ExifTool source the catalog was built from must be the one observed.
+def check_exiftool_sources(receipt, catalog) -> None:
+    """Every ExifTool source the catalog was built from must be the one observed."""
     fingerprint = receipt["native"]["library_fingerprint"]
     for path, fact in catalog["producer"]["sources"].items():
         if fingerprint.get(path) != fact.get("sha256"):
             raise ValueError(f"corpus read receipt ExifTool source differs from the catalog: {path}")
-    catalog_ids = {(entry["table"], entry["raw_key"], entry["variant_index"]) for entry in catalog["entries"]}
+
+
+def catalog_credit(receipt, derived, catalog_ids) -> tuple[set, set, dict]:
+    """Map a validated receipt's coordinates onto catalog identities.
+
+    `catalog_ids` holds `(table, raw_key, variant_index)`; the receipt's
+    `(table, tag ID, variant)` coordinates use the same representation, so the
+    mapping is exact set membership.
+    """
     credited, outside = set(), 0
     for table, tag_id, variant in derived["credited_coordinates"]:
         identity = (table, tag_id, variant)
@@ -80,3 +81,16 @@ def observed_reads(receipt, catalog, root) -> tuple[set, set, dict]:
               "native_coordinates_outside_catalog": native_outside,
               "metric_c": derived["metric_c"]}
     return credited, native, counts
+
+
+def observed_reads(receipt, catalog, root) -> tuple[set, set, dict]:
+    """-> (credited catalog identities, natively read catalog identities, counts) for a validated receipt."""
+    if receipt is None:
+        return set(), set(), {}
+    derived = corpus_read_receipt.validate(receipt, catalog["exiftool_version"])
+    # Credit applies to the runtime being joined, not to an older build.
+    if receipt["producer"]["runtime_input_manifest_sha256"] != runtime_inputs.runtime_input_manifest(root):
+        raise ValueError("corpus read receipt runtime differs from the joined checkout")
+    check_exiftool_sources(receipt, catalog)
+    catalog_ids = {(entry["table"], entry["raw_key"], entry["variant_index"]) for entry in catalog["entries"]}
+    return catalog_credit(receipt, derived, catalog_ids)
