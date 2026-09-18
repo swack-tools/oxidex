@@ -199,14 +199,52 @@ impl MetadataMap {
         previous
     }
 
+    /// [`insert_with_group1`](Self::insert_with_group1), also attaching the
+    /// value `--no-print-conv` shows instead of `display_value`.
+    ///
+    /// For readers that apply a PrintConv before storing: without the
+    /// ValueConv form, `-n` reprints the label (`RMETA:Azimuth` `E` where
+    /// ExifTool's `-n` prints `5`). Priority and instance are exactly
+    /// `insert_with_group1`'s, so the default winner does not move.
+    pub(crate) fn insert_with_group1_and_value<K: Into<String>>(
+        &mut self,
+        key: K,
+        display_value: TagValue,
+        no_print_conv_value: TagValue,
+        group1: &str,
+    ) -> Option<TagValue> {
+        let key = key.into();
+        let previous = self.sink.get(&key).cloned();
+        let order = self.sink.next_order();
+        let mut occurrence = TagOccurrence::from_insert_shim(&key, display_value, order);
+        occurrence.group1 = super::tag_occurrence::intern(group1);
+        occurrence.value = Some(no_print_conv_value);
+        self.sink.record(key, occurrence);
+        previous
+    }
+
     /// Copies every winner of `source` into this map through
     /// [`insert_with_group1`](Self::insert_with_group1), so a family-1 group
-    /// the sub-parser recorded survives the copy. A source built only with
+    /// the sub-parser recorded survives the copy -- and so does the
+    /// `--no-print-conv` form it attached
+    /// ([`insert_with_group1_and_value`](Self::insert_with_group1_and_value)):
+    /// dropping it made `-n` reprint the label (APP6 `NITF:ImageColor`
+    /// `Monochrome` where ExifTool prints `0`). A source built only with
     /// `insert()` copies exactly as `for (k, v) in source.iter() {
     /// self.insert(k, v) }` would.
     pub(crate) fn merge_winners_keeping_group1(&mut self, source: &MetadataMap) {
         for (key, occurrence) in source.sink.winner_occurrences() {
-            self.insert_with_group1(key.clone(), occurrence.raw.clone(), &occurrence.group1);
+            match &occurrence.value {
+                Some(value) => self.insert_with_group1_and_value(
+                    key.clone(),
+                    occurrence.raw.clone(),
+                    value.clone(),
+                    &occurrence.group1,
+                ),
+                None => {
+                    self.insert_with_group1(key.clone(), occurrence.raw.clone(), &occurrence.group1)
+                }
+            };
         }
     }
 

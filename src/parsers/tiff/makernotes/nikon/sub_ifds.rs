@@ -118,6 +118,7 @@ pub fn parse_preview_ifd(
     order: ByteOrder,
     preview_ifd_base: Option<u64>,
     tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
 ) {
     let Some(start) = tiff_start.checked_add(ifd_offset) else {
         return;
@@ -135,7 +136,11 @@ pub fn parse_preview_ifd(
     let _ = parse_ifd_entries(ifd, order, &config, |entry, _| match entry.tag_id {
         0x0103 => {
             if let Some(value) = scalar_u32(entry, data, tiff_start, order) {
+                // Compression, ResolutionUnit and YCbCrPositioning print a
+                // label; `-n` prints the stored code (pinned 13.59:
+                // `"PreviewIFD:Compression": 6` for Nikon.nef).
                 tags.insert("Nikon:Compression".to_string(), compression_name(value));
+                value_forms.insert("Nikon:Compression".to_string(), value.to_string());
             }
         }
         0x011a | 0x011b => {
@@ -156,6 +161,7 @@ pub fn parse_preview_ifd(
                     "Nikon:ResolutionUnit".to_string(),
                     resolution_unit_name(value),
                 );
+                value_forms.insert("Nikon:ResolutionUnit".to_string(), value.to_string());
             }
         }
         0x0201 => {
@@ -182,6 +188,7 @@ pub fn parse_preview_ifd(
                     other => format!("Unknown ({})", other),
                 };
                 tags.insert("Nikon:YCbCrPositioning".to_string(), printed);
+                value_forms.insert("Nikon:YCbCrPositioning".to_string(), value.to_string());
             }
         }
         _ => {}
@@ -377,7 +384,16 @@ mod tests {
 
         let data = makernote(100, &payload);
         let mut tags = HashMap::new();
-        parse_preview_ifd(&data, 10, 100, ByteOrder::LittleEndian, None, &mut tags);
+        let mut value_forms = HashMap::new();
+        parse_preview_ifd(
+            &data,
+            10,
+            100,
+            ByteOrder::LittleEndian,
+            None,
+            &mut tags,
+            &mut value_forms,
+        );
 
         assert_eq!(tags.get("Nikon:Compression").unwrap(), "JPEG (old-style)");
         assert_eq!(tags.get("Nikon:XResolution").unwrap(), "72");
@@ -385,6 +401,13 @@ mod tests {
         assert_eq!(tags.get("Nikon:PreviewImageLength").unwrap(), "26");
         // Deliberately absent: it would need the MakerNote's file offset.
         assert!(!tags.contains_key("Nikon:PreviewImageStart"));
+        // `-n` prints the stored codes: pinned 13.59 `-j -G1 -n` on
+        // Nikon.nef gives `"PreviewIFD:Compression": 6` and
+        // `"PreviewIFD:ResolutionUnit": 2`.
+        assert_eq!(value_forms.get("Nikon:Compression").unwrap(), "6");
+        assert_eq!(value_forms.get("Nikon:ResolutionUnit").unwrap(), "2");
+        // XResolution has no PrintConv, so it carries no separate form.
+        assert!(!value_forms.contains_key("Nikon:XResolution"));
     }
 
     #[test]
@@ -455,7 +478,15 @@ mod tests {
     fn out_of_range_sub_ifd_offsets_are_ignored() {
         let data = makernote(0, &[0u8; 4]);
         let mut tags = HashMap::new();
-        parse_preview_ifd(&data, 10, 4096, ByteOrder::LittleEndian, None, &mut tags);
+        parse_preview_ifd(
+            &data,
+            10,
+            4096,
+            ByteOrder::LittleEndian,
+            None,
+            &mut tags,
+            &mut HashMap::new(),
+        );
         parse_scan_ifd(&data, 10, 4096, ByteOrder::LittleEndian, &mut tags);
         assert!(tags.is_empty());
     }

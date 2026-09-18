@@ -107,11 +107,31 @@ pub fn parse_sigma_makernote(
         let bytes = bytes.as_ref();
         if let Some((name, value)) = decode_tag(*tag_id, *field_type, *count, bytes, order, version)
         {
-            // 0x003b Firmware and 0x003c WhiteBalance are `Priority => 0`
-            // duplicates of 0x0017 and 0x0007: ExifTool keeps the first
-            // extraction, so an existing value is never overwritten.
-            if metadata.get(&format!("MakerNotes:{name}")).is_none() {
-                metadata.insert_with_group1(format!("MakerNotes:{name}"), value, SIGMA_GROUP1);
+            let key = format!("MakerNotes:{name}");
+            if is_priority_zero_duplicate(*tag_id, version) {
+                // 0x003b Firmware and 0x003c WhiteBalance are `Priority => 0`
+                // duplicates of 0x0017 and 0x0007 (Sigma.pm). ExifTool keeps
+                // the first extraction as the default value, but `-a` still
+                // reports the second: SigmaDP2.x3f prints `Sigma:Firmware`
+                // and `Sigma:WhiteBalance` twice each under pinned 13.59.
+                // A priority-0 occurrence never displaces an existing winner
+                // (`TagSink::record`), and wins only when it is alone.
+                metadata.insert_occurrence(
+                    key,
+                    value,
+                    0,
+                    SIGMA_GROUP1,
+                    crate::core::Instance::default(),
+                );
+            } else if metadata.get(&key).is_none() {
+                match no_print_conv_value(*tag_id, *field_type, *count, bytes, order, name) {
+                    Some(raw) => {
+                        metadata.insert_with_group1_and_value(key, value, raw, SIGMA_GROUP1);
+                    }
+                    None => {
+                        metadata.insert_with_group1(key, value, SIGMA_GROUP1);
+                    }
+                }
             }
         }
         match (*tag_id, *field_type) {
@@ -359,6 +379,53 @@ fn decode_tag(
     Some(value)
 }
 
+/// Whether `tag_id` is one of `Sigma.pm`'s `Priority => 0` restatements of an
+/// earlier tag of the same name: 0x003b Firmware (of 0x0017) and 0x003c
+/// WhiteBalance (of 0x0007), both conditional on `MakerNoteSigmaVer < 3`.
+fn is_priority_zero_duplicate(tag_id: u16, version: u8) -> bool {
+    version < 3 && matches!(tag_id, 0x003B | 0x003C)
+}
+
+/// The value `-n` prints for a tag [`decode_tag`] stored as its PrintConv
+/// output, or `None` when the stored value already is the ValueConv form.
+///
+/// `name` is `decode_tag`'s answer for this entry, so the id/version
+/// conditions are not restated here. Every tag below carries a `PrintConv`
+/// in `Sigma.pm`; the `Xxxx:`-prefix strippers are `ValueConv`s and print
+/// the same either way.
+fn no_print_conv_value(
+    tag_id: u16,
+    field_type: u16,
+    count: u32,
+    bytes: &[u8],
+    order: ByteOrder,
+    name: &str,
+) -> Option<TagValue> {
+    match name {
+        // PrintConv hashes / `IsInt($val) ? "$val C" : $val` /
+        // `s/(\d)of(\d)/$1 of $2/` over the stored string.
+        "ExposureMode" | "MeteringMode" | "SensorTemperature" | "AutoBracket" => {
+            Some(TagValue::new_string(decode_string(bytes)))
+        }
+        // `$val =~ tr/ /x/` over the int16u pair: `-n` keeps the space.
+        "PreviewImageSize" => size_pair(bytes, count, order)
+            .map(|size| TagValue::new_string(size.replacen('x', " ", 1))),
+        "ColorMode" => read_u32(bytes, order).map(|raw| TagValue::Integer(i64::from(raw))),
+        // `sprintf("%.1f")` / PrintExposureTime over the rational.
+        "FNumber" | "ExposureTime" => rational(bytes, field_type, order).map(TagValue::Float),
+        // 0x0035's `s/^(\d)/\+$1/`; 0x000c's string spelling is a ValueConv.
+        "ExposureCompensation" if tag_id == 0x0035 => {
+            rational(bytes, field_type, order).map(TagValue::Float)
+        }
+        // ValueConv `$val * 1e-6`, then PrintExposureTime.
+        "ExposureTime2" => {
+            let micros: f64 = decode_string(bytes).trim().parse().ok()?;
+            Some(TagValue::Float(micros * 1e-6))
+        }
+        _ => None,
+    }
+}
+
 /// `Sigma.pm` 0x002c ColorMode PrintConv.
 fn color_mode(raw: u32) -> String {
     match raw {
@@ -531,6 +598,61 @@ mod tests {
     }
 
     use super::*;
+
+    /// `-n` values pinned against 13.59 `-j -G1 -n` on SigmaDP2.x3f and
+    /// Sigma.jpg: MeteringMode 8, ExposureMode "P", ColorMode 3,
+    /// PreviewImageSize "640 480", ExposureTime/ExposureTime2 0.1,
+    /// SensorTemperature 20.
+    #[test]
+    fn print_converted_tags_keep_their_value_conv_form() {
+        let be = ByteOrder::BigEndian;
+        let raw = |id, field_type, count, bytes: &[u8]| {
+            let (name, _) = decode_tag(id, field_type, count, bytes, be, 2).unwrap();
+            no_print_conv_value(id, field_type, count, bytes, be, name)
+        };
+        assert_eq!(
+            raw(0x0009, TYPE_STRING, 2, b"8\0"),
+            Some(TagValue::new_string("8"))
+        );
+        assert_eq!(
+            raw(0x0008, TYPE_STRING, 2, b"P\0"),
+            Some(TagValue::new_string("P"))
+        );
+        assert_eq!(
+            raw(0x002C, TYPE_LONG, 1, &[0, 0, 0, 3]),
+            Some(TagValue::Integer(3))
+        );
+        assert_eq!(
+            raw(0x001C, TYPE_SHORT, 2, &[0x02, 0x80, 0x01, 0xE0]),
+            Some(TagValue::new_string("640 480"))
+        );
+        assert_eq!(
+            raw(0x0032, TYPE_RATIONAL_U, 1, &[0, 0, 0, 1, 0, 0, 0, 10]),
+            Some(TagValue::Float(0.1))
+        );
+        match raw(0x0033, TYPE_STRING, 7, b"100000\0") {
+            Some(TagValue::Float(v)) => assert_eq!(format_number(v), "0.1"),
+            other => panic!("ExposureTime2 -n: {other:?}"),
+        }
+        assert_eq!(
+            raw(0x0039, TYPE_STRING, 3, b"20\0"),
+            Some(TagValue::new_string("20"))
+        );
+        // ValueConv-only tags print the same either way: no separate form.
+        assert_eq!(raw(0x0016, TYPE_STRING, 11, b"Qual:BASIC\0"), None);
+        assert_eq!(raw(0x0007, TYPE_STRING, 5, b"Auto\0"), None);
+    }
+
+    /// 0x003b Firmware / 0x003c WhiteBalance are `Priority => 0` restatements:
+    /// the pinned oracle's `-a` reports both occurrences on SigmaDP2.x3f.
+    #[test]
+    fn priority_zero_restatements_are_legacy_only() {
+        assert!(is_priority_zero_duplicate(0x003B, 2));
+        assert!(is_priority_zero_duplicate(0x003C, 2));
+        assert!(!is_priority_zero_duplicate(0x003B, 3));
+        assert!(!is_priority_zero_duplicate(0x0017, 2));
+        assert!(!is_priority_zero_duplicate(0x0007, 2));
+    }
 
     #[test]
     fn strips_photopro_labels() {
