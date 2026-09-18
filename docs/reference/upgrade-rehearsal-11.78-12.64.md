@@ -141,6 +141,41 @@ same whole-body-template pattern as blocker #1 (SetNewValue, #798), now on the
 ConvInv helper. The only two matrix rows that pass are native-idempotent
 `IFD1:XResolution`/`IFD1:YResolution` inserts on JPEG.
 
+*Update (staging/rehearsal-convinv): F4 closed.* `compile_convinv` now admits
+one whole-body profile per captured release (`convinv_full_template.json`,
+`_11_78.json`, `_12_64.json`), selected only by exact token consumption, never
+by the version label. Each profile must also contain its modeled regions exactly
+once in the whitespace-stripped raw B::Deparse. Those regions are the default
+type, the WriteCheck gate, both CHECK_PROC calls, the CHECK_PROC guard, the
+PrintConv->ValueConv advance, conversion presence and the error result. The
+bodies do differ from 13.59, and the ledger records why each difference is
+exact for the scalar executor:
+
+- 12.64 and 11.78 guard CHECK_PROC with `unless ($err2)` where 13.59 uses
+  `unless (defined($err2))`. Only WriteCheck assigns `$err2` there, and every
+  WriteCheck row is refused.
+- 11.78 resolves the default into `$type` inside the loop. The first `$type`
+  is the same falsy chain the executor computes.
+- 11.78 also calls CHECK_PROC with three arguments, not four. An admitted
+  CHECK_PROC binds exactly three arguments and has no statement that could
+  read a fourth.
+
+Stage 6a, `generated_tiff_write_matrix.py --route public-api` via the adapter,
+each release against its own native tree, same base for before and after
+(73315c00 + I1 + I2 + I3):
+
+| | before | after |
+| --- | ---: | ---: |
+| 11.78 | 2/1,530 | **1,530/1,530** |
+| 12.64 | 2/1,530 | **1,530/1,530** |
+
+I3 is a third local-only intervention in the scratch worktrees, needed since
+#823. `artifacts.py` now lists the per-module table files statically from
+13.59. Each older release's correct regeneration drops some of those modules
+(11.78: 10 binary + 12 IFD, and adds `ifd/json`, `ifd/rsrc`; 12.64: 5 + 7).
+The write-set check can declare neither the dropped module nor its deletion,
+so regeneration is refused before any stage runs.
+
 **F5 — warnings (not yet a failure).** When the QuickTime generators refuse
 every row, `generated_keys_specs.rs` and `generated_userdata_specs.rs` still
 import `EnumOperand` and `SourceFormat`. The result is two `unused_imports`
@@ -261,8 +296,7 @@ Follow-ups, each needing its own evidence:
    `ExprId`.
 3. **F5:** the QuickTime spec generators should not emit unused imports when
    they refuse every row.
-4. **F4:** replace the whole-body ConvInv template with a statement-level
-   recognizer that refuses only the changed branches, as #798 did for SetNewValue.
+4. **F4:** done (per-release ConvInv profiles plus operand proofs, see F4).
 5. **F3:** make pinned-release test expectations regenerable, or bind them to
    the pin, so an upgrade separates upstream deltas from regressions.
 6. **Handwritten retention:** gate handwritten parsers and detection by
@@ -270,6 +304,9 @@ Follow-ups, each needing its own evidence:
    silent.
 7. **F6:** capture a per-release native-write expectation so `--readback-*`
    can measure a rehearsal release.
+8. **I3 (#823):** `artifacts.py`'s per-module table outputs must follow the
+   release. The fix, deriving the stems from the regenerated hubs, is on
+   `staging/rehearsal-zero-intervention` (0291b28d, 447cff6b). It retires I3.
 
 Re-run this rehearsal unchanged (same pair, same corpus) after 1–3 to reach the
 read/write stages without code interventions.
