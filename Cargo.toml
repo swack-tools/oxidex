@@ -159,6 +159,9 @@ serde_yaml = "0.9"
 # to compile without `RawAccess` -- see tests/compile_fail/README or the
 # fixtures under `tests/compile_fail/`.
 trybuild = "1"
+# `filetype`'s proof that each magic-number literal fold is implied by its
+# pattern uses the regex crate's own parser and prefix extractor.
+regex-syntax = "0.8"
 
 [profile.release]
 opt-level = 3

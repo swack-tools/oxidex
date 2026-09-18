@@ -17,25 +17,164 @@
 pub mod tables;
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use regex::bytes::Regex;
 
 /// How ExifTool sizes the header it tests magic numbers against.
 const HEADER_LEN: usize = 1024;
 
-/// Compiled magic patterns, in ExifTool's test order.
+/// One slot per [`tables::MAGIC`] row, in ExifTool's test order.
 ///
-/// Patterns that fail to compile are dropped rather than panicking: a bad
-/// pattern should cost one format's identification, not the whole binary. The
-/// `all_magic_patterns_compile` test asserts the set is in fact complete, so a
-/// regression surfaces in CI instead of silently degrading detection.
-static COMPILED: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+/// Every question this module answers names its candidate formats up front --
+/// [`matches_magic`] one key, [`identify`] the formats its extension declares
+/// -- so only those rows are ever consulted. Compiling every pattern on first
+/// use cost 40% of a single-file `oxidex -j -a -G1` run (regex NFA/DFA
+/// construction for ~120 patterns, paid again by every process). Now a row is
+/// answered in the cheapest way that is provably the same answer:
+///
+/// 1. `prefix` is the literal byte run every match must start with, read off
+///    the pattern by [`literal_prefix`]. A header that does not start with it
+///    cannot match, and no regex is built.
+/// 2. When the prefix *is* the whole pattern (`exact`), starting with it is
+///    matching it -- `^\xff\xd8\xff` is `starts_with(b"\xff\xd8\xff")`.
+/// 3. Otherwise the row's own regex is compiled on first use, from the same
+///    pattern string, and run over the same 1 KiB window.
+///
+/// `literal_prefix_folds_are_implied_by_the_pattern` proves steps 1 and 2 for
+/// every row with `regex-syntax`'s own prefix extractor, and
+/// `lazy_compilation_answers_like_the_eager_table` checks every answer against
+/// an eagerly compiled table on each row's literal, its truncations and its
+/// one-byte near misses. Callers still walk the rows in table order.
+///
+/// A pattern that fails to compile still costs one format's identification
+/// rather than the whole binary: its regex slot holds `None`, which callers
+/// treat exactly as the eager table treated a dropped row. The
+/// `all_magic_patterns_compile` test compiles every row and asserts none is
+/// `None`, so a regression surfaces in CI instead of silently degrading
+/// detection.
+struct MagicRow {
+    prefix: Vec<u8>,
+    exact: bool,
+    regex: OnceLock<Option<Regex>>,
+}
+
+static ROWS: LazyLock<Box<[MagicRow]>> = LazyLock::new(|| {
     tables::MAGIC
         .iter()
-        .filter_map(|(t, p)| Regex::new(p).ok().map(|r| (*t, r)))
+        .map(|(_, pattern)| {
+            let (prefix, exact) = literal_prefix(pattern);
+            MagicRow {
+                prefix,
+                exact,
+                regex: OnceLock::new(),
+            }
+        })
         .collect()
 });
+
+/// The compiled pattern for `tables::MAGIC[index]`, compiling it on first use.
+fn compiled(index: usize) -> Option<&'static Regex> {
+    ROWS[index]
+        .regex
+        .get_or_init(|| Regex::new(tables::MAGIC[index].1).ok())
+        .as_ref()
+}
+
+/// Whether `head` (already cut to [`HEADER_LEN`]) matches row `index`.
+///
+/// `None` only for a row whose pattern does not compile and whose literal
+/// prefix could not settle the answer -- the eager table's dropped row.
+fn row_matches(index: usize, head: &[u8]) -> Option<bool> {
+    let row = &ROWS[index];
+    if !head.starts_with(&row.prefix) {
+        return Some(false);
+    }
+    if row.exact {
+        return Some(true);
+    }
+    compiled(index).map(|re| re.is_match(head))
+}
+
+/// The literal bytes every match of a `(?s-u)^...` magic pattern starts with,
+/// and whether those bytes are the entire pattern.
+///
+/// Deliberately narrow: it reads plain ASCII letters, digits, space and a few
+/// punctuation marks that are literal outside a class, `\xHH` escapes and
+/// escaped punctuation, and stops at the first anything-else. A token followed
+/// by a quantifier is not required, so the run ends before it. A pattern with
+/// an alternation at the top level (`PCAP`'s `^a|b|c`, whose `^` binds only
+/// the first branch) gets no prefix at all. Returning less than the true
+/// prefix is always safe; the proof test rejects returning more.
+fn literal_prefix(pattern: &str) -> (Vec<u8>, bool) {
+    let Some(body) = pattern.strip_prefix("(?s-u)^") else {
+        return (Vec::new(), false);
+    };
+    let b = body.as_bytes();
+    if has_top_level_alternation(b) {
+        return (Vec::new(), false);
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let (byte, next) = match b[i] {
+            b'\\' => match b.get(i + 1) {
+                Some(b'x') => {
+                    let hex = b
+                        .get(i + 2..i + 4)
+                        .and_then(|h| std::str::from_utf8(h).ok())
+                        .and_then(|h| u8::from_str_radix(h, 16).ok());
+                    match hex {
+                        Some(v) => (v, i + 4),
+                        None => break,
+                    }
+                }
+                Some(&c) if c.is_ascii_punctuation() => (c, i + 2),
+                _ => break,
+            },
+            c if c.is_ascii_alphanumeric() || b" !\"%&',/:;<=>@_~-#".contains(&c) => (c, i + 1),
+            _ => break,
+        };
+        if matches!(b.get(next), Some(b'?' | b'*' | b'+' | b'{')) {
+            return (out, false);
+        }
+        out.push(byte);
+        i = next;
+    }
+    let exact = i == b.len();
+    (out, exact)
+}
+
+/// Whether `|` appears outside every group and class.
+fn has_top_level_alternation(b: &[u8]) -> bool {
+    let (mut depth, mut i) = (0usize, 0);
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1,
+            b'[' => {
+                i += 1;
+                if b.get(i) == Some(&b'^') {
+                    i += 1;
+                }
+                if b.get(i) == Some(&b']') {
+                    i += 1;
+                }
+                while i < b.len() && b[i] != b']' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b'|' if depth == 0 => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
 
 /// Formats whose magic number [`tables::MAGIC`] files under a different name.
 ///
@@ -73,9 +212,10 @@ fn magic_key(format: &str) -> &str {
 /// Whether the header satisfies the pattern filed under one specific key.
 fn magic_matches(key: &str, header: &[u8]) -> bool {
     let head = &header[..header.len().min(HEADER_LEN)];
-    COMPILED
+    tables::MAGIC
         .iter()
-        .any(|(k, re)| *k == key && re.is_match(head))
+        .enumerate()
+        .any(|(i, (k, _))| *k == key && row_matches(i, head) == Some(true))
 }
 
 /// Whether `header` satisfies the magic number ExifTool files under `file_type`.
@@ -257,12 +397,17 @@ fn heif_family_brand(header: &[u8]) -> Option<(&'static str, &'static str)> {
 fn magic_accepts(formats: &[&str], header: &[u8]) -> Option<bool> {
     let head = &header[..header.len().min(HEADER_LEN)];
     let mut declared = false;
-    for (key, re) in COMPILED.iter() {
+    for (i, (key, _)) in tables::MAGIC.iter().enumerate() {
         if !formats.iter().any(|f| magic_key(f) == *key) {
             continue;
         }
+        // An uncompilable row is skipped before it can count as declared,
+        // exactly as the eager table dropped it.
+        let Some(hit) = row_matches(i, head) else {
+            continue;
+        };
         declared = true;
-        if re.is_match(head) {
+        if hit {
             return Some(true);
         }
     }
@@ -490,7 +635,179 @@ mod tests {
             .map(|(t, _)| *t)
             .collect();
         assert!(bad.is_empty(), "magic patterns failed to compile: {bad:?}");
-        assert_eq!(COMPILED.len(), tables::MAGIC.len());
+        // And every lazily compiled slot holds its pattern, not `None`.
+        assert_eq!(ROWS.len(), tables::MAGIC.len());
+        for (i, (t, p)) in tables::MAGIC.iter().enumerate() {
+            let re = compiled(i).unwrap_or_else(|| panic!("{t} slot is empty"));
+            assert_eq!(re.as_str(), *p, "{t} slot compiled the wrong row");
+        }
+    }
+
+    /// Every literal fold is implied by its pattern, checked with the regex
+    /// crate's own parser and prefix extractor rather than the hand scanner:
+    /// every string the pattern can match starts with one of the extracted
+    /// literals, so each of those must start with the folded prefix. An
+    /// `exact` fold must be the pattern's only, complete match.
+    #[test]
+    fn literal_prefix_folds_are_implied_by_the_pattern() {
+        use regex_syntax::hir::literal::{ExtractKind, Extractor};
+        let (mut folded, mut exact) = (Vec::new(), Vec::new());
+        for (t, p) in tables::MAGIC {
+            let (prefix, is_exact) = literal_prefix(p);
+            let hir = regex_syntax::ParserBuilder::new()
+                .utf8(false)
+                .build()
+                .parse(p)
+                .unwrap_or_else(|e| panic!("{t}: {e}"));
+            let seq = Extractor::new().kind(ExtractKind::Prefix).extract(&hir);
+            if is_exact {
+                let lits = seq.literals().expect("exact fold needs a finite set");
+                assert_eq!(lits.len(), 1, "{t}: exact fold but {lits:?}");
+                assert!(lits[0].is_exact(), "{t}: exact fold but {lits:?}");
+                assert_eq!(lits[0].as_bytes(), prefix.as_slice(), "{t}");
+                exact.push(*t);
+            }
+            if prefix.is_empty() {
+                continue;
+            }
+            let lits = seq
+                .literals()
+                .unwrap_or_else(|| panic!("{t}: unbounded prefixes, fold {prefix:?}"));
+            for lit in lits {
+                assert!(
+                    lit.as_bytes().starts_with(&prefix),
+                    "{t}: pattern admits {lit:?}, fold claims {prefix:?}"
+                );
+            }
+            folded.push(*t);
+        }
+        // Pin the coverage so a scanner regression that silently folds
+        // nothing (safe, but slow again) is visible too.
+        assert!(
+            exact.contains(&"JPEG") && exact.contains(&"ZIP"),
+            "{exact:?}"
+        );
+        assert!(
+            folded.len() >= 60,
+            "only {} folds: {folded:?}",
+            folded.len()
+        );
+        println!(
+            "{} of {} magic rows fold to a literal prefix, {} of them exact",
+            folded.len(),
+            tables::MAGIC.len(),
+            exact.len()
+        );
+    }
+
+    /// Lazy compilation must not change any answer. Each row's pattern is
+    /// compiled independently here and run against every row's canonical
+    /// header sample (plus truncations and one-byte mutations of it, the near
+    /// misses), and both public questions -- `matches_magic` per key and
+    /// `magic_accepts` per key set -- must agree with an eager scan over the
+    /// independently compiled table, in table order.
+    #[test]
+    fn lazy_compilation_answers_like_the_eager_table() {
+        let eager: Vec<(&str, Regex)> = tables::MAGIC
+            .iter()
+            .map(|(t, p)| (*t, Regex::new(p).expect("compiles")))
+            .collect();
+        let samples: Vec<Vec<u8>> = {
+            let mut base: Vec<Vec<u8>> = vec![
+                b"\xff\xd8\xff\xe0".to_vec(),
+                b"II*\x00\x08\x00\x00\x00".to_vec(),
+                b"MM\x00*\x00\x00\x00\x08".to_vec(),
+                b"\x89PNG\r\n\x1a\n".to_vec(),
+                b"GIF89a".to_vec(),
+                b"%PDF-1.4\n".to_vec(),
+                b"PK\x03\x04".to_vec(),
+                b"BM\x00\x00".to_vec(),
+                b"FORM\x00\x00\x00\x10AIFF".to_vec(),
+                b"AT&TFORM\x00\x00\x03\x96DJVM".to_vec(),
+                b"<?xml version=\"1.0\"?><a/>".to_vec(),
+                b"plain printable text\r\n".to_vec(),
+                b"PF\x0a512 768\x0a-1.000000\x0a".to_vec(),
+                b"\x00\x01\xf0\x00\x00\x00Copyright".to_vec(),
+                b"SIMPLE  =                    T".to_vec(),
+                b"  0\r\nSECTION\r\n  2\r\nHEADER".to_vec(),
+                b"\x00\x00\x00\x18ftypheic".to_vec(),
+                Vec::new(),
+            ];
+            // Every row's own literal bytes, where the pattern has any: the
+            // run of plain characters and \xHH escapes right after the anchor.
+            for (_, p) in tables::MAGIC {
+                let body = p.trim_start_matches("(?s-u)^").as_bytes();
+                let mut lit = Vec::new();
+                let mut i = 0;
+                while i < body.len() {
+                    if body[i] == b'\\' && body.get(i + 1) == Some(&b'x') && i + 4 <= body.len() {
+                        match u8::from_str_radix(
+                            std::str::from_utf8(&body[i + 2..i + 4]).unwrap_or("zz"),
+                            16,
+                        ) {
+                            Ok(b) => lit.push(b),
+                            Err(_) => break,
+                        }
+                        i += 4;
+                    } else if body[i].is_ascii_alphanumeric() || body[i] == b' ' {
+                        lit.push(body[i]);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if !lit.is_empty() {
+                    base.push(lit);
+                }
+            }
+            let mut all = Vec::new();
+            for s in base {
+                for cut in 0..s.len() {
+                    all.push(s[..cut].to_vec());
+                }
+                for pos in 0..s.len() {
+                    let mut m = s.clone();
+                    m[pos] ^= 0x01;
+                    all.push(m);
+                }
+                let mut long = s.clone();
+                long.extend_from_slice(&[0x20; 300]);
+                all.push(long);
+                all.push(s);
+            }
+            all
+        };
+        let mut keys: Vec<&str> = tables::MAGIC.iter().map(|(t, _)| *t).collect();
+        keys.push("PFM2");
+        keys.push("NoSuchFormat");
+        for header in &samples {
+            let head = &header[..header.len().min(HEADER_LEN)];
+            for key in &keys {
+                let want = eager
+                    .iter()
+                    .any(|(k, re)| *k == magic_key(key) && re.is_match(head));
+                assert_eq!(matches_magic(key, header), want, "{key} on {header:?}");
+            }
+            for (_, _, formats) in tables::EXT_TO_TYPE {
+                let mut declared = false;
+                let mut want = None;
+                for (k, re) in &eager {
+                    if formats.iter().any(|f| magic_key(f) == *k) {
+                        declared = true;
+                        if re.is_match(head) {
+                            want = Some(true);
+                            break;
+                        }
+                    }
+                }
+                let want = want.or_else(|| declared.then_some(false));
+                assert_eq!(
+                    magic_accepts(formats, header),
+                    want,
+                    "{formats:?} on {header:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -11,188 +11,44 @@ pub mod tag_registry;
 // Re-export everything from exiftool-tags crate
 pub use oxidex_tags::*;
 
-use std::collections::HashMap;
-use std::sync::LazyLock;
-
 // Re-export commonly used registry functions
 pub use tag_registry::{get_tag_descriptor, tag_count};
 
-/// Reverse lookup index: (numeric tag ID, format family) -> tag name
-/// Built lazily on first access from the YAML-based tag databases
-static TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> = LazyLock::new(|| {
-    let mut index = HashMap::with_capacity(10000);
-
-    // Helper function to determine FormatFamily and prefix from table name
-    fn get_format_info(table_name: &str) -> Option<(FormatFamily, &'static str)> {
-        if table_name.starts_with("Exif::") {
-            Some((FormatFamily::EXIF, "EXIF"))
-        } else if table_name.starts_with("GPS::") {
-            Some((FormatFamily::GPS, "GPS"))
-        } else if table_name.starts_with("XMP::") {
-            Some((FormatFamily::XMP, "XMP"))
-        } else if table_name.starts_with("IPTC::") {
-            Some((FormatFamily::IPTC, "IPTC"))
-        } else if table_name.starts_with("ICC_Profile::") {
-            Some((FormatFamily::ICCProfile, "ICC_Profile"))
-        } else if table_name.starts_with("Photoshop::") {
-            Some((FormatFamily::Photoshop, "Photoshop"))
-        } else {
-            // Default to EXIF for other tables that might contain numeric tags
-            None
-        }
-    }
-
-    // Helper function to parse hex tag ID from string
-    fn parse_tag_id(id_str: &str) -> Option<u16> {
-        if let Some(hex_str) = id_str.strip_prefix("0x") {
-            u16::from_str_radix(hex_str, 16).ok()
-        } else {
-            id_str.parse::<u16>().ok()
-        }
-    }
-
-    // This used to be ~50 substring and exact-match hacks -- "-bit ",
-    // " Channels", "Profile M", and a literal list containing "Manual",
-    // "Portrait", "Auto", "Uncompressed" -- introduced because the YAML
-    // registry carried 16,014 PrintConv display values as tag entries, and
-    // something had to keep them out of this index.
-    //
-    // The data is fixed at the source now (see
-    // scripts/prune_printconv_tag_entries.py and
-    // tests/tag_registry_invariants.rs), which inverted this filter: it
-    // rejected zero fabrications and one real tag. `Uncompressed` is a
-    // genuine Exif::Main tag at 0xBC03 -- HD Photo's compression value --
-    // and the enum list dropped it, so it could never be identified.
-    //
-    // What survives is the one rule still doing work: XMP::Main is keyed by
-    // namespace prefix (`x`, `mwg-rs`, `acdsee-rs`, `drone-dji`), and those
-    // are SubDirectory routes rather than tags, so they must not claim a
-    // numeric id here. ExifTool has no lowercase-initial tag name.
-    fn is_valid_tag_name(name: &str) -> bool {
-        let Some(first) = name.chars().next() else {
-            return false;
-        };
-        !first.is_ascii_lowercase() || name.starts_with("undef") || name.starts_with("n/a")
-    }
-
-    // Scan all domain tag databases and build reverse index
-    // We iterate through: core, camera, media, image, document, specialty
-    // Using entry().or_insert() so FIRST occurrence wins (standard tags take priority over value names)
-
-    // Core domain (contains standard EXIF/TIFF tags - process first for priority)
-    // Skip Composite tables as they contain derived/calculated values, not primary tags
-    for table in &core::CORE_TAGS.tables {
-        // Skip Composite tables - they're derived values, not primary tag definitions
-        if table.name.contains("::Composite") {
-            continue;
-        }
-
-        if let Some((format_family, prefix)) = get_format_info(&table.name) {
-            for tag in &table.tags {
-                if let Some(tag_id) = parse_tag_id(&tag.id) {
-                    // Skip invalid tag names (enum values mixed in with real tags)
-                    if !is_valid_tag_name(&tag.name) {
-                        continue;
-                    }
-                    let full_name = format!("{}:{}", prefix, tag.name);
-                    index.entry((tag_id, format_family)).or_insert(full_name);
-                }
-            }
-        }
-    }
-
-    // Camera domain
-    for table in &camera::CAMERA_TAGS.tables {
-        if table.name.contains("::Composite") {
-            continue;
-        }
-        if let Some((format_family, prefix)) = get_format_info(&table.name) {
-            for tag in &table.tags {
-                if let Some(tag_id) = parse_tag_id(&tag.id) {
-                    if !is_valid_tag_name(&tag.name) {
-                        continue;
-                    }
-                    let full_name = format!("{}:{}", prefix, tag.name);
-                    index.entry((tag_id, format_family)).or_insert(full_name);
-                }
-            }
-        }
-    }
-
-    // Media domain
-    for table in &media::MEDIA_TAGS.tables {
-        if table.name.contains("::Composite") {
-            continue;
-        }
-        if let Some((format_family, prefix)) = get_format_info(&table.name) {
-            for tag in &table.tags {
-                if let Some(tag_id) = parse_tag_id(&tag.id) {
-                    if !is_valid_tag_name(&tag.name) {
-                        continue;
-                    }
-                    let full_name = format!("{}:{}", prefix, tag.name);
-                    index.entry((tag_id, format_family)).or_insert(full_name);
-                }
-            }
-        }
-    }
-
-    // Image domain
-    for table in &image::IMAGE_TAGS.tables {
-        if table.name.contains("::Composite") {
-            continue;
-        }
-        if let Some((format_family, prefix)) = get_format_info(&table.name) {
-            for tag in &table.tags {
-                if let Some(tag_id) = parse_tag_id(&tag.id) {
-                    if !is_valid_tag_name(&tag.name) {
-                        continue;
-                    }
-                    let full_name = format!("{}:{}", prefix, tag.name);
-                    index.entry((tag_id, format_family)).or_insert(full_name);
-                }
-            }
-        }
-    }
-
-    // Document domain
-    for table in &document::DOCUMENT_TAGS.tables {
-        if table.name.contains("::Composite") {
-            continue;
-        }
-        if let Some((format_family, prefix)) = get_format_info(&table.name) {
-            for tag in &table.tags {
-                if let Some(tag_id) = parse_tag_id(&tag.id) {
-                    if !is_valid_tag_name(&tag.name) {
-                        continue;
-                    }
-                    let full_name = format!("{}:{}", prefix, tag.name);
-                    index.entry((tag_id, format_family)).or_insert(full_name);
-                }
-            }
-        }
-    }
-
-    // Specialty domain
-    for table in &specialty::SPECIALTY_TAGS.tables {
-        if table.name.contains("::Composite") {
-            continue;
-        }
-        if let Some((format_family, prefix)) = get_format_info(&table.name) {
-            for tag in &table.tags {
-                if let Some(tag_id) = parse_tag_id(&tag.id) {
-                    if !is_valid_tag_name(&tag.name) {
-                        continue;
-                    }
-                    let full_name = format!("{}:{}", prefix, tag.name);
-                    index.entry((tag_id, format_family)).or_insert(full_name);
-                }
-            }
-        }
-    }
-
-    index
-});
+/// Reverse lookup: (numeric tag ID, format family) -> bare tag name.
+///
+/// Each `oxidex-tags-*` crate's `build.rs` emits its share of this index as a
+/// sorted static slice (`TAG_ID_REVERSE`, see
+/// `oxidex_tags_shared::reverse_index`), so a lookup is a binary search over
+/// read-only data. It replaced a `LazyLock<HashMap<(u16, FormatFamily),
+/// String>>` whose first use decoded all six tag databases and allocated a
+/// `String` per entry -- 8.7% of a single-file `oxidex -j -a -G1` run, paid
+/// again by every process.
+///
+/// The old index kept the *first* occurrence of each key, scanning the crates
+/// in this order; consulting the slices in the same order and taking the first
+/// hit is the same rule. `reverse_index_matches_the_runtime_builder` keeps the
+/// old builder verbatim and asserts the two agree on every key.
+fn reverse_index_name(tag_id: u16, family: FormatFamily) -> Option<&'static str> {
+    let family = match family {
+        FormatFamily::EXIF => IdFamily::Exif,
+        FormatFamily::GPS => IdFamily::Gps,
+        FormatFamily::XMP => IdFamily::Xmp,
+        FormatFamily::IPTC => IdFamily::Iptc,
+        FormatFamily::ICCProfile => IdFamily::IccProfile,
+        FormatFamily::Photoshop => IdFamily::Photoshop,
+        _ => return None,
+    };
+    [
+        core::TAG_ID_REVERSE,
+        camera::TAG_ID_REVERSE,
+        media::TAG_ID_REVERSE,
+        image::TAG_ID_REVERSE,
+        document::TAG_ID_REVERSE,
+        specialty::TAG_ID_REVERSE,
+    ]
+    .into_iter()
+    .find_map(|rows| lookup_reverse(rows, family, tag_id))
+}
 
 /// Looks up a tag name from a numeric tag ID and IFD context.
 ///
@@ -268,20 +124,10 @@ fn lookup_tag_name_with_generated(
     }
 
     // Look up the tag in the appropriate format family
-    if let Some(tag_name) = TAG_ID_TO_NAME_INDEX.get(&(tag_id, format_family)) {
-        // Found the tag, now we need to replace the prefix with the correct IFD name
-        // The generated tags use format family prefixes (EXIF:, GPS:, etc.)
-        // but we want to use IFD-specific prefixes for output:
-        // - Main IFD (IFD0): Use "IFD0:" prefix for compatibility with Perl ExifTool -G1 output
-        // - EXIF Sub-IFD (ExifIFD): Use "ExifIFD:" prefix
-        // - GPS Sub-IFD (GPS): Use "GPS:" prefix
-        // - Thumbnail IFD (IFD1): Use "IFD1:" prefix
-        // - IFD2, IFD3: Use "IFD2:", "IFD3:" prefixes for multi-page TIFF
-
-        if let Some(colon_pos) = tag_name.find(':') {
-            let tag_base_name = &tag_name[colon_pos + 1..];
-            return format!("{}:{}", ifd_name, tag_base_name);
-        }
+    if let Some(tag_base_name) = reverse_index_name(tag_id, format_family) {
+        // The index carries bare names; the group is the IFD the tag was read
+        // from (IFD0, ExifIFD, GPS, IFD1, IFD2...), as ExifTool's -G1 prints.
+        return format!("{ifd_name}:{tag_base_name}");
     }
 
     // The YAML index missed. Before giving up on a name, consult the generated
@@ -299,6 +145,235 @@ fn lookup_tag_name_with_generated(
 mod tests {
     use super::*;
 
+    use std::collections::HashMap;
+    use std::sync::LazyLock;
+
+    /// The runtime builder `reverse_index_name` replaced, kept verbatim as the
+    /// oracle the generated slices are checked against.
+    static LEGACY_TAG_ID_TO_NAME_INDEX: LazyLock<HashMap<(u16, FormatFamily), String>> =
+        LazyLock::new(|| {
+            let mut index = HashMap::with_capacity(10000);
+
+            // Helper function to determine FormatFamily and prefix from table name
+            fn get_format_info(table_name: &str) -> Option<(FormatFamily, &'static str)> {
+                if table_name.starts_with("Exif::") {
+                    Some((FormatFamily::EXIF, "EXIF"))
+                } else if table_name.starts_with("GPS::") {
+                    Some((FormatFamily::GPS, "GPS"))
+                } else if table_name.starts_with("XMP::") {
+                    Some((FormatFamily::XMP, "XMP"))
+                } else if table_name.starts_with("IPTC::") {
+                    Some((FormatFamily::IPTC, "IPTC"))
+                } else if table_name.starts_with("ICC_Profile::") {
+                    Some((FormatFamily::ICCProfile, "ICC_Profile"))
+                } else if table_name.starts_with("Photoshop::") {
+                    Some((FormatFamily::Photoshop, "Photoshop"))
+                } else {
+                    // Default to EXIF for other tables that might contain numeric tags
+                    None
+                }
+            }
+
+            // Helper function to parse hex tag ID from string
+            fn parse_tag_id(id_str: &str) -> Option<u16> {
+                if let Some(hex_str) = id_str.strip_prefix("0x") {
+                    u16::from_str_radix(hex_str, 16).ok()
+                } else {
+                    id_str.parse::<u16>().ok()
+                }
+            }
+
+            // This used to be ~50 substring and exact-match hacks -- "-bit ",
+            // " Channels", "Profile M", and a literal list containing "Manual",
+            // "Portrait", "Auto", "Uncompressed" -- introduced because the YAML
+            // registry carried 16,014 PrintConv display values as tag entries, and
+            // something had to keep them out of this index.
+            //
+            // The data is fixed at the source now (see
+            // scripts/prune_printconv_tag_entries.py and
+            // tests/tag_registry_invariants.rs), which inverted this filter: it
+            // rejected zero fabrications and one real tag. `Uncompressed` is a
+            // genuine Exif::Main tag at 0xBC03 -- HD Photo's compression value --
+            // and the enum list dropped it, so it could never be identified.
+            //
+            // What survives is the one rule still doing work: XMP::Main is keyed by
+            // namespace prefix (`x`, `mwg-rs`, `acdsee-rs`, `drone-dji`), and those
+            // are SubDirectory routes rather than tags, so they must not claim a
+            // numeric id here. ExifTool has no lowercase-initial tag name.
+            fn is_valid_tag_name(name: &str) -> bool {
+                let Some(first) = name.chars().next() else {
+                    return false;
+                };
+                !first.is_ascii_lowercase() || name.starts_with("undef") || name.starts_with("n/a")
+            }
+
+            // Scan all domain tag databases and build reverse index
+            // We iterate through: core, camera, media, image, document, specialty
+            // Using entry().or_insert() so FIRST occurrence wins (standard tags take priority over value names)
+
+            // Core domain (contains standard EXIF/TIFF tags - process first for priority)
+            // Skip Composite tables as they contain derived/calculated values, not primary tags
+            for table in &core::CORE_TAGS.tables {
+                // Skip Composite tables - they're derived values, not primary tag definitions
+                if table.name.contains("::Composite") {
+                    continue;
+                }
+
+                if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                    for tag in &table.tags {
+                        if let Some(tag_id) = parse_tag_id(&tag.id) {
+                            // Skip invalid tag names (enum values mixed in with real tags)
+                            if !is_valid_tag_name(&tag.name) {
+                                continue;
+                            }
+                            let full_name = format!("{}:{}", prefix, tag.name);
+                            index.entry((tag_id, format_family)).or_insert(full_name);
+                        }
+                    }
+                }
+            }
+
+            // Camera domain
+            for table in &camera::CAMERA_TAGS.tables {
+                if table.name.contains("::Composite") {
+                    continue;
+                }
+                if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                    for tag in &table.tags {
+                        if let Some(tag_id) = parse_tag_id(&tag.id) {
+                            if !is_valid_tag_name(&tag.name) {
+                                continue;
+                            }
+                            let full_name = format!("{}:{}", prefix, tag.name);
+                            index.entry((tag_id, format_family)).or_insert(full_name);
+                        }
+                    }
+                }
+            }
+
+            // Media domain
+            for table in &media::MEDIA_TAGS.tables {
+                if table.name.contains("::Composite") {
+                    continue;
+                }
+                if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                    for tag in &table.tags {
+                        if let Some(tag_id) = parse_tag_id(&tag.id) {
+                            if !is_valid_tag_name(&tag.name) {
+                                continue;
+                            }
+                            let full_name = format!("{}:{}", prefix, tag.name);
+                            index.entry((tag_id, format_family)).or_insert(full_name);
+                        }
+                    }
+                }
+            }
+
+            // Image domain
+            for table in &image::IMAGE_TAGS.tables {
+                if table.name.contains("::Composite") {
+                    continue;
+                }
+                if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                    for tag in &table.tags {
+                        if let Some(tag_id) = parse_tag_id(&tag.id) {
+                            if !is_valid_tag_name(&tag.name) {
+                                continue;
+                            }
+                            let full_name = format!("{}:{}", prefix, tag.name);
+                            index.entry((tag_id, format_family)).or_insert(full_name);
+                        }
+                    }
+                }
+            }
+
+            // Document domain
+            for table in &document::DOCUMENT_TAGS.tables {
+                if table.name.contains("::Composite") {
+                    continue;
+                }
+                if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                    for tag in &table.tags {
+                        if let Some(tag_id) = parse_tag_id(&tag.id) {
+                            if !is_valid_tag_name(&tag.name) {
+                                continue;
+                            }
+                            let full_name = format!("{}:{}", prefix, tag.name);
+                            index.entry((tag_id, format_family)).or_insert(full_name);
+                        }
+                    }
+                }
+            }
+
+            // Specialty domain
+            for table in &specialty::SPECIALTY_TAGS.tables {
+                if table.name.contains("::Composite") {
+                    continue;
+                }
+                if let Some((format_family, prefix)) = get_format_info(&table.name) {
+                    for tag in &table.tags {
+                        if let Some(tag_id) = parse_tag_id(&tag.id) {
+                            if !is_valid_tag_name(&tag.name) {
+                                continue;
+                            }
+                            let full_name = format!("{}:{}", prefix, tag.name);
+                            index.entry((tag_id, format_family)).or_insert(full_name);
+                        }
+                    }
+                }
+            }
+
+            index
+        });
+
+    /// The build-time slices answer exactly what the runtime index answered:
+    /// the same name for every key it held, and nothing for any key it did
+    /// not (no generated row outside the legacy key set).
+    #[test]
+    fn reverse_index_matches_the_runtime_builder() {
+        let legacy = &*LEGACY_TAG_ID_TO_NAME_INDEX;
+        // 641 keys at 13.59; a floor so an empty database cannot pass vacuously.
+        assert!(
+            legacy.len() > 500,
+            "legacy index suspiciously small: {}",
+            legacy.len()
+        );
+        for (&(id, family), full) in legacy {
+            let (_, bare) = full.split_once(':').expect("prefixed name");
+            assert_eq!(
+                reverse_index_name(id, family),
+                Some(bare),
+                "0x{id:04X} {family:?}"
+            );
+        }
+        let generated: std::collections::HashSet<(IdFamily, u16)> = [
+            core::TAG_ID_REVERSE,
+            camera::TAG_ID_REVERSE,
+            media::TAG_ID_REVERSE,
+            image::TAG_ID_REVERSE,
+            document::TAG_ID_REVERSE,
+            specialty::TAG_ID_REVERSE,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(family, id, _)| (*family, *id))
+        .collect();
+        assert_eq!(generated.len(), legacy.len(), "generated key set differs");
+        for rows in [
+            core::TAG_ID_REVERSE,
+            camera::TAG_ID_REVERSE,
+            media::TAG_ID_REVERSE,
+            image::TAG_ID_REVERSE,
+            document::TAG_ID_REVERSE,
+            specialty::TAG_ID_REVERSE,
+        ] {
+            assert!(
+                rows.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1)),
+                "slice not strictly sorted"
+            );
+        }
+    }
+
     #[test]
     fn renamed_current_address_wins_retired_reverse_without_reviving_yaml() {
         use crate::writers::generated_setnewvalue_public_migration_rules::PUBLIC_SET_NEW_VALUE_MIGRATIONS;
@@ -313,11 +388,8 @@ mod tests {
             .find(|migration| {
                 !migration.removed_or_unsupported
                     && migration.write_group == "IFD0"
-                    && TAG_ID_TO_NAME_INDEX
-                        .get(&(migration.raw_tag_id, FormatFamily::EXIF))
-                        .is_some_and(|name| {
-                            name.split_once(':').map(|(_, name)| name) == Some(migration.name)
-                        })
+                    && reverse_index_name(migration.raw_tag_id, FormatFamily::EXIF)
+                        == Some(migration.name)
             })
             .expect("a migrated source identity must have a real legacy YAML spelling");
         let old_name = format!("{}:{}", source.write_group, source.name);
