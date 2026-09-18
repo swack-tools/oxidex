@@ -14,7 +14,7 @@
 #
 # Before this script existed, a bump only ever ran tier 1 -- `just
 # regen-tables` calls regen.sh directly, and nothing called the tier-2
-# scripts as a group at all. A bump could therefore refresh binary_tables.rs
+# scripts as a group at all. A bump could therefore refresh the binary tables
 # to a new ExifTool release while every tier-2 file quietly stayed on the
 # old one, and nothing in the repo could tell: each generator individually
 # looked fine, verify.py only ever checked tier 1, and the tier-2 outputs
@@ -79,7 +79,7 @@ fi
 
 if [[ "$TIER1" == "1" ]]; then
     echo "=========================================================="
-    echo ">> TIER 1: binary_tables.rs, filetypes, Composite, FITS"
+    echo ">> TIER 1: binary/ + ifd/ tables, filetypes, Composite, FITS"
     echo "=========================================================="
     # A missing default tree may still be fetched by tier 1. Explicit trees
     # fail if absent; they never fall back to an unrelated cached source.

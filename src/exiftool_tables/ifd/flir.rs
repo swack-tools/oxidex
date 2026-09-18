@@ -1,0 +1,266 @@
+//! ExifTool `FLIR` IFD-style tables, generated from ExifTool
+//! 13.59's own Perl hashes -- one file per module; `mod.rs` beside this
+//! file is the hub that declares and re-exports it.
+//!
+//! DO NOT EDIT. Regenerate with `just regen-tables` (see `mod.rs`).
+
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+
+// Everything a table literal names -- the `ifd_schema` types, `ExprId`, the
+// `cond`/`subdir`/`validation` imports -- is in scope in the hub, and a glob
+// import of the parent module brings its private imports along (RFC 1560).
+#[allow(unused_imports)]
+use super::*;
+
+/// `Image::ExifTool::FLIR::AFF` -- 2 tags,
+/// 0 `_variants` groups (IFD-style: PROCESS_PROC absent).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static IFD_FLIR_AFF: IfdTable = IfdTable {
+    module: "FLIR",
+    table: "AFF",
+    group0: "FLIR",
+    group1: "FLIR",
+    group2: "Image",
+    set_group1: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
+    tags: &[
+        IfdTag {
+            id: 0x0001,
+            name: "AFF1",
+            format: None,
+            count: None,
+            writable: None,
+            groups: TagGroups::NONE,
+            flags: IfdFlags::NONE,
+            condition: None,
+            omitted: Omitted {
+                value_conv: false,
+                raw_conv: false,
+                condition: false,
+                hook: false,
+                subdirectory: true,
+                print_conv: false,
+            },
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: Some(IfdSubdirEdge {
+                module: "FLIR",
+                table: "AFF1",
+                start: IfdStart::ValuePtr(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                validation: None,
+                processor: IfdSubdirProcessor::Native,
+                unwalked: None,
+            }),
+        },
+        IfdTag {
+            id: 0x0005,
+            name: "AFF5",
+            format: None,
+            count: None,
+            writable: None,
+            groups: TagGroups::NONE,
+            flags: IfdFlags::NONE,
+            condition: None,
+            omitted: Omitted {
+                value_conv: false,
+                raw_conv: false,
+                condition: false,
+                hook: false,
+                subdirectory: true,
+                print_conv: false,
+            },
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: Some(IfdSubdirEdge {
+                module: "FLIR",
+                table: "AFF5",
+                start: IfdStart::ValuePtr(0),
+                base: None,
+                byte_order: IfdByteOrder::Inherit,
+                fix_format: None,
+                sub_ifd: false,
+                max_subdirs: None,
+                dir_name: None,
+                validate: false,
+                validation: None,
+                processor: IfdSubdirProcessor::Native,
+                unwalked: None,
+            }),
+        },
+    ],
+    variants: &[],
+};
+
+/// `Image::ExifTool::FLIR::Composite` -- 0 tags,
+/// 0 `_variants` groups (IFD-style: PROCESS_PROC absent).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static IFD_FLIR_COMPOSITE: IfdTable = IfdTable {
+    module: "FLIR",
+    table: "Composite",
+    group0: "Composite",
+    group1: "FLIR",
+    group2: "Camera",
+    set_group1: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("ifd_tag_id_unrepresentable", 1)],
+    },
+    tags: &[],
+    variants: &[],
+};
+
+/// `Image::ExifTool::FLIR::Main` -- 6 tags,
+/// 0 `_variants` groups (IFD-style: PROCESS_PROC absent).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static IFD_FLIR_MAIN: IfdTable = IfdTable {
+    module: "FLIR",
+    table: "Main",
+    group0: "MakerNotes",
+    group1: "FLIR",
+    group2: "Camera",
+    set_group1: None,
+    priority: Some(0),
+    gate_a: GateA { blocked_by: &[] },
+    tags: &[
+        IfdTag {
+            id: 0x0001,
+            name: "ImageTemperatureMax",
+            format: Some(Fmt::Rational64s),
+            count: None,
+            writable: Some("rational64u"),
+            groups: TagGroups::NONE,
+            flags: IfdFlags::NONE,
+            condition: None,
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+        },
+        IfdTag {
+            id: 0x0002,
+            name: "ImageTemperatureMin",
+            format: Some(Fmt::Rational64s),
+            count: None,
+            writable: Some("rational64u"),
+            groups: TagGroups::NONE,
+            flags: IfdFlags::NONE,
+            condition: None,
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+        },
+        IfdTag {
+            id: 0x0003,
+            name: "Emissivity",
+            format: None,
+            count: None,
+            writable: Some("rational64u"),
+            groups: TagGroups::NONE,
+            flags: IfdFlags::NONE,
+            condition: None,
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::Expr(ExprId::Sprintf2fVal67A3D4),
+            subdir: None,
+        },
+        IfdTag {
+            id: 0x0004,
+            name: "UnknownTemperature",
+            format: Some(Fmt::Rational64s),
+            count: None,
+            writable: Some("rational64u"),
+            groups: TagGroups::NONE,
+            flags: IfdFlags {
+                unknown: true,
+                binary: false,
+                list: false,
+                protected: false,
+                avoid: false,
+                priority: None,
+            },
+            condition: None,
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+        },
+        IfdTag {
+            id: 0x0005,
+            name: "CameraTemperatureRangeMax",
+            format: Some(Fmt::Rational64s),
+            count: None,
+            writable: Some("rational64u"),
+            groups: TagGroups::NONE,
+            flags: IfdFlags {
+                unknown: true,
+                binary: false,
+                list: false,
+                protected: false,
+                avoid: false,
+                priority: None,
+            },
+            condition: None,
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+        },
+        IfdTag {
+            id: 0x0006,
+            name: "CameraTemperatureRangeMin",
+            format: Some(Fmt::Rational64s),
+            count: None,
+            writable: Some("rational64u"),
+            groups: TagGroups::NONE,
+            flags: IfdFlags {
+                unknown: true,
+                binary: false,
+                list: false,
+                protected: false,
+                avoid: false,
+                priority: None,
+            },
+            condition: None,
+            omitted: Omitted::NONE,
+            raw_conv: None,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+        },
+    ],
+    variants: &[],
+};
+
+/// `Image::ExifTool::FLIR::UserData` -- 0 tags,
+/// 0 `_variants` groups (IFD-style: PROCESS_PROC absent).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static IFD_FLIR_USERDATA: IfdTable = IfdTable {
+    module: "FLIR",
+    table: "UserData",
+    group0: "FLIR",
+    group1: "FLIR",
+    group2: "Camera",
+    set_group1: None,
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("ifd_tag_id_unrepresentable", 1)],
+    },
+    tags: &[],
+    variants: &[],
+};

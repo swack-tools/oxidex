@@ -36,6 +36,12 @@
 //! just regen-tables            # extract + generate + verify
 //! ```
 
+// The two generated table artifacts are directories -- a `mod.rs` hub plus
+// one file per ExifTool module (`binary/canon.rs`, `ifd/exif.rs`, ...) --
+// mounted here under the module names every consumer already uses, so
+// `binary_tables::CANON_CAMERASETTINGS` and `ifd_tables::IFD_EXIF_MAIN` are
+// unchanged paths. `tools/exiftool-tables/table_modules.py` owns the layout.
+#[path = "binary/mod.rs"]
 pub mod binary_tables;
 pub mod cond;
 pub mod enabled;
@@ -47,6 +53,7 @@ pub mod fit_schema;
 pub mod fit_tables;
 pub mod ifd_engine;
 pub mod ifd_schema;
+#[path = "ifd/mod.rs"]
 pub mod ifd_tables;
 pub mod keyed_engine;
 pub mod keyed_schema;
@@ -321,7 +328,7 @@ mod tests {
         let pinned = crate::exiftool_oracle::repo_pin();
         assert_eq!(
             EXIFTOOL_VERSION, pinned,
-            "binary_tables.rs was transcribed from ExifTool {EXIFTOOL_VERSION}, but \
+            "binary/mod.rs was transcribed from ExifTool {EXIFTOOL_VERSION}, but \
              .exiftool-version pins {pinned}; regenerate with `just regen-tables`"
         );
     }
@@ -1100,8 +1107,8 @@ mod tests {
     fn ifd_tables_come_from_the_same_release_as_binary_tables() {
         assert_eq!(
             IFD_EXIFTOOL_VERSION, EXIFTOOL_VERSION,
-            "ifd_tables.rs was transcribed from ExifTool {IFD_EXIFTOOL_VERSION} but \
-             binary_tables.rs from {EXIFTOOL_VERSION}; regenerate both with `just regen-tables`"
+            "ifd/mod.rs was transcribed from ExifTool {IFD_EXIFTOOL_VERSION} but \
+             binary/mod.rs from {EXIFTOOL_VERSION}; regenerate both with `just regen-tables`"
         );
     }
 

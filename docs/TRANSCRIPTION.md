@@ -143,7 +143,8 @@ trustworthy.
 
 ```
 dump_tables.pl   Perl symbol table  ->  tables.json
-codegen.py       tables.json        ->  binary_tables.rs
+codegen.py       tables.json        ->  binary/mod.rs + binary/<module>.rs
+                                        (and ifd/mod.rs + ifd/<module>.rs)
 oracle.pl        Perl symbol table  ->  ground-truth TSV
 verify.py        Rust + TSV         ->  PASS / FAIL
 ```

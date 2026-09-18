@@ -535,7 +535,7 @@ jobs:
 
   # The generated ExifTool tables are 100k+ lines that no reviewer reads in a
   # diff, so their correctness rests entirely on verify.py -- which, until this
-  # job existed, nothing ever ran. A hand-edit of binary_tables.rs, or a
+  # job existed, nothing ever ran. A hand-edit of a binary/ table file, or a
   # regeneration against a different ExifTool, passed every other check.
   #
   # This re-parses the COMMITTED Rust and diffs it against a ground-truth dump
@@ -611,7 +611,7 @@ jobs:
           ET_VERSION: ${{ steps.exiftool.outputs.version }}
         run: |
           python3 tools/exiftool-tables/verify.py \
-            src/exiftool_tables/binary_tables.rs \
+            src/exiftool_tables/binary/mod.rs \
             "$EXIFTOOL_SOURCE/lib" \
             --oracle tools/exiftool-tables/oracle.pl \
             --keyed-generated src/exiftool_tables/keyed_tables.rs \
@@ -621,10 +621,11 @@ jobs:
           # this runs their actual Start/Base arithmetic against the pinned
           # ProcessBinaryData Perl eval scope (ExifTool.pm:10118-10137).
           python3 tools/exiftool-tables/verify_subdirs.py \
-            src/exiftool_tables/binary_tables.rs \
+            src/exiftool_tables/binary/mod.rs \
             "$EXIFTOOL_SOURCE/lib" \
             --exiftool "$EXIFTOOL_SOURCE/exiftool"
-      # Step 14 (tag-machinery overhaul): tier 1 above is binary_tables.rs;
+      # Step 14 (tag-machinery overhaul): tier 1 above is binary/ (the split
+      # binary tables);
       # tier 2 is everything downstream of it that regen.sh never touches --
       # the MakerNote sub-directory tables, the Nikon AF-point grids and the
       # six scripts/gen_*.pl one-off transcriptions. Until this step existed,
@@ -704,7 +705,7 @@ jobs:
           python3 tools/exiftool-tables/replay_ifd_catalog_inputs.py \
             --source "$RUNNER_TEMP/catalog-writer-source.json" \
             --committed-ledger tools/exiftool-tables/ifd_identity_ledger.json \
-            --committed-rust src/exiftool_tables/ifd_tables.rs \
+            --committed-rust src/exiftool_tables/ifd/mod.rs \
             --committed-expr-ledger tools/exiftool-tables/expr_oracle_ledger.json \
             --fresh-expr-ledger "$RUNNER_TEMP/catalog-expr-oracle.json" \
             --output "$RUNNER_TEMP/catalog-ifd-identity.json"
@@ -725,7 +726,7 @@ jobs:
             --garmin-fit-protocol-fact "$RUNNER_TEMP/garmin-fit-protocol.json" \
             --ifd-source "$RUNNER_TEMP/catalog-writer-source.json" \
             --ifd-identity-ledger "$RUNNER_TEMP/catalog-ifd-identity.json" \
-            --ifd-rust "src/exiftool_tables/ifd_tables.rs" \
+            --ifd-rust "src/exiftool_tables/ifd/mod.rs" \
             --ifd-expr-ledger "$RUNNER_TEMP/catalog-expr-oracle.json" \
             --writer-source "$RUNNER_TEMP/catalog-writer-source.json" \
             --writer-final-ledger "tools/exiftool-tables/tiff_scalar_final_ledger.json" \
@@ -818,7 +819,7 @@ jobs:
           # Exercise mutations of the actual generated parent/child artifacts,
           # including a downgrade that removes both processor and validation.
           export OXIDEX_IFD_SERIAL_MUTATION_TEST=1
-          export OXIDEX_IFD_GENERATED="$GITHUB_WORKSPACE/src/exiftool_tables/ifd_tables.rs"
+          export OXIDEX_IFD_GENERATED="$GITHUB_WORKSPACE/src/exiftool_tables/ifd/mod.rs"
           export OXIDEX_SERIAL_GENERATED="$OXIDEX_SERIAL_RUST"
           export OXIDEX_IFD_SERIAL_ORACLE="$PROCESSORS"
           export OXIDEX_WORD_KEYED_RUST="$GITHUB_WORKSPACE/src/exiftool_tables/keyed_tables.rs"

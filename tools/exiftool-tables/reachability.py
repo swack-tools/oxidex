@@ -26,16 +26,16 @@ when they are not re-derived (a 22-vs-21 discrepancy that survived because
 the count was hand-made). Reading gate A out of the generated Rust means the
 report cannot disagree with the artifact it describes.
 
-Instrument: parses `src/exiftool_tables/binary_tables.rs` and
+Instrument: parses `src/exiftool_tables/binary/` (mod.rs plus one file per module) and
 `src/exiftool_tables/enabled.rs` directly -- the committed artifacts, not a
 fresh dump -- so it needs neither Perl nor a corpus and can run in CI.
 
 Slice I-1 adds the same census for the IFD-style tables: gate A out of
-`src/exiftool_tables/ifd_tables.rs`, gate B out of
+`src/exiftool_tables/ifd/`, gate B out of
 `src/exiftool_tables/enabled_ifd.rs` (`ENABLED_IFD`), and literal
 `find_ifd_table("Mod", "Tbl")` call sites. It is printed as its own section
 after the binary one (whose text is unchanged), and skipped with a message
-when `ifd_tables.rs` is not on the tree. `--json-out` carries both: the
+when `ifd/mod.rs` is not on the tree. `--json-out` carries both: the
 top-level `tables`/`enabled`/`eligible`/`refused`/`gate_a_refusal_reasons`
 keys keep their binary-only meaning, every `per_table` row now says its
 `kind` (`"binary"` or `"ifd"`), and an `ifd` block repeats the four counts
@@ -50,14 +50,17 @@ import sys
 from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-TABLES = ROOT / "src/exiftool_tables/binary_tables.rs"
+TABLES = ROOT / "src/exiftool_tables/binary/mod.rs"
 ALLOWLIST = ROOT / "src/exiftool_tables/enabled.rs"
-IFD_TABLES = ROOT / "src/exiftool_tables/ifd_tables.rs"
+IFD_TABLES = ROOT / "src/exiftool_tables/ifd/mod.rs"
 IFD_ALLOWLIST = ROOT / "src/exiftool_tables/enabled_ifd.rs"
 SRC = ROOT / "src"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import instrument  # noqa: E402 -- git/instrument identity header
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import table_modules  # noqa: E402 -- the per-module artifact layout
 
 # `module: "X",\n    table: "Y",` ... up to that table's `gate_a` literal.
 TABLE_RE = re.compile(
@@ -84,7 +87,7 @@ IFD_EDGE_RE = re.compile(
 
 
 def parse_tables(path=TABLES, kind="binary"):
-    src = path.read_text(encoding="utf-8")
+    src = table_modules.read_logical(path)
     table_re, edge_re = (TABLE_RE, EDGE_RE) if kind == "binary" else (IFD_TABLE_RE, IFD_EDGE_RE)
     out = []
     for m in table_re.finditer(src):
@@ -123,7 +126,7 @@ def parse_allowlist(path=ALLOWLIST, static_name="ENABLED"):
     return {(m, t) for m, t in re.findall(r'\("([^"]+)",\s*"([^"]+)"\)', body)}
 
 
-def parse_call_sites(fn="find_table", skip=("binary_tables.rs", "enabled.rs")):
+def parse_call_sites(fn="find_table", skip=(TABLES.parent, ALLOWLIST)):
     """Every `find_table("Mod", "Tbl")` in non-test `src/` code.
 
     Literal pairs only. A model-dispatched lookup
@@ -133,14 +136,15 @@ def parse_call_sites(fn="find_table", skip=("binary_tables.rs", "enabled.rs")):
     counting call sites instead of live tables.
 
     Slice I-1 runs the same scan for `find_ifd_table` (`fn`), skipping the
-    IFD artifacts instead. `\\b` in front of the name keeps the two lookups
+    IFD artifacts instead (`skip` lists the artifact directory and the
+    allowlist file). `\\b` in front of the name keeps the two lookups
     apart: `find_ifd_table(` does not contain `find_table(`, but the anchor
     is what makes that a rule rather than a coincidence of spelling.
     """
     static, dynamic = set(), 0
     pat = re.compile(rf'\b{fn}\(\s*"([^"]+)"\s*,\s*(?:"([^"]+)"|(\w+))\s*\)')
     for path in SRC.rglob("*.rs"):
-        if path.name in skip:
+        if any(path == s or path.is_relative_to(s) for s in skip):
             continue
         # Strip `//` line comments before matching. Without this the census
         # counts a call site that does not exist: `ricoh.rs:215` NAMES
@@ -269,7 +273,7 @@ def main():
         ifd_tables = parse_tables(IFD_TABLES, "ifd")
         ifd_allowed = parse_allowlist(IFD_ALLOWLIST, "ENABLED_IFD")
         ifd_call_sites, ifd_dynamic = parse_call_sites(
-            "find_ifd_table", ("ifd_tables.rs", "enabled_ifd.rs")
+            "find_ifd_table", (IFD_TABLES.parent, IFD_ALLOWLIST)
         )
         ifd_enabled, ifd_eligible, ifd_refused = classify(ifd_tables, ifd_allowed, ifd_call_sites)
 
@@ -288,7 +292,7 @@ def main():
     if ifd_present:
         print()
         print("=" * 66)
-        print("IFD-style tables (slice I-1): src/exiftool_tables/ifd_tables.rs "
+        print("IFD-style tables (slice I-1): src/exiftool_tables/ifd/ "
               "vs enabled_ifd.rs")
         print("=" * 66)
         ifd_status = {k: (v[len("ifd:"):] if v.startswith("ifd:") else f"binary:{v}")

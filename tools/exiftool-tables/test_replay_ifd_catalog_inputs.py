@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 import codegen
+import table_modules
 import join_catalog_hydrated as join
 from replay_ifd_catalog_inputs import digest, replay
 
@@ -28,11 +29,11 @@ class IfdCatalogReplayTests(unittest.TestCase):
                               "verified_expressions": [], "expression_counts": {"total": 0, "verified": 0},
                               "use_counts": {"total": 0, "verified": 0}})
         chunks, index, _, rows = codegen.gen_ifd_tables(cls.document, ["Exif"], set())
-        cls.rust = codegen.render_ifd_file("13.59", chunks, index)
+        cls.rust = codegen.render_ifd_files("13.59", chunks, index)
         cls.ledger = {"schema": "oxidex_ifd_identity_ledger_v1", "exiftool_version": "13.59",
                       "source": {"tables_json_sha256": digest(cls.source),
                                  "expr_ledger_sha256": digest(cls.oracle),
-                                 "ifd_rust_hash_format": "rustfmt-2024",
+                                 "ifd_rust_hash_format": codegen.IFD_RUST_HASH_FORMAT,
                                  "ifd_rust_sha256": codegen._canonical_ifd_rust_sha256(cls.rust)},
                       "rows": sorted(rows, key=lambda row: (row["full_name"], row["raw_key"], tuple(row["variant_path"]))),
                       "counts": {"rows": 2, "emitted": 2, "refused": 0,
@@ -75,7 +76,7 @@ class IfdCatalogReplayTests(unittest.TestCase):
 
     def test_changed_rust_refuses_even_with_updated_committed_hash(self):
         source, oracle = self.fresh()
-        rust = self.rust.replace('name: "Artist"', 'name: "Forged"', 1)
+        rust = dict(self.rust, **{"exif.rs": self.rust["exif.rs"].replace('name: "Artist"', 'name: "Forged"', 1)})
         self.assertNotEqual(rust, self.rust)
         ledger = copy.deepcopy(self.ledger)
         ledger["source"]["ifd_rust_sha256"] = codegen._canonical_ifd_rust_sha256(rust)
@@ -117,13 +118,16 @@ class IfdCatalogReplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             inputs = {"source": source, "committed-ledger": encoded(self.ledger),
-                      "committed-rust": self.rust.encode(), "committed-expr-ledger": self.oracle,
-                      "fresh-expr-ledger": oracle}
+                      "committed-expr-ledger": self.oracle, "fresh-expr-ledger": oracle}
             command = [sys.executable, str(Path(__file__).with_name("replay_ifd_catalog_inputs.py"))]
             for name, value in inputs.items():
                 path = root / name
                 path.write_bytes(value)
                 command.extend(["--" + name, str(path)])
+            # The committed Rust is a directory: the hub plus one file per module.
+            table_modules.write_files(root / "ifd" / "mod.rs", self.rust)
+            committed_rust = {name: (root / "ifd" / name).read_bytes() for name in self.rust}
+            command.extend(["--committed-rust", str(root / "ifd" / "mod.rs")])
             output = root / "bound.json"
             result = subprocess.run([*command, "--output", str(output)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -135,6 +139,8 @@ class IfdCatalogReplayTests(unittest.TestCase):
                 self.assertIn("new path distinct", result.stderr)
             for name, value in inputs.items():
                 self.assertEqual((root / name).read_bytes(), value)
+            for name, value in committed_rust.items():
+                self.assertEqual((root / "ifd" / name).read_bytes(), value)
 
 
 if __name__ == "__main__":

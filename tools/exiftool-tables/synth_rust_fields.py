@@ -1,8 +1,8 @@
 """Extract per-field write metadata for a (module, table) pair directly from
-the ALREADY-VERIFIED src/exiftool_tables/binary_tables.rs, rather than
+the ALREADY-VERIFIED src/exiftool_tables/binary/ artifact, rather than
 re-deriving format/count/enum data from the raw dump_tables.pl JSON.
 
-Why this instead of tables.json: binary_tables.rs is the output that
+Why this instead of tables.json: binary/ is the output that
 `tools/exiftool-tables/verify.py` (== `just verify-tables`, a CI gate) checks
 field-by-field against ExifTool itself. Using it as the source for sample
 generation means every field this harness attempts is one whose format/count/

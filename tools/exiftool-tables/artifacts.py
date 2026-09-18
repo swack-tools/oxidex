@@ -30,9 +30,53 @@ class Artifact:
     mode: str = "whole"
 
 
+
+
+# The per-module files of the two split table artifacts (`binary/mod.rs` and
+# `ifd/mod.rs` hubs, one `<stem>.rs` per ExifTool module beside each; the
+# layout is tools/exiftool-tables/table_modules.py). These are the file stems
+# `table_modules.module_stem` derives from the ExifTool module names the
+# pinned release carries, listed here verbatim so the manifest stays a plain
+# static inventory: a release that adds or drops a module changes this list,
+# and `check` (unexpected/missing output) and test_artifacts.py (list vs. the
+# committed hubs' `mod` lines) both say so rather than letting an orphan or
+# a missing file through.
+BINARY_MODULE_STEMS = (
+    "aiff", "ape", "asf", "bmp", "bpg", "canon", "canoncustom", "canonraw", "canonvrd", "casio",
+    "dji", "djvu", "dng", "dpx", "dsf", "exe", "flac", "flashpix", "flir", "font", "fotostation",
+    "fujifilm", "gif", "gimp", "gm", "gopro", "h264", "hp", "icc_profile", "ico", "id3", "infiray",
+    "iso", "itc", "jpeg", "jpeg2000", "kandao", "kodak", "kyoceraraw", "lnk", "microsoft",
+    "minolta", "minoltaraw", "mng", "moi", "mpeg", "mpf", "mrc", "mxf", "nikon", "nikoncapture",
+    "nikoncustom", "nintendo", "olympus", "opus", "palm", "panasonic", "panasonicraw", "parrot",
+    "pcx", "pentax", "pgf", "photocd", "photoshop", "png", "psp", "quicktime", "reconyx", "red",
+    "ricoh", "riff", "samsung", "sanyo", "sigma", "sigmaraw", "sony", "stim", "theora", "vorbis",
+    "wavpack", "zip", "zisraw",
+)
+
+IFD_MODULE_STEMS = (
+    "aiff", "ape", "apple", "audible", "bmp", "bpg", "canon", "casio", "darwincore", "dicom",
+    "dji", "djvu", "dv", "exe", "exif", "fits", "flac", "flash", "flashpix", "flif", "flir",
+    "font", "fujifilm", "garmin", "ge", "geotiff", "gif", "gimp", "google", "gps", "h264", "hp",
+    "html", "id3", "iptc", "iso", "itc", "jpeg", "jvc", "kodak", "leaf", "lnk", "lytro", "m2ts",
+    "macos", "matroska", "microsoft", "miff", "minolta", "misb", "mng", "motorola", "mpeg", "mpf",
+    "mwg", "mxf", "nikon", "nikoncustom", "nintendo", "ogg", "olympus", "openexr", "opus", "other",
+    "panasonic", "panasonicraw", "parrot", "pcap", "pdf", "pentax", "photomechanic", "photoshop",
+    "pict", "plus", "png", "postscript", "psp", "quicktime", "radiance", "rawzor", "real", "red",
+    "ricoh", "riff", "rtf", "samsung", "sanyo", "shortcuts", "sigma", "sigmaraw", "sony",
+    "sonyidc", "stim", "taginfoxml", "text", "theora", "tnef", "torrent", "trailer", "unknown",
+    "vcard", "vorbis", "wpg", "wtv", "xisf", "xmp", "zip",
+)
+
+
+def _module_artifacts(kind, stems):
+    return tuple(
+        Artifact(f"{kind}-{stem}", 1, "codegen", f"src/exiftool_tables/{kind}/{stem}.rs")
+        for stem in stems
+    )
+
 ARTIFACTS = (
-    Artifact("binary", 1, "codegen", "src/exiftool_tables/binary_tables.rs"),
-    Artifact("ifd", 1, "codegen", "src/exiftool_tables/ifd_tables.rs"),
+    Artifact("binary", 1, "codegen", "src/exiftool_tables/binary/mod.rs"),
+    Artifact("ifd", 1, "codegen", "src/exiftool_tables/ifd/mod.rs"),
     Artifact("ifd-identity-ledger", 1, "codegen", "tools/exiftool-tables/ifd_identity_ledger.json"),
     Artifact("keyed", 1, "codegen", "src/exiftool_tables/keyed_tables.rs"),
     Artifact("garmin-fit", 1, "codegen", "src/exiftool_tables/fit_tables.rs"),
@@ -97,7 +141,7 @@ ARTIFACTS = (
     Artifact("geotiff", 2, "gen_geotiff_printconv", "src/parsers/tiff/geotiff_printconv.rs"),
     Artifact("dicom", 2, "gen_dicom_dict", "src/parsers/specialized/dicom_dict.rs"),
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
-)
+) + _module_artifacts("binary", BINARY_MODULE_STEMS) + _module_artifacts("ifd", IFD_MODULE_STEMS)
 
 
 def validate(artifacts=ARTIFACTS):

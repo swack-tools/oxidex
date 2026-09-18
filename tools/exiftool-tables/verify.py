@@ -21,7 +21,7 @@ codegen. Reading back what was actually written catches escaping bugs, integer
 overflow in enum keys, sort-order mistakes that break binary_search, and
 truncation -- the failures that compile perfectly.
 
-Slice I-1 adds a second stage over `src/exiftool_tables/ifd_tables.rs` (the
+Slice I-1 adds a second stage over `src/exiftool_tables/ifd/mod.rs` (the
 ProcessExif-style tables; see `docs/superpowers/specs/2026-09-06-ifd-tables-
 design.md` section 4), run after the binary stage from the same oracle
 output and folded into the same exit status. It is skipped, with a message,
@@ -58,6 +58,7 @@ import verify_native_reader
 import verify_word_directory
 import verify_processor_inventory
 import verify_serial_directory
+import table_modules
 import verify_word_rows
 import json
 
@@ -798,8 +799,7 @@ def parse_rust(path):
     set of the latter, so `main()` can report them as their own column
     without a second, parallel set of dicts to keep in sync.
     """
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
+    src = table_modules.read_logical(path)
 
     # V2 makes the native condition and RawConv explicit on every Field.  Do
     # not silently mix readers: if a partially-regenerated artifact contains
@@ -929,7 +929,7 @@ def parse_omitted_native_fields(path):
     Duplicate raw keys are refused here rather than counted twice in the
     inventory below.
     """
-    src = Path(path).read_text(encoding="utf-8")
+    src = table_modules.read_logical(path)
     marker = OMITTED_NATIVE_FIELDS_RE.search(src)
     if marker is None:
         return ParsedNativeOmissions(False, {})
@@ -1952,8 +1952,7 @@ def check_version(generated_rs, lib):
                       costs far more to reach from several hundred plausible
                       differences than from one line.
     """
-    with open(generated_rs, encoding="utf-8") as fh:
-        m = VERSION_RE.search(fh.read())
+    m = VERSION_RE.search(table_modules.read_logical(generated_rs))
     if not m:
         raise SystemExit(
             f"{generated_rs} carries no EXIFTOOL_VERSION stamp -- regenerate it "
@@ -2040,7 +2039,7 @@ def expected_subdir_edge(fact):
 
 
 # ===========================================================================
-# Slice I-1: the IFD-style tables, `src/exiftool_tables/ifd_tables.rs`.
+# Slice I-1: the IFD-style tables, `src/exiftool_tables/ifd/mod.rs`.
 # ===========================================================================
 #
 # Same doctrine, second table kind. The generated file is parsed back (never
@@ -2353,8 +2352,7 @@ def parse_ifd_rust(path):
     does not know. A verifier that parses zero tags reports zero mismatches,
     which is why every one of these is a SystemExit and not a warning.
     """
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
+    src = table_modules.read_logical(path)
     out = ParsedIfd({}, {}, set(), defaultdict(dict), {}, {}, {}, {}, [], [])
     v2_schema = IFD_TAG_V2_RE.search(src) is not None
     require_serial_schema = "IfdSubdirProcessor" in src
@@ -3224,16 +3222,17 @@ def main():
     )
     ap.add_argument(
         "--ifd-generated", default=None,
-        help="slice I-1's src/exiftool_tables/ifd_tables.rs (default: the file of that "
-             "name beside GENERATED_RS); the IFD stage is skipped, with a message, when "
-             "it does not exist",
+        help="slice I-1's src/exiftool_tables/ifd/mod.rs (default: the ifd/ hub beside "
+             "GENERATED_RS's binary/ hub, or ifd_tables.rs beside a single-file "
+             "GENERATED_RS); the IFD stage is skipped, with a message, when it does "
+             "not exist",
     )
     args = ap.parse_args()
 
     version = check_version(args.generated_rs, args.exiftool_lib)
     ifd_path = (
         Path(args.ifd_generated) if args.ifd_generated
-        else Path(args.generated_rs).with_name("ifd_tables.rs")
+        else table_modules.sibling_artifact(args.generated_rs, "ifd", "ifd_tables.rs")
     )
     ifd_present = ifd_path.is_file()
 
@@ -3836,7 +3835,8 @@ def main():
     # silently passed -- when the generated file is not on this tree.
     ifd_failed = 0
     if ifd_present:
-        stamped = VERSION_RE.search(ifd_path.read_text(encoding="utf-8"))
+        ifd_src = table_modules.read_logical(ifd_path)
+        stamped = VERSION_RE.search(ifd_src)
         if stamped and stamped.group(1) != version:
             raise SystemExit(
                 f"ExifTool pin skew: {ifd_path} was transcribed from {stamped.group(1)}, "
@@ -3847,9 +3847,9 @@ def main():
             sys.exit(f"parsed 0 IfdTable statics from {ifd_path} -- verifier is broken, "
                      "not the generator; fix the parser before trusting a PASS")
         ifd_oracle = parse_ifd_oracle(oracle_out)
-        serial_path = ifd_path.with_name("serial_tables.rs")
+        serial_path = table_modules.tables_dir(ifd_path) / "serial_tables.rs"
         serial_tables = None
-        if "IfdSubdirProcessor" in ifd_path.read_text(encoding="utf-8"):
+        if "IfdSubdirProcessor" in ifd_src:
             if not serial_path.is_file():
                 raise SystemExit(
                     f"serial IFD schema requires {serial_path}, but it is absent; "

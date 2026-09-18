@@ -27,6 +27,7 @@ import catalog_garmin_fit
 import catalog_corpus_reads
 import final_scalar_stage
 import codegen
+import table_modules
 import setnewvalue_public_migration_ledger as public_migration
 import quicktime_baseline as baseline
 from catalog_snapshot import validate_native_writable, validate_native_writable_counts
@@ -283,6 +284,11 @@ def quicktime_rust_matches(expected: str, supplied: str) -> bool:
     return formatted[0] == formatted[1]
 
 
+def source_fact_hash_format(ledger: dict) -> object:
+    source = ledger.get("source") if isinstance(ledger, dict) else None
+    return source.get("ifd_rust_hash_format") if isinstance(source, dict) else None
+
+
 def _ifd_catalog_variant(path: object) -> int:
     if path == []:
         return 0
@@ -291,9 +297,21 @@ def _ifd_catalog_variant(path: object) -> int:
     raise ValueError("IFD ledger variant path is malformed")
 
 
-def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: str | None,
+def ifd_rust_matches(expected: dict[str, str], supplied: dict[str, str]) -> bool:
+    """`quicktime_rust_matches` over a split artifact: same file set, every
+    file rustfmt-equivalent."""
+    if set(expected) != set(supplied):
+        return False
+    return all(quicktime_rust_matches(expected[name], supplied[name]) for name in sorted(expected))
+
+
+def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: dict | None,
                        expr_ledger: bytes | None = None) -> dict:
     """Authenticate IFD compiler rows as schema declarations only.
+
+    `emitted_rust` is the committed IFD artifact's file set (`{"mod.rs": ...,
+    "<module>.rs": ...}`, `table_modules.read_files`), never one string: the
+    ledger's `ifd_rust_sha256` is over that set (`codegen.IFD_RUST_HASH_FORMAT`).
 
     IFD codegen may use oracle-approved conversions. When the ledger binds an
     expression oracle, replay validates and uses that exact input; a ledger
@@ -305,8 +323,10 @@ def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: 
         if expr_ledger is not None:
             raise ValueError("IFD expression ledger requires compiler source, identity ledger, and Rust artifact")
         return {}
-    if any(value is None for value in supplied) or not isinstance(source, bytes) or not isinstance(emitted_rust, str):
+    if any(value is None for value in supplied) or not isinstance(source, bytes) or not isinstance(emitted_rust, dict):
         raise ValueError("IFD replay requires source, identity ledger, and Rust artifact together")
+    if source_fact_hash_format(ledger) != codegen.IFD_RUST_HASH_FORMAT:
+        raise ValueError("IFD ledger binds a Rust artifact hash format this tool does not compute")
     try:
         document = json.loads(source)
     except json.JSONDecodeError as exc:
@@ -345,8 +365,8 @@ def ifd_implementation(source: bytes | None, ledger: dict | None, emitted_rust: 
     replay_chunks, replay_index_rows, _, replay = codegen.gen_ifd_tables(
         document, sorted(document.get("modules", {})), verified_exprs
     )
-    replay_rust = codegen.render_ifd_file(str(document.get("exiftool_version")), replay_chunks, replay_index_rows)
-    if not quicktime_rust_matches(replay_rust, emitted_rust):
+    replay_rust = codegen.render_ifd_files(str(document.get("exiftool_version")), replay_chunks, replay_index_rows)
+    if not ifd_rust_matches(replay_rust, emitted_rust):
         raise ValueError("IFD Rust artifact differs from compiler replay")
     replay_by_id = {(row["full_name"], row["raw_key"], tuple(row["variant_path"])): row for row in replay}
     if len(replay_by_id) != len(replay):
@@ -614,7 +634,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
           writer_public_rust: str | None = None, writer_input_digests: dict[str, str] | None = None,
           quicktime_keys_ledger: dict | None = None, quicktime_keys_rust: str | None = None,
           writer_read_evidence: dict | None = None, quicktime_keys_read_evidence: dict | None = None,
-          ifd_source: bytes | None = None, ifd_ledger: dict | None = None, ifd_rust: str | None = None,
+          ifd_source: bytes | None = None, ifd_ledger: dict | None = None, ifd_rust: dict | None = None,
           ifd_expr_ledger: bytes | None = None, ifd_input_digests: dict[str, str] | None = None,
           userdata_ledger: dict | None = None, userdata_rust: str | None = None,
           userdata_input_digests: dict[str, str] | None = None,
@@ -1116,11 +1136,11 @@ def main() -> int:
                          "keys_rust_sha256": hashlib.sha256(keys_rust.encode()).hexdigest()}
     ifd_source = args.ifd_source.read_bytes() if args.ifd_source else None
     ifd_ledger = args.ifd_identity_ledger.read_bytes() if args.ifd_identity_ledger else None
-    ifd_rust = args.ifd_rust.read_text(encoding="utf-8") if args.ifd_rust else None
+    ifd_rust = table_modules.read_files(args.ifd_rust) if args.ifd_rust else None
     ifd_expr = args.ifd_expr_ledger.read_bytes() if args.ifd_expr_ledger else None
     ifd_digests = ({"source_sha256": hashlib.sha256(ifd_source).hexdigest(),
                     "ledger_sha256": hashlib.sha256(ifd_ledger).hexdigest(),
-                    "rust_sha256": hashlib.sha256(ifd_rust.encode()).hexdigest(),
+                    "rust_sha256": hashlib.sha256(table_modules.logical_text(ifd_rust).encode()).hexdigest(),
                     **({"expr_ledger_sha256": hashlib.sha256(ifd_expr).hexdigest()} if ifd_expr is not None else {})}
                    if ifd_source else None)
     garmin_fit_source = args.garmin_fit_source.read_bytes() if args.garmin_fit_source else None

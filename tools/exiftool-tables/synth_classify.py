@@ -3,7 +3,7 @@
 corpus-synthesis question: can we manufacture a sample for it?
 
 Inputs:
-  --binary-tables   src/exiftool_tables/binary_tables.rs (the 613 emitted tables)
+  --binary-tables   src/exiftool_tables/binary/mod.rs (the 613 emitted tables)
   --tables-json     dump_tables.pl output against the PINNED exiftool tree
                      (must be run against the exact .exiftool-version release --
                      see AGENTS.md's "never grade against an unpinned ExifTool")
@@ -39,10 +39,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from synth_carriers import CARRIER_MAP, DEAD_LOOKUPS, REACHABLE  # noqa: E402
+import table_modules  # noqa: E402 -- the per-module artifact layout
 
 
 def parse_emitted_tables(rs_path: Path) -> list[tuple[str, str]]:
-    text = rs_path.read_text()
+    text = table_modules.read_logical(rs_path)
     pairs = re.findall(r'module:\s*"([^"]+)",\s*table:\s*"([^"]+)"', text)
     if len(pairs) != 613:
         print(

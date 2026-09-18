@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import retire_binary_tables as retire
+import table_modules
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,7 +16,10 @@ SOURCE = "src/parsers/tiff/makernotes/sony/enciphered_tables.rs"
 INPUT = ROOT / SOURCE
 BINARY_DATA = ROOT / "src/parsers/tiff/makernotes/sony/binary_data.rs"
 MANIFEST = ROOT / "tools/exiftool-tables/table_ownership.json"
-SHARED_TABLES = ROOT / "src/exiftool_tables/binary_tables.rs"
+SHARED_TABLES = ROOT / "src/exiftool_tables/binary/mod.rs"
+# The split artifact as one text (hub with every module file spliced in), the
+# form the retirement tool reads it in; the temp copies below are single files.
+SHARED_TABLES_TEXT = table_modules.read_logical(SHARED_TABLES).encode("utf-8")
 ENABLED_TABLES = ROOT / "src/exiftool_tables/enabled.rs"
 LEGACY = """//! generated fixture
 
@@ -179,7 +183,7 @@ class RetireBinaryTablesTests(unittest.TestCase):
             root = Path(directory)
             binary_path = root / "binary_tables.rs"
             enabled_path = root / "enabled.rs"
-            binary_path.write_bytes(SHARED_TABLES.read_bytes())
+            binary_path.write_bytes(SHARED_TABLES_TEXT)
             enabled_path.write_text(
                 ENABLED_TABLES.read_text().replace('(\"Sony\", \"Tag202a\"),\n', "", 1)
             )
@@ -192,7 +196,7 @@ class RetireBinaryTablesTests(unittest.TestCase):
             root = Path(directory)
             binary_path = root / "binary_tables.rs"
             enabled_path = root / "enabled.rs"
-            binary_path.write_bytes(SHARED_TABLES.read_bytes())
+            binary_path.write_bytes(SHARED_TABLES_TEXT)
             enabled_path.write_text(
                 ENABLED_TABLES.read_text().replace(
                     '("Sony", "Tag202a"),', '// ("Sony", "Tag202a"),', 1
@@ -200,7 +204,7 @@ class RetireBinaryTablesTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(retire.Refusal, "not enabled"):
                 retire.verify_shared_route(migrations, binary_path, enabled_path)
-            shared = SHARED_TABLES.read_bytes()
+            shared = SHARED_TABLES_TEXT
             sony_start = shared.index(b"pub static SONY_TAG202A")
             binary_path.write_bytes(shared[:sony_start] + shared[sony_start:].replace(
                 b"gate_a: GateA { blocked_by: &[] },",
@@ -248,7 +252,7 @@ class RetireBinaryTablesTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             shared_path = Path(directory) / "binary_tables.rs"
-            shared_path.write_bytes(b"// unrelated generated table change\n" + SHARED_TABLES.read_bytes())
+            shared_path.write_bytes(b"// unrelated generated table change\n" + SHARED_TABLES_TEXT)
             retire.verify_shared_route(migrations, shared_path, ENABLED_TABLES)
         previous = retire.require_recorded_replay(ledger, SOURCE, migrations, INPUT.read_text())
         self.assertEqual(previous["output_sha256"], retire.hashlib.sha256(INPUT.read_bytes()).hexdigest())

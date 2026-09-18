@@ -32,7 +32,7 @@
 domains = [
   "src/exiftool_tables/mod.rs",            # census invariants
   "src/exiftool_tables/enabled.rs",        # Gate B allowlist
-  "src/exiftool_tables/binary_tables.rs",  # GENERATED
+  "src/exiftool_tables/binary/mod.rs",     # GENERATED (hub; binary/<module>.rs beside it)
   "src/exiftool_tables/runtime.rs",        # references the generated ExprId enum
   "tools/exiftool-tables/verify_subdirs.py",
   "src/bin/jpeg-tag-matrix/baseline.json",

@@ -99,7 +99,7 @@ python3 tools/exiftool-tables/retire_binary_tables.py \
   --source src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
   --input src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
   --output src/parsers/tiff/makernotes/sony/enciphered_tables.rs \
-  --shared-tables src/exiftool_tables/binary_tables.rs \
+  --shared-tables src/exiftool_tables/binary/mod.rs \
   --enabled-tables src/exiftool_tables/enabled.rs \
   --consumer-root src \
   --identity-out tools/exiftool-tables/table_ownership_identity.json
@@ -266,7 +266,8 @@ conditions or conversion semantics. Catalog size is not extraction coverage.
 ```text
 ExifTool loaded tables -> dump_tables.pl -> tables.json
   -> verify_exprs.py -> expression PASS ledger
-  -> codegen.py -> binary_tables.rs + ifd_tables.rs + keyed_tables.rs + conversion accounting
+  -> codegen.py -> binary/ + ifd/ (a mod.rs hub + one file per ExifTool module each,
+     tools/exiftool-tables/table_modules.py) + keyed_tables.rs + conversion accounting
   -> codegen_composite.py -> Composite definitions and expression computations
   -> downstream generators -> vendor-specific artifacts
 

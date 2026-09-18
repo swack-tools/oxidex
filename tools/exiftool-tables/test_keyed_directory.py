@@ -420,8 +420,9 @@ class SharedExprRegistry(unittest.TestCase):
                 "probe_counts": {"pass": 1, "fail": 0, "skip": 0},
                 "verified_expressions": [codegen.exprs.normalize(expression)],
             }), encoding="utf-8")
-            first = root / "first.rs"
-            second = root / "second.rs"
+            # `-o` names a mod.rs hub (one file per ExifTool module beside it).
+            first = root / "first" / "mod.rs"
+            second = root / "second" / "mod.rs"
             keyed = root / "keyed.rs"
             common = [sys.executable, str(Path(codegen.__file__)), str(tables),
                       "--expr-ledger", str(ledger)]

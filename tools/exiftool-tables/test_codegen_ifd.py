@@ -21,6 +21,7 @@ from collections import Counter
 from pathlib import Path
 
 import codegen
+import table_modules
 import exprs
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -164,7 +165,7 @@ class IdentityLedger(unittest.TestCase):
         doc = self._doc()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            tables, binary, ifd, ledger = (root / name for name in ("tables.json", "binary.rs", "ifd.rs", "ledger.json"))
+            tables, binary, ifd, ledger = (root / name for name in ("tables.json", "binary/mod.rs", "ifd/mod.rs", "ledger.json"))
             tables.write_text(json.dumps(doc))
             result = subprocess.run([
                 sys.executable, str(ROOT / "tools" / "exiftool-tables" / "codegen.py"), str(tables),
@@ -180,10 +181,18 @@ class IdentityLedger(unittest.TestCase):
                 report["source"]["tables_json_sha256"],
                 __import__("hashlib").sha256(tables.read_bytes()).hexdigest(),
             )
+            self.assertEqual(report["source"]["ifd_rust_hash_format"], codegen.IFD_RUST_HASH_FORMAT)
             self.assertEqual(
                 report["source"]["ifd_rust_sha256"],
-                codegen._canonical_ifd_rust_sha256(ifd.read_text()),
+                codegen._canonical_ifd_rust_sha256(table_modules.read_files(ifd)),
             )
+            # One file per ExifTool module beside each hub, and the hub
+            # re-exports each of them under its old path.
+            self.assertEqual(sorted(p.name for p in ifd.parent.glob("*.rs")), ["mod.rs", "test.rs"])
+            self.assertIn("pub use test::*;", ifd.read_text())
+            self.assertIn("pub static IFD_TEST_MAIN:", (ifd.parent / "test.rs").read_text())
+            self.assertNotIn("pub static IFD_", ifd.read_text())
+            self.assertEqual(sorted(p.name for p in binary.parent.glob("*.rs")), ["mod.rs"])
             missing_ifd = subprocess.run([
                 sys.executable, str(ROOT / "tools" / "exiftool-tables" / "codegen.py"), str(tables),
                 "-o", str(binary), "--ifd-identity-ledger-out", str(ledger),
@@ -1077,10 +1086,10 @@ class WholeDump(unittest.TestCase):
             [f"    &{codegen.ifd_table_ident(m, t)}," for m, t in selected], self.index_rows,
             "ALL_IFD_TABLES must list every selected table, sorted by (module, table)",
         )
-        committed = ROOT / "src" / "exiftool_tables" / "ifd_tables.rs"
+        committed = ROOT / "src" / "exiftool_tables" / "ifd" / "mod.rs"
         if committed.is_file():
-            statics = re.findall(r"^pub static (IFD_\w+): IfdTable", committed.read_text(), re.M)
-            self.assertEqual(len(statics), len(selected), "committed ifd_tables.rs table count")
+            statics = re.findall(r"^pub static (IFD_\w+): IfdTable", table_modules.read_logical(committed), re.M)
+            self.assertEqual(len(statics), len(selected), "committed ifd/ table count")
 
     def test_tags_and_variants_are_sorted_and_unique_per_table(self):
         for chunk in self.chunks:
