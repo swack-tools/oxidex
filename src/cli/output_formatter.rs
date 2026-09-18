@@ -26,6 +26,7 @@
 
 use crate::core::formatters::decode_gps_processing_method;
 use crate::core::formatters::exiftool_rational_number;
+use crate::core::formatters::numeric_precision::perl_number;
 use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_value::TagValue;
 use crate::core::value_formatter::format_gps_reference;
@@ -398,8 +399,8 @@ pub(crate) enum JsonNode {
 impl JsonNode {
     /// A bare token for a value this crate computed as a number itself (not
     /// a tag string), spelled as serde_json would.
-    fn number(n: impl Into<serde_json::Number>) -> Self {
-        JsonNode::Literal(n.into().to_string())
+    fn number(n: i64) -> Self {
+        JsonNode::Literal(n.to_string())
     }
 
     /// Indexes an object by key; `None` for a missing key or a non-object.
@@ -543,9 +544,7 @@ fn json_string_value(s: &str) -> JsonNode {
 /// separate from tag_name=None, which also occurs in normal nested structures.
 fn raw_tag_value_to_json(value: &TagValue) -> JsonNode {
     match value {
-        TagValue::Float(number) => json_string_value(
-            &crate::core::formatters::numeric_precision::perl_number(*number),
-        ),
+        TagValue::Float(number) => json_string_value(&perl_number(*number)),
         TagValue::Array(values) => {
             JsonNode::Array(values.iter().map(raw_tag_value_to_json).collect())
         }
@@ -590,10 +589,11 @@ pub(crate) fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> Jso
             json_string_value(s)
         }
         TagValue::Integer(i) => JsonNode::number(*i),
-        // A non-finite f64 has no serde_json::Number; serde_json::json!
-        // rendered it as `null`, which this keeps.
-        TagValue::Float(f) => serde_json::Number::from_f64(*f)
-            .map_or_else(|| JsonNode::Literal("null".to_string()), JsonNode::number),
+        // ExifTool never holds a Rust f64: its value is a Perl NV, which
+        // stringifies as `%.15g` (`90`, not serde's `90.0`; `Inf`, not
+        // `null`) before EscapeJSON types it -- the same route the raw
+        // writer already takes.
+        TagValue::Float(f) => json_string_value(&perl_number(*f)),
         TagValue::Rational {
             numerator,
             denominator,
@@ -2213,13 +2213,38 @@ mod raw_float_projection_tests {
             "value".to_string(),
             TagValue::Float(4.966666666666667),
         )]));
+        // Print and raw modes stringify an f64 the same way now: a Perl NV
+        // is `%.15g` whichever mode prints it.
         assert_eq!(
             tag_value_to_json(None, &nested)["value"],
-            serde_json::json!(4.966666666666667)
+            serde_json::json!(4.96666666666667)
         );
         assert_eq!(
             raw_tag_value_to_json(&nested)["value"],
             serde_json::json!(4.96666666666667)
         );
+    }
+
+    /// Print-mode floats: `90.0` was serde's spelling; ExifTool's NV prints
+    /// `90` (MRC `CellAlpha` in the corpus), and non-finite values become
+    /// Perl's quoted `Inf`/`NaN` instead of serde's `null`.
+    #[test]
+    fn print_mode_float_uses_perl_nv_stringification() {
+        for (value, expected) in [
+            (90.0, "90"),
+            (-1.0, "-1"),
+            (0.0, "0"),
+            (1.5e-6, "1.5e-06"),
+            (200000.0, "200000"),
+            (f64::INFINITY, "\"Inf\""),
+            (f64::NAN, "\"NaN\""),
+        ] {
+            assert_eq!(
+                tag_value_to_json(Some("File:CellAlpha"), &TagValue::Float(value))
+                    .to_pretty_string(),
+                expected,
+                "{value}"
+            );
+        }
     }
 }
