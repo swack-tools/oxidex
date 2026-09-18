@@ -88,6 +88,22 @@ COND_DICT = {
         'MCond::ModelRe(false, r"^(NEX-|ILCE-|ILME-|ZV-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX95|HX99|RX0M2|RX1RM3))")',
     '$$self{Model} !~ /^(ILCA-|DSC-|ZV-)/':
         'MCond::ModelRe(true, r"^(ILCA-|DSC-|ZV-)")',
+    # Earlier releases' texts of the two model gates above. Each key is its own
+    # release's literal Condition and each value that release's own regex body,
+    # copied verbatim -- never 13.59's -- so a table generated from that release
+    # attributes the tag to exactly the cameras that release does. The bodies
+    # use only anchors, literals, `-`, `|` and groups, where Perl and the
+    # `regex` crate agree by construction; `capture_sony_main_conditions.pl`
+    # proves it empirically (fixtures/sony_main_model_conditions.json).
+    # 0x201d FlexibleSpotPosition, 11.78's text:
+    '$$self{Model} =~ /^(NEX-|ILCE-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX99|RX0M2))/':
+        'MCond::ModelRe(false, r"^(NEX-|ILCE-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX99|RX0M2))")',
+    # 0x201d FlexibleSpotPosition, 12.64's text:
+    '$$self{Model} =~ /^(NEX-|ILCE-|ILME-|ZV-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX95|HX99|RX0M2))/':
+        'MCond::ModelRe(false, r"^(NEX-|ILCE-|ILME-|ZV-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX95|HX99|RX0M2))")',
+    # 0x2020 AFPointsUsed (first variant), 11.78's and 12.64's text:
+    '$$self{Model} !~ /^(ILCA-|DSC-)/':
+        'MCond::ModelRe(true, r"^(ILCA-|DSC-)")',
     '$$self{Model} =~ /^ILCA-(68|77M2)/':
         'MCond::ModelRe(false, r"^ILCA-(68|77M2)")',
     '$$self{Model} =~ /^(ILCE-(5100|6000|7M2))/':
@@ -279,7 +295,7 @@ HEADER = '''//! `Sony::Main` scalars main_table.rs does not implement -- generat
 //! hand-edit.
 //!
 //! Read out of ExifTool's own `%Image::ExifTool::Sony::Main` hash in-process
-//! (13.59) rather than retyped, and interpreted by [`super::main_extra`]. A tag
+//! ({version}) rather than retyped, and interpreted by [`super::main_extra`]. A tag
 //! whose Condition or conversion is not one of the forms that module implements
 //! is omitted entirely rather than emitted with a guessed value.
 
@@ -309,7 +325,10 @@ def generate(data):
             low_priority = translate_priority(tag_id, name, tag)
             rows.append(render_row(tag_id, name, cond, fmt, raw, vc, pc, print_hex, low_priority))
 
-    out = [HEADER]
+    version = data.get("exiftool_version")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", version):
+        raise Unsupported(0, "?", f"malformed exiftool_version: {version!r}")
+    out = [HEADER.replace("{version}", version)]
     for i, items in enumerate(pools.maps):
         out.append(render_map_decl(f"M{i}", items))
     for i, items in enumerate(pools.bits):

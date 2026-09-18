@@ -245,4 +245,127 @@ mod tests {
         let as_undef = value(7, 2, 640u16.to_le_bytes().to_vec());
         assert!(render(0x1001, &as_undef, ByteOrder::LittleEndian, &mut ctx).is_none());
     }
+
+    /// `(negated, pattern)` out of the generator's `MCond::ModelRe(..)` text.
+    fn parse_model_re(generated: &str) -> (bool, &'static str) {
+        let rest = generated
+            .strip_prefix("MCond::ModelRe(")
+            .and_then(|r| r.strip_suffix("\")"))
+            .unwrap_or_else(|| panic!("not an MCond::ModelRe: {generated}"));
+        let (neg, pattern) = rest
+            .split_once(", r\"")
+            .unwrap_or_else(|| panic!("not an MCond::ModelRe: {generated}"));
+        let neg = match neg {
+            "true" => true,
+            "false" => false,
+            other => panic!("bad negation flag {other:?} in {generated}"),
+        };
+        (neg, Box::leak(pattern.to_string().into_boxed_str()))
+    }
+
+    /// Each release's `Sony::Main` model Conditions, as the generator translates
+    /// them, select exactly the models that release's own Perl selects.
+    ///
+    /// The fixture (`capture_sony_main_conditions.py`) holds, per release, every
+    /// `$$self{Model} =~ /RE/` Condition on a generated tag, the models the
+    /// release's ExifTool selects when it `eval`s that Condition, and the
+    /// `MCond` text the generator emits for it. Here that text runs through the
+    /// real interpreter over the same models. The pinned release's rows must
+    /// also be the ones the committed `main_extra_tables.rs` carries.
+    #[test]
+    fn model_conditions_select_what_each_releases_perl_selects() {
+        use std::collections::BTreeSet;
+        const FIXTURE: &str = include_str!(
+            "../../../../../tools/exiftool-tables/fixtures/sony_main_model_conditions.json"
+        );
+        #[derive(serde::Deserialize)]
+        struct Models {
+            real: Vec<String>,
+            synthetic: Vec<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Row {
+            tag: String,
+            variant: usize,
+            name: String,
+            generated: String,
+            selects: Vec<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Release {
+            exiftool_version: String,
+            conditions: Vec<Row>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            models: Models,
+            releases: Vec<Release>,
+        }
+        let f: Fixture = serde_json::from_str(FIXTURE).expect("fixture is valid JSON");
+        assert!(f.models.real.len() >= 100, "model list collapsed");
+        let models: Vec<&str> = f
+            .models
+            .real
+            .iter()
+            .chain(&f.models.synthetic)
+            .map(String::as_str)
+            .collect();
+        let pin = crate::exiftool_oracle::REPO_PIN.trim();
+        assert!(
+            f.releases.iter().any(|r| r.exiftool_version == pin),
+            "fixture has no row set for the pinned {pin}"
+        );
+        let v = value(3, 2, vec![0; 4]);
+        let mut mismatches = Vec::new();
+        let mut checked = 0;
+        for rel in &f.releases {
+            for row in &rel.conditions {
+                let (neg, pattern) = parse_model_re(&row.generated);
+                let cond = MCond::ModelRe(neg, pattern);
+                let perl: BTreeSet<&str> = row.selects.iter().map(String::as_str).collect();
+                for model in &models {
+                    let mut ctx = Ctx::new(Some(model), None);
+                    let rust = holds(&cond, &mut ctx, &v);
+                    if rust != perl.contains(model) {
+                        mismatches.push(format!(
+                            "{} {} {}[{}] {model:?}: perl {} rust {rust}",
+                            rel.exiftool_version,
+                            row.tag,
+                            row.name,
+                            row.variant,
+                            perl.contains(model)
+                        ));
+                    }
+                    checked += 1;
+                }
+                if rel.exiftool_version == pin {
+                    let id = u16::from_str_radix(row.tag.trim_start_matches("0x"), 16).unwrap();
+                    let committed = super::super::main_extra_tables::TAGS
+                        .iter()
+                        .filter(|t| t.id == id)
+                        .nth(row.variant)
+                        .unwrap_or_else(|| {
+                            panic!("{} variant {} not committed", row.tag, row.variant)
+                        });
+                    assert_eq!(committed.name, row.name);
+                    match committed.cond {
+                        MCond::ModelRe(n, p) => assert_eq!(
+                            (n, p),
+                            (neg, pattern),
+                            "{} {}: committed table differs from the generator",
+                            row.tag,
+                            row.name
+                        ),
+                        _ => panic!("{} {}: committed cond is not ModelRe", row.tag, row.name),
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000, "only {checked} evaluations");
+        assert!(
+            mismatches.is_empty(),
+            "Rust/Perl disagree:\n  {}",
+            mismatches.join("\n  ")
+        );
+    }
 }
