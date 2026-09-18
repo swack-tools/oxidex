@@ -34,7 +34,7 @@ ExifTool and a perl with `Archive::Zip`, and it is slow.
 
 ## Preview it the way the deploy builds it
 
-`tools/docs-local-deploy.sh` (added in #835) mirrors the `publish` job of
+`tools/docs-local-deploy.sh` (#835) mirrors the `publish` job of
 `deploy-docs.yml`. It builds the site into a temporary directory and serves
 it on localhost. By default it builds from a `git archive` snapshot of a ref,
 so your checkout is not touched.
@@ -48,8 +48,7 @@ tools/docs-local-deploy.sh --full-report            # + the real ExifTool compar
 ```
 
 `--keep` keeps the temporary directory. Environment variables pass through to
-the VitePress build. Until #835 is merged, run the script from its branch:
-`git show origin/staging/docs-local-deploy:tools/docs-local-deploy.sh > /tmp/docs-local-deploy.sh`.
+the VitePress build.
 
 Open the served site in a browser, not `index.html` from disk. The site uses
 clean URLs and absolute asset paths, so a `file://` URL breaks every link and
