@@ -1,7 +1,7 @@
 # Specialty Formats Tag Domain
 
-- Tables: 18
-- Total tags: 3719
+- Tables: 17
+- Total tags: 3477
 
 ## DICOM::Main (3149 tags)
 
@@ -111,16 +111,13 @@
 
 - `SubfileType` — SubfileType tag
 
-## DjVu::Info (8 tags)
+## DjVu::Info (5 tags)
 
 - `ImageHeight` — ImageHeight tag
 - `DjVuVersion` — DjVuVersion tag
 - `SpatialResolution` — SpatialResolution tag
 - `Gamma` — Gamma tag
 - `Orientation` — Orientation tag
-- `Rotate 180` — Rotate 180 tag
-- `Rotate 90 CW` — Rotate 90 CW tag
-- `Rotate 270 CW` — Rotate 270 CW tag
 
 ## FITS::Main (4 tags)
 
@@ -133,10 +130,6 @@
 
 - `BootSystem` — BootSystem tag
 - `BootIdentifier` — BootIdentifier tag
-
-## ISO::Composite (1 tags)
-
-- `ISO:VolumeBlockSize` — ISO:VolumeBlockSize tag
 
 ## ISO::Main (2 tags)
 
@@ -192,29 +185,10 @@
 - `Security` — Security tag
 - `Unknown` — Unknown tag
 
-## MISB::Security (51 tags)
+## MISB::Security (21 tags)
 
 - `SecurityClassification` — SecurityClassification tag
-- `Unclassified` — Unclassified tag
-- `Restricted` — Restricted tag
-- `Confidential` — Confidential tag
-- `Secret` — Secret tag
-- `Top Secret` — Top Secret tag
 - `ClassifyingCountryCodeMethod` — ClassifyingCountryCodeMethod tag
-- `ISO-3166 Two Letter` — ISO-3166 Two Letter tag
-- `ISO-3166 Three Letter` — ISO-3166 Three Letter tag
-- `FIPS 10-4 Two Letter` — FIPS 10-4 Two Letter tag
-- `FIPS 10-4 Four Letter` — FIPS 10-4 Four Letter tag
-- `ISO-3166 Numeric` — ISO-3166 Numeric tag
-- `1059 Two Letter` — 1059 Two Letter tag
-- `1059 Three Letter` — 1059 Three Letter tag
-- `FIPS 10-4 Mixed` — FIPS 10-4 Mixed tag
-- `ISO 3166 Mixed` — ISO 3166 Mixed tag
-- `STANAG 1059 Mixed` — STANAG 1059 Mixed tag
-- `GENC Two Letter` — GENC Two Letter tag
-- `GENC Three Letter` — GENC Three Letter tag
-- `GENC Numeric` — GENC Numeric tag
-- `GENC Mixed` — GENC Mixed tag
 - `ClassifyingCountry` — ClassifyingCountry tag
 - `SecuritySCI-SHIInformation` — SecuritySCI-SHIInformation tag
 - `Caveats` — Caveats tag
@@ -225,17 +199,6 @@
 - `DeclassificationDate` — DeclassificationDate tag
 - `ClassificationAndMarkingSystem` — ClassificationAndMarkingSystem tag
 - `ObjectCountryCodingMethod` — ObjectCountryCodingMethod tag
-- `ISO-3166 Two Letter` — ISO-3166 Two Letter tag
-- `ISO-3166 Three Letter` — ISO-3166 Three Letter tag
-- `ISO-3166 Numeric` — ISO-3166 Numeric tag
-- `FIPS 10-4 Two Letter` — FIPS 10-4 Two Letter tag
-- `FIPS 10-4 Four Letter` — FIPS 10-4 Four Letter tag
-- `1059 Two Letter` — 1059 Two Letter tag
-- `1059 Three Letter` — 1059 Three Letter tag
-- `GENC Two Letter` — GENC Two Letter tag
-- `GENC Three Letter` — GENC Three Letter tag
-- `GENC Numeric` — GENC Numeric tag
-- `GENC AdminSub` — GENC AdminSub tag
 - `ObjectCountryCodes` — ObjectCountryCodes tag
 - `ClassificationComments` — ClassificationComments tag
 - `UMID` — UMID tag
@@ -246,7 +209,7 @@
 - `ClassifyingCountryCodingMethodDate` — ClassifyingCountryCodingMethodDate tag
 - `ObjectCountryCodingMethodDate` — ObjectCountryCodingMethodDate tag
 
-## MISB::UASDatalink (121 tags)
+## MISB::UASDatalink (105 tags)
 
 - `Checksum` — Checksum tag
 - `GPSDateTime` — GPSDateTime tag
@@ -295,11 +258,6 @@
 - `TargetErrorEstimateCE90` — TargetErrorEstimateCE90 tag
 - `TargetErrorEstimateLE90` — TargetErrorEstimateLE90 tag
 - `GenericFlagData01` — GenericFlagData01 tag
-- `Auto-track` — Auto-track tag
-- `IR polarity black` — IR polarity black tag
-- `Icing detected` — Icing detected tag
-- `Slant range measured` — Slant range measured tag
-- `Image invalid` — Image invalid tag
 - `SecurityLocalMetadataSet` — SecurityLocalMetadataSet tag
 - `DifferentialPressure` — DifferentialPressure tag
 - `AngleOfAttack` — AngleOfAttack tag
@@ -316,13 +274,6 @@
 - `WeaponFired` — WeaponFired tag
 - `LaserPRFCode` — LaserPRFCode tag
 - `SensorFieldOfViewName` — SensorFieldOfViewName tag
-- `Narrow` — Narrow tag
-- `Medium` — Medium tag
-- `Wide` — Wide tag
-- `Ultrawide` — Ultrawide tag
-- `Narrow Medium` — Narrow Medium tag
-- `2x Ultranarrow` — 2x Ultranarrow tag
-- `4x Ultranarrow` — 4x Ultranarrow tag
 - `MagneticHeading` — MagneticHeading tag
 - `UAS_LSVersionNumber` — UAS_LSVersionNumber tag
 - `TargetLocationCovarianceMatrix` — TargetLocationCovarianceMatrix tag
@@ -337,10 +288,6 @@
 - `SensorEllipsoidHeight` — SensorEllipsoidHeight tag
 - `AlternateEllipsoidHeight` — AlternateEllipsoidHeight tag
 - `OperationalMode` — OperationalMode tag
-- `Operational` — Operational tag
-- `Training` — Training tag
-- `Exercise` — Exercise tag
-- `Maintenance` — Maintenance tag
 - `FrameCenterHeightAboveEllipsoid` — FrameCenterHeightAboveEllipsoid tag
 - `SensorVelocityNorth` — SensorVelocityNorth tag
 - `SensorVelocityEast` — SensorVelocityEast tag
@@ -348,7 +295,23 @@
 - `CornerLatitude1` — CornerLatitude1 tag
 - `CornerLongitude1` — CornerLongitude1 tag
 - `CornerLatitude2` — CornerLatitude2 tag
-- _... plus 21 more tags_
+- `CornerLongitude2` — CornerLongitude2 tag
+- `CornerLatitude3` — CornerLatitude3 tag
+- `CornerLongitude3` — CornerLongitude3 tag
+- `CornerLatitude4` — CornerLatitude4 tag
+- `CornerLongitude4` — CornerLongitude4 tag
+- `FullPitchAngle` — FullPitchAngle tag
+- `FullRollAngle` — FullRollAngle tag
+- `FullAngleOfAttack` — FullAngleOfAttack tag
+- `FullSideslipAngle` — FullSideslipAngle tag
+- `MIISCoreIdentifier` — MIISCoreIdentifier tag
+- `SARMotionImageryData` — SARMotionImageryData tag
+- `TargetWidthExtended` — TargetWidthExtended tag
+- `RangeImageLocalSet` — RangeImageLocalSet tag
+- `GeoregistrationLocalSet` — GeoregistrationLocalSet tag
+- `CompositeImagingLocalSet` — CompositeImagingLocalSet tag
+- `SegmentLocalSet` — SegmentLocalSet tag
+- _... plus 5 more tags_
 
 ## MRC::FEI12 (98 tags)
 
@@ -451,17 +414,12 @@
 - `PhasePlatePosition` — PhasePlatePosition tag
 - `ObjectiveAperture` — ObjectiveAperture tag
 
-## MRC::Main (41 tags)
+## MRC::Main (36 tags)
 
 - `ImageWidth` — ImageWidth tag
 - `ImageHeight` — ImageHeight tag
 - `ImageDepth` — ImageDepth tag
 - `ImageMode` — ImageMode tag
-- `16-bit signed integer` — 16-bit signed integer tag
-- `32-bit signed real` — 32-bit signed real tag
-- `complex 16-bit integer` — complex 16-bit integer tag
-- `complex 32-bit real` — complex 32-bit real tag
-- `16-bit unsigned integer` — 16-bit unsigned integer tag
 - `StartPoint` — StartPoint tag
 - `GridSize` — GridSize tag
 - `CellWidth` — CellWidth tag
@@ -495,124 +453,27 @@
 - `Label8` — Label8 tag
 - `Label9` — Label9 tag
 
-## Nintendo::CameraInfo (8 tags)
+## Nintendo::CameraInfo (5 tags)
 
 - `ModelID` — ModelID tag
 - `TimeStamp` — TimeStamp tag
 - `InternalSerialNumber` — InternalSerialNumber tag
 - `Parallax` — Parallax tag
 - `Category` — Category tag
-- `Mii` — Mii tag
-- `Man` — Man tag
-- `Woman` — Woman tag
 
 ## Nintendo::Main (1 tags)
 
 - `CameraInfo` — CameraInfo tag
 
-## PCAP::Main (191 tags)
+## PCAP::Main (7 tags)
 
-- `IEEE 802.3 Ethernet` — IEEE 802.3 Ethernet tag
-- `Experimental 4Mb Ethernet` — Experimental 4Mb Ethernet tag
-- `AX.25` — AX.25 tag
-- `PRONET` — PRONET tag
-- `MIT CHAOSNET` — MIT CHAOSNET tag
-- `IEEE 802.5` — IEEE 802.5 tag
-- `ARCNET BSD` — ARCNET BSD tag
-- `SLIP` — SLIP tag
-- `PPP` — PPP tag
-- `fddI` — fddI tag
-- `PPP HDLC` — PPP HDLC tag
-- `PPP Ethernet` — PPP Ethernet tag
-- `Symantec Firewall` — Symantec Firewall tag
-- `ATM RFC 1483` — ATM RFC 1483 tag
-- `Raw` — Raw tag
-- `SLIP BSD/OS` — SLIP BSD/OS tag
-- `PPP BSD/OS` — PPP BSD/OS tag
-- `Cisco PPP with HDLC` — Cisco PPP with HDLC tag
-- `IEEE 802.11` — IEEE 802.11 tag
-- `ATM Classical IP` — ATM Classical IP tag
-- `Frame Relay` — Frame Relay tag
-- `OpenBSD Loopback` — OpenBSD Loopback tag
-- `OpenBSD IPSEC` — OpenBSD IPSEC tag
-- `ATM LANE 802.3` — ATM LANE 802.3 tag
-- `NetBSD HIPPI` — NetBSD HIPPI tag
-- `NetBSD HDLC` — NetBSD HDLC tag
-- `Linux SLL` — Linux SLL tag
-- `Apple LocalTalk` — Apple LocalTalk tag
-- `Acorn Econet` — Acorn Econet tag
-- `OpenBSD ipfilter` — OpenBSD ipfilter tag
-- `OpenBSD pflog` — OpenBSD pflog tag
-- `Cisco IOS` — Cisco IOS tag
-- `IEEE 802.11 Prism` — IEEE 802.11 Prism tag
-- `IEEE 802.11 Aironet` — IEEE 802.11 Aironet tag
-- `Siemens HiPath HDLC` — Siemens HiPath HDLC tag
-- `IP-over-Fibre` — IP-over-Fibre tag
-- `SunATM` — SunATM tag
-- `RapidIO` — RapidIO tag
-- `PCI Express` — PCI Express tag
-- `Xilinx Aurora` — Xilinx Aurora tag
-- `IEEE 802.11 Radiotap` — IEEE 802.11 Radiotap tag
-- `Tazmen Sniffer` — Tazmen Sniffer tag
-- `ARCNET Linux` — ARCNET Linux tag
-- `Juniper MLPPP` — Juniper MLPPP tag
-- `Juniper MLFR` — Juniper MLFR tag
-- `Juniper ES` — Juniper ES tag
-- `Juniper GGSN` — Juniper GGSN tag
-- `Juniper MFR` — Juniper MFR tag
-- `Juniper ATM2` — Juniper ATM2 tag
-- `Juniper Services` — Juniper Services tag
-- `Juniper ATM1` — Juniper ATM1 tag
-- `Apple IP-over-IEEE 1394` — Apple IP-over-IEEE 1394 tag
-- `MTP2 with PHDR` — MTP2 with PHDR tag
-- `MTP2` — MTP2 tag
-- `MTP3` — MTP3 tag
-- `SCCP` — SCCP tag
-- `DOCSIS` — DOCSIS tag
-- `Linux IrDA` — Linux IrDA tag
-- `IBM SP` — IBM SP tag
-- `IBM SN` — IBM SN tag
-- `IEEE 802.11 AVS` — IEEE 802.11 AVS tag
-- `Juniper Monitor` — Juniper Monitor tag
-- `BACnet MS/TP` — BACnet MS/TP tag
-- `PPP PPPD` — PPP PPPD tag
-- `Juniper PPPOE` — Juniper PPPOE tag
-- `Juniper PPPOE ATM` — Juniper PPPOE ATM tag
-- `GPRS LLC` — GPRS LLC tag
-- `GPF-T` — GPF-T tag
-- `GPF-F` — GPF-F tag
-- `Gcom T1/E1` — Gcom T1/E1 tag
-- `Gcom Serial` — Gcom Serial tag
-- `Juniper PIC Peer` — Juniper PIC Peer tag
-- `ERF ETH` — ERF ETH tag
-- `ERF POS` — ERF POS tag
-- `Linux LAPD` — Linux LAPD tag
-- `Juniper Ether` — Juniper Ether tag
-- `Juniper PPP` — Juniper PPP tag
-- `Juniper Frame Relay` — Juniper Frame Relay tag
-- `Juniper CHDLC` — Juniper CHDLC tag
 - `MFR` — MFR tag
-- `Juniper VP` — Juniper VP tag
-- `A653 ICM` — A653 ICM tag
-- `USB FreeBSD` — USB FreeBSD tag
-- `Bluetooth HCI H4` — Bluetooth HCI H4 tag
-- `IEEE 802.16 MAC CPS` — IEEE 802.16 MAC CPS tag
-- `USB Linux` — USB Linux tag
-- `CAN 2.0B` — CAN 2.0B tag
-- `IEEE 802.15.4 Linux` — IEEE 802.15.4 Linux tag
-- `PPI` — PPI tag
-- `IEEE 802.16 MAC CPS Radio` — IEEE 802.16 MAC CPS Radio tag
-- `Juniper ISM` — Juniper ISM tag
-- `IEEE 802.15.4 with FCS` — IEEE 802.15.4 with FCS tag
-- `SITA` — SITA tag
-- `ERF` — ERF tag
-- `RAIF1` — RAIF1 tag
-- `IPMB Kontron` — IPMB Kontron tag
-- `Juniper ST` — Juniper ST tag
-- `Bluetooth HCI H4 with PHDR` — Bluetooth HCI H4 with PHDR tag
-- `AX.25 KISS` — AX.25 KISS tag
-- `LAPD` — LAPD tag
-- _... plus 91 more tags_
+- `Comment` — Comment tag
+- `CustomOption1` — CustomOption1 tag
+- `CustomOption2` — CustomOption2 tag
+- `CustomOption3` — CustomOption3 tag
+- `CustomOption4` — CustomOption4 tag
+- `IPv4Addr` — IPv4Addr tag
 
 ## XISF::Main (1 tags)
 
