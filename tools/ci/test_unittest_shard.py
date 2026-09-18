@@ -186,7 +186,7 @@ class WeightsFreshnessTests(unittest.TestCase):
     """
 
     MAX_UNWEIGHTED_MODULES = 5
-    REFRESH = "python3 tools/ci/unittest_weights_from_run.py <green-run-id>"
+    REFRESH = "python3 tools/ci/unittest_weights_from_run.py <green-run-id> [<run-id> ...]"
     SUITE = WorkflowWiringTests.SUITE
 
     def test_few_discovered_modules_lack_a_recorded_weight(self):

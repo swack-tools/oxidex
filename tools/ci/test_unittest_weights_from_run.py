@@ -41,6 +41,10 @@ class ParseShardTests(unittest.TestCase):
                            "test_n.D.test_c": 32.0, "test_n.D.test_d": 0.01})
         self.assertEqual(out, {"test_m": 8.0, "test_n": 32.0, "test_n.D.test_c": 32.0})
 
+    def test_runs_average_per_test_over_the_runs_that_ran_it(self):
+        self.assertEqual(gen.average([{"t.C.a": 10.0, "t.C.b": 2.0}, {"t.C.a": 30.0}]),
+                         {"t.C.a": 20.0, "t.C.b": 2.0})
+
     def test_a_log_without_the_banner_refuses(self):
         with self.assertRaises(ValueError):
             gen.parse_shard([JOB + line for line in LOG if "shard 2/8" not in line])

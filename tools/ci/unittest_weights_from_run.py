@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate tools/ci/unittest_weights.json from one green GitHub Actions run.
+"""Regenerate tools/ci/unittest_weights.json from one or more green GitHub Actions runs.
 
-    python3 tools/ci/unittest_weights_from_run.py <run-id> [--out PATH]
+    python3 tools/ci/unittest_weights_from_run.py <run-id> [<run-id> ...] [--out PATH]
 
 Reads the log of every `Verify Generated Tables / tools N/M` job of the run
 through `gh run view --job <id> --log` and measures each test as the wall
@@ -12,7 +12,13 @@ test that pays for them, and nothing between two results is lost.
 
 Output keeps the sharder's format: one whole-module total per module, plus a
 full test id for any single test at or above EXPLICIT_ID_SECONDS so it can be
-placed on its own. `source` records the run id and head SHA.
+placed on its own. `source` records the run ids and head SHAs.
+
+Pass several green runs to average them. One run is a noisy sample: the
+shards land on runners whose speed differs by up to ~1.6x (measured across
+runs 35394817483 and 35401749984, on light and heavy tests alike), and the
+heaviest compile-and-Perl tests swing by +-50% from run to run. Each test's
+weight is its mean over the runs that contain it.
 
 Every shard is cross-checked before anything is written: the parsed test count
 must equal the shard's `Ran N tests`, the measured seconds must account for the
@@ -126,6 +132,15 @@ def collect(run_id):
     return meta["headSha"], per_test
 
 
+def average(samples):
+    """[{test_id: seconds}, ...] -> {test_id: mean over the runs that ran it}."""
+    runs = {}
+    for per_test in samples:
+        for test_id, secs in per_test.items():
+            runs.setdefault(test_id, []).append(secs)
+    return {test_id: sum(values) / len(values) for test_id, values in runs.items()}
+
+
 def weights(per_test):
     modules = {}
     for test_id, secs in per_test.items():
@@ -140,20 +155,25 @@ def weights(per_test):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("run_id", type=int)
+    parser.add_argument("run_ids", type=int, nargs="+", metavar="run-id")
     parser.add_argument("--out", type=Path, default=Path(__file__).with_name("unittest_weights.json"))
     args = parser.parse_args(argv)
-    sha, per_test = collect(args.run_id)
+    collected = [(run_id, *collect(run_id)) for run_id in args.run_ids]
+    per_test = average([samples for _, _, samples in collected])
+    runs = ", ".join(f"{run_id} at {sha[:12]}" for run_id, sha, _ in collected)
+    plural = "s" if len(collected) > 1 else ""
     document = {
         "note": f"Module keys are whole-module seconds; full test ids (>={EXPLICIT_ID_SECONDS:g}s) "
-                "override their share. Refresh: python3 tools/ci/unittest_weights_from_run.py <run-id>",
-        "source": f"GitHub Actions run {args.run_id} at {sha[:12]} (ubuntu-latest shards): "
-                  "per-test wall seconds between consecutive unittest -v results",
+                "override their share. Refresh: python3 tools/ci/unittest_weights_from_run.py "
+                "<run-id> [<run-id> ...]",
+        "source": f"GitHub Actions run{plural} {runs} (ubuntu-latest shards): per-test wall "
+                  "seconds between consecutive unittest -v results"
+                  + (", mean over the runs containing each test" if plural else ""),
         "seconds": weights(per_test),
     }
     args.out.write_text(json.dumps(document, indent=1) + "\n")
     print(f"wrote {args.out}: {len(per_test)} tests, "
-          f"{sum(per_test.values()):.0f}s total from run {args.run_id}", file=sys.stderr)
+          f"{sum(per_test.values()):.0f}s total from run{plural} {runs}", file=sys.stderr)
     return 0
 
 
