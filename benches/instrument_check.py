@@ -46,7 +46,9 @@ def loadavg() -> tuple[float, float, float] | None:
 
 
 def top_cpu(n: int = 5) -> list[str]:
-    out = subprocess.run(["ps", "-Ao", "pcpu,comm", "-r"], capture_output=True, text=True).stdout.splitlines()
+    # BSD/macOS ps sorts by CPU with -r; procps (Linux) has no -r and uses --sort.
+    sort = ["-r"] if sys.platform == "darwin" else ["--sort=-pcpu"]
+    out = subprocess.run(["ps", "-Ao", "pcpu,comm", *sort], capture_output=True, text=True).stdout.splitlines()
     return [line.strip()[:100] for line in out[1 : n + 1]]
 
 

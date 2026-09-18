@@ -1,0 +1,174 @@
+name: Benchmarks (indicative)
+
+# CLI wall-clock benchmarks of the code that actually lands, against the pinned
+# Perl ExifTool: benches/exiftool_comparison.sh on the shipped release profile.
+#
+# Why this exists beside ci.yml's `metrics` job: that job runs only on pushes
+# to `main` (which is far behind the tip), benches in-process criterion
+# targets on a `lto = false` bench profile nobody ships, and never runs
+# ExifTool. This workflow measures the merge result on every landing on
+# `refactor/tag-machinery`, with the binary users get.
+#
+# NON-BLOCKING by construction. A shared GitHub-hosted runner is noisy, so:
+#   * it is a separate workflow, not a required status check, and nothing
+#     `needs:` it -- it can never hold up a merge;
+#   * it never compares against a threshold or a previous run, so a slow
+#     runner cannot fail it. It fails only when the measurement itself cannot
+#     be trusted: the binary is missing or stale, the oracle is not
+#     `.exiftool-version` or fails the OOXML.docx -> DOCX probe, or the tree
+#     is dirty (benches/instrument_check.py). That failure is the point --
+#     a refused measurement must be visible, not reported as a green number;
+#   * every number it publishes is labelled INDICATIVE, and is published as an
+#     artifact and step summary, never committed. benches/benchmark_results.md
+#     stays the hand-run, locally-measured table, and says so.
+#
+# Cost: ~10 runner-minutes, dominated by the fat-LTO release build. hyperfine
+# runs 3 warmups + 20 timed runs per command (the local default is 5 + 30).
+# Library-level criterion benches stay in ci.yml's `metrics` job, which also
+# feeds deploy-docs.yml's performance page.
+
+on:
+  push:
+    branches: [refactor/tag-machinery]
+  workflow_dispatch:
+  # Validation only: a PR that changes the benchmark harness or this file runs
+  # it once so the change is proven before it lands. Ordinary PRs never run
+  # it -- see "NON-BLOCKING" above.
+  pull_request:
+    paths:
+      - .github/workflows/benchmarks.yml
+      - benches/exiftool_comparison.sh
+      - benches/instrument_check.py
+
+concurrency:
+  # Each landing gets its own number (a cancelled run is a hole in the
+  # series); a superseded PR validation run is simply replaced.
+  group: benchmarks-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  exiftool-comparison:
+    name: ExifTool comparison (indicative)
+    # Pinned image rather than ubuntu-latest: numbers are only comparable run
+    # to run on the same runner class, and ubuntu-24.04's system perl is the
+    # canonical 5.38.2 the other oracle jobs use.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUNNER_LABEL: ubuntu-24.04
+      HYPERFINE_WARMUP: 3
+      HYPERFINE_RUNS: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: benchmarks
+      # The SHIPPED profile: [profile.release], fat LTO, codegen-units = 1.
+      # Not `cargo bench`'s profile and not ci.yml's lto=false override.
+      - name: Build oxidex (shipped release profile)
+        run: cargo build --release --bin oxidex
+      # Same composite action the verify-tables and read-regression-gate jobs
+      # use: .exiftool-version -> that release's source tree in
+      # $EXIFTOOL_SOURCE, plus Archive::Zip for the DOCX capability probe.
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
+      - name: Install hyperfine
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq hyperfine bc
+          hyperfine --version
+      # scripts/exiftool_oracle.py resolves the pinned tree as
+      # $EXIFTOOL_CACHE_DIR/exiftool and runs it as `perl -I<lib> exiftool`
+      # under $EXIFTOOL_PERL, checking that perl's modules -- no bare
+      # `exiftool` from PATH anywhere. instrument_check.py (called by the
+      # script before any timing) then asserts -ver == .exiftool-version and
+      # the OOXML.docx -> DOCX probe, and refuses otherwise.
+      - name: Run benches/exiftool_comparison.sh
+        id: bench
+        run: |
+          set -euo pipefail
+          unset PERL5LIB PERLLIB PERL5OPT
+          mkdir -p "$RUNNER_TEMP/exiftool-cache"
+          ln -sfn "$EXIFTOOL_SOURCE" "$RUNNER_TEMP/exiftool-cache/exiftool"
+          export EXIFTOOL_CACHE_DIR="$RUNNER_TEMP/exiftool-cache" EXIFTOOL_PERL=perl
+          CPU=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
+          BENCH_ENVIRONMENT="CI, INDICATIVE ONLY: GitHub Actions, GitHub-hosted shared runner $RUNNER_LABEL (image ${ImageVersion:-unknown}), $(nproc) vCPU, $CPU; run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          export BENCH_ENVIRONMENT
+          ./benches/exiftool_comparison.sh target/release/oxidex
+      - name: Write step summary
+        if: always()
+        env:
+          EVENT: ${{ github.event_name }}
+          BENCH_OUTCOME: ${{ steps.bench.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          p = pathlib.Path("benches/benchmark_results.json")
+          sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+          print("## Benchmarks: oxidex vs pinned ExifTool (INDICATIVE)\n", file=out)
+          print("> Shared GitHub-hosted runner: numbers are noisy, indicative only, and never gate a merge. "
+                "Compare only with other runs of this workflow on the same runner class; never with "
+                "`benches/benchmark_results.md` (a local workstation run).\n", file=out)
+          # benches/benchmark_results.json is COMMITTED (the local run), so its
+          # mere presence proves nothing: only a successful step that stamped
+          # this very checkout counts as this run's result.
+          r = json.loads(p.read_text()) if p.is_file() else None
+          if os.environ["BENCH_OUTCOME"] != "success" or not r or r["instrument"]["commit"] != sha:
+              print(f"**No results** (benchmark step: {os.environ['BENCH_OUTCOME']}): it failed or refused "
+                    "to measure -- see its log for the `instrument_check.py` reason. Nothing below the "
+                    "committed local table was produced by this run.", file=out)
+              raise SystemExit(0)
+          ins = r["instrument"]
+          cpu = subprocess.run(["sh", "-c", "lscpu | sed -n 's/^Model name: *//p' | head -1"], capture_output=True, text=True).stdout.strip()
+          print(f"- **Commit**: `{ins['commit']}` (checked out `{sha}`, event `{os.environ['EVENT']}`)", file=out)
+          print(f"- **ExifTool**: {ins['exiftool']}", file=out)
+          print(f"- **oxidex**: {ins['oxidex_version']}, sha256 `{ins['oxidex_sha256'][:16]}...`, `[profile.release]`"
+                + (f" -- staleness: {ins['staleness_note']}" if ins['staleness_note'] else ""), file=out)
+          print(f"- **Runner**: {os.environ['RUNNER_LABEL']} (image {os.environ.get('ImageVersion', 'unknown')}), "
+                f"{os.cpu_count()} vCPU, {cpu}; {ins['machine']}", file=out)
+          print(f"- **Load (1/5/15) at preflight**: {ins['loadavg_at_preflight']}", file=out)
+          print(f"- **hyperfine**: `--warmup {os.environ['HYPERFINE_WARMUP']} --runs "
+                f"{os.environ['HYPERFINE_RUNS']} -N`, both commands per invocation\n", file=out)
+          rows = [
+              ("1a. 112-byte JPEG stub (process startup)", "single_file"),
+              ("1b. `t/images/Canon.jpg -j -a -G1`", "single_canon"),
+              ("2. 1000-file batch `-r` (oxidex: rayon)", "batch"),
+              ("3. write one tag", "write"),
+              ("4. detection (one JPEG)", "detection"),
+              ("5. `t/images` corpus `-j -a -G1`, rayon", "corpus"),
+              ("5'. same, `RAYON_NUM_THREADS=1`", "corpus_1thread"),
+          ]
+          print("| Scenario | ExifTool median | oxidex median | Ratio (medians) | Ratio (minima) |", file=out)
+          print("|---|---:|---:|---:|---:|", file=out)
+          for label, key in rows:
+              et, ox = r[key]["results"][0], r[key]["results"][1]
+              print(f"| {label} | {et['median']*1000:.1f} ms | {ox['median']*1000:.1f} ms | "
+                    f"**{et['median']/ox['median']:.2f}x** | {et['min']/ox['min']:.2f}x |", file=out)
+          print(f"\nRunner vCPU count: {os.cpu_count()} (rayon scenarios 2 and 5 scale with it). "
+                "Full tables, per-scenario load and the top-CPU log are in the `benchmark-comparison` artifact.", file=out)
+          PY
+          cat "$GITHUB_STEP_SUMMARY"
+      # Only on success: these three files are committed (the local run), so
+      # uploading them after a failed or refused step would publish the old
+      # local numbers under this run's name.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.bench.outcome == 'success'
+        with:
+          # Not `benchmark-results`: that name is ci.yml's criterion artifact,
+          # which deploy-docs.yml looks up by name.
+          name: benchmark-comparison
+          path: |
+            benches/benchmark_results.md
+            benches/benchmark_results.json
+            benches/benchmark_results.log
+          if-no-files-found: error
+          retention-days: 90
