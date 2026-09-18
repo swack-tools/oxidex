@@ -16,7 +16,7 @@ may still change before 2.0.0.
 | --- | --- | --- |
 | Raw values (`Flash: 24`, `FNumber: 9/5`) | ExifTool's display values (`Flash: Auto, Did not fire`, `FNumber: 1.8`) | Pass `--no-print-conv` if you parse raw values. `-n` is still the rename dry run, not ExifTool's `-n`. |
 | An unreadable or unparsed file printed `Error:` and exited 1 | For a single file: exits 0 with the identity and filesystem tags, plus a `File:Warning`. Several files or `-r` still report `Error reading …` and exit 1. | Pass `--strict` to fail as before, or check `Status` in JSON |
-| Unknown tags printed under hex names (`IFD0:0xF999`) | Hidden, together with OxiDex's own diagnostic tags | Pass `--extended-output` to see them |
+| Unknown tags printed under hex names (`IFD0:0xF999`) | Hidden, together with JPEG SOF diagnostics and ZIP per-entry forensics | Pass `--extended-output` to see them |
 | `(Binary, N bytes)` | `(Binary data N bytes, use -b option to extract)` | Update any pattern that matches the placeholder |
 | Dates in RFC 3339 form | `YYYY:MM:DD HH:MM:SS` | Parse ExifTool's date form |
 | Lists as `[a, b]` | `a, b` | Split on `, ` |
