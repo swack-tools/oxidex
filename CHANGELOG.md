@@ -7,18 +7,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0-beta.1] - Unreleased
+
+Built from `refactor/tag-machinery`. This is a **beta**: output and API may still change before 2.0.0.
+Upgrading from 1.x? Read the migration guide, `docs/guide/migrating-from-1x.md`
+(https://oxidex.net/guide/migrating-from-1x once published).
+
+### Breaking changes
+
+Every entry below was checked against the v1.2.1 tag and the code at the tip.
+
+**Command line**
+- **ExifTool's print conversion is on by default** (#643). Values now match ExifTool's display form (`Flash: Auto, Did not fire`, `FNumber: 1.8`) instead of raw numbers. Use `--no-print-conv` for raw values. OxiDex's `-n` is still the rename dry run, not ExifTool's `-n`. `-e`/`--exiftool-compat` are accepted and do nothing.
+- **A file that cannot be fully read no longer fails the command** (`c343c69d`). The command exits 0 with the filesystem and identity tags, a `File:Warning`, and in JSON a top-level `"Status"` of `Partial`, `IdentifiedOnly` or `Unsupported`. Pass `--strict` for the old fail-fast behaviour.
+- **Tags with no ExifTool counterpart are hidden by default** (`a9072ba6`). This covers hex-fallback names for unknown tags (such as `IFD0:0xF999`), JPEG SOF diagnostics and ZIP per-entry forensics. `--extended-output` shows them.
+
+**JSON output**
+- **Values are typed the way ExifTool's `EscapeJSON` types them** (#425, `c3a7508e`, #813). Numeric-looking values become JSON numbers written exactly as spelled (`2.00` stays `2.00`), and `true`/`false` become booleans. Floats use Perl's `%.15g` (`2`, not `2.0`). Rationals print as their 10-significant-digit quotient, or `"inf"`/`"undef"`, not as `"n/d"` strings.
+- **A top-level `"Status"` key** appears for any read that did not parse completely (see above).
+
+**Text and CSV output**
+- The binary placeholder is now ExifTool's `(Binary data N bytes, use -b option to extract)` (#360).
+- Dates print as `YYYY:MM:DD HH:MM:SS`, not RFC 3339 (#346). List values print as `a, b`, not `[a, b]` (#646).
+
+**Tag names, groups and values**
+- `FileType`, `MIMEType` and `FileSize` appear once, under `File:`. The duplicate bare keys some parsers wrote are gone (#650, #654).
+- The File-group readers (BMP, FLIF, PFM, ICO, OpenEXR, Radiance HDR, PCAP, MP3, MPC) prefix their keys with `File:`. For example, BMP's `ImageWidth` is now `File:ImageWidth`. FITS keys move under `FITS:` (#793).
+- `File:FileType` uses ExifTool's names (`CR2`, `NEF`), not internal variant names such as `CanonCR2` (#346).
+- `File:File*Date` values are local time with the offset in force at that moment, and `FileSize` is formatted as ExifTool formats it (#339).
+- The maker-note group `Fujifilm` is now `FujiFilm`. Its tag 0x100e is `NoiseReduction`, not `HighISONoiseReduction` (#351, #433).
+- `.fit` files are identified as Garmin FIT (`FileType: FIT`), not FITS (#652).
+
+**Rust library**
+- `read_metadata` returns `Ok` for a format it can identify but not parse, with only the identity tags (and any Composite tags). In 1.x it returned `Err(UnsupportedFormat)` (#271, #272). To tell the cases apart, use `read_metadata_report` and its `ParseStatus`.
+- `FileFormat` has 69 more variants and is not `#[non_exhaustive]`, so an exhaustive `match` no longer compiles.
+- Removed module paths (`9b9ee6d7`):
+  - `oxidex::ffi::c_api`: use `oxidex::ffi`.
+  - `oxidex::parsers::format_detector`: use `oxidex::parsers::detection`. `oxidex::parsers::detect_format` is still exported.
+  - `oxidex::parsers::icc_parser`: use `oxidex::parsers::icc`. `parse_icc_profile_data` now returns `Vec<IccTag>`.
+- The crate uses Rust edition 2024 (`9bfc15bd`), and its dependencies need a recent compiler. `rust-toolchain.toml` pins 1.97.1 for development. No `rust-version` is declared.
+
+**C header**
+- `include/oxidex.h` now declares the symbols the library actually exports: `exiftool_*`, `ExifToolHandle` and `EXIFTOOL_*`. It used to declare `oxidex_*` names, which were never exported (`d7804ff4`). Source written against the old header no longer compiles, although it could never have linked. The Python binding was corrected at the same time. The 15 exported functions and their error codes are unchanged.
+
 
 ### Changed
 - **`tag-comparison`'s full-corpus sweep now processes formats concurrently** - the per-format loop in `src/bin/tag-comparison/main.rs` (used by `just compare-exiftool-full` and the fix-loop dispatcher's per-round attribution rebuild) now runs on a `rayon` thread pool instead of one format at a time in a single thread; measured 1.2-1.7x faster wall-clock on a full ~4,200-file/126-format corpus sweep depending on cache warmth, with byte-for-byte identical output. What gets measured and how gaps are attributed is unchanged
-- **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-8x`, and are now tuned for throughput over measurement fidelity
+- **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-8x`, and are now tuned for throughput over measurement fidelity. *(The runner has since moved back to GitHub-hosted `ubuntu-latest`; the `--quick`, `lto = false` and `codegen-units = 16` settings remain.)*
   - **Affects**: the 90-day benchmark artifact published by `ci.yml`, and the timings on the docs performance page published by `deploy-docs.yml`
   - **What changed**: runner class; `--quick` (fewer criterion samples — `deploy-docs.yml` already used it and `ci.yml` did not, so the two had been publishing different methodologies); `lto = false` and `codegen-units = 16` on the bench profile, applied via CI env so `Cargo.toml` is unchanged
   - **These numbers describe a binary nobody ships**: `[profile.release]` keeps `lto = true`, so benchmark figures are now a *regression signal*, not a performance claim to quote publicly
   - **Impact**: benchmark numbers measured before this date are **not comparable** with numbers after it, on either hardware or methodology.
   - **Not a performance regression or improvement**: any step change in the published figures at this date reflects the CI change, not a change in OxiDex itself.
   - Both benchmark jobs were changed together, in one commit, and must continue to match each other on runner label and measurement flags.
-- **CI/CD caching moved to WarpBuild** - Rust, npm, Docker layer, and ExifTool-source caches now use WarpBuild's cache backend rather than the GitHub Actions cache
+- **CI/CD caching moved to WarpBuild** - Rust, npm, Docker layer, and ExifTool-source caches now use WarpBuild's cache backend rather than the GitHub Actions cache. *(Since reverted: `ci.yml` now runs on GitHub-hosted `ubuntu-latest` runners.)*
 
 ### Added
 - **Optional Magika AI-Powered File Detection** - Google's deep learning model for enhanced file type identification

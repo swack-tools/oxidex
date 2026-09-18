@@ -72,7 +72,7 @@ RULES = [
          r"(?P<pre>//! Contains )(?P<val>[\d,]+)(?P<post> metadata tag definitions)",
          "definitions"),
     Rule("docs/index.md",
-         r"(?P<pre>    title: )(?P<val>[\d,]+)(?P<post> Metadata Tags)",
+         r"(?P<pre>    title: )(?P<val>[\d,]+)(?P<post> Tag Definitions)",
          "definitions",
          "YAML frontmatter -- cannot carry an HTML comment marker"),
     Rule("docs/guide/index.md",
@@ -102,7 +102,7 @@ RULES = [
          "score",
          "YAML frontmatter"),
     Rule("docs/index.md",
-         r"(?P<pre>conformance against pinned ExifTool, across )(?P<val>\d+)(?P<post> format families)",
+         r"(?P<pre>conformance against pinned ExifTool, across )(?P<val>\d+)(?P<post> file types)",
          "formats",
          "YAML frontmatter"),
 ]
