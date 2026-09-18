@@ -315,65 +315,177 @@ CONVERT_UNIX_TIME_SEMANTICS = {
     ),
 }
 DEFAULT_CONVERT_UNIX_TIME_SEMANTICS = "floor_round"
-_CONVERT_UNIX_TIME_RUST = "crate::exiftool_tables::exprs::convert_unix_time("
+
+
+# =============================================================================
+# PrintAFPointsLeftRight / PrintAFPointsUpDown semantics -- the same problem,
+# and the same mechanism, as ConvertUnixTime above: Nikon.pm changed the
+# sub's arithmetic between releases, so the port is chosen by PROVING which
+# body the pinned tree carries.
+#
+#   12.64:  my $center = 1 + ($ncol + 1)/2;
+#   13.59:  my $center = ($ncol + 1) / 2;
+#
+# (11.78 has neither sub.) Everything else in the two bodies is identical,
+# so the releases disagree by exactly one column/row on every non-zero input:
+# PrintAFPointsLeftRight($val, 29) prints `C` at 16 under 12.64 and at 15
+# under 13.59, `1L of Center` at 15 (12.64) where 13.59 prints `C`, and so
+# on -- exactly the 2 expressions the 12.64 rehearsal's verify_exprs.py run
+# failed on. The CODE_REFS entries above match only the CALL (`{ ...
+# PrintAFPointsLeftRight($val, 29); }`), never the callee, so without this
+# selection both releases compiled to the 13.59 arithmetic.
+#
+# The folded sources are matched on raw text, not on native_reader_facts'
+# body_tokens: that tokenizer reads the `/` in `($ncol + 1)/2` as a regex
+# literal and folds the rest of the line into one token.
+PRINT_AF_POINTS_LEFT_RIGHT_SEMANTICS = {
+    # ExifTool 13.59 (pinned).
+    "center_half": (
+        "print_af_points_left_right",
+        "sub PrintAFPointsLeftRight($$) { my ($col, $ncol) = @_; "
+        "my $center = ($ncol + 1) / 2; return 'n/a' if $col == 0; "
+        "return 'C' if $col == $center; "
+        "return sprintf('%d', $center - $col) . 'L of Center' if $col < $center; "
+        "return sprintf('%d', $col - $center) . 'R of Center' if $col > $center; }",
+    ),
+    # ExifTool 12.64.
+    "center_one_plus_half": (
+        "print_af_points_left_right_one_plus_center",
+        "sub PrintAFPointsLeftRight($$) { my ($col, $ncol) = @_; "
+        "my $center = 1 + ($ncol + 1)/2; return 'n/a' if $col == 0; "
+        "return 'C' if $col == $center; "
+        "return sprintf('%d', $center - $col) . 'L of Center' if $col < $center; "
+        "return sprintf('%d', $col - $center) . 'R of Center' if $col > $center; }",
+    ),
+}
+PRINT_AF_POINTS_UP_DOWN_SEMANTICS = {
+    # ExifTool 13.59 (pinned).
+    "center_half": (
+        "print_af_points_up_down",
+        "sub PrintAFPointsUpDown($$) { my ($row, $nrow) = @_; "
+        "my $center = ($nrow + 1) / 2; return 'n/a' if $row == 0; "
+        "return 'C' if $row == $center; "
+        "return sprintf('%d', $center - $row) . 'U from Center' if $row < $center; "
+        "return sprintf('%d', $row - $center) . 'D from Center' if $row > $center; }",
+    ),
+    # ExifTool 12.64.
+    "center_one_plus_half": (
+        "print_af_points_up_down_one_plus_center",
+        "sub PrintAFPointsUpDown($$) { my ($row, $nrow) = @_; "
+        "my $center = 1 + ($nrow + 1)/2; return 'n/a' if $row == 0; "
+        "return 'C' if $row == $center; "
+        "return sprintf('%d', $center - $row) . 'U from Center' if $row < $center; "
+        "return sprintf('%d', $row - $center) . 'D from Center' if $row > $center; }",
+    ),
+}
+
+
+# Every helper whose Perl semantics differ between releases, keyed by the
+# name `helper_semantics` records in the oracle ledger: the module file (under
+# the pinned lib) holding the sub, its ports {name: (Rust fn, folded body)},
+# and the default port -- the 13.59 one, which every translation in
+# TRANSLATIONS is spelled with and every committed ledger was proven with.
+HELPER_SEMANTICS = {
+    "ConvertUnixTime": {
+        "module": "Image/ExifTool.pm",
+        "ports": CONVERT_UNIX_TIME_SEMANTICS,
+        "default": DEFAULT_CONVERT_UNIX_TIME_SEMANTICS,
+    },
+    "PrintAFPointsLeftRight": {
+        "module": "Image/ExifTool/Nikon.pm",
+        "ports": PRINT_AF_POINTS_LEFT_RIGHT_SEMANTICS,
+        "default": "center_half",
+    },
+    "PrintAFPointsUpDown": {
+        "module": "Image/ExifTool/Nikon.pm",
+        "ports": PRINT_AF_POINTS_UP_DOWN_SEMANTICS,
+        "default": "center_half",
+    },
+}
 _BASE_TRANSLATIONS = dict(TRANSLATIONS)
-_convert_unix_time_semantics = DEFAULT_CONVERT_UNIX_TIME_SEMANTICS
+_helper_semantics = {h: spec["default"] for h, spec in HELPER_SEMANTICS.items()}
 
 
-def convert_unix_time_source(exiftool_pm_text):
-    """`sub ConvertUnixTime ... }` from ExifTool.pm's text, comments and
-    whitespace folded; None when the sub is absent. Only a `#` at line start
-    or after whitespace opens a comment -- neither known body carries a `#`
-    anywhere else, and a fold that went wrong could only make the text match
-    nothing, which refuses."""
-    m = re.search(r"^sub ConvertUnixTime\b.*?^\}", exiftool_pm_text, re.S | re.M)
+def default_helper_semantics():
+    return {h: spec["default"] for h, spec in HELPER_SEMANTICS.items()}
+
+
+def sub_source(module_text, sub):
+    """`sub <sub> ... }` from a module's text, comments and whitespace
+    folded; None when the sub is absent. Only a `#` at line start or after
+    whitespace opens a comment -- no known body carries a `#` anywhere else,
+    and a fold that went wrong could only make the text match nothing, which
+    refuses."""
+    m = re.search(rf"^sub {re.escape(sub)}\b.*?^\}}", module_text, re.S | re.M)
     if m is None:
         return None
     body = re.sub(r"(?m)(^|\s)#.*$", r"\1", m.group(0))
     return re.sub(r"\s+", " ", body).strip()
 
 
-def detect_convert_unix_time_semantics(et_lib):
-    """(semantics name or None, folded source) for the pinned tree at
-    `et_lib` -- the directory holding `Image/ExifTool.pm`. No readable
-    ExifTool.pm proves nothing, so it selects nothing (refuses)."""
+def detect_helper_semantics(et_lib, helper):
+    """(port name or None, folded source) for `helper` in the pinned tree at
+    `et_lib` -- the directory holding `Image/`. The port is the one whose
+    folded body equals the tree's EXACTLY; the release label plays no part.
+    An unreadable module or an absent sub proves nothing, so it selects
+    nothing (refuses)."""
     from pathlib import Path
+    spec = HELPER_SEMANTICS[helper]
     try:
-        text = (Path(et_lib) / "Image" / "ExifTool.pm").read_text(encoding="latin-1")
+        text = (Path(et_lib) / spec["module"]).read_text(encoding="latin-1")
     except OSError:
         return None, None
-    source = convert_unix_time_source(text)
-    name = next((n for n, (_fn, body) in CONVERT_UNIX_TIME_SEMANTICS.items()
-                 if body == source), None)
+    source = sub_source(text, helper)
+    name = next((n for n, (_fn, body) in spec["ports"].items() if body == source), None)
     return name, source
 
 
-def convert_unix_time_semantics():
-    return _convert_unix_time_semantics
+def detect_convert_unix_time_semantics(et_lib):
+    return detect_helper_semantics(et_lib, "ConvertUnixTime")
 
 
-def set_convert_unix_time_semantics(name):
-    """Select the ConvertUnixTime port for every later translation. `None`
-    refuses ConvertUnixTime outright. Clears the compile caches and rebuilds
-    TRANSLATIONS in place, so nothing compiled under the previous selection
-    survives the switch."""
-    global _convert_unix_time_semantics
-    if name is not None and name not in CONVERT_UNIX_TIME_SEMANTICS:
-        raise ValueError(f"unknown ConvertUnixTime semantics {name!r}")
-    _convert_unix_time_semantics = name
+def helper_semantics():
+    return dict(_helper_semantics)
+
+
+def set_helper_semantics(selection):
+    """Select ports for the helpers named in `selection` ({helper: port or
+    None}); helpers not named keep their current port. `None` refuses every
+    translation that reaches that helper -- it is dropped from TRANSLATIONS,
+    so it is omitted and counted, never compiled against a sub nobody has
+    checked. Clears the compile caches and rebuilds TRANSLATIONS in place, so
+    nothing compiled under the previous selection survives the switch."""
+    for helper, name in selection.items():
+        if helper not in HELPER_SEMANTICS:
+            raise ValueError(f"unknown helper {helper!r}")
+        if name is not None and name not in HELPER_SEMANTICS[helper]["ports"]:
+            raise ValueError(f"unknown {helper} semantics {name!r}")
+    _helper_semantics.update(selection)
     rebuilt = {}
     for key, (rty, code) in _BASE_TRANSLATIONS.items():
-        if _CONVERT_UNIX_TIME_RUST in code:
-            if name is None:
+        for helper, spec in HELPER_SEMANTICS.items():
+            default_call = (f"crate::exiftool_tables::exprs::"
+                            f"{spec['ports'][spec['default']][0]}(")
+            if default_call not in code:
                 continue
-            fn = CONVERT_UNIX_TIME_SEMANTICS[name][0]
-            code = code.replace(_CONVERT_UNIX_TIME_RUST,
-                                f"crate::exiftool_tables::exprs::{fn}(")
-        rebuilt[key] = (rty, code)
+            name = _helper_semantics[helper]
+            if name is None:
+                code = None
+                break
+            code = code.replace(
+                default_call,
+                f"crate::exiftool_tables::exprs::{spec['ports'][name][0]}(")
+        if code is not None:
+            rebuilt[key] = (rty, code)
     TRANSLATIONS.clear()
     TRANSLATIONS.update(rebuilt)
     _COMPILE_CACHE.clear()
     _COMPOSITE_COMPILE_CACHE.clear()
+
+
+def set_convert_unix_time_semantics(name):
+    """Select the ConvertUnixTime port; see set_helper_semantics."""
+    set_helper_semantics({"ConvertUnixTime": name})
 
 
 def _code_ref_pattern(body):
@@ -405,8 +517,11 @@ def code_ref_expr(deparse):
     """
     if not isinstance(deparse, str):
         return None
-    return next((key for pattern, key in _CODE_REF_PATTERNS
-                 if pattern.fullmatch(deparse.strip())), None)
+    key = next((key for pattern, key in _CODE_REF_PATTERNS
+                if pattern.fullmatch(deparse.strip())), None)
+    # A key whose translation the selected helper semantics refused (see
+    # set_helper_semantics) names Rust nobody has proven for this tree.
+    return key if key in TRANSLATIONS else None
 
 
 def normalize(expr):
@@ -965,9 +1080,10 @@ class _Parser:
             raise ExprCompileError("ConvertUnixTime needs a numeric argument")
         # The port proven to match the pinned tree's sub; see
         # CONVERT_UNIX_TIME_SEMANTICS. None = unproven, refused.
-        if _convert_unix_time_semantics is None:
+        selected = _helper_semantics["ConvertUnixTime"]
+        if selected is None:
             raise ExprCompileError("pinned ConvertUnixTime source matches no ported semantics")
-        fn = CONVERT_UNIX_TIME_SEMANTICS[_convert_unix_time_semantics][0]
+        fn = CONVERT_UNIX_TIME_SEMANTICS[selected][0]
         return ("string", f"crate::exiftool_tables::exprs::{fn}({ac}, {to_local})")
 
     def _parse_sprintf(self):

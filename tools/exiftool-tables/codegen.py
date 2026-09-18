@@ -301,16 +301,17 @@ def load_oracle_ledger(path, tables_json, version):
     # proven with). Applied below, so this generation compiles each
     # approved expression to exactly the Rust that was verified.
     helper_semantics = ledger.get("helper_semantics", {})
-    cut = exprs.DEFAULT_CONVERT_UNIX_TIME_SEMANTICS
-    if isinstance(helper_semantics, dict) and set(helper_semantics) <= {"ConvertUnixTime"}:
-        cut = helper_semantics.get("ConvertUnixTime", cut)
-    if (not isinstance(helper_semantics, dict)
-            or set(helper_semantics) - {"ConvertUnixTime"}
-            or (cut is not None and cut not in exprs.CONVERT_UNIX_TIME_SEMANTICS)):
+    selection = exprs.default_helper_semantics()
+    if (isinstance(helper_semantics, dict)
+            and set(helper_semantics) <= set(exprs.HELPER_SEMANTICS)
+            and all(n is None or n in exprs.HELPER_SEMANTICS[h]["ports"]
+                    for h, n in helper_semantics.items())):
+        selection.update(helper_semantics)
+    else:
+        known = {h: sorted(spec["ports"]) for h, spec in exprs.HELPER_SEMANTICS.items()}
         problems.append(
-            f"helper_semantics {helper_semantics!r}: only ConvertUnixTime is "
-            f"known, and it must be one of {sorted(exprs.CONVERT_UNIX_TIME_SEMANTICS)} "
-            "or null"
+            f"helper_semantics {helper_semantics!r}: each key must be a known "
+            f"helper and each value one of its ports or null -- {known}"
         )
     fail_count = ledger.get("probe_counts", {}).get("fail")
     if fail_count != 0:
@@ -333,7 +334,7 @@ def load_oracle_ledger(path, tables_json, version):
             f"{LEDGER_REMEDY}"
         )
 
-    exprs.set_convert_unix_time_semantics(cut)
+    exprs.set_helper_semantics(selection)
     return set(ledger["verified_expressions"])
 
 
