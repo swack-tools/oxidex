@@ -20,7 +20,7 @@ import re
 import codegen
 import conds
 import serial_directory_facts as facts
-from serial_processor_grammar import SERIAL_PROCESSOR_V1_TOKENS
+from serial_processor_grammar import SERIAL_PROCESSOR_GRAMMARS
 
 
 DESCRIPTOR_VERSION = 2
@@ -76,6 +76,9 @@ _REQUIRED_PROCESSOR_STEPS = (
     ("unknown option restore", ("$et", "->", "Options", "(", "'Unknown'", ",", "$unknown", ")")),
     ("unknown generation cleanup", ("delete", "$et", "->", "{", "'NO_UNKNOWN'", "}")),
 )
+# Whole-body token streams; see serial_processor_grammar.py for why each is the
+# same modeled algorithm. Membership is exact, never a prefix or subset match.
+_ACCEPTED_PROCESSOR_GRAMMARS = frozenset(tokens for _, tokens in SERIAL_PROCESSOR_GRAMMARS)
 _TABLE_MODELED_PROPERTIES = frozenset({"PROCESS_PROC", "FORMAT", "GROUPS", "VARS"})
 _TABLE_DOCUMENTARY_PROPERTIES = frozenset({"NOTES"})
 _ROW_MODELED_PROPERTIES = frozenset({"Name", "Format", "Condition", "PrintConv", "RawConv",
@@ -114,7 +117,7 @@ def _processor_contract(processor):
     # state assignment and reporting branches are all operands in this stream.
     # A table may add rows freely; a changed shared processor needs a new
     # grammar version and native proof before it becomes a supported input.
-    if tuple(tokens) != SERIAL_PROCESSOR_V1_TOKENS:
+    if tuple(tokens) not in _ACCEPTED_PROCESSOR_GRAMMARS:
         raise SerialDirectoryRefused("serial processor is outside the complete executable grammar")
     steps = [effect for effect, _ in _REQUIRED_PROCESSOR_STEPS]
     return {
