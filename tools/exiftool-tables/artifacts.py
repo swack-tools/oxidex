@@ -16,9 +16,12 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
+
+import table_modules
 
 
 @dataclass(frozen=True)
@@ -34,47 +37,70 @@ class Artifact:
 
 # The per-module files of the two split table artifacts (`binary/mod.rs` and
 # `ifd/mod.rs` hubs, one `<stem>.rs` per ExifTool module beside each; the
-# layout is tools/exiftool-tables/table_modules.py). These are the file stems
-# `table_modules.module_stem` derives from the ExifTool module names the
-# pinned release carries, listed here verbatim so the manifest stays a plain
-# static inventory: a release that adds or drops a module changes this list,
-# and `check` (unexpected/missing output) and test_artifacts.py (list vs. the
-# committed hubs' `mod` lines) both say so rather than letting an orphan or
-# a missing file through.
-BINARY_MODULE_STEMS = (
-    "aiff", "ape", "asf", "bmp", "bpg", "canon", "canoncustom", "canonraw", "canonvrd", "casio",
-    "dji", "djvu", "dng", "dpx", "dsf", "exe", "flac", "flashpix", "flir", "font", "fotostation",
-    "fujifilm", "gif", "gimp", "gm", "gopro", "h264", "hp", "icc_profile", "ico", "id3", "infiray",
-    "iso", "itc", "jpeg", "jpeg2000", "kandao", "kodak", "kyoceraraw", "lnk", "microsoft",
-    "minolta", "minoltaraw", "mng", "moi", "mpeg", "mpf", "mrc", "mxf", "nikon", "nikoncapture",
-    "nikoncustom", "nintendo", "olympus", "opus", "palm", "panasonic", "panasonicraw", "parrot",
-    "pcx", "pentax", "pgf", "photocd", "photoshop", "png", "psp", "quicktime", "reconyx", "red",
-    "ricoh", "riff", "samsung", "sanyo", "sigma", "sigmaraw", "sony", "stim", "theora", "vorbis",
-    "wavpack", "zip", "zisraw",
-)
+# layout is tools/exiftool-tables/table_modules.py). Which modules exist is a
+# property of the selected ExifTool release -- 11.78 has no DJI or InfiRay
+# module, 13.59 has no JSON or Rsrc one -- so the member files are not listed
+# here: they are exactly the stems the hub's `mod <stem>;` lines declare,
+# read from the tree each time the inventory is used. A static 13.59 list
+# made every other release's regeneration fail the write-set check (a missing
+# `dji.rs`, an unexpected `json.rs`) until someone edited this file, which is
+# an upgrade intervention, not a guarantee.
+#
+# The guarantee the static list gave is kept mechanically: `family_errors`
+# rejects a hub that names a file which is not there, a `*.rs` beside the hub
+# that it does not name (an orphan), and a stem list that is not the sorted,
+# unique order `table_modules.render_hub` writes. `check` applies it to the
+# regenerated tree, and a member may only appear or disappear together with
+# its `mod` line.
+MODULE_FAMILIES = ("binary", "ifd")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_FAMILY_MEMBER = re.compile(r"src/exiftool_tables/(binary|ifd)/([a-z0-9_]+)\.rs")
 
-IFD_MODULE_STEMS = (
-    "aiff", "ape", "apple", "audible", "bmp", "bpg", "canon", "casio", "darwincore", "dicom",
-    "dji", "djvu", "dv", "exe", "exif", "fits", "flac", "flash", "flashpix", "flif", "flir",
-    "font", "fujifilm", "garmin", "ge", "geotiff", "gif", "gimp", "google", "gps", "h264", "hp",
-    "html", "id3", "iptc", "iso", "itc", "jpeg", "jvc", "kodak", "leaf", "lnk", "lytro", "m2ts",
-    "macos", "matroska", "microsoft", "miff", "minolta", "misb", "mng", "motorola", "mpeg", "mpf",
-    "mwg", "mxf", "nikon", "nikoncustom", "nintendo", "ogg", "olympus", "openexr", "opus", "other",
-    "panasonic", "panasonicraw", "parrot", "pcap", "pdf", "pentax", "photomechanic", "photoshop",
-    "pict", "plus", "png", "postscript", "psp", "quicktime", "radiance", "rawzor", "real", "red",
-    "ricoh", "riff", "rtf", "samsung", "sanyo", "shortcuts", "sigma", "sigmaraw", "sony",
-    "sonyidc", "stim", "taginfoxml", "text", "theora", "tnef", "torrent", "trailer", "unknown",
-    "vcard", "vorbis", "wpg", "wtv", "xisf", "xmp", "zip",
-)
+
+def family_dir(kind):
+    return f"src/exiftool_tables/{kind}"
+
+
+def module_stems(kind, root=REPO_ROOT):
+    """The module file stems the `kind` hub under `root` declares."""
+    if kind not in MODULE_FAMILIES:
+        raise ValueError(f"unknown split table artifact: {kind}")
+    hub = Path(root) / family_dir(kind) / table_modules.MOD_RS
+    if not hub.is_file() or hub.is_symlink():
+        raise ValueError(f"missing/nonregular/symlink split table hub: {family_dir(kind)}/{table_modules.MOD_RS}")
+    return tuple(table_modules.declared_stems(hub))
+
+
+def family_errors(root=REPO_ROOT):
+    """Why the split table directories under `root` are not a consistent
+    generated set (empty when they are)."""
+    errors = []
+    for kind in MODULE_FAMILIES:
+        stems = module_stems(kind, root)
+        if list(stems) != sorted(set(stems)):
+            errors.append(f"{family_dir(kind)}/{table_modules.MOD_RS} module lines are not sorted and unique")
+        directory = Path(root) / family_dir(kind)
+        on_disk = {p.stem for p in directory.glob("*.rs") if p.name != table_modules.MOD_RS}
+        errors += [f"orphan module file {family_dir(kind)}/{stem}.rs (not declared by its hub)"
+                   for stem in sorted(on_disk - set(stems))]
+        errors += [f"declared module file {family_dir(kind)}/{stem}.rs is missing"
+                   for stem in sorted(set(stems) - on_disk)]
+    return errors
+
+
+def is_family_member(path):
+    """Whether `path` is where a split table artifact's module file lives."""
+    match = _FAMILY_MEMBER.fullmatch(path)
+    return bool(match) and match.group(2) + ".rs" != table_modules.MOD_RS
 
 
 def _module_artifacts(kind, stems):
     return tuple(
-        Artifact(f"{kind}-{stem}", 1, "codegen", f"src/exiftool_tables/{kind}/{stem}.rs")
+        Artifact(f"{kind}-{stem}", 1, "codegen", f"{family_dir(kind)}/{stem}.rs")
         for stem in stems
     )
 
-ARTIFACTS = (
+STATIC_ARTIFACTS = (
     Artifact("binary", 1, "codegen", "src/exiftool_tables/binary/mod.rs"),
     Artifact("ifd", 1, "codegen", "src/exiftool_tables/ifd/mod.rs"),
     Artifact("ifd-identity-ledger", 1, "codegen", "tools/exiftool-tables/ifd_identity_ledger.json"),
@@ -144,10 +170,34 @@ ARTIFACTS = (
     Artifact("geotiff", 2, "gen_geotiff_printconv", "src/parsers/tiff/geotiff_printconv.rs"),
     Artifact("dicom", 2, "gen_dicom_dict", "src/parsers/specialized/dicom_dict.rs"),
     Artifact("lens-alternatives", 2, "dump_lens_alternatives", "src/composite/lens_alternatives.rs"),
-) + _module_artifacts("binary", BINARY_MODULE_STEMS) + _module_artifacts("ifd", IFD_MODULE_STEMS)
+)
 
 
-def validate(artifacts=ARTIFACTS):
+def inventory(root=REPO_ROOT):
+    """Every declared output under `root`: the static entries, then each split
+    table artifact's module files in its hub's order."""
+    members = ()
+    for kind in MODULE_FAMILIES:
+        members += _module_artifacts(kind, module_stems(kind, root))
+    return STATIC_ARTIFACTS + members
+
+
+def __getattr__(name):
+    # `ARTIFACTS` and the stem lists are read from this checkout's hubs on
+    # every access, so a process that imported this module before a
+    # regeneration (the rehearsal stage adapter) sees the regenerated set.
+    if name == "ARTIFACTS":
+        return inventory()
+    if name == "BINARY_MODULE_STEMS":
+        return module_stems("binary")
+    if name == "IFD_MODULE_STEMS":
+        return module_stems("ifd")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def validate(artifacts=None, root=REPO_ROOT):
+    if artifacts is None:
+        artifacts = inventory(root)
     keys, paths = set(), set()
     for item in artifacts:
         path = PurePosixPath(item.path)
@@ -162,11 +212,12 @@ def validate(artifacts=ARTIFACTS):
         paths.add(item.path)
 
 
-def select(tier="all", kind="all", producer=None):
-    validate()
+def select(tier="all", kind="all", producer=None, root=REPO_ROOT):
+    items = inventory(root)
+    validate(items)
     if str(tier) not in ("all", "1", "2") or kind not in ("all", "rust"):
         raise ValueError("invalid artifact selector")
-    selected = [a for a in ARTIFACTS if (str(tier) == "all" or a.tier == int(tier))
+    selected = [a for a in items if (str(tier) == "all" or a.tier == int(tier))
                 and (kind == "all" or a.path.endswith(".rs"))
                 and (producer is None or a.producer == producer)]
     if not selected:
@@ -191,13 +242,18 @@ def digest(data):
 
 
 def manifest_digest():
-    return digest(json.dumps([asdict(a) for a in ARTIFACTS], sort_keys=True).encode())
+    # The split artifacts' member lists are release data, not manifest: a
+    # regeneration that adds or drops a module must not read as a changed
+    # manifest between `snapshot` and `check`.
+    return digest(json.dumps({"static": [asdict(a) for a in STATIC_ARTIFACTS],
+                              "families": [family_dir(kind) for kind in MODULE_FAMILIES]},
+                             sort_keys=True).encode())
 
 
 def checked_caches(root, caches):
     """Never let a cache exclusion hide tracked files or declared outputs."""
     tracked = [root / os.fsdecode(p) for p in git(root, "ls-files", "-z").split(b"\0") if p]
-    protected = tracked + [root / a.path for a in ARTIFACTS]
+    protected = tracked + [root / a.path for a in inventory(root)]
     result = []
     for raw in caches:
         path = Path(raw)
@@ -252,7 +308,7 @@ def state(root, caches):
 
 def snapshot(root, tier, caches):
     root = repository(root)
-    selected = select(tier)
+    selected = select(tier, root=root)
     for item in selected:
         path = root / item.path
         if path.resolve() != path:
@@ -268,25 +324,33 @@ def check(root, saved):
     if (saved.get("schema") != 1 or saved.get("root") != str(root)
             or saved.get("manifest") != manifest_digest()):
         raise ValueError("snapshot schema, root, or manifest changed")
-    selected = select(saved["tier"])
+    selected = select(saved["tier"], root=root)
     before = saved["before"]
     after = state(root, saved["caches"])
     changes = sorted(p for p in before["files"].keys() | after["files"].keys()
                      if before["files"].get(p) != after["files"].get(p))
     allowed = {a.path for a in selected}
-    unexpected = sorted(set(changes) - allowed)
+    # A split artifact's module file may also appear or disappear, when the
+    # selected tier writes that artifact; `family_errors` below then requires
+    # the regenerated hub to name exactly the files that are there.
+    writes_families = any(a.path == f"{family_dir(kind)}/{table_modules.MOD_RS}"
+                          for a in selected for kind in MODULE_FAMILIES)
+    unexpected = sorted(p for p in set(changes) - allowed
+                        if not (writes_families and is_family_member(p)))
     invalid = [a.path for a in selected if not (root / a.path).is_file()
                or (root / a.path).resolve() != root / a.path]
-    if unexpected or invalid or before["identity"] != after["identity"]:
+    inconsistent = family_errors(root) if writes_families else []
+    if unexpected or invalid or inconsistent or before["identity"] != after["identity"]:
         raise ValueError(f"regeneration write-set rejected: unexpected={unexpected}; "
                          f"missing/nonregular/symlink outputs={invalid}; "
+                         f"inconsistent split tables={inconsistent}; "
                          f"HEAD/index changed={before['identity'] != after['identity']}")
     return changes
 
 
 def diff_committed(root, tier):
     root = repository(root)
-    paths = [a.path for a in select(tier)]
+    paths = [a.path for a in select(tier, root=root)]
     for path in paths:
         # git diff alone ignores a new output with no committed counterpart.
         git(root, "cat-file", "-e", f"HEAD:{path}")
@@ -317,12 +381,12 @@ def main():
     args = parser.parse_args()
     args.root = args.root.resolve()
     try:
-        validate()
+        validate(root=args.root)
         if args.command == "paths":
-            for item in select(args.tier, args.kind, args.producer):
+            for item in select(args.tier, args.kind, args.producer, root=args.root):
                 print(args.root / item.path if args.absolute else item.path)
         elif args.command == "path":
-            matches = [a for a in ARTIFACTS if a.key == args.key]
+            matches = [a for a in inventory(args.root) if a.key == args.key]
             if len(matches) != 1:
                 raise ValueError(f"unknown artifact key: {args.key}")
             print(args.root / matches[0].path)
