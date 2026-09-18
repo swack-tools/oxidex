@@ -2,10 +2,13 @@
 """Bucket a samply (Firefox processed-profile JSON, gzip) by pipeline stage.
 
 Three views over every sample of every thread:
-  stage   -- inclusive ownership: walking each stack ROOT->LEAF, the first
-             frame matching a stage regex claims the sample (so a malloc under
-             the IFD engine counts as "engine", and JSON formatting under the
-             CLI counts as "json").
+  stage   -- inclusive ownership: a sample with ANY frame inside a generated
+             engine (ifd/binary/serial/keyed, cond/exprs) is the engine's, since
+             the engines are always reached through a hand parser and the
+             question is how much the engines cost; otherwise, walking the
+             stack ROOT->LEAF, the first frame matching a stage regex claims
+             the sample (a malloc under Composite counts as "composite", JSON
+             formatting under the CLI counts as "json").
   leaf    -- self time: the leaf frame's function (top N).
   alloc   -- share of samples whose LEAF is inside the allocator (malloc/free/
              realloc/_nanov2_/szone) regardless of stage.
@@ -118,7 +121,10 @@ def main():
             if leaf_lib in ALLOC_LIBS: alloc_c["allocator (libsystem_malloc leaf)"] += w
             elif "memmove" in leaf or "memcpy" in leaf or "memset" in leaf: alloc_c["memmove/memcpy/memset leaf"] += w
             owner = None
-            for f in funcs:  # root -> leaf: outermost tier-1 stage claims it
+            for f in reversed(funcs):  # leaf -> root: an engine frame anywhere wins
+                hit = next((n for n, r in STAGE_RE if n.startswith("engine:") and r.search(f)), None)
+                if hit: owner = hit; break
+            for f in (funcs if owner is None else []):  # root -> leaf: outermost tier-1 stage claims it
                 hit = next((n for n, r in STAGE_RE if r.search(f)), None)
                 if hit: owner = hit; break
             if owner is None:

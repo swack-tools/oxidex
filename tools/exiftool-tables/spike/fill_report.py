@@ -38,21 +38,21 @@ for scen, label in [("canon_jpg", "(a) Canon.jpg `-j -a -G1`"), ("nikon_nef", "(
                     ("corpus_parallel", "(c) 194-file t/images `-j -a -G1`, oxidex rayon 10 cores"),
                     ("corpus_1thread", "(c') same, oxidex `RAYON_NUM_THREADS=1`"), ("noop", "process floor")]:
     res = hf(scen)
-    ox = next((r for r in res if "oxidex" in r["command"]), None)
-    et = next((r for r in res if "exiftool" in r["command"]), None)
+    ox = next((r for r in res if "target/release/oxidex" in r["command"]), None)
+    et = next((r for r in res if "/exiftool " in r["command"] + " " and "target/release/oxidex" not in r["command"]), None)
     if scen == "corpus_1thread" and et is None:
-        et = next(r for r in hf("corpus_parallel") if "exiftool" in r["command"])
+        et = next(r for r in hf("corpus_parallel") if "target/release/oxidex" not in r["command"])
     ratio = et["median"] / ox["median"] if (ox and et) else None
     ratio_min = et["min"] / ox["min"] if (ox and et) else None
     ratios[scen] = ratio
     ld = loads.get(scen, {})
     for r in res:
-        rr = f"**{ratio:.2f}x**; {ratio_min:.2f}x" if (ratio and "oxidex" in r["command"]) else ""
+        rr = f"**{ratio:.2f}x**; {ratio_min:.2f}x" if (ratio and "target/release/oxidex" in r["command"]) else ""
         cv = 100 * r["stddev"] / r["mean"]
         rows.append(f"| {label} | `{short(r['command'])}` | {ms(r['median']):.1f} ms | {ms(r['min']):.1f} ms | {ms(r['mean']):.1f} ± {ms(r['stddev']):.1f} ({cv:.0f} %) | {ms(r['max']):.1f} ms | {len(r['times'])} | {ld.get('before', '?')} -> {ld.get('after', '?')} | {rr} |")
         label = ""
 HF_TABLE = "\n".join(rows)
-noop_ox = next(r for r in hf("noop") if "oxidex" in r["command"])["median"]
+noop_ox = next(r for r in hf("noop") if "target/release/oxidex" in r["command"])["median"]
 
 # ---- stages ----------------------------------------------------------------
 def tsv(name):
@@ -135,7 +135,7 @@ V = {
 }
 # stub ms comes from the benchmark refresh run if present
 try:
-    V["STUB_MS"] = f"{ms(next(r for r in json.load(open(os.path.join(ROOT, 'benches/benchmark_results.json')))['single_file']['results'] if 'oxidex' in r['command'])['median']):.1f}"
+    V["STUB_MS"] = f"{ms(next(r for r in json.load(open(os.path.join(ROOT, 'benches/benchmark_results.json')))['single_file']['results'] if 'target/release/oxidex' in r['command'])['median']):.1f}"
 except Exception:
     pass
 s = open(TPL).read()

@@ -21,7 +21,7 @@ settle() {
 # Machine state around a timed run: load1/5/15 and the top 5 CPU consumers.
 snap() {
   echo "[$1] $(uptime)"
-  ps -Ao pcpu,args -r | head -6 | sed "s/^/[$1]   /" | cut -c1-140
+  ps -Ao pcpu,args -r | sed -n '1,6p' | sed "s/^/[$1]   /" | cut -c1-140
 }
 settle
 echo "=== bench refresh start $(date -u +%FT%TZ) ==="; echo "uptime before: $(uptime)"
