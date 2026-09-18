@@ -11,6 +11,15 @@ mod tables;
 
 use tables::FITS_TAG_NAMES;
 
+/// ProcessFITS's float test (FITS.pm, 13.59), which gates its `tr/DE/e/`:
+/// `/^[+-]?(?=\d|\.\d)\d*(\.\d*)?([ED]([+-]?\d+))?$/`. The lookahead is
+/// spelled as its two cases (a leading digit, or `.` then a digit); ASCII
+/// digits only, as on Perl byte strings; `\n?` is Perl's `$`.
+static FITS_FLOAT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[ED][+-]?[0-9]+)?\n?\z")
+        .expect("static regex is valid")
+});
+
 const FITS_RECORD_SIZE: usize = 80;
 const FITS_BLOCK_SIZE: usize = 2880;
 
@@ -101,11 +110,12 @@ impl FITSParser {
         if value.is_empty() {
             None
         } else {
-            // FITS permits Fortran D exponents; ExifTool renders both D and E
-            // using an `e` before passing the value on.
-            let normalized_number = value.replace(['D', 'E'], "e");
-            let value = if normalized_number.parse::<f64>().is_ok() {
-                normalized_number
+            // FITS permits Fortran D exponents. ProcessFITS (FITS.pm, 13.59)
+            // rewrites D and E to `e` only on a value its float pattern
+            // accepts, and otherwise keeps the text as read:
+            //   $val =~ tr/DE/e/ if $val =~ /^[+-]?(?=\d|\.\d)\d*(\.\d*)?([ED]([+-]?\d+))?$/;
+            let value = if FITS_FLOAT.is_match(value) {
+                value.replace(['D', 'E'], "e")
             } else {
                 value.to_string()
             };
@@ -139,16 +149,6 @@ impl FITSParser {
             }
         }
         name
-    }
-
-    fn tag_value(value: String) -> TagValue {
-        if let Ok(integer) = value.parse::<i64>() {
-            TagValue::Integer(integer)
-        } else if let Ok(float) = value.parse::<f64>() {
-            TagValue::Float(float)
-        } else {
-            TagValue::String(value)
-        }
     }
 
     /// Parses FITS header and extracts all metadata
@@ -218,9 +218,14 @@ impl FITSParser {
                             if !value.is_empty() {
                                 // Same table and family-1 group as the
                                 // COMMENT/HISTORY arm above: `FITS`.
+                                // ProcessFITS hands HandleTag the card's text
+                                // itself, so the value stays a string: `-j`
+                                // then prints `2000.0` and `1.000e-06` exactly
+                                // as the header spells them (a parsed f64
+                                // would print `2000` and `1e-06`).
                                 metadata.insert(
                                     format!("FITS:{}", Self::tag_name(&keyword)),
-                                    Self::tag_value(value),
+                                    TagValue::String(value),
                                 );
                             }
                         }
@@ -1457,8 +1462,8 @@ mod tests {
         ]));
 
         let metadata = FITSParser.parse(&reader).unwrap();
-        assert_eq!(metadata.get_integer("FITS:Bitpix"), Some(8));
-        assert_eq!(metadata.get_integer("FITS:Naxis"), Some(0));
+        assert_eq!(metadata.get_string("FITS:Bitpix"), Some("8"));
+        assert_eq!(metadata.get_string("FITS:Naxis"), Some("0"));
         assert_eq!(metadata.get_string("FITS:CreateDate"), Some("28/01/97"));
         assert_eq!(
             metadata.get_string("FITS:ObservationTime"),
@@ -1467,6 +1472,41 @@ mod tests {
         assert_eq!(metadata.get_string("FITS:Timversn"), Some("XFF/95-004"));
         assert_eq!(metadata.get_string("FITS:Datasum"), Some("         0"));
         assert!(!metadata.keys().any(|name| name.ends_with("Comment")));
+    }
+
+    /// ProcessFITS passes each card's text to HandleTag, so pinned 13.59's
+    /// `-j` prints the header's own spelling (FITS.fits in the corpus:
+    /// `"FITS:Equinox": 2000.0`, `"FITS:Tierrela": 1.000e-06`). Parsing to
+    /// f64 printed `2000` / `1e-06`. The D/E rewrite applies only to a value
+    /// ProcessFITS's float pattern accepts. Every expectation below is what
+    /// the pinned oracle printed for these exact cards (2026-09-17).
+    #[test]
+    fn unquoted_values_keep_the_header_spelling() {
+        let reader = TestReader::new(fits(&[
+            "SIMPLE  =                    T",
+            "EQUINOX =               2000.0 / equinox",
+            "TIERRELA=            1.000E-06 / relative error",
+            "MJDREFF =   6.965740740000D-04 / fraction",
+            "DEC_OBJ =       -7.20808030E+01",
+            "SEQ     =                  007",
+            "HALF    =                  .5D1",
+            "DOTS    =                 .5.3E1",
+            "LOWER   =               1.5d3",
+            "END",
+        ]));
+        let metadata = FITSParser.parse(&reader).unwrap();
+        for (tag, expected) in [
+            ("FITS:Equinox", "2000.0"),
+            ("FITS:Tierrela", "1.000e-06"),
+            ("FITS:Mjdreff", "6.965740740000e-04"),
+            ("FITS:DecObj", "-7.20808030e+01"),
+            ("FITS:Seq", "007"),
+            ("FITS:Half", ".5e1"),
+            ("FITS:Dots", ".5.3E1"),
+            ("FITS:Lower", "1.5d3"),
+        ] {
+            assert_eq!(metadata.get_string(tag), Some(expected), "{tag}");
+        }
     }
 
     /// The gate used to be a bare six-byte `b"SIMPLE"` comparison, which
