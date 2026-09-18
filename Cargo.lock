@@ -1172,6 +1172,7 @@ dependencies = [
  "quick-xml",
  "rayon",
  "regex",
+ "regex-syntax",
  "serde",
  "serde_json",
  "serde_yaml",
