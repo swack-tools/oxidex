@@ -14,7 +14,7 @@ and a Rust protocol that extracts nothing. These tests pin that:
 * the pinned 13.59 artifacts are unchanged (see also test_garmin_fit_specs.py,
   which replays the committed ledger and Rust byte-for-byte).
 
-`fixtures/garmin_fit_module_absent_11_78.json` is the real capture of the
+`testdata/garmin_fit_module_absent_11_78_fact.json` is the real capture of the
 11.78 source tree (Perl 5.38.2). Set OXIDEX_ABSENT_EXIFTOOL_LIB to an
 ExifTool lib without Garmin.pm (and EXIFTOOL_PERL) to recapture it live.
 """
@@ -37,7 +37,7 @@ import join_catalog_hydrated as join
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CAPTURE = HERE / "capture_garmin_fit_fact.pl"
-ABSENT_FACT = HERE / "fixtures" / "garmin_fit_module_absent_11_78.json"
+ABSENT_FACT = HERE / "testdata" / "garmin_fit_module_absent_11_78_fact.json"
 BOUNDED = HERE / "fixtures" / "garmin_fit_source.json"
 LEDGER = HERE / "garmin_fit_ledger.json"
 RUST = ROOT / "src" / "exiftool_tables" / "fit_tables.rs"
