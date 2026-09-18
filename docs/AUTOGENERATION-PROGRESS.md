@@ -53,6 +53,19 @@ the generated monoliths; `expr_coverage.py` denominator fix (its frame omits
 v2 step 1 (`Session` + top helpers on `Exif::Main`), gated by #814 and
 re-measured by the generated-share census.
 
+### Later on 2026-09-18
+
+Merged after the checkpoint above: #816 (plan + v2 design), #817 (coverage
+spike), #818 (last rehearsal blocker), #819 / #820 (docs audit, tag-domain
+pages regenerated to 931 tables / 16,684 tags), #821 / #825 (benchmarks
+against pinned 13.59: 3.0x per file, 1.83x per core, 6.15x with rayon;
+Composite allocation dominates, dispatch is 0.66%), #822 (snapshot: 2,378
+proven reads, +113, 0 lost), #823 (generated tables split per module, every
+item byte-identical), #824 (v2 step 1: `Session` + 17 helpers, 7,380 probes,
+0 mismatches), #826 (first end-to-end rehearsal: generate/verify/build pass
+with 2 interventions per release; tests and writes fail -- see the plan's
+next checkpoint).
+
 ## Record through 2026-09-14 (previous checkpoint, PR #764)
 
 Latest landed checkpoint at that time: PR #764 squash-merged as
