@@ -20,7 +20,7 @@ Compare a CI number only with other runs of the same workflow.
 
 ## Committed measurement (#821)
 
-| | |
+| Item | Detail |
 | --- | --- |
 | Instrument | `benches/exiftool_comparison.sh` with `benches/instrument_check.py`; hyperfine 1.20.0, `--warmup 5 --runs 30 -N`, both commands in one invocation |
 | OxiDex | commit `8f04e288`, oxidex 1.2.1 built with the shipped `[profile.release]` (fat LTO, `codegen-units=1`) |
