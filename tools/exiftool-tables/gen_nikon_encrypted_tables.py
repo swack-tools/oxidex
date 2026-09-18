@@ -6,6 +6,11 @@ This is deliberately a small, audited translator for the runtime DSL in
 enum labels, table graph, and root alternatives all come from the loaded
 Nikon/NikonCustom declarations.  A field or expression outside that DSL is a
 hard error before the destination is opened.
+
+Admission is by content, never by the dump's ExifTool version label (see
+"Content gate" below): the label only names the release in the header.  A
+table or callback that differs from the modeled form is either an explicitly
+recorded omission for that exact content, or a refusal.
 """
 from __future__ import annotations
 
@@ -100,6 +105,171 @@ NIKON_ENCRYPTED_CALLBACKS = {
   },
  },
 }
+
+# ---------------------------------------------------------------------------
+# Content gate.  No ExifTool version label admits or refuses a source here: the
+# label only names the release in the generated header.  A source is admitted
+# because the executable facts this generator models match an approved form
+# byte-for-byte (the exact-body pins above), or match an *explicitly captured*
+# historical form whose difference from the approved form is itself proven
+# below.  Everything else is refused or, where recorded, omitted -- never
+# approximated.
+#
+# A captured form is admitted by two layers, the same shape as
+# `final_scalar_stage.py` / `setnewvalue_convinv_recipes.py`:
+#   1. its whole B::Deparse body is pinned by exact sha256 (the key);
+#   2. an operand proof: rewriting the captured body's whitespace-stripped
+#      text with exactly the recorded (old, new) regions -- each present exactly
+#      once -- must reproduce the approved form's whitespace-stripped text,
+#      pinned by `approved_compact_sha256`.  So the listed regions are the
+#      *complete* difference, and each region carries the reason it cannot
+#      change what the generated reader computes, or the `effect` render must
+#      then prove absent from the admitted table graph.
+# Regions are compared on raw deparse text with whitespace removed, never on
+# `native_reader_facts.body_tokens`, whose tokenizer reads a Perl division `/`
+# as a regex opener and can fold thousands of characters into one token.
+
+def _compact(text): return re.sub(r'\s+','',text)
+
+CAPTURED_FORMS = {
+ # ExifTool 12.64 `PrepareNikonOffsets` (Nikon.pm), captured with the canonical
+ # Perl 5.38.2 B::Deparse.  It predates `AlwaysDecrypt`: it resolves every
+ # present offset tag through GetTagInfo and always warns on a short section.
+ # With no `AlwaysDecrypt` row in the admitted graph the two statements are the
+ # 13.59 statements (the 12.64 `my` inside `and` is undef whenever it is not
+ # executed: it is cleared at each iteration exit and never assigned otherwise),
+ # so render requires exactly that.
+ ('Image::ExifTool::Nikon::PrepareNikonOffsets','0f5574b63dcf0fa65f6dd56a8763cd61841633b51a6c2e6f8cf40d4cd0b3e008'): {
+  'approved':'0451602b9206b6f48dfce8f69640edba38ef1b51322d6b4fe54b2c7761f79153',
+  'approved_compact_sha256':'976572adff6d3b3325b882fa24a0f9837e37644e098c7b4c6218ee8ae1fb89b3',
+  'effects':frozenset({'no_always_decrypt'}),
+  'delta':(
+   ('($tagTablePtr->{$pos}and(my($tagInfo)=$et->GetTagInfo($tagTablePtr,$pos)));',
+    "(my($tagInfo)=$tagTablePtr->{$pos});(($tagInfoandnot(((ref($tagInfo)eq'HASH')&&$tagInfo->{'AlwaysDecrypt'})))and($tagInfo=$et->GetTagInfo($tagTablePtr,$pos)));"),
+   ('$et->Warn(("Datatooshortfor$tagInfo->{\'Name\'}"),1);',
+    '($tagInfo->{\'AlwaysDecrypt\'}or$et->Warn(("Datatooshortfor$tagInfo->{\'Name\'}"),1));'),
+  ),
+ },
+ # ExifTool 12.64 `ProcessBinaryData` (ExifTool.pm).  Reader-inert regions:
+ # $binVal/SaveBin and TAG_EXTRA/RATIONAL storage (options and side tables the
+ # generated reader never consults), VerboseDir/VPrint ordering (verbose
+ # only), and the ustring/ustr32 decoder name (both formats are outside
+ # `FORMATS`, so such a row is already refused).  The one reader-visible
+ # region is `NotDup`: 12.64 does not exempt a fixed-Start subdirectory from
+ # ProcessDirectory's duplicate-address guard, so render proves no admitted
+ # fixed-Start subdirectory can reach an already-registered address.
+ ('Image::ExifTool::ProcessBinaryData','0c4d7794890ffe64cbfa74b0740762d74954e63f48bb828dc5956e34fe4f55d0'): {
+  'approved':'6bcec56a8e09306bf25044e734e138581153361197ad42f96ca8789b4aea6357',
+  'approved_compact_sha256':'0b6255c787a42431a1c4516f5eb58728ac4b69e2b20b4916e156c7fe8a3548b1',
+  'effects':frozenset({'no_notdup'}),
+  'delta':(
+   ('my(@tags,$topIndex);','my(@tags,$topIndex,$binVal);'),
+   ("($verboseand$self->VerboseDir('BinaryData',(undef),$size));",
+    "($verboseand$self->VerboseDir('BinaryData',(undef),$size,GetByteOrder));"),
+   ('my($tagInfo,$val,$saveNextIndex,$len,$mask,$wasVar,$rational);',
+    'my($tagInfo,$val,$saveNextIndex,$len,$mask,$wasVar,$rational,$offAdj);'),
+   ("((($formateq'ustring')||($formateq'ustr32'))and($val=$self->Decode($val,'UCS2')));",
+    "((($formateq'ustring')||($formateq'ustr32'))and($val=$self->Decode($val,'UTF16')));"),
+   ("(($formateq'undef')or($val=~s/\\0.*//s));}",
+    "(($formateq'undef')or($val=~s/\\0.*//s));}($self->{'OPTIONS'}{'SaveBin'}and($binVal=substr($$dataPt,($entry+$dirStart),$count)));"),
+   ('$self->VPrint(2,sprintf(("$self->{\'INDENT\'}[offsetsadjustedby${sign}0x%.4xafter0x%.4x$tagInfo->{\'Name\'}]\\n"),$tmp,$index));',
+    '($offAdj=sprintf(("$self->{\'INDENT\'}[offsetsadjustedby${sign}0x%.4xafter0x%.4x$tagInfo->{\'Name\'}]\\n"),$tmp,$index));'),
+   ("$self->VerboseInfo($index,$tagInfo,'Table',$tagTablePtr,'Value',$val,'DataPt',$dataPt,'Size',$len,'Start',($entry+$dirStart),'Addr',((($entry+$dirStart)+$base)+$dataPos),'Format',$format,'Count',$count,'Extra',($mask?sprintf(',mask0x%.2x',$mask):(undef)));}",
+    "$self->VerboseInfo($index,$tagInfo,'Table',$tagTablePtr,'Value',$val,'DataPt',$dataPt,'Size',$len,'Start',($entry+$dirStart),'Addr',((($entry+$dirStart)+$base)+$dataPos),'Format',$format,'Count',$count,'Extra',($mask?sprintf(',mask0x%.2x',$mask):(undef)));}($offAdjand$self->VPrint(2,$offAdj));"),
+   ("(my($start)=($subdir->{'Start'}||0));","(my($start)=($subdir->{'Start'}||0));my($notDup);"),
+   ('($start+=($dirStart+$entry));','($start+=($dirStart+$entry));($notDup=1);'),
+   ("(my(%subdirInfo)=('DataPt',$dataPt,'DataPos',$dataPos,'DataLen',$dataLen,'DirStart',$start,'DirLen',$len,'Base',$subdirBase));",
+    "(my(%subdirInfo)=('DataPt',$dataPt,'DataPos',$dataPos,'DataLen',$dataLen,'DirStart',$start,'DirLen',$len,'Base',$subdirBase,'NotDup',$notDup));"),
+   ("(defined($rational)and($self->{'RATIONAL'}{$key}=$rational));",
+    "(defined($rational)and($self->{'TAG_EXTRA'}{$key}{'Rational'}=$rational));(defined($binVal)and($self->{'TAG_EXTRA'}{$key}{'BinVal'}=$binVal));"),
+  ),
+ },
+}
+
+def captured_form(name, body):
+ """Return the effects of an explicitly captured form, proving its delta first."""
+ pair=(name,hashlib.sha256(body.encode()).hexdigest())
+ form=CAPTURED_FORMS.get(pair)
+ if form is None: return None
+ text=_compact(body)
+ for old,new in form['delta']:
+  if text.count(old)!=1: fail(f'{name}: captured form {pair[1]} lacks its recorded region exactly once')
+  text=text.replace(old,new)
+ if hashlib.sha256(text.encode()).hexdigest()!=form['approved_compact_sha256']:
+  fail(f'{name}: captured form {pair[1]} does not rewrite to approved form {form["approved"]}')
+ return form['effects']
+
+# Encrypted callbacks recorded as *not modeled*.  Every root that dispatches to
+# one keeps its place in Condition order (so a later variant is never selected
+# in its stead) but is emitted with `encrypted: None`, which extracts nothing,
+# and its table graph is not generated.  The closure is still pinned exactly,
+# so a changed body is refused rather than silently omitted.
+OMITTED_CALLBACKS = {
+ # ExifTool 11.78 `ProcessNikonEncrypted`: decrypts only `DecryptLen` bytes
+ # (extended by an eval'd `DecryptMore` expression) unless Verbose > 2 or
+ # Unknown > 1, then walks the whole block, so tags past that length read
+ # ciphertext; it has no InitEncryptedSubdir/PrepareNikonOffsets, and its
+ # `Decrypt($dataPt,$serial,$count,$start,$len)` is not the incremental 13.59
+ # routine.  `encrypted.rs` decrypts the whole block and models none of that.
+ ('Image::ExifTool::Nikon::ProcessNikonEncrypted','35930e654bfc9f184963c27af373d0ac618468aff58f4b4e3b8b2d069c80425a'): {
+  'source_file':'Image/ExifTool/Nikon.pm',
+  'reason':'DecryptLen/DecryptMore partial decryption (ExifTool 11.78 form) is not modeled by encrypted.rs',
+  'dependencies': {
+   'Image::ExifTool::Nikon::Decrypt': {
+    'body_sha256':'dc1920dce4b3d4048212d4dd677bcf918726015b64a97b4f1dd241f4ef02dc55',
+    'source_file':'Image/ExifTool/Nikon.pm',
+   },
+   'Image::ExifTool::Nikon::SetByteOrder': {
+    'name':'Image::ExifTool::SetByteOrder',
+    'body_sha256':'b09a10c46f0800e2a2d1bc8cde1269fa205300e62f0d5bf7358d6a57ac2c8d4d',
+    'source_file':'Image/ExifTool.pm',
+   },
+  },
+ },
+}
+
+# Tables recorded as omitted, keyed by (module, table, sha256 of the table's
+# canonical JSON) and mapped to the exact refusal the table produces.  An entry
+# is honoured only for that exact content, and only while the table still
+# refuses with exactly that message: a table that became renderable, or that
+# refuses for a new reason, is a hard error.  An omitted table's rows and
+# graph are not generated; a parent row pointing at it is kept for Condition
+# selection and its Hook, but extracts nothing.
+OMITTED_TABLES = {
+ # Captured from the ExifTool 12.64 source (tables-12.64.json, Perl 5.38.2
+ # dump).  Each refuses under the 13.59-derived DSL; nothing is emitted for it.
+ ('Nikon','LensData0800','bf7c3c5c3b19a2f9c29a9da69819623fe2e69983b95f9dc2ca710918689af6c8'): {
+  'refusal_sha256':'12021cb6930a3844860554e0ff281db6d243fd1d63431b9d84795950a0175c72',
+  'note':'FocusDistance PrintConv keyed on FocusDistanceRangeWidth has no runtime operation',
+ },
+ ('Nikon','MenuSettingsZ9','fa2da2d776c7569107dae9430dbe4e0415f86dcf5259f1d6e30fd9b6dce25f7c'): {
+  'refusal_sha256':'f16641de39e64fd17e8cde176e7ebc7bc63e06711f2a8895f54ffeafeaad9090',
+  'note':'Condition `$$self{AFAraMode} = 2` is an assignment, outside the Condition DSL',
+ },
+ ('Nikon','MenuSettingsZ9v3','136d0dfbab339d5d1a170cb381d60deebf58fc5f28d46a48cd53fd23efb75f0f'): {
+  'refusal_sha256':'f16641de39e64fd17e8cde176e7ebc7bc63e06711f2a8895f54ffeafeaad9090',
+  'note':'Condition `$$self{AFAraMode} = 2` is an assignment, outside the Condition DSL',
+ },
+ ('Nikon','MenuSettingsZ9v4','a9261ddce7dc1e0698e33f72d1e318ffd094108979756c060e9d86ee78204934'): {
+  'refusal_sha256':'f16641de39e64fd17e8cde176e7ebc7bc63e06711f2a8895f54ffeafeaad9090',
+  'note':'Condition `$$self{AFAraMode} = 2` is an assignment, outside the Condition DSL',
+ },
+ ('Nikon','Offset13InfoZ9','7d2805e950aa9c043fa59b7a01aa90da5ac643f1d6d940197250a631ed01f01c'): {
+  'refusal_sha256':'feb578516a90c2ba01f7af482a74130a747cf0f64385719c4c03494cf90461a6',
+  'note':'AFAreaInitialXPosition multi-statement PrintConv has no runtime operation',
+ },
+ ('Nikon','SeqInfoZ9','e4bf2cd6b4f0ca2a636acde1372c8ba96615c22fe3df669ca7c46722e70c44e1'): {
+  'refusal_sha256':'95bf5179097709d2134825d48680553cfb308f80fdc42d3ffdb3a36b81498a1d',
+  'note':'FocusShiftShooting "Frame N of M" PrintConv has no runtime operation',
+ },
+}
+
+def refusal_digest(error):
+ return hashlib.sha256(str(error).encode()).hexdigest()
+
+def table_digest(t):
+ return hashlib.sha256(json.dumps(t,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+
 SPECIAL_PC = {
  '1e7ef329fc2f1932e8487471a4ca9bb29feba8e0c97bd9d10d2328b6bae8c082':'BlockShotBits',
  'fe6312fde652899325bd7fed73115e385b6e3526e114266a2e2e32ccd07007e1':'AutoCaptureCriteriaBits',
@@ -189,7 +359,8 @@ def rust_regex(pattern):
   return conds._validate_regex_pattern(pattern,ascii_source_only=True)
  except conds.CondCompileError as error:
   fail(f'regex outside shared Rust-compatible grammar: {pattern!r}: {error}')
-def code(v):
+def code_shape(v):
+ """Validate a dumped CODE fact's shape and provenance; return its name."""
  base={'__perl','__opaque','__name','__deparse'}
  provenance={'resolved','source_file','source_sha256'}
  allowed=base|provenance|{'dependencies','lexical_arrays'}
@@ -197,8 +368,18 @@ def code(v):
  present=set(v)&provenance
  if present and (present != provenance or v['resolved'] is not True or not isinstance(v['source_file'],str) or not re.fullmatch(r'[A-Za-z0-9_./-]+',v['source_file']) or v['source_file'].startswith('/') or '..' in v['source_file'].split('/') or not isinstance(v['source_sha256'],str) or not re.fullmatch(r'[0-9a-f]{64}',v['source_sha256'])): fail(f'bad CODE provenance: {v!r}')
  if 'dependencies' in v and (not isinstance(v['dependencies'],dict) or not v['dependencies']): fail(f'bad CODE dependencies: {v!r}')
- pair=(v.get('__name'),hashlib.sha256(v.get('__deparse','').encode()).hexdigest())
- if pair not in CODE: fail(f'unregistered native CODE body: {pair[0]!r} {pair[1]}')
+ return v['__name']
+
+def code(v, effects=None):
+ """Admit an exactly registered body, or a captured form whose effect the caller enforces."""
+ name=code_shape(v)
+ pair=(name,hashlib.sha256(v['__deparse'].encode()).hexdigest())
+ if pair in CODE: return name
+ found=captured_form(name,v['__deparse']) if pair in CAPTURED_FORMS else None
+ if found is None: fail(f'unregistered native CODE body: {pair[0]!r} {pair[1]}')
+ # A captured form is admitted only where its effect is then enforced.
+ if effects is None: fail(f'{pair[0]}: captured form {pair[1]} outside an enforcing context')
+ effects.update(found)
  return pair[0]
 
 def decrypt_xlat(fact):
@@ -219,9 +400,11 @@ def decrypt_xlat(fact):
   fail('Nikon Decrypt: @xlat digest mismatch')
  return raw
 
-def encrypted_callback(v):
- name=code(v); pair=(name,hashlib.sha256(v['__deparse'].encode()).hexdigest())
- expected=NIKON_ENCRYPTED_CALLBACKS.get(pair)
+def encrypted_callback(v, effects, contracts=None):
+ if contracts is None: contracts=NIKON_ENCRYPTED_CALLBACKS
+ name=code(v,effects) if contracts is NIKON_ENCRYPTED_CALLBACKS else code_shape(v)
+ pair=(name,hashlib.sha256(v['__deparse'].encode()).hexdigest())
+ expected=contracts.get(pair)
  if expected is None: fail(f'unregistered encrypted callback: {name!r}')
  if v['source_file']!=expected['source_file']:
   fail(f'{name}: source provenance changed')
@@ -233,9 +416,10 @@ def encrypted_callback(v):
  for helper,contract in expected_deps.items():
   fact=deps.get(helper)
   if fact is None: fail(f'{name}: missing helper {helper!r}')
-  actual=code(fact)
+  actual=code(fact,effects) if contracts is NIKON_ENCRYPTED_CALLBACKS else code_shape(fact)
   digest=hashlib.sha256(fact['__deparse'].encode()).hexdigest()
-  if (actual!=contract.get('name',helper) or digest!=contract['body_sha256']
+  captured=CAPTURED_FORMS.get((actual,digest),{}).get('approved') if contracts is NIKON_ENCRYPTED_CALLBACKS else None
+  if (actual!=contract.get('name',helper) or contract['body_sha256'] not in (digest,captured)
       or fact['source_file']!=contract['source_file']):
    fail(f'{name}: unregistered helper body or source {helper!r} {digest}')
   if fact['source_file']=='Image/ExifTool/Nikon.pm' and fact['source_sha256']!=v['source_sha256']:
@@ -362,10 +546,35 @@ def pc(row, maps):
    return out.format(m.group(1)) if '{}' in out else out
  fail(f'unregistered PrintConv: {s!r}')
 
-HEADER='''//! Nikon encrypted binary-data tables -- generated, do not hand-edit.\n//!\n//! Every row below was read out of ExifTool's own `%Image::ExifTool::Nikon::*`\n//! and `%Image::ExifTool::NikonCustom::*` hashes in-process (ExifTool 13.59),\n//! so the offsets, masks, formats, Conditions and PrintConv tables are\n//! ExifTool's rather than retyped. A tag whose Condition or conversion is not\n//! one of the forms [`super::binary_data`] implements is omitted entirely\n//! rather than emitted with a guessed value.\n\nuse super::binary_data::{\n    BinTable, BinTag, Cond, Dm, Encrypted, Filter, Fmt, Hook, NumCmp, Pc, Raw, Root, StrCmp,\n    SubDir, SubStart, Vc,\n};\n'''
+HEADER='''//! Nikon encrypted binary-data tables -- generated, do not hand-edit.\n//!\n//! Every row below was read out of ExifTool's own `%Image::ExifTool::Nikon::*`\n//! and `%Image::ExifTool::NikonCustom::*` hashes in-process (ExifTool @RELEASE@),\n//! so the offsets, masks, formats, Conditions and PrintConv tables are\n//! ExifTool's rather than retyped. A tag whose Condition or conversion is not\n//! one of the forms [`super::binary_data`] implements is omitted entirely\n//! rather than emitted with a guessed value.\n\nuse super::binary_data::{\n    BinTable, BinTag, Cond, Dm, Encrypted, Filter, Fmt, Hook, NumCmp, Pc, Raw, Root, StrCmp,\n    SubDir, SubStart, Vc,\n};\n'''
+ENCRYPTED_ROOT_KEYS = {'TagTable','DecryptStart','DirOffset','ByteOrder','ProcessProc','WriteProc'}
+
+def release_label(data):
+ """The dump's release label, used only to name the source in the header.
+
+ It never admits or refuses content: a source is judged by the facts it
+ carries.  A missing or malformed label refuses only because the generated
+ header could not then say which release it was read from.
+ """
+ label=data.get('exiftool_version')
+ if not isinstance(label,str) or not re.fullmatch(r'[0-9]+\.[0-9]+',label):
+  fail(f'malformed ExifTool release label {label!r}')
+ return label
+
+def callback_kind(fact, effects):
+ """Verify a root callback closure; return ('modeled'|'omitted', @xlat)."""
+ name=code_shape(fact); pair=(name,hashlib.sha256(fact['__deparse'].encode()).hexdigest())
+ if pair in OMITTED_CALLBACKS:
+  return 'omitted',encrypted_callback(fact,effects,OMITTED_CALLBACKS)[1]
+ name,lookup=encrypted_callback(fact,effects)
+ if name!='Image::ExifTool::Nikon::ProcessNikonEncrypted':fail('unexpected root process')
+ return 'modeled',lookup
+
+def closure_key(fact):
+ return (fact.get('__name'),hashlib.sha256(fact.get('__deparse','').encode()).hexdigest(),fact.get('source_file'),fact.get('source_sha256'))
 
 def render(data):
- if data.get('exiftool_version')!='13.59':fail('wrong ExifTool version')
+ label=release_label(data)
  mods=data.get('modules',{}); nik=mods.get('Nikon',{}).get('tables',{}); custom=mods.get('NikonCustom',{}).get('tables',{})
  if not nik or not custom:fail('missing Nikon modules')
  def table(full):
@@ -382,11 +591,32 @@ def render(data):
   if sum(name==identity[1] for _,name in names)==1:
    return identity[1].upper()
   return '_'.join(identity).upper()
- roots=[]; queue=[]; decrypt_lookup=None
+ omission={}
+ def omitted_table(identity):
+  if identity not in omission:
+   omission[identity]=OMITTED_TABLES.get((*identity,table_digest(selected(identity))))
+  return omission[identity]
+ effects=set()
+ root_groups=[]
  for tag,which in [('145','SHOT_INFO_ROOTS'),('151','COLOR_BALANCE_ROOTS'),('152','LENS_DATA_ROOTS')]:
   group=nik.get('Main',{}).get('tags',{}).get(tag)
   if not group:fail(f'missing Nikon::Main[{tag}]')
-  variants=group.get('_variants',[group]); out=[]
+  root_groups.append((tag,which,group.get('_variants',[group])))
+ # Every root ProcessProc closure is verified first, so a DecryptStart-only
+ # root -- whose table's PROCESS_PROC carries no helper graph -- binds to a
+ # closure proven on another root rather than to a bare body hash.
+ verified={}; decrypt_lookup=None
+ for _,_,variants in root_groups:
+  for row in variants:
+   sd=row.get('SubDirectory')
+   if isinstance(sd,dict) and 'ProcessProc' in sd:
+    kind,lookup=callback_kind(sd['ProcessProc'],effects)
+    verified[closure_key(sd['ProcessProc'])]=kind
+    if decrypt_lookup is None: decrypt_lookup=lookup
+    elif decrypt_lookup!=lookup: fail('Nikon roots disagree about Decrypt @xlat')
+ roots=[]; queue=[]; omitted_roots=[]; skipped=set()
+ for tag,which,variants in root_groups:
+  out=[]
   for row in variants:
    sd=row.get('SubDirectory'); name=row.get('Name'); c=row.get('Condition')
    if not isinstance(sd,dict) or not isinstance(name,str):fail('bad root variant')
@@ -405,23 +635,37 @@ def render(data):
      counts='&['+', '.join(str(value) for value in vals)+']'
     else:fail(f'unsupported root guard {guard!r}')
    full=sd.get('TagTable'); tname,t=table(full)
-   encrypted=None
+   encrypted=None; note=None
    if 'ProcessProc' in sd or 'DecryptStart' in sd:
-    if 'ProcessProc' in sd:
-     callback,lookup=encrypted_callback(sd['ProcessProc'])
-     if callback!='Image::ExifTool::Nikon::ProcessNikonEncrypted':fail('unexpected root process')
-     if decrypt_lookup is None: decrypt_lookup=lookup
-     elif decrypt_lookup!=lookup: fail('Nikon roots disagree about Decrypt @xlat')
-    queue.append(tname)
-    order=sd.get('ByteOrder'); bo={'BigEndian':'Some(true)','LittleEndian':'Some(false)',None:'None'}.get(order)
-    if bo is None:fail(f'bad root ByteOrder {order!r}')
-    encrypted=f'Some(Encrypted {{ table: {{TABLE:{tname[0]}:{tname[1]}}}, decrypt_start: {u(sd.get("DecryptStart",0))}, dir_offset: {u(sd.get("DirOffset",0))}, byte_order: {bo} }})'
-   out.append((name,ver,cap,counts,encrypted))
+    kind='modeled'; callback=sd.get('ProcessProc')
+    if callback is not None:
+     kind=verified[closure_key(callback)]
+    else:
+     proc=t.get('meta',{}).get('PROCESS_PROC')
+     if isinstance(proc,dict) and proc.get('__name')=='Image::ExifTool::Nikon::ProcessNikonEncrypted':
+      code_shape(proc); callback=proc
+      kind=verified.get(closure_key(proc))
+      if kind is None:fail(f'{name}: table PROCESS_PROC is not bound to a verified callback closure')
+    if kind=='omitted':
+     note=OMITTED_CALLBACKS[closure_key(callback)[:2]]['reason']
+    elif omitted_table(tname) is not None:
+     skipped.add(tname)
+     note=f'{tname[0]}::{tname[1]}: {omitted_table(tname)["note"]}'
+    else:
+     extra=set(sd)-ENCRYPTED_ROOT_KEYS
+     if extra:fail(f'{name}: unmodeled encrypted SubDirectory keys {sorted(extra)}')
+     queue.append(tname)
+     order=sd.get('ByteOrder'); bo={'BigEndian':'Some(true)','LittleEndian':'Some(false)',None:'None'}.get(order)
+     if bo is None:fail(f'bad root ByteOrder {order!r}')
+     encrypted=f'Some(Encrypted {{ table: {{TABLE:{tname[0]}:{tname[1]}}}, decrypt_start: {u(sd.get("DecryptStart",0))}, dir_offset: {u(sd.get("DirOffset",0))}, byte_order: {bo} }})'
+    if note is not None: omitted_roots.append(name)
+   out.append((name,ver,cap,counts,encrypted,note))
   roots.append((tag,which,out))
  seen=set()
  while queue:
   n=queue.pop()
-  if n in seen:continue
+  if n in seen or n in skipped:continue
+  if omitted_table(n) is not None: skipped.add(n); continue
   seen.add(n); t=selected(n)
   for _,g in sorted(t.get('tags',{}).items(),key=lambda x: float(x[0])):
    for row in g.get('_variants',[g]):
@@ -429,17 +673,20 @@ def render(data):
     if sd:
      child,_=table(sd.get('TagTable')); queue.append(child)
  names=sorted(seen); idx={n:i for i,n in enumerate(names)}; maps={}; rows={}
- # Enum declaration order follows the loaded native hashes.  Tags themselves
- # are emitted in ProcessBinaryData numeric order below.
- for n in names:
-  t=selected(n)
-  for _,g in sorted(t.get('tags',{}).items(),key=lambda x: float(x[0])):
+
+ def prepass(n, maps):
+  for _,g in sorted(selected(n).get('tags',{}).items(),key=lambda x: float(x[0])):
    for row in g.get('_variants',[g]):
-    if not omitted(row) and 'PrintConv' in row: pc(row,maps)
- for n in names:
+    if not omitted(row) and not silent(row) and 'PrintConv' in row: pc(row,maps)
+
+ def silent(row):
+  sd=row.get('SubDirectory')
+  return isinstance(sd,dict) and omitted_table(table(sd.get('TagTable'))[0]) is not None
+
+ def render_rows(n, child_index, maps, effects):
   t=selected(n); meta=t.get('meta',{})
   for k in ('CHECK_PROC','PROCESS_PROC','WRITE_PROC'):
-   if k in meta:code(meta[k])
+   if k in meta:code(meta[k],effects)
   proc=meta.get('PROCESS_PROC')
   if proc is not None and proc.get('__name') not in ('Image::ExifTool::ProcessBinaryData','Image::ExifTool::Nikon::ProcessNikonEncrypted'):fail(f'{n}: bad PROCESS_PROC')
   if set(meta)-{'CHECK_PROC','PROCESS_PROC','WRITE_PROC','WRITABLE','FIRST_ENTRY','GROUPS','NOTES','FORMAT','DATAMEMBER','IS_SUBDIR','VARS'}:fail(f'{n}: unsupported meta')
@@ -474,12 +721,13 @@ def render(data):
      rf=FORMATS[z.group(1)];count=u(z.group(2) or 1)
     mask=u(row.get('Mask',0)); shift=(mask & -mask).bit_length()-1 if mask else 0
     if 'BitShift' in row and u(row['BitShift'])!=shift:fail(f'{n}[{key}]: explicit BitShift')
-    sd=row.get('SubDirectory'); sub='None'
+    sd=row.get('SubDirectory'); sub='None'; quiet=None
     if sd is not None:
      if not isinstance(sd,dict) or set(sd)-{'TagTable','Start'}:fail(f'{n}[{key}]: bad SubDirectory')
      child,_=table(sd.get('TagTable')); start={'$val':'Val','$dirStart + $val':'DirStartPlusVal'}.get(sd.get('Start'),'Fixed(0)' if sd.get('Start') is None else None)
      if start is None:fail(f'{n}[{key}]: bad SubDirectory Start')
-     sub=f'Some(SubDir {{ table: {idx[child]}, start: SubStart::{start} }})'
+     quiet=omitted_table(child)
+     if quiet is None: sub=f'Some(SubDir {{ table: {child_index(child)}, start: SubStart::{start} }})'
     hook='Hook::None'
     h=row.get('Hook')
     if h is not None:
@@ -488,11 +736,42 @@ def render(data):
      elif (q:=re.fullmatch(r'\$varSize \+= (\d+) if \$\$self\{Model\} =~ /(.+)/ and \$\$self\{FirmwareVersion\} and \$\$self\{FirmwareVersion\} ge "([^"]+)"',h)):hook=f'Hook::AddIfModelAndFirmwareGe({u(q.group(1))}, {rs(rust_regex(q.group(2)))}, {rs(q.group(3))})'
      elif n==('Nikon','MenuSettingsZ8v2') and key=='0' and h==MENU_SETTINGS_Z8V2_HOOK:hook='Hook::MenuSettingsZ8v2'
      else:fail(f'{n}[{key}]: unsupported Hook')
+    if quiet is not None:
+     # The child table is a recorded omission.  Keep this variant so it still
+     # wins Condition selection and applies its Hook, but extract nothing:
+     # `unknown` rows are skipped before any conversion or state update.
+     out.append(f'    // {child[0]}::{child[1]} omitted: {quiet["note"]}')
+     out.append(f'    BinTag {{ index: {m.group(1)}, frac: {m.group(2) or 0}, name: {rs(name)}, cond: {cond(row.get("Condition"))}, fmt: Fmt::{rf}, count: {count}, mask: 0x{mask:x}, shift: {shift}, raw: Raw::None, filter: Filter::None, vc: Vc::None, pc: Pc::None, hook: {hook}, print_hex: false, unknown: true, low_priority: false, subdir: None }},')
+     continue
     rawv,filterv=raw(expr(row,'RawConv')); unknown=flag(row.get('Unknown',False),'Unknown'); low=low_priority(row.get('Priority'))
     out.append(f'    BinTag {{ index: {m.group(1)}, frac: {m.group(2) or 0}, name: {rs(name)}, cond: {cond(row.get("Condition"))}, fmt: Fmt::{rf}, count: {count}, mask: 0x{mask:x}, shift: {shift}, raw: {rawv}, filter: {filterv}, vc: {vc(expr(row,"ValueConv"))}, pc: {pc(row,maps)}, hook: {hook}, print_hex: {flag(row.get("PrintHex",False),"PrintHex")}, unknown: {unknown}, low_priority: {low}, subdir: {sub} }},')
-  rows[n]=out
+  return out
+
+ # A recorded omission holds only while the table still refuses, and refuses
+ # for exactly the recorded reason; otherwise it is stale and is itself refused.
+ for n in sorted(skipped):
+  try:
+   scratch={}; prepass(n,scratch); render_rows(n, lambda child: 0, scratch, set())
+  except Unsupported as error:
+   if refusal_digest(error)!=omitted_table(n)['refusal_sha256']:
+    fail(f'{n}: recorded omission no longer matches; table now refuses with {refusal_digest(error)}: {str(error)[:200]!r}')
+  else: fail(f'{n}: recorded omission is stale: the table renders')
+ # Enum declaration order follows the loaded native hashes.  Tags themselves
+ # are emitted in ProcessBinaryData numeric order below.
+ for n in names:
+  t=selected(n)
+  try: prepass(n,maps)
+  except Unsupported as error:
+   error.table=n
+   raise
+ for n in names:
+  try: rows[n]=render_rows(n, lambda child: idx[child], maps, effects)
+  except Unsupported as error:
+   error.table=n
+   raise
+ enforce_captured_effects(effects, names, selected, table)
  # Root tables refer to numeric indices after the graph is fixed.
- text=[HEADER]
+ text=[HEADER.replace('@RELEASE@',label)]
  if decrypt_lookup is not None:
   for name,offset in (('XLAT0',0),('XLAT1',256)):
    values=', '.join(f'0x{value:02x}' for value in decrypt_lookup[offset:offset+256])
@@ -515,11 +794,51 @@ def render(data):
  text.append('];')
  for tag,which,out in roots:
   text += ['',f'/// `Nikon::Main` 0x{int(tag):04x}, in ExifTool\'s Condition order.','#[rustfmt::skip]',f'pub static {which}: &[Root] = &[']
-  for name,ver,cap,counts,e in out:
+  for name,ver,cap,counts,e,note in out:
    en='None' if e is None else re.sub(r'\{TABLE:(Nikon|NikonCustom):(\w+)\}',lambda m:str(idx[(m.group(1),m.group(2))]),e)
+   if note is not None: text.append(f'    // omitted: {note}')
    text.append(f'    Root {{ name: {rs(name)}, version_re: {rs("^"+ver)}, cap_lt: {cap}, counts: {counts}, encrypted: {en} }},')
   text.append('];')
- return '\n'.join(text)+'\n',{'tables':len(names),'rows':sum(len(x) for x in rows.values()),'maps':len(maps)}
+ counts={'tables':len(names),'rows':sum(1 for x in rows.values() for r in x if not r.lstrip().startswith('//')),'maps':len(maps)}
+ if skipped: counts['omitted_tables']=len(skipped)
+ if omitted_roots: counts['omitted_roots']=len(omitted_roots)
+ return '\n'.join(text)+'\n',counts
+
+def enforce_captured_effects(effects, names, selected, table):
+ """Prove, over the admitted table graph, what each captured form's delta needs."""
+ unknown=set(effects)-{'no_always_decrypt','no_notdup'}
+ if unknown: fail(f'unenforced captured-form effects {sorted(unknown)}')
+ if 'no_always_decrypt' in effects:
+  for n in names:
+   for key,g in selected(n).get('tags',{}).items():
+    if any('AlwaysDecrypt' in row for row in g.get('_variants',[g])):
+     fail(f'{n}[{key}]: AlwaysDecrypt under the captured pre-AlwaysDecrypt PrepareNikonOffsets form')
+ if 'no_notdup' in effects:
+  # Without NotDup, ProcessDirectory refuses a fixed-Start subdirectory whose
+  # address is already registered.  Admit that form only where the table graph
+  # cannot produce such an address: (1) a fixed-Start subdirectory at byte 0
+  # of its parent (the parent's own address) needs the parent's
+  # VARS{ALLOW_REPROCESS}; (2) no table mixes fixed-Start with `$val`-Start
+  # subdirectories, whose data-chosen targets could land on a fixed one; and
+  # (3) a fixed-Start subdirectory's table has no subdirectories of its own.
+  for n in names:
+   t=selected(n); inc={'int8u':1,'int16u':2}.get(t['meta'].get('FORMAT','int8u'),1)
+   kinds=set()
+   for key,g in t.get('tags',{}).items():
+    for row in g.get('_variants',[g]):
+     sd=row.get('SubDirectory')
+     if not isinstance(sd,dict): continue
+     start=sd.get('Start')
+     if isinstance(start,str) and '$' in start: kinds.add('value'); continue
+     kinds.add('fixed')
+     offset=float(key)*inc+u(start if start is not None else 0)
+     if offset==0 and not t['meta'].get('VARS',{}).get('ALLOW_REPROCESS'):
+      fail(f'{n}[{key}]: fixed-Start subdirectory at its parent address without ALLOW_REPROCESS under the captured pre-NotDup ProcessBinaryData form')
+     child,ct=table(sd.get('TagTable'))
+     if any(isinstance(r.get('SubDirectory'),dict) for cg in ct.get('tags',{}).values() for r in cg.get('_variants',[cg])):
+      fail(f'{n}[{key}]: fixed-Start subdirectory {child} has subdirectories under the captured pre-NotDup ProcessBinaryData form')
+   if kinds=={'value','fixed'}:
+    fail(f'{n}: mixes fixed-Start and $val-Start subdirectories under the captured pre-NotDup ProcessBinaryData form')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('dump',type=Path);p.add_argument('-o','--output',required=True,type=Path);a=p.parse_args()

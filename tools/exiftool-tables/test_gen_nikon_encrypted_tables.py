@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -378,6 +379,270 @@ class NikonEncryptedGeneratorTests(unittest.TestCase):
         z8v2["1"] = z8v2.pop("0")
         with self.assertRaises(generator.Unsupported):
             generator.render(changed)
+
+
+FORMS = json.loads((Path(__file__).with_name("testdata") / "nikon_encrypted_forms.json").read_text())
+PBD = "Image::ExifTool::ProcessBinaryData"
+PNO = "Image::ExifTool::Nikon::PrepareNikonOffsets"
+
+
+def real_closure_fixture(callback_release, pbd_release=None, label="13.59"):
+    """The unit fixture, driven by a captured release's real callback closure.
+
+    Every encrypted root dispatches through that closure and the table uses
+    that release's (or `pbd_release`'s) real ProcessBinaryData body.
+    """
+    data = fixture()
+    data["exiftool_version"] = label
+    for ident in ("145", "151", "152"):
+        data["modules"]["Nikon"]["tables"]["Main"]["tags"][ident]["SubDirectory"]["ProcessProc"] = \
+            copy.deepcopy(FORMS[callback_release]["callback"])
+    data["modules"]["Nikon"]["tables"]["Test"]["meta"]["PROCESS_PROC"] = \
+        copy.deepcopy(FORMS[pbd_release or callback_release]["process_binary_data"])
+    return data
+
+
+def without_header_label(text):
+    return re.sub(r"in-process \(ExifTool [0-9.]+\)", "in-process (ExifTool <label>)", text)
+
+
+class ContentGateTests(unittest.TestCase):
+    """The version label is provenance text; only modeled content admits or refuses."""
+
+    def test_byte_identical_relabelled_source_is_admitted(self):
+        baseline, counts = generator.render(real_closure_fixture("13.59"))
+        self.assertIn("in-process (ExifTool 13.59)", baseline)
+        for label in ("99.99", "12.64", "11.78", "13.60"):
+            with self.subTest(label=label):
+                text, relabelled_counts = generator.render(real_closure_fixture("13.59", label=label))
+                self.assertIn(f"in-process (ExifTool {label})", text)
+                self.assertEqual(without_header_label(text), without_header_label(baseline))
+                self.assertEqual(relabelled_counts, counts)
+
+    def test_13_59_label_with_changed_modeled_content_is_refused(self):
+        """The label the old gate required is present; the content is not the approved form."""
+        generator.render(real_closure_fixture("13.59"))
+        mutations = {
+            "callback body": lambda d: d["modules"]["Nikon"]["tables"]["Main"]["tags"]["152"]["SubDirectory"]["ProcessProc"],
+            "PrepareNikonOffsets helper": lambda d: d["modules"]["Nikon"]["tables"]["Main"]["tags"]["152"]["SubDirectory"]["ProcessProc"]["dependencies"][PNO],
+            "Decrypt helper": lambda d: d["modules"]["Nikon"]["tables"]["Main"]["tags"]["152"]["SubDirectory"]["ProcessProc"]["dependencies"]["Image::ExifTool::Nikon::Decrypt"],
+            "ProcessBinaryData": lambda d: d["modules"]["Nikon"]["tables"]["Test"]["meta"]["PROCESS_PROC"],
+        }
+        for what, locate in mutations.items():
+            with self.subTest(what=what):
+                data = real_closure_fixture("13.59")
+                self.assertEqual(data["exiftool_version"], "13.59")
+                fact = locate(data)
+                fact["__deparse"] = fact["__deparse"].replace("{", "{ 1;", 1)
+                with self.assertRaises(generator.Unsupported):
+                    generator.render(data)
+
+    def test_malformed_label_refuses_only_for_header_provenance(self):
+        for label in (None, "", "latest", 13.59):
+            with self.subTest(label=label):
+                data = real_closure_fixture("13.59")
+                data["exiftool_version"] = label
+                with self.assertRaisesRegex(generator.Unsupported, "malformed ExifTool release label"):
+                    generator.render(data)
+
+    def test_12_64_captured_forms_are_admitted_and_rewrite_to_approved(self):
+        approved, approved_counts = generator.render(real_closure_fixture("13.59"))
+        captured, captured_counts = generator.render(real_closure_fixture("12.64", label="12.64"))
+        # 12.64's PrepareNikonOffsets and ProcessBinaryData are captured forms;
+        # every other modeled body is byte-identical, so the artifact is too.
+        self.assertEqual(without_header_label(captured), without_header_label(approved))
+        self.assertEqual(captured_counts, approved_counts)
+        for fact in (FORMS["12.64"]["callback"]["dependencies"][PNO], FORMS["12.64"]["process_binary_data"]):
+            with self.subTest(name=fact["__name"]):
+                form = generator.CAPTURED_FORMS[(fact["__name"], hashlib.sha256(fact["__deparse"].encode()).hexdigest())]
+                approved_fact = (FORMS["13.59"]["callback"]["dependencies"][PNO] if fact["__name"] == PNO
+                                 else FORMS["13.59"]["process_binary_data"])
+                self.assertEqual(hashlib.sha256(approved_fact["__deparse"].encode()).hexdigest(), form["approved"])
+                self.assertEqual(hashlib.sha256(generator._compact(approved_fact["__deparse"]).encode()).hexdigest(),
+                                 form["approved_compact_sha256"])
+                self.assertTrue(generator.captured_form(fact["__name"], fact["__deparse"]))
+
+    def test_captured_form_requires_its_complete_recorded_delta(self):
+        fact = FORMS["12.64"]["process_binary_data"]
+        key = (fact["__name"], hashlib.sha256(fact["__deparse"].encode()).hexdigest())
+        original = generator.CAPTURED_FORMS[key]
+        self.addCleanup(generator.CAPTURED_FORMS.__setitem__, key, original)
+        # Dropping a region leaves an unexplained difference from the approved form.
+        generator.CAPTURED_FORMS[key] = dict(original, delta=original["delta"][:-1])
+        with self.assertRaisesRegex(generator.Unsupported, "does not rewrite to approved form"):
+            generator.captured_form(*key[:1], fact["__deparse"])
+        # A region that is not present exactly once is not the captured body.
+        generator.CAPTURED_FORMS[key] = dict(original, delta=original["delta"] + (("}", "}"),))
+        with self.assertRaisesRegex(generator.Unsupported, "lacks its recorded region exactly once"):
+            generator.captured_form(*key[:1], fact["__deparse"])
+
+    def test_captured_form_is_never_admitted_without_its_effect_enforced(self):
+        with self.assertRaisesRegex(generator.Unsupported, "outside an enforcing context"):
+            generator.code(copy.deepcopy(FORMS["12.64"]["process_binary_data"]))
+        effects = set()
+        generator.code(copy.deepcopy(FORMS["12.64"]["process_binary_data"]), effects)
+        self.assertEqual(effects, {"no_notdup"})
+
+    def test_pre_always_decrypt_prepare_offsets_refuses_always_decrypt_rows(self):
+        for release, admitted in (("13.59", True), ("12.64", False)):
+            with self.subTest(release=release):
+                data = real_closure_fixture(release)
+                data["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["AlwaysDecrypt"] = 1
+                if admitted:
+                    generator.render(data)
+                else:
+                    with self.assertRaisesRegex(generator.Unsupported, "pre-AlwaysDecrypt PrepareNikonOffsets"):
+                        generator.render(data)
+
+    def test_pre_notdup_binary_data_refuses_reachable_duplicate_addresses(self):
+        def with_child(release, start=None, allow_reprocess=False, extra=None):
+            data = real_closure_fixture("13.59", pbd_release=release)
+            tables = data["modules"]["Nikon"]["tables"]
+            sub = {"TagTable": "Image::ExifTool::Nikon::Child"}
+            if start is not None:
+                sub["Start"] = start
+            tables["Test"]["tags"]["0"] = {"Name": "ChildDir", "SubDirectory": sub}
+            if allow_reprocess:
+                tables["Test"]["meta"]["VARS"] = {"ALLOW_REPROCESS": 1}
+            tables["Child"] = {"meta": {"FORMAT": "int8u"}, "tags": {"1": {"Name": "ChildTag"}}}
+            if extra:
+                extra(tables)
+            return data
+
+        # 13.59 passes NotDup, so the fixed-Start child at its parent's address is processed.
+        generator.render(with_child("13.59"))
+        # 12.64 does not: the same child is a duplicate address unless the parent allows it.
+        with self.assertRaisesRegex(generator.Unsupported, "without ALLOW_REPROCESS"):
+            generator.render(with_child("12.64"))
+        generator.render(with_child("12.64", allow_reprocess=True))
+        # A fixed-Start child at a nonzero offset cannot be its parent's address.
+        def at_two(tables):
+            tables["Test"]["tags"]["2"] = tables["Test"]["tags"].pop("0")
+        generator.render(with_child("12.64", extra=at_two))
+        # A data-chosen `$val` target beside a fixed one could coincide with it.
+        def mixed(tables):
+            tables["Test"]["tags"]["3"] = {"Name": "Other", "Format": "int32u", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Nikon::Child", "Start": "$val"}}
+        with self.assertRaisesRegex(generator.Unsupported, "mixes fixed-Start and \\$val-Start"):
+            generator.render(with_child("12.64", allow_reprocess=True, extra=mixed))
+        # A fixed-Start child with its own subdirectories could collide with a later sibling.
+        def nested(tables):
+            tables["Child"]["tags"]["2"] = {"Name": "Grandchild", "SubDirectory": {
+                "TagTable": "Image::ExifTool::Nikon::Leaf"}}
+            tables["Leaf"] = {"meta": {"FORMAT": "int8u"}, "tags": {}}
+        with self.assertRaisesRegex(generator.Unsupported, "has subdirectories"):
+            generator.render(with_child("12.64", allow_reprocess=True, extra=nested))
+
+    def test_11_78_callback_is_an_explicit_pinned_omission(self):
+        text, counts = generator.render(real_closure_fixture("11.78", pbd_release="13.59", label="11.78"))
+        self.assertEqual(counts, {"tables": 0, "rows": 0, "maps": 0, "omitted_roots": 3})
+        self.assertIn("pub static TABLES: &[BinTable] = &[\n];", text)
+        self.assertEqual(text.count("encrypted: None }"), 3)
+        self.assertEqual(text.count("// omitted: DecryptLen/DecryptMore partial decryption"), 3)
+        # The Rust runtime still links against the release's own @xlat bytes.
+        self.assertIn("pub static XLAT0: [u8; 256]", text)
+        # The omission pins the whole closure: a changed 11.78 helper refuses.
+        data = real_closure_fixture("11.78", pbd_release="13.59")
+        helper = data["modules"]["Nikon"]["tables"]["Main"]["tags"]["152"]["SubDirectory"]["ProcessProc"]["dependencies"]["Image::ExifTool::Nikon::Decrypt"]
+        helper["__deparse"] += " "
+        with self.assertRaisesRegex(generator.Unsupported, "unregistered helper body"):
+            generator.render(data)
+
+    def test_modeled_encrypted_root_keys_are_closed(self):
+        data = real_closure_fixture("13.59")
+        data["modules"]["Nikon"]["tables"]["Main"]["tags"]["152"]["SubDirectory"]["DecryptLen"] = "100"
+        with self.assertRaisesRegex(generator.Unsupported, "unmodeled encrypted SubDirectory keys \\['DecryptLen'\\]"):
+            generator.render(data)
+
+    def test_decryptstart_only_root_binds_to_a_verified_closure(self):
+        data = real_closure_fixture("13.59")
+        tables = data["modules"]["Nikon"]["tables"]
+        root = tables["Main"]["tags"]["145"]["SubDirectory"]
+        root.pop("ProcessProc")
+        tables["Shot"] = {"meta": {"FORMAT": "int8u"}, "tags": {"1": {"Name": "ShotTag"}}}
+        root["TagTable"] = "Image::ExifTool::Nikon::Shot"
+        proc = copy.deepcopy(FORMS["13.59"]["callback"])
+        proc.pop("dependencies")
+        tables["Shot"]["meta"]["PROCESS_PROC"] = proc
+        text, _ = generator.render(data)
+        self.assertIn('name: "ShotTag"', text)
+        proc["source_sha256"] = "0" * 64
+        with self.assertRaisesRegex(generator.Unsupported, "not bound to a verified callback closure"):
+            generator.render(data)
+
+
+class OmittedTableLedgerTests(unittest.TestCase):
+    def setUp(self):
+        # Cleanups run last-in first-out: empty the ledger, then restore it.
+        self.addCleanup(generator.OMITTED_TABLES.update, dict(generator.OMITTED_TABLES))
+        self.addCleanup(generator.OMITTED_TABLES.clear)
+        generator.OMITTED_TABLES.clear()
+
+    def unmodeled(self):
+        data = fixture()
+        tables = data["modules"]["Nikon"]["tables"]
+        tables["Parent"] = {"meta": {"FORMAT": "int8u"}, "tags": {
+            "4": {"Name": "Kid", "Condition": "$$self{FirmwareVersion}", "Hook": '$varSize += 4 if $$self{FirmwareVersion} and $$self{FirmwareVersion} ge "1.10"',
+                  "SubDirectory": {"TagTable": "Image::ExifTool::Nikon::Test"}},
+            "9": {"Name": "After"}}}
+        tables["Main"]["tags"]["145"]["SubDirectory"]["TagTable"] = "Image::ExifTool::Nikon::Parent"
+        tables["Test"]["tags"]["1"]["PrintConv"] = {"kind": "expr", "expr": "unmodeled($val)"}
+        return data
+
+    def record(self, data, name="Test", refusal=None):
+        table = data["modules"]["Nikon"]["tables"][name]
+        if refusal is None:
+            try:
+                generator.render(data)
+            except generator.Unsupported as error:
+                refusal = str(error)
+        generator.OMITTED_TABLES[("Nikon", name, generator.table_digest(table))] = {
+            "refusal_sha256": hashlib.sha256(refusal.encode()).hexdigest(), "note": "test omission"}
+
+    def test_unrecorded_unmodeled_table_is_a_hard_error(self):
+        with self.assertRaisesRegex(generator.Unsupported, "unregistered PrintConv"):
+            generator.render(self.unmodeled())
+
+    def test_recorded_exact_table_is_omitted_and_parent_row_stays_selected(self):
+        data = self.unmodeled()
+        self.record(data)
+        text, counts = generator.render(data)
+        self.assertEqual(counts["omitted_tables"], 1)
+        self.assertNotIn("TAGS_TEST", text)
+        self.assertIn("// Nikon::Test omitted: test omission", text)
+        kid = next(line for line in text.splitlines() if 'name: "Kid"' in line)
+        # Condition and Hook still apply; the row extracts nothing.
+        self.assertIn("cond: Cond::Truthy(Dm::FirmwareVersion)", kid)
+        self.assertIn('hook: Hook::AddIfFirmwareGe(4, "1.10")', kid)
+        self.assertIn("unknown: true", kid)
+        self.assertIn("subdir: None", kid)
+        self.assertIn('name: "After"', text)
+        # Pointed at directly by a root, the omission leaves that root inert.
+        direct = fixture()
+        direct["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["PrintConv"] = {"kind": "expr", "expr": "unmodeled($val)"}
+        generator.OMITTED_TABLES.clear()
+        self.record(direct)
+        text, counts = generator.render(direct)
+        self.assertEqual(counts["omitted_roots"], 3)
+        self.assertIn("// omitted: Nikon::Test: test omission", text)
+
+    def test_changed_content_is_not_covered_by_the_recorded_omission(self):
+        data = self.unmodeled()
+        self.record(data)
+        data["modules"]["Nikon"]["tables"]["Test"]["tags"]["1"]["Name"] = "Renamed"
+        with self.assertRaisesRegex(generator.Unsupported, "unregistered PrintConv"):
+            generator.render(data)
+
+    def test_stale_or_mismatched_omission_is_refused(self):
+        data = fixture()
+        self.record(data, refusal="whatever it used to be")
+        with self.assertRaisesRegex(generator.Unsupported, "recorded omission is stale"):
+            generator.render(data)
+        generator.OMITTED_TABLES.clear()
+        data = self.unmodeled()
+        self.record(data, refusal="a different refusal")
+        with self.assertRaisesRegex(generator.Unsupported, "no longer matches"):
+            generator.render(data)
 
 
 if __name__ == "__main__":
