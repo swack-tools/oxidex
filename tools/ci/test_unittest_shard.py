@@ -56,51 +56,68 @@ if __name__ == "__main__":
 
 
 class WorkflowWiringTests(unittest.TestCase):
-    """The shard count lives in three separate literals in `ci.yml`.
+    """`ci.yml`'s shard matrix must be the only place the count is written.
 
-    `verify-tables-tools` names itself `.../tools ${{ matrix.shard }}/8`,
-    enumerates `shard: [1..8]`, and passes `--of 8`. Nothing tied those
-    together, and a drift between them removes tests from CI *silently*:
-    every shard that does run still passes, so the job stays green. Measured
-    on this suite at `0f92071b` -- matrix `[1..8]` against `--of 10` runs
-    1,200 of 1,512 ids, dropping 312 (20.6%) with no failure anywhere.
+    `unittest_shard.py` partitions the suite against `--of`; the matrix decides
+    which partitions actually run. A second literal for the count lets those
+    drift, and the drift is *silent*: the shards that do run still pass, so the
+    job stays green while their tests never execute. Measured on this suite at
+    `0f92071b`, matrix `[1..8]` against a stray `--of 10` left 312 of 1512 ids
+    (20.6%) in no shard that runs, with no failure anywhere.
 
-    That is also the shape the sharding has to survive as the catalog grows:
-    `unittest_shard.py` discovers ids dynamically, so a new test module is
-    picked up on its own, but only if every shard index is actually run.
+    So `--of` is `${{ strategy.job-total }}` -- the matrix's own length -- and
+    these tests keep it that way. What remains to check is that the matrix
+    enumerates `1..len(matrix)`: `unittest_shard.py` rejects a shard index
+    above `--of` loudly, but a matrix that merely *skips* an index in range
+    would drop that partition quietly.
     """
 
     CI_YAML = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
     SUITE = pathlib.Path(__file__).resolve().parents[1] / "exiftool-tables"
+    JOB_TOTAL = "${{ strategy.job-total }}"
 
-    def wiring(self):
-        """-> (display_n, matrix_list, of_n) read from the shard job."""
+    def job(self):
         text = self.CI_YAML.read_text()
-        job = text.split("\n  verify-tables-tools:\n", 1)
-        self.assertEqual(len(job), 2, "verify-tables-tools job not found in ci.yml")
-        # The job ends at the next top-level job key.
-        body = re.split(r"\n  [a-z0-9-]+:\n", job[1], maxsplit=1)[0]
+        parts = text.split("\n  verify-tables-tools:\n", 1)
+        self.assertEqual(len(parts), 2, "verify-tables-tools job not found in ci.yml")
+        return re.split(r"\n  [a-z0-9-]+:\n", parts[1], maxsplit=1)[0]
 
-        display = re.search(r"name:.*?/\s*tools\s*\$\{\{\s*matrix\.shard\s*\}\}/(\d+)", body)
-        matrix = re.search(r"shard:\s*\[([0-9,\s]+)\]", body)
-        of = re.search(r"unittest_shard\.py[^\n]*--of\s+(\d+)", body)
-        for name, found in (("display name", display), ("matrix list", matrix), ("--of", of)):
-            self.assertIsNotNone(found, f"could not read the shard {name} from ci.yml")
-        return (
-            int(display.group(1)),
-            [int(n) for n in matrix.group(1).split(",")],
-            int(of.group(1)),
+    def matrix(self):
+        found = re.search(r"shard:\s*\[([0-9,\s]+)\]", self.job())
+        self.assertIsNotNone(found, "could not read the shard matrix from ci.yml")
+        return [int(n) for n in found.group(1).split(",")]
+
+    def test_the_shard_count_is_written_once_in_the_matrix(self):
+        body = self.job()
+        # Anchor on the invocation, not a prose mention of the same filename.
+        invocation = re.search(r"python3[^\n]*unittest_shard\.py[^\n]*--shard[^\n]*", body)
+        self.assertIsNotNone(invocation, "unittest_shard.py invocation not found")
+        self.assertIn(
+            '--of "$SHARD_TOTAL"',
+            invocation.group(0),
+            "--of must come from the matrix via $SHARD_TOTAL, never a second literal",
         )
+        self.assertRegex(
+            body,
+            r"SHARD_TOTAL:\s*\$\{\{\s*strategy\.job-total\s*\}\}",
+            "SHARD_TOTAL must be strategy.job-total, the matrix's own length",
+        )
+        self.assertNotRegex(
+            invocation.group(0),
+            r"--of\s+\d",
+            "a literal --of reintroduces the drift this job was rewired to remove",
+        )
+        self.assertIn(self.JOB_TOTAL, re.search(r"name:[^\n]*", body).group(0),
+                      "the display name should report strategy.job-total too")
 
-    def test_the_three_shard_count_literals_agree(self):
-        display_n, matrix_list, of_n = self.wiring()
+    def test_the_matrix_enumerates_every_index_from_one(self):
+        matrix = self.matrix()
         self.assertEqual(
-            matrix_list,
-            list(range(1, of_n + 1)),
-            "ci.yml's matrix must enumerate exactly 1..--of; any other list "
-            "leaves the missing shards' tests unrun while CI stays green",
+            matrix,
+            list(range(1, len(matrix) + 1)),
+            "the matrix must be 1..N with no gaps: strategy.job-total is its "
+            "length, so a skipped index leaves that partition's tests unrun",
         )
-        self.assertEqual(display_n, of_n, "the job's display name disagrees with --of")
 
     def test_the_committed_wiring_runs_every_discovered_test(self):
         """The invariant the other two guard, checked end to end.
@@ -109,35 +126,37 @@ class WorkflowWiringTests(unittest.TestCase):
         module added for newly-generated tags is discovered here and must land
         in one of the shards `ci.yml` actually runs.
         """
-        _, matrix_list, of_n = self.wiring()
-        suite = unittest.defaultTestLoader.discover(str(self.SUITE), pattern="test_*.py")
+        matrix = self.matrix()
+        # `top_level_dir` explicitly: the suite directory is not a package, and
+        # without it Python 3.9's loader raises "Start directory is not
+        # importable". CI runs this job on whatever python3 the image ships.
+        suite = unittest.defaultTestLoader.discover(
+            str(self.SUITE), pattern="test_*.py", top_level_dir=str(self.SUITE))
         tests = list(shard.flatten(suite))
         self.assertGreater(len(tests), 100, "discovery found almost nothing; wrong start dir?")
         weights = shard.weigh(tests, json.loads(
-            (pathlib.Path(__file__).with_name("unittest_weights.json")).read_text())["seconds"])
-        partitions = shard.partition(weights, of_n)
-        covered = {i for index in matrix_list for i in partitions[index - 1]}
+            pathlib.Path(__file__).with_name("unittest_weights.json").read_text())["seconds"])
+        partitions = shard.partition(weights, len(matrix))
+        covered = {i for index in matrix for i in partitions[index - 1]}
         missing = sorted(set(weights) - covered)
         self.assertEqual(
-            missing,
-            [],
-            f"{len(missing)} of {len(weights)} tools tests are in no shard ci.yml runs",
-        )
+            missing, [], f"{len(missing)} of {len(weights)} tools tests are in no shard ci.yml runs")
 
     def test_a_module_with_no_recorded_timing_still_lands_in_a_run_shard(self):
         """The growth case: tags generate a new test module, unweighted.
 
-        `weigh` gives an unknown module `DEFAULT_MODULE_SECONDS` *in total*
-        and spreads it across its tests, so its tests are partitioned like any
+        `weigh` gives an unknown module `DEFAULT_MODULE_SECONDS` *in total* and
+        spreads it across its tests, so its tests are partitioned like any
         other -- never dropped. Note the estimate is a module total, not a
-        per-test one: 50 new tests share 5 s, so a genuinely slow new module
-        is under-weighted until `unittest_weights.json` records it. That
-        misbalances a shard; it does not lose a test.
+        per-test one: 50 new tests share 5 s, so a genuinely slow new module is
+        under-weighted until `unittest_weights.json` records it. That
+        misbalances a shard against the 30-minute timeout; it does not lose a
+        test.
         """
-        _, matrix_list, of_n = self.wiring()
+        matrix = self.matrix()
         newcomers = [f"test_newly_generated_tags.Case.test_{i}" for i in range(50)]
         weights = shard.weigh([Fake(i) for i in newcomers], {})
         self.assertAlmostEqual(sum(weights.values()), shard.DEFAULT_MODULE_SECONDS)
-        partitions = shard.partition(weights, of_n)
-        covered = {i for index in matrix_list for i in partitions[index - 1]}
+        partitions = shard.partition(weights, len(matrix))
+        covered = {i for index in matrix for i in partitions[index - 1]}
         self.assertEqual(sorted(covered), sorted(newcomers))
