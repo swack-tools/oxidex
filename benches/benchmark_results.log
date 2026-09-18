@@ -1,0 +1,70 @@
+[single before]  6:42  up 12 days, 23:37, 1 user, load averages: 6.71 7.83 8.05
+[single before]    %CPU ARGS
+[single before]   117.0 /usr/libexec/icloudmailagent
+[single before]   100.1 /System/Applications/Mail.app/Contents/MacOS/Mail
+[single before]    73.4 /usr/libexec/spotlightknowledged.updater -u
+[single before]    59.4 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[single before]    39.3 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[single after]  6:42  up 12 days, 23:37, 1 user, load averages: 6.98 7.87 8.06
+[single after]    %CPU ARGS
+[single after]   119.1 /usr/libexec/icloudmailagent
+[single after]    86.3 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[single after]    79.7 /usr/libexec/spotlightknowledged.updater -u
+[single after]    35.4 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[single after]    15.7 /usr/sbin/cfprefsd agent
+[batch before]  6:42  up 12 days, 23:37, 1 user, load averages: 6.98 7.87 8.06
+[batch before]    %CPU ARGS
+[batch before]   119.1 /usr/libexec/icloudmailagent
+[batch before]    86.3 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[batch before]    79.7 /usr/libexec/spotlightknowledged.updater -u
+[batch before]    35.4 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[batch before]    15.7 /usr/sbin/cfprefsd agent
+[batch after]  6:43  up 12 days, 23:38, 1 user, load averages: 8.37 7.98 8.08
+[batch after]    %CPU ARGS
+[batch after]    99.3 /System/Applications/Mail.app/Contents/MacOS/Mail
+[batch after]    38.3 /usr/libexec/icloudmailagent
+[batch after]    27.6 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[batch after]    25.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[batch after]     4.8 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process --user-
+[write before]  6:43  up 12 days, 23:38, 1 user, load averages: 8.37 7.98 8.08
+[write before]    %CPU ARGS
+[write before]    99.3 /System/Applications/Mail.app/Contents/MacOS/Mail
+[write before]    38.3 /usr/libexec/icloudmailagent
+[write before]    27.6 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[write before]    25.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[write before]     4.8 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process --user
+[write after]  6:43  up 12 days, 23:38, 1 user, load averages: 8.02 7.91 8.06
+[write after]    %CPU ARGS
+[write after]   121.9 /usr/libexec/icloudmailagent
+[write after]   100.7 /System/Applications/Mail.app/Contents/MacOS/Mail
+[write after]    76.7 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[write after]    39.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[write after]     6.3 /System/Library/DriverExtensions/AppleCentauriAlpha.dext/AppleCentauriAlpha com.apple.driver.AppleCentauriAlpha 0x1000
+[detection before]  6:43  up 12 days, 23:38, 1 user, load averages: 8.02 7.91 8.06
+[detection before]    %CPU ARGS
+[detection before]   121.9 /usr/libexec/icloudmailagent
+[detection before]   100.7 /System/Applications/Mail.app/Contents/MacOS/Mail
+[detection before]    76.7 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[detection before]    39.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[detection before]     6.3 /System/Library/DriverExtensions/AppleCentauriAlpha.dext/AppleCentauriAlpha com.apple.driver.AppleCentauriAlpha 0
+[detection after]  6:43  up 12 days, 23:38, 1 user, load averages: 8.02 7.91 8.06
+[detection after]    %CPU ARGS
+[detection after]   121.0 /usr/libexec/icloudmailagent
+[detection after]   100.7 /System/Applications/Mail.app/Contents/MacOS/Mail
+[detection after]    62.8 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[detection after]    34.9 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[detection after]     5.1 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process --u
+[corpus before]  6:43  up 12 days, 23:38, 1 user, load averages: 8.02 7.91 8.06
+[corpus before]    %CPU ARGS
+[corpus before]   121.0 /usr/libexec/icloudmailagent
+[corpus before]   100.7 /System/Applications/Mail.app/Contents/MacOS/Mail
+[corpus before]    62.8 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
+[corpus before]    34.9 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[corpus before]     5.1 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process --use
+[corpus after]  6:44  up 12 days, 23:40, 1 user, load averages: 6.60 7.53 7.90
+[corpus after]    %CPU ARGS
+[corpus after]   120.8 /usr/libexec/icloudmailagent
+[corpus after]   100.3 /System/Applications/Mail.app/Contents/MacOS/Mail
+[corpus after]    38.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer -daemon
+[corpus after]    30.7 /Applications/BatteryMonitor.app/Contents/MacOS/BatteryMonitorPrivilegedHelper --interval 10
+[corpus after]    25.5 /Applications/CrashPlan.app/Contents/Library/LaunchServices/CrashPlanService.app/Contents/MacOS/CrashPlanService
