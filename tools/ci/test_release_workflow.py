@@ -15,6 +15,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -160,6 +161,27 @@ class DockerWorkflowTests(unittest.TestCase):
         step = self.meta_step()
         self.assertIn("type=ref,event=tag", step)
         self.assertIn("type=semver,pattern={{version}}", step)
+
+
+class CratesIoTests(unittest.TestCase):
+    """No tag push may reach crates.io while the root crate's name is unresolved.
+
+    The crates.io name `oxidex` belongs to another account. A publish step
+    run from a tag would upload the eight tag crates and then fail on the
+    root one, leaving a half-published release that can't be withdrawn
+    (crates.io only yanks). Publishing stays a manual, maintainer-run step
+    (docs/RELEASE-2.0.0-beta.1.md) until the name is settled. Lift these
+    two guards together, in the same change that settles the name.
+    """
+
+    def test_no_workflow_publishes_to_crates_io(self):
+        for wf in sorted(WORKFLOWS.glob("*.y*ml")):
+            with self.subTest(workflow=wf.name):
+                self.assertNotRegex(wf.read_text(), r"cargo\s+publish\b(?![^\n]*--dry-run)")
+
+    def test_root_crate_is_not_publishable(self):
+        with (REPO / "Cargo.toml").open("rb") as fh:
+            self.assertIs(tomllib.load(fh)["package"].get("publish"), False)
 
 
 if __name__ == "__main__":

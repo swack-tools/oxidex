@@ -22,6 +22,8 @@ recollection.
       entry covering this line (written on `staging/docs-overhaul`).
 - [ ] **Migration guide present.** The 1.x to 2.0 migration page exists and is
       linked from the docs site (written on `staging/docs-overhaul`).
+- [ ] **crates.io decision recorded.** One of options (a), (b) or (c) under
+      "crates.io" below is chosen, and the install instructions match it.
 - [ ] **Tag SHA chosen and frozen.** Record it: `SHA=$(git rev-parse origin/refactor/tag-machinery)`
       after the last merge you intend to ship. Every box below is about
       *this* SHA, not "the tip" at some other moment.
@@ -93,22 +95,65 @@ image is wanted, that is a separate maintainer decision about the gate.
 When a pre-release tag is on `main`, it now publishes only
 `:v2.0.0-beta.1` and `:2.0.0-beta.1` and never moves `:latest`.
 
-**crates.io.** No workflow publishes to crates.io, and a tag push doesn't
-publish crates. Two blockers stop the root crate `oxidex` from being
-published at all, whatever the version:
+**crates.io: not published by this release, and blocked for the root crate.**
+No workflow publishes to crates.io, and a tag push doesn't publish crates.
+`tools/ci/test_release_workflow.py` fails if any workflow gains a
+non-dry-run `cargo publish`, and the root `Cargo.toml` now carries
+`publish = false`, so a tag can't leave a half-published set of crates
+(crates.io only yanks, it never deletes). Checked 2026-09-18 against
+`https://crates.io/api/v1/crates/<name>` and `/owners`, with the probe
+validated on `serde` (200):
 
-- the name `oxidex` on crates.io belongs to another account (a 0.0.1
-  "reserved name stub" pointing at `oxidex-rs/oxidex`);
-- the packaged crate is 288.7 MiB (25.7 MiB compressed), and crates.io's
-  limit is 10 MiB.
+- **`oxidex`: taken, not ours.** It is 0.0.1, created 2025-08-12, owned by
+  crates.io user `qodeninja`, repository `github.com/oxidex-rs/oxidex`,
+  described as a "reserved name stub". `cargo publish` of the root crate
+  fails on ownership.
+- **`oxidex-tags`, `-core`, `-camera`, `-media`, `-image`, `-document`,
+  `-specialty`, `-shared`: free.** None exists (404 on the crate and its
+  owners), so nothing has been published under them by anyone, the
+  maintainer included.
+- **Size, independent of the name.** The root crate packages to 288.7 MiB
+  (25.7 MiB compressed) and crates.io's limit is 10 MiB. It needs an
+  `include`/`exclude` list whatever it's called (mostly test data).
 
-The tag crates are free names, small, and pass `cargo publish --dry-run`. If
-the maintainer decides to publish them, do it by hand, in dependency order
-(cargo does the ordering for you):
+The name is the maintainer's decision. The options:
+
+- [ ] **(a) Get the name transferred.** Ask `qodeninja` directly (the
+      `oxidex-rs/oxidex` repository is the contact point). If that goes
+      nowhere, crates.io's usage policy handles squatted placeholder crates
+      through help@crates.io, case by case and with no guaranteed outcome
+      or timeline. That rules it out as a blocker for a beta.
+- [ ] **(b) Publish under another name.** These are verified free on
+      crates.io's API and sparse index (both 404): `oxidex-rs`,
+      `oxidex-metadata`, `swack-oxidex`. Renaming is cheaper than it
+      sounds, because `Cargo.toml` already pins `[lib] name = "oxidex"` and
+      `[[bin]] name = "oxidex"`. Rust imports (`use oxidex::...`), the
+      `oxidex` binary, `liboxidex.{a,dylib,so}`, the C header and the
+      Python ctypes binding all stay as they are. What changes:
+      `[package] name` and `Cargo.lock`; `fuzz/Cargo.toml` and
+      `benches/spike/Cargo.toml` (`oxidex = { path = ... }` becomes
+      `oxidex = { package = "<new>", path = ... }`); every `-p oxidex` in
+      docs and `CLAUDE.md`; the install instructions (`cargo install <new>`
+      in `docs/guide/getting-started.md` and the CHANGELOG); and the
+      snippet in `src/parsers/magika_detector.rs` docs. The tag crates keep
+      their names.
+- [ ] **(c) No crates.io for the beta.** Ship the GitHub pre-release
+      binaries only. Rust users take a git dependency on the signed tag:
+      `oxidex = { git = "https://github.com/swack-tools/oxidex", tag = "v2.0.0-beta.1" }`.
+      This needs nothing else from this PR, and it is what happens by
+      default if no box above is ticked.
+
+Whichever is chosen, `docs/guide/getting-started.md` currently tells users
+to `cargo install oxidex`, and today that installs the other account's
+stub. It needs correcting before anyone is pointed at the beta.
+
+If the tag crates are published (under (a) or (b)), do it by hand. Cargo
+orders the crates by dependency, and `publish = false` keeps the root crate
+out:
 
 ```bash
-cargo publish --workspace --exclude oxidex --dry-run   # rehearse
-cargo publish --workspace --exclude oxidex             # publishes in this order:
+cargo publish --workspace --exclude oxidex --dry-run   # rehearse (passes today)
+cargo publish --workspace --exclude oxidex             # uploads in this order:
 # oxidex-tags-shared 0.1.0, oxidex-tags-core, -camera, -document, -image,
 # -media, -specialty, then oxidex-tags (all 2.0.0-beta.1)
 ```
