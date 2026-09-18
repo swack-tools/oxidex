@@ -6,7 +6,10 @@ Supersedes the *mechanism* in `AUTOGENERATION-PLAN.md`; that document's goal
 Numbers below name their instrument. The expression-coverage spike
 (`tools/exiftool-tables/spike/run_spike.py`, draft PR #817) landed 2026-09-18
 and its numbers are filled in; they reproduce byte-for-byte on a clean tree
-at `ed404074` against the 13.59 dump (sha256 `536386691b0d…`). The build order
+at `07d808a0` against the 13.59 dump (sha256 `536386691b0d…`), and are
+byte-identical under `PYTHONHASHSEED=1,2,3` (an earlier revision had
+seed-dependent top-N cutoffs at tied counts, which moved two boundary numbers;
+the committed report is the one to quote). The build order
 below is read off its curves, not chosen.
 
 ## Why the current mechanism cannot reach 100%
@@ -107,7 +110,7 @@ Passed by `&mut` through every walker; the `$self` equivalent.
 per key from every use site and refuses a key used inconsistently.
 
 **Measured (spike):** 285 distinct session keys. With the helper library in
-place, **13 / 53 / 192 keys reach 90 / 95 / 99%** of uses. By use count:
+place, **13 / 52 / 192 keys reach 90 / 95 / 99%** of uses. By use count:
 `$$self{Model}` 734, `$self` as object 270, `FacesDetected` 166, `Make` 117,
 `BitM` 96, `$count` 71, `$format` 66. Typed fields: `model`, `make`,
 `byte_order`, `count`, `format`; module-specific members (`FacesDetected`,
@@ -128,7 +131,7 @@ behaviour changed between releases.
 pinned source): 103 pure functions of their arguments, 52 read `$self`, 16
 drive the engine; plus 41 module-level data tables. With the session model,
 **6 / 22 / 113 helper ports reach 90 / 95 / 99%** of uses; session + top 25
-helpers takes Frame A from 75.4% to **97.1%** and distinct expressions from
+helpers takes Frame A from 75.4% to **96.9%** and distinct expressions from
 53.0% to **91.8%** -- the win is the long tail of one-off expressions. oxidex
 has **10 complete + 4 partial** ports today (partial = one branch only:
 `ConvertDateTime` as identity, `Decode`/UCS2, `ConvertFileSize` default
