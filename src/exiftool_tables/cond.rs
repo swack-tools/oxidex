@@ -477,17 +477,72 @@ fn perl_truthy(v: Option<&MemberValue>) -> bool {
     }
 }
 
+/// Compiled `Condition` regexes, one map per `ignore_case` flag (index 0 is
+/// case-sensitive, 1 is `/i`), keyed on the pattern text. `None` records a
+/// pattern that failed to build, so a bad literal is compiled once and then
+/// keeps failing closed without being recompiled on every evaluation.
+///
+/// Before this cache every [`Cond::eval`] rebuilt its regex from scratch, and
+/// the NFA/DFA construction inside `regex_automata` -- not the match -- was
+/// 3.3 % of a single `oxidex -j -a -G1 Canon.jpg` run
+/// (`benches/spike/DISPATCH_PERF.md`).
+///
+/// String-mode and byte-mode compilations live in two separate caches
+/// ([`STR_REGEXES`], [`BYTE_REGEXES`]) because the same pattern text means
+/// different things in each: `\xd7` is the codepoint U+00D7 in the first and
+/// the single byte 0xD7 in the second (see [`regex_match_bytes`]).
+///
+/// Bounded: every pattern reaching these helpers is a `&'static str` literal
+/// emitted by `conds.py` into the generated tables (the `pattern` field of
+/// [`Cond::MemberRegex`], [`Cond::ValPtRegex`] and [`Cond::FormatRegex`]),
+/// never text derived from file data, so the cache holds at most one entry
+/// per distinct (pattern, `ignore_case`) pair in the generated tables
+/// (`binary/`, `ifd/`, `keyed_tables.rs`, `serial_tables.rs`) -- 195 of them,
+/// across 536 uses, when this cache was added -- and never grows with the
+/// number of files read. The `Arc` lets a caller match outside the lock
+/// while sharing the regex's internal scratch-space pool; cloning a bare
+/// `regex::Regex` would give each clone a fresh, empty pool.
+type RegexCache<R> = std::sync::Mutex<[HashMap<String, Option<std::sync::Arc<R>>>; 2]>;
+
+static STR_REGEXES: std::sync::LazyLock<RegexCache<regex::Regex>> =
+    std::sync::LazyLock::new(Default::default);
+static BYTE_REGEXES: std::sync::LazyLock<RegexCache<regex::bytes::Regex>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Look `pattern` up in `cache`, compiling it with `build` (and recording a
+/// build failure as `None`) on the first request for that (pattern, flag).
+fn cached_regex<R>(
+    cache: &RegexCache<R>,
+    pattern: &str,
+    ignore_case: bool,
+    build: impl FnOnce() -> Result<R, regex::Error>,
+) -> Option<std::sync::Arc<R>> {
+    // A panic while holding the lock cannot leave a half-inserted entry, so a
+    // poisoned map is still a valid map.
+    let mut maps = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = &mut maps[usize::from(ignore_case)];
+    if let Some(hit) = map.get(pattern) {
+        return hit.clone();
+    }
+    let built = build().ok().map(std::sync::Arc::new);
+    map.insert(pattern.to_owned(), built.clone());
+    built
+}
+
 fn regex_match_str(pattern: &str, ignore_case: bool, subject: &str) -> bool {
-    match regex::RegexBuilder::new(pattern)
-        .case_insensitive(ignore_case)
-        .build()
-    {
-        Ok(re) => re.is_match(subject),
+    match cached_regex(&STR_REGEXES, pattern, ignore_case, || {
+        regex::RegexBuilder::new(pattern)
+            .case_insensitive(ignore_case)
+            .build()
+    }) {
+        Some(re) => re.is_match(subject),
         // `conds.py` validated `pattern` against the vetted subset before
         // emitting it; a build failure here would be a generator bug, not a
         // data problem. Fail closed (no match) rather than panic a metadata
         // reader over a malformed literal.
-        Err(_) => false,
+        None => false,
     }
 }
 
@@ -504,13 +559,14 @@ fn regex_match_str(pattern: &str, ignore_case: bool, subject: &str) -> bool {
 /// pattern is ASCII, which is why it never showed. Byte mode also makes
 /// `.`/`\w`/`\b` byte-wise, which is Perl's semantics on a byte string.
 fn regex_match_bytes(pattern: &str, ignore_case: bool, subject: &[u8]) -> bool {
-    match regex::bytes::RegexBuilder::new(pattern)
-        .unicode(false)
-        .case_insensitive(ignore_case)
-        .build()
-    {
-        Ok(re) => re.is_match(subject),
-        Err(_) => false,
+    match cached_regex(&BYTE_REGEXES, pattern, ignore_case, || {
+        regex::bytes::RegexBuilder::new(pattern)
+            .unicode(false)
+            .case_insensitive(ignore_case)
+            .build()
+    }) {
+        Some(re) => re.is_match(subject),
+        None => false,
     }
 }
 
@@ -667,6 +723,46 @@ mod tests {
             negate: false,
         };
         assert!(cond.eval(&mut ctx));
+    }
+
+    #[test]
+    fn regex_cache_compiles_each_pattern_and_flag_once_and_caches_failures() {
+        // A private cache, so parallel tests touching the global ones cannot
+        // disturb the counts.
+        let cache: RegexCache<regex::Regex> = RegexCache::default();
+        let mut builds = 0;
+        let mut lookup = |pattern: &str, ignore_case: bool| {
+            cached_regex(&cache, pattern, ignore_case, || {
+                builds += 1;
+                regex::RegexBuilder::new(pattern)
+                    .case_insensitive(ignore_case)
+                    .build()
+            })
+        };
+        for _ in 0..100 {
+            assert!(lookup(r"^DSLR-", false).unwrap().is_match("DSLR-A230"));
+            assert!(lookup(r"^DSLR-", true).unwrap().is_match("dslr-a230"));
+            // An unbuildable pattern fails closed every time, and is
+            // compiled only once.
+            assert!(lookup(r"(", false).is_none());
+        }
+        assert_eq!(builds, 3);
+        let maps = cache.lock().unwrap();
+        assert_eq!(maps[0].len() + maps[1].len(), 3);
+    }
+
+    #[test]
+    fn regex_cache_keeps_unicode_and_byte_compilations_distinct() {
+        // Same pattern text, both modes, in both orders: a cache shared
+        // between the modes would hand one mode the other's compilation.
+        // String mode: `\xd7` is U+00D7, the two UTF-8 bytes C3 97.
+        // Byte mode: `\xd7` is the single byte 0xD7 (Perl's reading).
+        for _ in 0..2 {
+            assert!(regex_match_str(r"^\xd7", false, "\u{d7}"));
+            assert!(regex_match_bytes(r"^\xd7", false, b"\xd7"));
+            assert!(!regex_match_bytes(r"^\xd7", false, "\u{d7}".as_bytes()));
+            assert!(regex_match_str(r"^\xd7", false, "\u{d7}"));
+        }
     }
 
     #[test]
