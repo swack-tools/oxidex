@@ -1,670 +1,132 @@
-# API Reference
+# Rust API reference
 
-Complete reference for OxiDex's Rust library API.
+This page lists the public read and write API at the `refactor/tag-machinery`
+tip (v2.0.0-beta.1), with signatures taken from the source. For a tutorial,
+see the [Rust library guide](/guide/library-api). For every item, run
+`cargo doc --open`.
 
-## Overview
+::: warning Beta
+The API may still change before 2.0.0. The crate is not on crates.io:
+depend on the Git repository.
+:::
 
-OxiDex provides both a high-level ergonomic API for common operations and a low-level API for fine-grained control over metadata manipulation.
+## Paths
 
-**Key Features:**
-- **Zero-cost abstractions** - Efficient parsing with minimal overhead
-- **Type-safe** - Strongly-typed metadata values with compile-time checks
-- **Synchronous design** - Simple, predictable execution model
-- **Error handling** - Comprehensive error types with context
-- **Format support** - JPEG, TIFF, XMP, PNG, MP4, and 140+ format families
+| Item | Path |
+| --- | --- |
+| `Metadata`, `VERSION` | crate root (`oxidex::Metadata`, `oxidex::VERSION`) |
+| `MetadataMap`, `TagValue`, `FileFormat`, `ReadOptions`, `ReadReport`, `ParseStatus`, `Diagnostic` | `oxidex::core` |
+| `read_metadata`, `read_metadata_report`, `write_metadata`, `modify_tag`, `remove_tag`, `clear_all_metadata` | `oxidex::core` (re-exported) and `oxidex::core::operations` |
+| `copy_metadata`, `read_metadata_with_detector` | `oxidex::core::operations` only |
+| `Result<T>`, `ExifToolError` | `oxidex::error` (not at the crate root) |
 
-## Quick Start
+## Reading
 
-```rust
-use oxidex::{Metadata, Result};
-
-fn main() -> Result<()> {
-    // Read metadata
-    let metadata = Metadata::from_path("photo.jpg")?;
-
-    // Access tags
-    if let Some(make) = metadata.get_string("EXIF:Make") {
-        println!("Camera: {}", make);
-    }
-
-    // Write metadata
-    metadata
-        .set_tag("EXIF:Artist", "Jane Doe")?
-        .write_to("output.jpg")?;
-
-    Ok(())
-}
+```rust,ignore
+pub fn read_metadata(path: &Path) -> Result<MetadataMap>;
+pub fn read_metadata_report(path: &Path) -> Result<ReadReport>;
+pub fn read_metadata_with_detector_and_options(
+    path: &Path, detector: DetectorMode, options: &ReadOptions,
+) -> Result<MetadataMap>;
 ```
 
-## Core Concepts
+- `read_metadata` returns `Ok` for any file it can open. A damaged file,
+  or a type with no parser, gives only what could be recovered, possibly
+  just the identity tags.
+- `read_metadata_report` returns the same map together with a
+  `ParseStatus` (`Parsed`, `Partial`, `IdentifiedOnly`, `Unsupported`) and
+  the diagnostics. `report.into_metadata()` gives you the map.
+- Keys are the group-qualified names `oxidex -j` prints (`IFD0:Make`,
+  `ExifIFD:ISO`, `File:FileType`), and lookups match them exactly.
 
-### Tag Naming Convention
+### `MetadataMap`
 
-All metadata tags follow the format: `<FormatFamily>:<TagName>`
+| Method | Signature |
+| --- | --- |
+| `get` | `fn get(&self, key: &str) -> Option<&TagValue>` |
+| `get_string` / `get_integer` / `get_float` | typed `Option` accessors |
+| `contains_key`, `keys`, `values`, `iter`, `len` | map-like access |
+| `insert`, `remove`, `get_mut` | modify before a `write_metadata` |
 
-**Examples:**
-- `EXIF:Make` - Camera manufacturer
-- `EXIF:Model` - Camera model
-- `GPS:Latitude` - GPS latitude coordinate
-- `XMP-dc:Creator` - Document creator
-- `IPTC:Keywords` - Image keywords
+`MetadataMap` keeps every occurrence of a tag internally, and the map API
+shows the priority winner for each key. It serialises to JSON as
+`{"Group:Tag": {"type": …, "value": …}}`.
 
-**Supported Format Families:**
+### `TagValue`
 
-| Family | Description | Example Tags |
-|--------|-------------|--------------|
-| `EXIF` | Exchangeable Image File Format | `EXIF:Make`, `EXIF:Model`, `EXIF:ISO` |
-| `XMP` | Extensible Metadata Platform | `XMP-dc:Creator`, `XMP-dc:Rights` |
-| `IPTC` | Press/journalism metadata | `IPTC:Keywords`, `IPTC:Caption` |
-| `GPS` | GPS location data | `GPS:Latitude`, `GPS:Longitude` |
-| `MakerNotes` | Camera-specific data | `MakerNotes:SerialNumber` |
-| `PNG` | PNG format metadata | `PNG:Title`, `PNG:Author` |
-| `QuickTime` | Video metadata | `QuickTime:Duration` |
-
-**Note:** Tag names are case-sensitive.
-
-### Type Safety
-
-Metadata values are represented by the `TagValue` enum:
-
-```rust
+```rust,ignore
 pub enum TagValue {
     String(String),
     Integer(i64),
     Float(f64),
     Rational { numerator: i32, denominator: i32 },
     Binary(Vec<u8>),
-    DateTime(chrono::DateTime<Utc>),
+    DateTime(DateTime<Utc>),
     Struct(Box<HashMap<String, TagValue>>),
+    Array(Vec<TagValue>),
 }
 ```
 
-Type-safe accessors prevent type confusion:
+It has constructors (`TagValue::new_string`, …), predicates (`is_*`) and
+accessors (`as_string`, …). `From` conversions exist for `&str`, `String`,
+`i64`, `i32`, `f64` and `f32`.
 
-```rust
-let iso = metadata.get_integer("EXIF:ISO")?;  // Option<i64>
-let make = metadata.get_string("EXIF:Make")?;  // Option<&str>
+## Writing
+
+```rust,ignore
+pub fn modify_tag(path: &Path, tag_name: &str, new_value: TagValue) -> Result<()>;
+pub fn remove_tag(path: &Path, tag_name: &str) -> Result<()>;
+pub fn write_metadata(path: &Path, metadata: &MetadataMap) -> Result<()>;
+pub fn clear_all_metadata(path: &Path) -> Result<()>;
+pub fn copy_metadata(source: &Path, dest: &Path, tags: Option<&[String]>) -> Result<()>;
 ```
 
-## High-Level API
-
-### Reading Metadata
-
-#### `Metadata::from_path(path: impl AsRef<Path>) -> Result<Metadata>`
-
-Opens a file and extracts all metadata tags.
-
-```rust
-use oxidex::{Metadata, Result};
-
-fn main() -> Result<()> {
-    let metadata = Metadata::from_path("photo.jpg")?;
-
-    if let Some(make) = metadata.get_string("EXIF:Make") {
-        println!("Camera: {}", make);
-    }
-
-    Ok(())
-}
-```
-
-**Errors:**
-- `IoError` - File not found, permission denied
-- `UnsupportedFormat` - File format not recognized
-- `ParseError` - File is corrupted or malformed
-
-#### `Metadata::from_bytes(data: &[u8], format_hint: Option<FileFormat>) -> Result<Metadata>`
-
-Parses metadata from a byte buffer.
-
-```rust
-let file_data = std::fs::read("image.jpg")?;
-let metadata = Metadata::from_bytes(&file_data, Some(FileFormat::JPEG))?;
-```
-
-**Use cases:**
-- Processing files from memory (HTTP uploads)
-- Working with embedded resources
-- Testing with synthetic data
-
-### Writing Metadata
-
-OxiDex uses a **builder pattern** for metadata modifications:
-
-```rust
-Metadata::from_path("input.jpg")?
-    .set_tag("EXIF:Artist", "John Doe")
-    .set_tag("EXIF:Copyright", "2025 John Doe")
-    .write_to("output.jpg")?;
-```
-
-#### Key Methods
-
-##### `set_tag(self, tag_name: &str, value: impl Into<TagValue>) -> Self`
-
-Sets a single tag value, consuming and returning the builder (it cannot fail).
-Use `insert(&mut self, ..)` when you hold the value by mutable reference.
-
-```rust
-let metadata = metadata
-    .set_tag("EXIF:Make", "Canon")
-    .set_tag("EXIF:ISO", 400)      // Accepts integers
-    .set_tag("EXIF:FNumber", 2.8); // Accepts floats
-```
-
-##### `remove(&mut self, tag_name: &str) -> Option<TagValue>`
-
-Removes a tag from the metadata, returning the old value if it was present.
-
-```rust
-metadata.remove("EXIF:Thumbnail");
-```
-
-##### `write_to(path: impl AsRef<Path>) -> Result<()>`
-
-Writes the modified metadata to a new file.
-
-```rust
-metadata.write_to("output.jpg")?;
-```
-
-##### `save() -> Result<()>`
-
-Writes the modified metadata back to the file it was read from (`source_path()`).
-
-```rust
-Metadata::from_path("photo.jpg")?
-    .set_tag("EXIF:Artist", "Jane Smith")
-    .save()?;
-```
-
-**Warning:** `save()` modifies the original file.
-
-### Advanced Operations
-
-#### Copy Metadata Between Files
-
-`copy_to()` returns a `CopyBuilder`; `execute()` performs the copy.
-
-```rust
-// Copy all tags
-Metadata::from_path("source.jpg")?
-    .copy_to("destination.jpg")?
-    .execute()?;
-
-// Copy specific tags only
-Metadata::from_path("source.jpg")?
-    .copy_to("destination.jpg")?
-    .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])?
-    .execute()?;
-```
-
-There is no exclusion filter on the builder; to copy everything except some
-tags, `remove()` them from the `Metadata` first, then `copy_to(..).execute()`.
-
-## Low-Level API
-
-### MetadataMap
-
-In-memory representation of file metadata. Stores key-value pairs where keys are tag names and values are `TagValue` enums.
-
-#### Construction
-
-```rust
-use oxidex::core::metadata_map::MetadataMap;
-
-let mut metadata = MetadataMap::new();
-let metadata = MetadataMap::with_capacity(50);  // Pre-allocate
-```
-
-#### Insertion and Modification
-
-```rust
-// Insert or replace
-metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
-
-// Get mutable reference
-if let Some(tag) = metadata.get_mut("EXIF:ISO") {
-    *tag = TagValue::new_integer(800);
-}
-
-// Remove tag
-let removed = metadata.remove("EXIF:Thumbnail");
-
-// Clear all
-metadata.clear();
-```
-
-#### Retrieval
-
-```rust
-// Generic accessor
-if let Some(tag_value) = metadata.get("EXIF:Make") {
-    println!("Value: {:?}", tag_value);
-}
-
-// Type-safe accessors
-let make = metadata.get_string("EXIF:Make");  // Option<&str>
-let iso = metadata.get_integer("EXIF:ISO");   // Option<i64>
-let aperture = metadata.get_float("EXIF:FNumber");  // Option<f64>
-```
-
-#### Querying
-
-```rust
-// Check existence
-if metadata.contains_key("EXIF:Make") {
-    println!("Make tag is present");
-}
-
-// Count tags
-println!("Found {} tags", metadata.len());
-
-// Check if empty
-if metadata.is_empty() {
-    println!("No metadata found");
-}
-```
-
-#### Iteration
-
-```rust
-// Iterate over name-value pairs
-for (name, value) in metadata.iter() {
-    println!("{}: {:?}", name, value);
-}
-
-// Iterate over tag names
-for tag_name in metadata.keys() {
-    println!("Tag: {}", tag_name);
-}
-
-// Iterate over values
-for value in metadata.values() {
-    if value.is_string() {
-        println!("String value: {}", value.as_string().unwrap());
-    }
-}
-```
-
-#### Serialization
-
-`MetadataMap` implements `serde::Serialize` and `serde::Deserialize`:
-
-```rust
-use serde_json;
-
-// Serialize to JSON
-let json = serde_json::to_string_pretty(&metadata)?;
-std::fs::write("metadata.json", json)?;
-
-// Deserialize from JSON
-let json_data = std::fs::read_to_string("metadata.json")?;
-let metadata: MetadataMap = serde_json::from_str(&json_data)?;
-```
-
-**JSON Format:**
-```json
-{
-  "EXIF:Make": {
-    "type": "String",
-    "value": "Canon"
-  },
-  "EXIF:ISO": {
-    "type": "Integer",
-    "value": 400
-  },
-  "EXIF:FNumber": {
-    "type": "Float",
-    "value": 2.8
-  }
-}
-```
-
-### TagValue
-
-Enum representing different metadata value types.
-
-#### Variants
-
-| Variant | Description | Use Cases |
-|---------|-------------|-----------|
-| `String(String)` | UTF-8 text | Make/model, artist, copyright |
-| `Integer(i64)` | 64-bit signed integer | ISO, width/height, orientation |
-| `Float(f64)` | 64-bit floating point | GPS coordinates, aperture |
-| `Rational { numerator, denominator }` | Fraction | Exposure time (1/100) |
-| `Binary(Vec<u8>)` | Byte data | Thumbnails, ICC profiles |
-| `DateTime(DateTime<Utc>)` | UTC timestamp | Creation/modification dates |
-| `Struct(Box<HashMap<...>>)` | Nested structure | Complex XMP structures |
-
-#### Constructors
-
-```rust
-// String
-let value = TagValue::new_string("Canon EOS 5D");
-
-// Integer
-let value = TagValue::new_integer(400);
-
-// Float
-let value = TagValue::new_float(2.8);
-
-// Rational (1/100 second)
-let value = TagValue::new_rational(1, 100);
-
-// Binary
-let value = TagValue::new_binary(vec![0xFF, 0xD8, 0xFF, 0xE0]);
-
-// DateTime
-use chrono::Utc;
-let value = TagValue::new_datetime(Utc::now());
-
-// Struct
-let mut structure = HashMap::new();
-structure.insert("author".to_string(), TagValue::new_string("John Doe"));
-let value = TagValue::new_struct(structure);
-```
-
-#### Type Checking
-
-```rust
-let value = TagValue::new_string("Canon");
-
-assert!(value.is_string());
-assert!(!value.is_integer());
-assert!(!value.is_float());
-```
-
-#### Type Extraction
-
-```rust
-// Safe extraction - returns Option
-if let Some(s) = value.as_string() {
-    println!("String value: {}", s);
-}
-
-// Pattern matching
-match value {
-    TagValue::String(s) => println!("String: {}", s),
-    TagValue::Integer(i) => println!("Integer: {}", i),
-    TagValue::Float(f) => println!("Float: {}", f),
-    _ => println!("Other type"),
-}
-```
-
-## Error Handling
-
-### ExifToolError
-
-All fallible operations return `Result<T, ExifToolError>`.
-
-```rust
+- Writes edit an existing file in place, through a temporary file and a
+  rename.
+- `write_metadata` re-reads the file and applies only the changes between
+  that read and the map you pass.
+- Only JPEG (EXIF), TIFF and TIFF-based RAW, PNG and PDF are writable.
+  Other formats return `UnsupportedFormat`. See
+  [Writing metadata](/guide/writing) for what is proven.
+
+## `Metadata`
+
+A convenience wrapper around a `MetadataMap` and its source path.
+
+| Method | Signature | Notes |
+| --- | --- | --- |
+| `from_path` | `fn from_path<P: AsRef<Path>>(path: P) -> Result<Metadata>` | reads the file |
+| `new` | `fn new() -> Metadata` | empty |
+| `get_string`, `get_integer`, `get_float`, `get`, `has_tag` | lookups | exact keys |
+| `set_tag` | `fn set_tag<V: Into<TagValue>>(self, tag: &str, value: V) -> Metadata` | builder style; cannot fail |
+| `insert`, `remove` | in-place changes | |
+| `save` | `fn save(&self) -> Result<()>` | writes back to the source file |
+| `write_to` | `fn write_to<P: AsRef<Path>>(&self, path: P) -> Result<()>` | into another *existing* file |
+| `copy_to` | `fn copy_to<P: AsRef<Path>>(&self, dest: P) -> Result<CopyBuilder>` | then `.with_tags(&[..])?` and `.execute()?` |
+| `len`, `is_empty`, `iter`, `source_path`, `as_map`, `into_map` | access | |
+
+## Errors
+
+```rust,ignore
 pub enum ExifToolError {
-    IoError(io::Error),
-    ParseError { message: String, offset: Option<usize> },
-    TagNotFound { tag_name: String },
-    InvalidTagValue { tag_name: String, reason: String },
-    UnsupportedFormat { message: String },
+    IoError(std::io::Error),
+    ParseError { .. },
+    TagNotFound { .. },
+    InvalidTagValue { .. },
+    UnsupportedFormat { .. },
 }
 ```
 
-#### Error Variants
+A value is validated when it is written, not when it is set.
 
-**`IoError(io::Error)`** - File not found, permission denied, etc.
+## Not public API
 
-```rust
-match Metadata::from_path("missing.jpg") {
-    Err(ExifToolError::IoError(e)) => {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            eprintln!("File does not exist");
-        }
-    }
-    _ => {}
-}
-```
+`oxidex::exiftool_tables` (the generated tables, the engines and the v2
+`Session`) is reachable as a module, but it is internal machinery. It will
+change without notice. The generated write modules under `oxidex::writers`
+are crate-private.
 
-**`ParseError { message, offset }`** - Malformed or corrupted file.
+## See also
 
-```rust
-match Metadata::from_path("corrupted.jpg") {
-    Err(ExifToolError::ParseError { message, offset }) => {
-        eprintln!("Parse error: {}", message);
-        if let Some(off) = offset {
-            eprintln!("Failed at byte offset: {}", off);
-        }
-    }
-    _ => {}
-}
-```
-
-**`TagNotFound { tag_name }`** - Requested tag doesn't exist.
-
-```rust
-if !metadata.has_tag("EXIF:Artist") {
-    return Err(ExifToolError::TagNotFound { tag_name: "EXIF:Artist".into() });
-}
-```
-
-**`InvalidTagValue { tag_name, reason }`** - Tag value type mismatch or invalid.
-
-```rust
-match metadata.set_tag("EXIF:ISO", "not_a_number") {
-    Err(ExifToolError::InvalidTagValue { tag_name, reason }) => {
-        eprintln!("Invalid value for {}: {}", tag_name, reason);
-    }
-    _ => {}
-}
-```
-
-**`UnsupportedFormat { message }`** - File format not recognized.
-
-```rust
-match Metadata::from_path("document.bmp") {
-    Err(ExifToolError::UnsupportedFormat { message }) => {
-        eprintln!("Format not supported: {}", message);
-    }
-    _ => {}
-}
-```
-
-### Error Handling Patterns
-
-#### Early Return with `?`
-
-```rust
-use oxidex::{Metadata, Result};
-
-fn process_image(path: &str) -> Result<()> {
-    let metadata = Metadata::from_path(path)?;
-
-    let artist = metadata.get_string("EXIF:Artist")
-        .unwrap_or("Unknown");
-
-    println!("Artist: {}", artist);
-    Ok(())
-}
-```
-
-#### Match for Detailed Handling
-
-```rust
-match Metadata::from_path(path) {
-    Ok(metadata) => {
-        println!("Loaded {} tags", metadata.len());
-    }
-    Err(ExifToolError::IoError(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-        eprintln!("File not found, using defaults");
-    }
-    Err(ExifToolError::UnsupportedFormat { .. }) => {
-        eprintln!("Format not supported, skipping");
-    }
-    Err(e) => {
-        eprintln!("Fatal error: {}", e);
-    }
-}
-```
-
-#### Context with `map_err`
-
-```rust
-Metadata::from_path(path)
-    .map_err(|e| {
-        eprintln!("Failed to process '{}': {}", path, e);
-        e
-    })?;
-```
-
-## Code Examples
-
-### Extract All Tags
-
-```rust
-use oxidex::{Metadata, Result};
-
-fn main() -> Result<()> {
-    let metadata = Metadata::from_path("photo.jpg")?;
-
-    println!("Found {} metadata tags:", metadata.len());
-    for (tag_name, tag_value) in metadata.iter() {
-        println!("  {}: {:?}", tag_name, tag_value);
-    }
-
-    // Serialize to JSON
-    let json = serde_json::to_string_pretty(&metadata)?;
-    std::fs::write("metadata.json", json)?;
-
-    Ok(())
-}
-```
-
-### Get Specific Tags
-
-```rust
-use oxidex::{Metadata, Result};
-
-fn main() -> Result<()> {
-    let metadata = Metadata::from_path("photo.jpg")?;
-
-    // String values
-    let make = metadata.get_string("EXIF:Make").unwrap_or("Unknown");
-    let model = metadata.get_string("EXIF:Model").unwrap_or("Unknown");
-
-    // Integer values
-    let iso = metadata.get_integer("EXIF:ISO").unwrap_or(0);
-
-    // Float values
-    let aperture = metadata.get_float("EXIF:FNumber").unwrap_or(0.0);
-
-    println!("Camera: {} {}", make, model);
-    println!("Settings: ISO {}, f/{:.1}", iso, aperture);
-
-    // GPS coordinates
-    if let (Some(lat), Some(lon)) = (
-        metadata.get_float("GPS:Latitude"),
-        metadata.get_float("GPS:Longitude")
-    ) {
-        println!("Location: {:.4}, {:.4}", lat, lon);
-    }
-
-    Ok(())
-}
-```
-
-### Modify Metadata
-
-```rust
-use oxidex::{Metadata, Result};
-
-fn main() -> Result<()> {
-    Metadata::from_path("original.jpg")?
-        .set_tag("EXIF:Artist", "Jane Smith")?
-        .set_tag("EXIF:Copyright", "2025 Jane Smith")?
-        .set_tag("EXIF:Rating", 5)?
-        .remove_tag("EXIF:Thumbnail")?
-        .write_to("modified.jpg")?;
-
-    println!("Metadata updated successfully");
-    Ok(())
-}
-```
-
-### Batch Processing
-
-```rust
-use oxidex::{Metadata, Result};
-use rayon::prelude::*;
-
-fn main() -> Result<()> {
-    let files = vec!["photo1.jpg", "photo2.jpg", "photo3.jpg"];
-
-    // Process files in parallel
-    let results: Vec<_> = files
-        .par_iter()
-        .map(|path| process_file(path))
-        .collect();
-
-    for (path, result) in files.iter().zip(results.iter()) {
-        match result {
-            Ok(info) => println!("✓ {}: {}", path, info),
-            Err(e) => eprintln!("✗ {}: {}", path, e),
-        }
-    }
-
-    Ok(())
-}
-
-fn process_file(path: &str) -> Result<String> {
-    let metadata = Metadata::from_path(path)?;
-    let make = metadata.get_string("EXIF:Make").unwrap_or("Unknown");
-    let model = metadata.get_string("EXIF:Model").unwrap_or("Unknown");
-    Ok(format!("{} {}", make, model))
-}
-```
-
-## Advanced Topics
-
-### Memory-Mapped File Access
-
-For large files, OxiDex uses memory-mapped I/O:
-
-```rust
-use memmap2::Mmap;
-use std::fs::File;
-
-let file = File::open(path)?;
-let mmap = unsafe { Mmap::map(&file)? };
-let metadata = Metadata::from_bytes(&mmap, None)?;
-```
-
-**Benefits:**
-- Efficient access to large files
-- Only relevant portions paged into memory
-- OS-level caching
-
-### Parallel Processing
-
-Use `rayon` for CPU-bound parallel processing:
-
-```rust
-use rayon::prelude::*;
-
-let results: Vec<_> = paths
-    .par_iter()
-    .map(|path| {
-        let metadata = Metadata::from_path(path)?;
-        Ok(metadata.get_string("EXIF:Make").unwrap_or("Unknown").to_string())
-    })
-    .collect();
-```
-
-**Performance tips:**
-- **SSD/NVMe:** 2-4x speedup on fast storage
-- **HDD:** Minimal benefit due to I/O bottleneck
-- **CPU-bound parsing:** XMP and complex formats benefit most
-
-## Additional Resources
-
-- [Library API Guide](/guide/library-api) - Integration tutorial
-- [FFI API Reference](/reference/ffi-api) - C bindings
-- [Tag Database](/reference/tag-database) - Complete tag list
-- [Architecture](/reference/architecture) - System design
+- [C API](/reference/ffi-api)
+- [Migrating from 1.x to 2.0](/guide/migrating-from-1x)

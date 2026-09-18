@@ -1,569 +1,190 @@
-# Library API
+# Rust library
 
-This chapter covers how to use OxiDex as a Rust library in your own applications.
+::: warning Beta: v2.0.0-beta.1
+The library API may still change before 2.0.0. OxiDex is not published on
+crates.io (the `oxidex` name there belongs to an unrelated crate), so depend
+on the Git repository. The 2.0 API differs from 1.x; see
+[Migrating from 1.x to 2.0](/guide/migrating-from-1x).
+:::
 
-## Overview
-
-OxiDex provides a Rust library API for reading and writing metadata in various image and media file formats. The library offers both high-level ergonomic APIs (planned) and low-level APIs (currently implemented) for fine-grained control over metadata manipulation.
-
-**Important Note**: This chapter documents both the **planned high-level API** (for future reference) and the **current low-level API** (available now). Many code examples use the planned API and are marked with `rust,ignore`. Working examples using the current API are provided in the [Working Examples](#working-examples-current-api) section.
-
-## Key Features
-
-- **Zero-Cost Abstractions**: Efficient parsing with minimal overhead
-- **Type-Safe**: Strongly-typed metadata values with runtime type checks
-- **Synchronous Design**: Simple, predictable execution model
-- **Comprehensive Error Handling**: Detailed error types with context
-- **Format Support**: JPEG, TIFF, PNG, PDF, MP4/QuickTime, XMP, IPTC
-
-## Core Concepts
-
-### Tag Naming Convention
-
-All metadata tags in OxiDex follow a standardized naming convention:
-
-```
-<FormatFamily>:<TagName>
+```toml
+[dependencies]
+oxidex = { git = "https://github.com/swack-tools/oxidex", branch = "refactor/tag-machinery" }
 ```
 
-**Examples:**
+The API is synchronous. It takes file paths and returns
+`oxidex::error::Result<T>`. For the full item list, run `cargo doc --open`.
+The [API reference](/reference/api-reference) lists the public items and
+their signatures.
 
-- `EXIF:Make` - Camera manufacturer
-- `EXIF:Model` - Camera model
-- `EXIF:DateTime` - Image capture date/time
-- `XMP-dc:Creator` - Document creator (XMP Dublin Core)
-- `GPS:Latitude` - GPS latitude coordinate
-- `IPTC:Keywords` - Image keywords
-- `PNG:Description` - PNG text description
-
-**Supported Format Families:**
-
-| Format Family | Description | Example Tags |
-|--------------|-------------|--------------|
-| `EXIF` | Exchangeable Image File Format | `EXIF:Make`, `EXIF:Model`, `EXIF:ISO` |
-| `XMP` | Extensible Metadata Platform | `XMP-dc:Creator`, `XMP-dc:Rights` |
-| `IPTC` | Press metadata standard | `IPTC:Keywords`, `IPTC:Caption-Abstract` |
-| `GPS` | GPS location data | `GPS:GPSLatitude`, `GPS:GPSLongitude` |
-| `ICC_Profile` | Color management | `ICC_Profile:ProfileDescription` |
-| `Photoshop` | Adobe Photoshop metadata | `Photoshop:Credit`, `Photoshop:Source` |
-| `PNG` | Portable Network Graphics | `PNG:Title`, `PNG:Author` |
-| `JFIF` | JPEG File Interchange Format | `JFIF:XResolution`, `JFIF:YResolution` |
-| `QuickTime` | Video metadata | `QuickTime:Duration`, `QuickTime:CreateDate` |
-
-**Case Sensitivity**: Tag names are case-sensitive. Always use the exact capitalization.
-
-### Synchronous API Design
-
-OxiDex uses a **synchronous, blocking API** design:
-
-- All operations complete before returning
-- No async/await or futures
-- File I/O is the bottleneck, not computation
-- Parallel processing is achieved via `rayon` at the application level
-
-**Rationale**: File I/O dominates performance in metadata extraction. The overhead of async runtimes provides no benefit. For batch processing, use `rayon`'s parallel iterators (see examples below).
-
-### Type Safety
-
-Metadata values are represented by the `TagValue` enum:
-
-```rust
-pub enum TagValue {
-    String(String),
-    Integer(i64),
-    Float(f64),
-    Rational { numerator: i32, denominator: i32 },
-    Binary(Vec<u8>),
-    DateTime(chrono::DateTime<Utc>),
-    Struct(Box<HashMap<String, TagValue>>),
-}
-```
-
-The API provides typed accessor methods that return `Option<T>`:
-
-```rust
-let iso = metadata.get("EXIF:ISO")?.as_integer()?;  // Option<i64>
-let make = metadata.get("EXIF:Make")?.as_string()?;  // Option<&str>
-```
-
-## High-Level API
-
-**Status**: ✅ Available Now
-
-The high-level API provides an ergonomic, builder-pattern interface for common operations.
-
-### Reading Metadata
+## Reading
 
 ```rust,no_run
-use oxidex::Metadata;
+use oxidex::core::operations::read_metadata;
+use std::path::Path;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Open file and extract all metadata
-    let metadata = Metadata::from_path("photo.jpg")?;
+fn main() -> oxidex::error::Result<()> {
+    let map = read_metadata(Path::new("photo.jpg"))?;
 
-    // Access metadata through typed getters
-    if let Some(make) = metadata.get_string("EXIF:Make") {
-        println!("Camera: {}", make);
+    if let Some(make) = map.get_string("IFD0:Make") {
+        println!("Make: {make}");
     }
-
-    if let Some(iso) = metadata.get_integer("EXIF:ISO") {
-        println!("ISO: {}", iso);
+    for (key, value) in map.iter() {
+        println!("{key}: {value:?}");
     }
-
     Ok(())
 }
 ```
 
-### Writing Metadata
+**Keys are group-qualified**, and they are the same keys `oxidex -j` prints:
+the family 1 group and the tag name, such as `IFD0:Make`, `ExifIFD:ISO`,
+`GPS:GPSLatitude` or `Canon:LensModel`. Filesystem and identity facts live
+under `File:`, such as `File:FileType` and `File:MIMEType`. A lookup by bare
+name, or by the family 0 group (`EXIF:Make`), finds nothing. To see which
+keys a file produces, run `oxidex -j file`.
+
+Values are held as decoded, which is what `oxidex --no-print-conv` prints.
+The CLI applies ExifTool's print conversion (`Flash: 0` → `No Flash`) when
+it formats output. `MetadataMap` accessors:
+
+| Method | Returns |
+| --- | --- |
+| `get(key)` | `Option<&TagValue>` |
+| `get_string(key)`, `get_integer(key)`, `get_float(key)` | typed `Option`s |
+| `contains_key(key)`, `keys()`, `values()`, `iter()`, `len()` | as for a map |
+
+`TagValue` has eight variants: `String`, `Integer`, `Float`,
+`Rational { numerator, denominator }`, `Binary`, `DateTime`, `Struct` and
+`Array`. Match on it with a wildcard arm, because the beta may add variants.
+
+### Knowing how far a read got
+
+`read_metadata` succeeds even when a file is damaged or has no parser. The
+result then holds only what could be recovered, which may be just the
+identity tags. When the difference matters, use `read_metadata_report`:
+
+```rust,no_run
+use oxidex::core::{read_metadata_report, ParseStatus};
+use std::path::Path;
+
+fn main() -> oxidex::error::Result<()> {
+    let report = read_metadata_report(Path::new("file.bin"))?;
+    match report.status {
+        ParseStatus::Parsed => {}
+        ParseStatus::Partial => eprintln!("partial read: {:?}", report.diagnostics),
+        ParseStatus::IdentifiedOnly => eprintln!("identified, but no parser"),
+        ParseStatus::Unsupported => eprintln!("not identified"),
+    }
+    let _map = report.into_metadata();
+    Ok(())
+}
+```
+
+`IdentifiedOnly` is the "detected is not parsed" case. `FileType` is
+correct, and nothing else was read.
+
+## Writing
+
+Only some formats and tags can be written, and fewer are proven against
+ExifTool. Read [Writing metadata](/guide/writing) first.
+
+One tag at a time:
+
+```rust,no_run
+use oxidex::core::operations::{modify_tag, remove_tag};
+use oxidex::core::TagValue;
+use std::path::Path;
+
+fn main() -> oxidex::error::Result<()> {
+    let path = Path::new("photo.jpg");
+    modify_tag(path, "IFD0:Artist", TagValue::new_string("Jane Doe"))?;
+    remove_tag(path, "IFD0:Artist")?;
+    Ok(())
+}
+```
+
+With the `Metadata` builder, several changes are made in one write:
 
 ```rust,no_run
 use oxidex::Metadata;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load, modify, and save metadata using builder pattern
+fn main() -> oxidex::error::Result<()> {
     Metadata::from_path("photo.jpg")?
-        .set_tag("EXIF:Artist", "John Doe")
-        .set_tag("EXIF:Copyright", "2025 John Doe")
+        .set_tag("EXIF:Artist", "Jane Doe")
+        .set_tag("EXIF:Copyright", "2026 Jane Doe")
         .save()?;
-
-    // Or write to a different file
-    Metadata::from_path("input.jpg")?
-        .set_tag("EXIF:Artist", "John Doe")
-        .write_to("output.jpg")?;
-
-    println!("Metadata updated successfully");
     Ok(())
 }
 ```
 
-### Copying Metadata
+- `set_tag` consumes and returns the `Metadata`, and cannot fail. Values
+  are validated when you call `save()` or `write_to()`.
+- `save()` writes back to the file the metadata was read from. `write_to(path)`
+  writes the same changes into another *existing* file of a writable
+  format. It does not create a new file.
+- A write re-reads the target and writes only the tags that changed. It
+  goes through a temporary file and a rename, so a failure leaves the
+  original intact.
+
+### Copying between files
 
 ```rust,no_run
 use oxidex::Metadata;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Copy all metadata from source to destination
-    Metadata::from_path("source.jpg")?
-        .copy_to("dest.jpg")?
-        .execute()?;
-
-    // Copy only specific tags
-    Metadata::from_path("source.jpg")?
-        .copy_to("dest.jpg")?
-        .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])?
-        .execute()?;
-
+fn main() -> oxidex::error::Result<()> {
+    let source = Metadata::from_path("source.jpg")?;
+    source.copy_to("dest.jpg")?.execute()?;                                        // everything
+    source.copy_to("dest.jpg")?.with_tags(&["IFD0:Make", "IFD0:Model"])?.execute()?; // selected tags
     Ok(())
 }
 ```
 
-## Low-Level API
+## Errors
 
-**Status**: ✅ Available
+`oxidex::error::ExifToolError` has five variants: `IoError`, `ParseError`,
+`TagNotFound`, `InvalidTagValue` and `UnsupportedFormat`. Writing to a
+format without a writer returns `UnsupportedFormat`.
 
-The low-level API provides direct access to the core data structures. Use this for production code until the high-level API is fully implemented.
-
-### Core Types
-
-#### MetadataMap
-
-`MetadataMap` is a wrapper around `HashMap<String, TagValue>` that stores metadata tags:
-
-```rust
-use oxidex::core::metadata_map::MetadataMap;
-
-// Create a new metadata map
-let mut metadata = MetadataMap::new();
-
-// Insert tags
-metadata.insert("EXIF:Make", TagValue::new_string("Canon"));
-metadata.insert("EXIF:ISO", TagValue::new_integer(400));
-
-// Get tags
-if let Some(make) = metadata.get("EXIF:Make") {
-    println!("Camera: {:?}", make);
-}
-
-// Iterate tags
-for (name, value) in metadata.iter() {
-    println!("{}: {:?}", name, value);
-}
-```
-
-#### TagValue
-
-`TagValue` enum represents different metadata value types:
-
-```rust
-use oxidex::core::tag_value::TagValue;
-use chrono::{Utc, TimeZone};
-
-// String
-let make = TagValue::new_string("Canon");
-
-// Integer
-let iso = TagValue::new_integer(400);
-
-// Float
-let aperture = TagValue::new_float(2.8);
-
-// Rational (fraction)
-let exposure = TagValue::new_rational(1, 125);  // 1/125 second
-
-// Binary
-let thumbnail = TagValue::new_binary(vec![0xFF, 0xD8, 0xFF]);
-
-// DateTime
-let dt = Utc.with_ymd_and_hms(2025, 1, 15, 14, 30, 0).unwrap();
-let datetime = TagValue::new_datetime(dt);
-```
-
-### Core Operations
-
-The `oxidex::core::operations` module provides the main metadata operations:
-
-#### read_metadata
-
-Read all metadata from a file:
-
-```rust
-use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-fn main() -> oxidex::Result<()> {
-    let path = Path::new("photo.jpg");
-    let metadata = read_metadata(path)?;
-
-    println!("Found {} tags", metadata.len());
-
-    for (tag_name, tag_value) in metadata.iter() {
-        println!("{}: {:?}", tag_name, tag_value);
-    }
-
-    Ok(())
-}
-```
-
-#### modify_tag
-
-Modify a single tag in a file:
-
-```rust
+```rust,no_run
 use oxidex::core::operations::modify_tag;
-use oxidex::core::tag_value::TagValue;
-use std::path::Path;
-
-fn main() -> oxidex::Result<()> {
-    let path = Path::new("photo.jpg");
-    let tag_name = "EXIF:Artist";
-    let tag_value = TagValue::new_string("John Doe".to_string());
-
-    modify_tag(path, tag_name, tag_value)?;
-
-    println!("Tag updated successfully");
-    Ok(())
-}
-```
-
-#### copy_metadata
-
-Copy metadata from one file to another:
-
-```rust
-use oxidex::core::operations::copy_metadata;
-use std::path::Path;
-
-fn main() -> oxidex::Result<()> {
-    let source = Path::new("source.jpg");
-    let dest = Path::new("dest.jpg");
-
-    // Copy all tags
-    copy_metadata(source, dest, None)?;
-
-    // Copy specific tags only
-    let tags = vec!["EXIF:Make".to_string(), "EXIF:Model".to_string()];
-    copy_metadata(source, dest, Some(&tags))?;
-
-    Ok(())
-}
-```
-
-## Working Examples (Current API)
-
-### Example 1: Read and Display All Metadata
-
-```rust
-use oxidex::core::operations::read_metadata;
+use oxidex::core::TagValue;
+use oxidex::error::ExifToolError;
 use std::path::Path;
 
 fn main() {
-    let path = Path::new("photo.jpg");
-
-    match read_metadata(path) {
-        Ok(metadata) => {
-            println!("Found {} metadata tags:", metadata.len());
-            for (name, value) in metadata.iter() {
-                // Display tag name and value
-                match value {
-                    oxidex::core::tag_value::TagValue::String(s) => {
-                        println!("  {}: {}", name, s);
-                    }
-                    oxidex::core::tag_value::TagValue::Integer(i) => {
-                        println!("  {}: {}", name, i);
-                    }
-                    oxidex::core::tag_value::TagValue::Float(f) => {
-                        println!("  {}: {}", name, f);
-                    }
-                    _ => {
-                        println!("  {}: {:?}", name, value);
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Error reading metadata: {}", e);
-        }
+    match modify_tag(Path::new("clip.mp4"), "IFD0:Artist", TagValue::new_string("x")) {
+        Ok(()) => {}
+        Err(ExifToolError::UnsupportedFormat { .. }) => eprintln!("this format cannot be written"),
+        Err(e) => eprintln!("{e}"),
     }
 }
 ```
 
-### Example 2: Extract Specific Camera Settings
+## Many files
 
-```rust
-use oxidex::core::operations::read_metadata;
-use oxidex::core::tag_value::TagValue;
-use std::path::Path;
+The API is plain functions over paths, so use your own parallelism. The CLI
+itself uses rayon:
 
-fn main() {
-    let path = Path::new("photo.jpg");
-
-    match read_metadata(path) {
-        Ok(metadata) => {
-            // Extract camera make
-            if let Some(TagValue::String(make)) = metadata.get("EXIF:Make") {
-                println!("Camera: {}", make);
-            }
-
-            // Extract ISO
-            if let Some(TagValue::Integer(iso)) = metadata.get("EXIF:ISO") {
-                println!("ISO: {}", iso);
-            }
-
-            // Extract aperture
-            if let Some(TagValue::Float(aperture)) = metadata.get("EXIF:FNumber") {
-                println!("Aperture: f/{:.1}", aperture);
-            }
-
-            // Extract GPS coordinates
-            if let Some(TagValue::Float(lat)) = metadata.get("GPS:GPSLatitude") {
-                if let Some(TagValue::Float(lon)) = metadata.get("GPS:GPSLongitude") {
-                    println!("Location: {:.4}, {:.4}", lat, lon);
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-        }
-    }
-}
-```
-
-### Example 3: Modify Metadata
-
-```rust
-use oxidex::core::operations::modify_tag;
-use oxidex::core::tag_value::TagValue;
-use std::path::Path;
-
-fn main() {
-    let path = Path::new("photo.jpg");
-
-    // Set artist name
-    if let Err(e) = modify_tag(
-        path,
-        "EXIF:Artist",
-        TagValue::new_string("John Doe".to_string())
-    ) {
-        eprintln!("Error setting artist: {}", e);
-        return;
-    }
-
-    // Set copyright
-    if let Err(e) = modify_tag(
-        path,
-        "EXIF:Copyright",
-        TagValue::new_string("Copyright 2025 John Doe".to_string())
-    ) {
-        eprintln!("Error setting copyright: {}", e);
-        return;
-    }
-
-    println!("Metadata updated successfully");
-}
-```
-
-### Example 4: Batch Processing with Rayon
-
-```rust
-use oxidex::core::operations::read_metadata;
-use rayon::prelude::*;
-use std::path::{Path, PathBuf};
-
-fn main() {
-    let files = vec![
-        PathBuf::from("photo1.jpg"),
-        PathBuf::from("photo2.jpg"),
-        PathBuf::from("photo3.jpg"),
-    ];
-
-    // Process files in parallel
-    let results: Vec<_> = files
-        .par_iter()
-        .map(|path| process_file(path))
-        .collect();
-
-    // Print results
-    for (path, result) in files.iter().zip(results.iter()) {
-        match result {
-            Ok(info) => println!("✓ {}: {}", path.display(), info),
-            Err(e) => eprintln!("✗ {}: {}", path.display(), e),
-        }
-    }
-}
-
-fn process_file(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let metadata = read_metadata(path)?;
-
-    let make = metadata.get("EXIF:Make")
-        .and_then(|v| v.as_string())
-        .unwrap_or("Unknown");
-
-    let model = metadata.get("EXIF:Model")
-        .and_then(|v| v.as_string())
-        .unwrap_or("Unknown");
-
-    Ok(format!("{} {}", make, model))
-}
-```
-
-### Example 5: Copy Metadata Between Files
-
-```rust
-use oxidex::core::operations::copy_metadata;
-use std::path::Path;
-
-fn main() {
-    let source = Path::new("original.jpg");
-    let dest = Path::new("edited.jpg");
-
-    // Copy all metadata
-    match copy_metadata(source, dest, None) {
-        Ok(_) => println!("All metadata copied successfully"),
-        Err(e) => eprintln!("Error copying metadata: {}", e),
-    }
-
-    // Copy only specific tags
-    let specific_tags = vec![
-        "EXIF:Artist".to_string(),
-        "EXIF:Copyright".to_string(),
-        "EXIF:DateTime".to_string(),
-    ];
-
-    match copy_metadata(source, dest, Some(&specific_tags)) {
-        Ok(_) => println!("Specific tags copied successfully"),
-        Err(e) => eprintln!("Error copying tags: {}", e),
-    }
-}
-```
-
-## Error Handling
-
-OxiDex provides comprehensive error types through the `ExifToolError` enum:
-
-```rust
-use oxidex::ExifToolError;
-
-// Handle different error types
-match read_metadata(path) {
-    Ok(metadata) => { /* process metadata */ }
-    Err(ExifToolError::IoError(e)) => {
-        eprintln!("I/O error: {}", e);
-    }
-    Err(ExifToolError::UnsupportedFormat { message }) => {
-        eprintln!("Unsupported format: {}", message);
-    }
-    Err(ExifToolError::ParseError { message, offset }) => {
-        if let Some(off) = offset {
-            eprintln!("Parse error at offset {}: {}", off, message);
-        } else {
-            eprintln!("Parse error: {}", message);
-        }
-    }
-    Err(e) => {
-        eprintln!("Error: {}", e);
-    }
-}
-```
-
-## Advanced Topics
-
-### Parallel Batch Processing
-
-Use `rayon` for efficient parallel processing of multiple files:
-
-```rust
+```rust,no_run
 use oxidex::core::operations::read_metadata;
 use rayon::prelude::*;
 use std::path::PathBuf;
 
-fn process_directory(dir: &str) -> Vec<(PathBuf, Result<usize, String>)> {
-    let files: Vec<PathBuf> = walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "jpg"))
-        .map(|e| e.path().to_path_buf())
-        .collect();
-
-    files
-        .par_iter()
-        .map(|path| {
-            let result = read_metadata(path)
-                .map(|m| m.len())
-                .map_err(|e| e.to_string());
-            (path.clone(), result)
-        })
-        .collect()
+fn main() {
+    let files: Vec<PathBuf> = std::env::args().skip(1).map(PathBuf::from).collect();
+    let results: Vec<_> = files.par_iter().map(|p| (p, read_metadata(p))).collect();
+    for (path, result) in results {
+        match result {
+            Ok(map) => println!("{}: {} tags", path.display(), map.len()),
+            Err(e) => eprintln!("{}: {e}", path.display()),
+        }
+    }
 }
 ```
 
-### Memory-Mapped I/O
+## From other languages
 
-OxiDex automatically uses memory-mapped I/O for efficient processing of large files. This is handled internally and requires no configuration.
-
-### Custom Tag Definitions
-
-For detailed information about the tag database and adding custom tags, see the Tag Database Generation documentation.
-
-## API Reference
-
-For complete API documentation, run:
-
-```bash
-cargo doc --open
-```
-
-This will generate and open the full Rust API documentation in your browser.
-
-## Additional Resources
-
-- **[Command-Line Usage](/guide/cli-usage)**: CLI interface for OxiDex
-- **[Troubleshooting](/guide/troubleshooting)**: Common issues and solutions
-
-## Migration Path
-
-As the high-level API is implemented, we'll maintain backward compatibility with the low-level API. You can start using the low-level API now and gradually migrate to the high-level API as features become available.
-
-**Current Status**:
-- ✅ Low-level API (MetadataMap, TagValue, operations)
-- 🔄 High-level API (Metadata struct with builder pattern)
-- ⏳ Advanced features (conditional edits, tag deletion, group operations)
+The C API is described in the [C API reference](/reference/ffi-api). It
+exports fifteen `exiftool_*` functions, with a header generated by cbindgen
+(`just cbindgen`). The MCP server, [oxidex-mcp](/guide/mcp-integration), is
+a separate project.

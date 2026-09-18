@@ -3,111 +3,103 @@ layout: home
 
 hero:
   name: OxiDex
-  text: Modern ExifTool in Rust
-  tagline: High-performance metadata management for 140+ format families
+  text: ExifTool's output, in Rust
+  tagline: A reimplementation of ExifTool whose tag tables are generated from ExifTool's own Perl source, and whose output is measured against the pinned ExifTool 13.59.
   actions:
     - theme: brand
-      text: Get Started
+      text: Get started
       link: /guide/getting-started
     - theme: alt
-      text: ExifTool Compatibility
-      link: /reference/comparison/
+      text: ExifTool parity
+      link: /guide/exiftool-parity
     - theme: alt
-      text: GitHub
-      link: https://github.com/swack-tools/oxidex
+      text: Project status
+      link: /status/
 
 features:
-  - icon: ⚡
-    title: Compiled Rust
-    details: Native code with parallel batch processing. The published speed figures are being re-measured against the pinned ExifTool; see the performance page for their status
-    link: /performance/
-    linkText: Benchmark status
-  - icon: 🔒
-    title: Memory Safe
-    details: Rust eliminates buffer overflows, use-after-free bugs, and entire classes of vulnerabilities
+  - icon: 🧬
+    title: Generated from ExifTool's source
+    details: Tag tables, byte layouts, conditions and conversions are dumped from the pinned Perl modules and generated into Rust. CI regenerates them and verifies them against live Perl. Whatever cannot be modelled is refused and counted, never approximated.
+    link: /architecture/
+    linkText: Architecture
   - icon: 🎯
-    title: 16,684 Metadata Tags
-    details: 77.5% measured extraction conformance against pinned ExifTool, across 126 format families — remeasured on every push, never estimated
-    link: /reference/tag-coverage-analysis
-    linkText: View Coverage
-  - icon: 🤖
-    title: AI Integration
-    details: A separate MCP server (oxidex-mcp) lets Claude and other MCP clients read, write, search, analyze and copy metadata
-  - icon: 🛠️
-    title: Drop-in Replacement
-    details: CLI compatible with original ExifTool syntax for seamless migration
-  - icon: 📦
-    title: Static Binaries
-    details: Self-contained executables with no runtime dependencies for easy deployment
-  - icon: 🌐
-    title: Cross-Platform
-    details: Native binaries for Windows, Linux (x86_64/ARM64), and macOS (Intel/Apple Silicon)
-  - icon: 📊
-    title: ExifTool Compatibility
-    details: Automated tag-by-tag comparison against the pinned ExifTool, regenerated when the docs deploy
-    link: /reference/comparison/
-    linkText: View Report
+    title: 16,684 Tag Definitions
+    details: 77.5% measured extraction conformance against pinned ExifTool, across 126 file types, in the last published coverage report. A definition only says a tag exists; the conformance score says what OxiDex extracts.
+    link: /guide/exiftool-parity
+    linkText: How parity is measured
+  - icon: 🛡️
+    title: Proven reads cannot regress
+    details: 2,378 ExifTool catalog entries are proven read on ExifTool's own test corpus. A CI gate fails any change that loses one, and a ratchet lets 25 parity counts move only in the good direction.
+    link: /guide/exiftool-parity#guarantees-that-stop-regressions
+    linkText: The guarantees
+  - icon: ⚡
+    title: Measured speed
+    details: 3.0x ExifTool 13.59 on a single JPEG and 1.83x per core on a 194-file corpus. Measured locally with pinned tools; more with parallel batch reads.
+    link: /performance/
+    linkText: The measurements
+  - icon: ✍️
+    title: Careful writes
+    details: Atomic writes for JPEG EXIF, TIFF and TIFF-based RAW, PNG and PDF. 19 tags are proven byte-for-byte against ExifTool's own writes; the rest is labelled as not yet proven.
+    link: /guide/writing
+    linkText: Write support
+  - icon: 🦀
+    title: Library, C API and CLI
+    details: An ExifTool-style command line, a Rust library, and a C API with a generated header. A separate MCP server (oxidex-mcp) exposes it to AI assistants.
+    link: /guide/library-api
+    linkText: Library guide
 ---
 
-## Quick Example
+::: warning v2.0.0-beta.1: a pre-release
+This site documents the 2.0 line, built on the `refactor/tag-machinery`
+branch. It is a **beta**: output and API may still change before 2.0.0.
+2.0 changes tag keys, value formatting and parts of the API compared with
+1.x. Read [Migrating from 1.x to 2.0](/guide/migrating-from-1x) before
+upgrading. The previous stable release is
+[v1.2.1](https://github.com/swack-tools/oxidex/releases/tag/v1.2.1)
+([its docs](https://github.com/swack-tools/oxidex/tree/v1.2.1/docs)).
+:::
+
+## Quick example
 
 ```bash
-# Extract all metadata from a file
+# Everything ExifTool would print for this file
 oxidex photo.jpg
 
-# Extract specific tags
+# Selected tags
 oxidex -Make -Model -DateTimeOriginal photo.jpg
 
-# Write metadata
-oxidex -Artist="Your Name" photo.jpg
+# JSON with every occurrence and its family-1 group, as `exiftool -j -a -G1`
+oxidex -j -a -G1 photo.jpg
 
-# Batch processing (recursive)
-oxidex -r /path/to/photos/
+# Write a tag (atomic, in place; add --backup to keep a .bak copy)
+oxidex -EXIF:Artist="Jane Doe" photo.jpg
 
-# JSON output
-oxidex -json photo.jpg
+# A whole directory, read in parallel
+oxidex -r -j /path/to/photos/
 ```
 
-## Performance
+## What OxiDex is today
 
-OxiDex is compiled, parallel Rust. The published comparison figures against
-Perl ExifTool date from 2025-12 and an unpinned ExifTool, and are recorded as
-stale in the [autogeneration plan](/AUTOGENERATION-PLAN); a refresh against the
-pinned 13.59 is in progress.
+- **A reader first.** Of the 131 formats that detection can map, 129 have
+  a parser. That includes camera RAW, which covers 36 RAW sub-formats. Many
+  more file types are *identified*, from ExifTool's own type tables, but not
+  parsed. [Supported formats](/reference/formats/) lists which is which.
+- **Parity is measured, not claimed.** Every number on this site names the
+  instrument and commit that produced it. The pinned ExifTool is always
+  checked for both its version and its capabilities first.
+  [ExifTool parity](/guide/exiftool-parity) explains the terms.
+- **Writing is narrower.** JPEG EXIF, TIFF and TIFF-based RAW, PNG and PDF
+  can be written. What is proven, and what is only implemented, is on
+  [Writing metadata](/guide/writing).
+- **Moving toward full generation.** The goal is that a new ExifTool release
+  flows in by regeneration, with no one retyping a tag rule. The
+  [v2 design](/AUTOGENERATION-V2-DESIGN) and the
+  [plan](/AUTOGENERATION-PLAN) describe how, and the [status page](/status/)
+  shows how far along it is.
 
-[Benchmark status and how to reproduce →](/performance/)
+## Where to go next
 
-## Why OxiDex?
-
-**For Photographers & Archivists:**
-- Process large image libraries in parallel
-- Reliable metadata preservation with memory-safe operations
-- Support for 40+ camera RAW formats
-
-**For Developers:**
-- Native Rust library API for integration
-- C FFI bindings for cross-language support
-- MCP server for AI assistant integration
-- Comprehensive documentation and examples
-
-**For AI & Automation:**
-- Natural language metadata operations via MCP
-- Works with Claude, Cline, and other MCP clients
-- Five tools: extract, write, search, analyze and copy metadata ([oxidex-mcp](https://github.com/swack-tools/oxidex-mcp))
-
-**For DevOps:**
-- Static binaries with no dependencies
-- Cross-compilation for all major platforms
-- Continuous fuzzing for security
-
-## Supported Formats
-
-140+ format families including:
-- **Images:** JPEG, PNG, TIFF, GIF, BMP, WebP, HEIF
-- **RAW:** Canon (CR2/CR3), Nikon (NEF), Sony (ARW), and 35+ more
-- **Video:** MP4, MOV, MKV, AVI, FLV
-- **Audio:** MP3, FLAC, AAC, WAV, OGG
-- **Documents:** PDF, Office formats
-- **Metadata:** EXIF, XMP, IPTC, ICC Profiles, MakerNotes
-
-[See complete format list →](/reference/formats/)
+- [Install OxiDex](/guide/getting-started)
+- [Use the command line](/guide/cli-usage) or [the Rust library](/guide/library-api)
+- [How the architecture works](/architecture/)
+- [How to contribute](/contributing/)

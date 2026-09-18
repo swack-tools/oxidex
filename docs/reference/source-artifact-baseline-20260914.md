@@ -40,7 +40,7 @@ Cargo source match the base, already validated with Clippy. The full recorded du
 ## Recorded result
 
 Instrument: `join_source_artifacts.py`, pinned ExifTool 13.59 dump. The committed
-[source/artifact report](source-artifact-baseline-13.59.json) records input,
+[source/artifact report](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/source-artifact-baseline-13.59.json) records input,
 selector, executor and generated-artifact hashes plus counts for 141 processor
 families. All 1,512 captured source tables remain in the denominator.
 

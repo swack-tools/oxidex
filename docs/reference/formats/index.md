@@ -1,397 +1,107 @@
-# Supported Formats
-
-OxiDex supports 140+ file format families with comprehensive metadata extraction and writing capabilities.
-
-**Legend:**
-- ✅ **Fully Implemented** - Read and write support with comprehensive tag coverage
-- 🔄 **Partial Support** - Read support implemented, write support limited
-- ⏳ **Planned** - On the roadmap for future implementation
-
-## Image Formats
-
-### JPEG (Joint Photographic Experts Group)
-
-**Status:** ✅ Fully Implemented
-
-**File Extensions:** `.jpg`, `.jpeg`, `.jpe`
-
-**Metadata Types:**
-- ✅ EXIF (Exchangeable Image File Format)
-- ✅ XMP (Extensible Metadata Platform)
-- ✅ IPTC (International Press Telecommunications Council)
-- ✅ JFIF (JPEG File Interchange Format)
-- ✅ GPS (Geolocation data)
-- ✅ ICC Profile (Color management)
-- ✅ Photoshop metadata
-- ✅ Thumbnail extraction
-
-**Available Tags:** 244 EXIF tags + 122 IPTC tags + XMP support
-
-**Common Use Cases:**
-- Digital camera photos
-- Web images
-- Social media uploads
-- Scanned documents
-
-### TIFF (Tagged Image File Format)
-
-**Status:** ✅ Fully Implemented
-
-**File Extensions:** `.tif`, `.tiff`
-
-**Metadata Types:**
-- ✅ EXIF
-- ✅ XMP
-- ✅ IPTC
-- ✅ GPS
-- ✅ ICC Profile
-- ✅ Photoshop
-- ✅ Multi-page/multi-image support
-
-**Available Tags:** 244 EXIF tags + TIFF-specific tags
-
-**Common Use Cases:**
-- Professional photography
-- Archival images
-- Scientific imaging
-- Medical imaging (DICOM-TIFF)
-
-### PNG (Portable Network Graphics)
-
-**Status:** ✅ Fully Implemented
-
-**File Extensions:** `.png`
-
-**Metadata Types:**
-- ✅ PNG text chunks (tEXt, zTXt, iTXt)
-- ✅ XMP
-- ✅ EXIF (embedded via PNG chunks)
-- ✅ ICC Profile
-- ✅ Creation time (tIME chunk)
-- ✅ Physical dimensions (pHYs chunk)
-
-**Available Tags:** 30 PNG-specific tags + EXIF/XMP support
-
-**Common Use Cases:**
-- Web graphics
-- Screenshots
-- Lossless image archiving
-- Images with transparency
-
-### RAW Camera Formats
-
-**Status:** ✅ Fully Implemented (40+ formats)
-
-**Supported Formats:**
-
-- **Canon:** CR2, CR3, CRW
-- **Nikon:** NEF, NRW
-- **Sony:** ARW, SR2, SRF, SRW, ARQ, ARI
-- **Fujifilm:** RAF
-- **Olympus:** ORF, ORI
-- **Pentax:** PEF
-- **Panasonic:** RW2, RWL
-- **Hasselblad:** 3FR, FFF
-- **Phase One:** IIQ
-- **Mamiya:** MEF
-- **Leaf:** MOS
-- **Kodak:** DCR, KDC
-- **Minolta:** MDC, MRW
-- **Epson:** ERF
-- **Sigma:** X3F
-- **GoPro:** GPR
-- **Adobe:** DNG (Digital Negative)
-- **HEIF:** HIF
-- **Light:** LRI
-- **Sinar:** STI
-- **Generic:** RAW, CAM, REV
-
-**Metadata Support:** EXIF, XMP, maker notes for each manufacturer
-
-## Video Formats
-
-### MP4/QuickTime
-
-**Status:** ✅ Fully Implemented
-
-**File Extensions:** `.mp4`, `.m4v`, `.mov`, `.3gp`, `.3g2`
-
-**Metadata Types:**
-- ✅ QuickTime atoms (moov, udta, meta)
-- ✅ Creation/modification times
-- ✅ Duration, dimensions
-- ✅ GPS coordinates
-- ✅ Camera make/model
-- ✅ XMP packets
-
-**Available Tags:** 143 QuickTime-specific tags
-
-**Common Use Cases:**
-- Video library management
-- Smartphone video metadata
-- Media asset databases
-- GPS-tagged videos
-
-### Additional Video Formats
-
-**Status:** ✅ Phase 1 Complete
-
-- **MKV/WebM** (Matroska) - ✅ Complete
-- **FLV** (Flash Video) - ✅ Complete
-- **AVI** (Audio Video Interleave) - ✅ Complete
-- **MTS/M2TS** (AVCHD) - ✅ Complete
-
-## Audio Formats
-
-**Status:** ✅ Phase 1 Complete
-
-- **MP3** (ID3 tags) - ✅ Complete
-- **FLAC** (Free Lossless Audio Codec) - ✅ Complete
-- **AAC** (Advanced Audio Coding) - ✅ Complete
-- **WAV** (Waveform Audio) - ✅ Complete
-- **OGG Vorbis** - ✅ Complete
-- **Opus** - ✅ Complete
-- **APE** (Monkey's Audio) - ✅ Complete
-
-## Document Formats
-
-### PDF (Portable Document Format)
-
-**Status:** ✅ Fully Implemented
-
-**File Extensions:** `.pdf`
-
-**Metadata Types:**
-- ✅ PDF Info Dictionary (Title, Author, Subject, Keywords)
-- ✅ Creation/Modification dates
-- ✅ XMP metadata packets
-- ✅ ICC profiles
-
-**Common Use Cases:**
-- Document metadata extraction
-- PDF library management
-- Compliance and archiving
-
-### PE (Portable Executable)
-
-**Status:** ✅ Fully Implemented
-
-**File Extensions:** `.exe`, `.dll`, `.sys`
-
-**Metadata Types:**
-- ✅ Version information
-- ✅ File properties
-- ✅ Digital signatures
-- ✅ Resource metadata
-
-**Common Use Cases:**
-- Windows executable analysis
-- Software inventory
-- Security auditing
-
-## Metadata Standards
-
-### EXIF (Exchangeable Image File Format)
-
-**Status:** ✅ Comprehensive Support
-
-**Supported in Formats:** JPEG, TIFF, PNG, RAW formats
-
-**Tag Categories:**
-- Image structure (width, height, color space)
-- Camera settings (ISO, aperture, shutter speed, focal length)
-- Camera identification (make, model, serial number)
-- Date/time stamps (original, digitized, modified)
-- Image processing (white balance, exposure compensation, flash)
-- Thumbnail images
-- Copyright and author information
-
-**Available Tags:** 718 tags from EXIF specification
-
-**Standards Compliance:** EXIF 2.3 specification
-
-### XMP (Extensible Metadata Platform)
-
-**Status:** ✅ Fully Implemented
-
-**Supported in Formats:** JPEG, TIFF, PNG, PDF, MP4
-
-**XMP Namespaces:**
-- `dc` (Dublin Core) - Title, Creator, Rights, Description
-- `xmp` - Base XMP properties
-- `xmpRights` - Copyright management
-- `photoshop` - Adobe Photoshop metadata
-- `exif` - EXIF properties in XMP format
-- `tiff` - TIFF properties in XMP format
-- `aux` - Additional camera metadata
-- `iptcCore` - IPTC Core metadata
-- `iptcExt` - IPTC Extension metadata
-- `plus` - Picture Licensing Universal System
-
-**Read Operations:** ✅ Full XML parsing
-**Write Operations:** ✅ Full XML serialization
-
-### IPTC (International Press Telecommunications Council)
-
-**Status:** ✅ Fully Implemented
-
-**Supported in Formats:** JPEG, TIFF
-
-**IPTC Categories:**
-- Descriptive metadata (Caption, Keywords, Headline)
-- Administrative metadata (Credit, Source, Copyright Notice)
-- People and locations (City, Province, Country, Creator)
-- Rights information (Usage Terms, Copyright Notice)
-- Technical metadata (Date Created, Digital Creation Date)
-
-**Available Tags:** 122 IPTC tags
-
-**Standards Compliance:** IPTC Core 1.3, IPTC Extension
-
-### GPS Metadata
-
-**Status:** ✅ Fully Implemented
-
-**Supported in Formats:** JPEG, TIFF, MP4/MOV, RAW
-
-**GPS Tags:**
-- Latitude, Longitude (decimal degrees)
-- Altitude (meters above sea level)
-- Timestamp (UTC)
-- Speed, Track (direction of movement)
-- Satellites used, DOP (dilution of precision)
-- Map Datum (coordinate system)
-- Differential correction
-
-**Available Tags:** 32 GPS-specific tags
-
-**Coordinate Formats:** Decimal degrees, degrees/minutes/seconds (DMS)
-
-## Additional Metadata
-
-### ICC Profile (Color Management)
-
-**Status:** ✅ Fully Implemented
-
-**Supported in Formats:** JPEG, TIFF, PNG, PDF
-
-**Profile Information:**
-- Profile description
-- Color space (RGB, CMYK, Lab)
-- Rendering intent
-- White point, primaries
-- Gamma/transfer curve
-
-**Available Tags:** 90 ICC Profile tags
-
-### Photoshop Metadata
-
-**Status:** ✅ Fully Implemented
-
-**Supported in Formats:** JPEG, TIFF, PNG
-
-**Photoshop Resources:**
-- Image resources (layers, paths)
-- Copyright flag
-- URL
-- Credit, Source
-- Caption Writer
-
-**Available Tags:** 136 Photoshop-specific tags
-
-### Maker Notes
-
-**Status:** ✅ Comprehensive Support (30+ manufacturers)
-
-**Canon MakerNotes:** 930 tags
-- Phase 1: Basic tags (ImageType, SerialNumber, ModelID)
-- Phase 2: Array tags (CameraSettings, ShotInfo, FocalLength)
-- Phase 3: Advanced (Lens database, AFInfo, FileInfo)
-
-**Nikon MakerNotes:** 2,398 tags (main) + 3,512 tags (NikonCustom)
-**Sony MakerNotes:** 1,148 tags
-**Pentax MakerNotes:** 876 tags
-
-## Format Detection
-
-OxiDex uses **magic number detection** to identify file formats:
-
-1. Reads the first few bytes (magic number)
-2. Matches against known format signatures
-3. Falls back to file extension if ambiguous
-
-**Format Signatures:**
-
-| Format | Magic Bytes | Offset |
-|--------|-------------|--------|
-| JPEG | `FF D8 FF` | 0 |
-| PNG | `89 50 4E 47 0D 0A 1A 0A` | 0 |
-| TIFF (LE) | `49 49 2A 00` | 0 |
-| TIFF (BE) | `4D 4D 00 2A` | 0 |
-| PDF | `25 50 44 46` (`%PDF`) | 0 |
-| MP4/MOV | `66 74 79 70` (`ftyp`) | 4 |
-
-This ensures robust format detection even with incorrect extensions.
-
-## Performance by Format
-
-**Relative Performance** (compared to baseline JPEG parsing):
-
-| Format | Read Speed | Write Speed | Notes |
-|--------|-----------|-------------|-------|
-| JPEG | 1.0x (baseline) | 1.0x | Optimized segment parsing |
-| TIFF | 0.9x | 0.9x | IFD chain traversal |
-| PNG | 1.1x | 1.1x | Simple chunk-based format |
-| PDF | 0.8x | 0.8x | Object parsing |
-| MP4/MOV | 0.7x | N/A | Atom tree traversal |
-
-All formats process typical files in < 50ms on modern hardware.
-
-## Tag Database Statistics
-
-**Total Tags:** 16,684 tag definitions (see [Tag Coverage](/reference/tag-coverage-analysis) for what this counts and for the measured extraction-conformance score)
-
-**Tags by Format Family:**
-- NikonCustom: 3,512 tags
-- DICOM: 3,149 tags
-- Nikon: 2,398 tags
-- Sony: 1,148 tags
-- QuickTime: 1,069 tags
-- Canon: 930 tags
-- Casio: 930 tags
-- Pentax: 876 tags
-- EXIF: 718 tags
-- And 131+ more format families
-
-## Checking Format Support
-
-Use the CLI to check format support:
-
-```bash
-oxidex photo.jpg
-```
-
-Supported formats will display metadata. Unsupported formats show:
-
-```
-Error: Unsupported file format: unknown
-```
-
-## Future Roadmap
-
-**v1.2.1 (current crate version):** 140+ format families detected; read and write support varies per family as the tables above state
-**v2.0 Goal:** Enhanced maker notes support for all major camera vendors
-**v3.0 Goal:** Complete ExifTool extraction parity, measured by [conformance score](/reference/tag-coverage-analysis#measured-extraction-coverage), not by definitions count
+# Supported formats
+
+A format can be supported in three different ways, and they mean very
+different things:
+
+| State | What you get | How to tell |
+| --- | --- | --- |
+| **Parsed** | The format's own tags, from a parser for that format | Tags beyond `File:` and `System:`; JSON has no `Status` key |
+| **Parsed generically** | Tags from a container or text reader, not the format's own tags | For example, an ODS spreadsheet gives `ZIP:` tags, and an RTF file gives line and word counts |
+| **Identified only** | `File:FileType`, `FileTypeExtension`, `MIMEType` and filesystem tags. Nothing else. | For a single-file read, JSON `"Status": "IdentifiedOnly"`; `ParseStatus::IdentifiedOnly` in the library |
+
+"Parsed" says a parser exists and runs. It does not say that the parser
+extracts everything ExifTool does. How much of each format matches ExifTool
+is measured, not assumed; see [ExifTool parity](/guide/exiftool-parity) and
+the per-format [comparison report](/reference/comparison/).
+
+::: info How these lists were made
+The format lists come from the code at the `refactor/tag-machinery` tip: the
+`FileFormat` enum in `src/core/file_format.rs`, the dispatch in
+`src/core/format_dispatch.rs`, and the RAW detection in
+`src/parsers/raw/format_detection.rs`. The examples of generic and
+identity-only reads were produced by running a release build on the pinned
+ExifTool 13.59 `t/images` corpus, and on synthetic headers for the types that
+corpus lacks.
+:::
+
+## Parsed
+
+Detection can map a file to one of 131 `FileFormat` variants. 129 of them
+dispatch to a parser; the other two are `Unknown` and an unused `RAW`
+placeholder. One of the 129, camera RAW, covers 36 RAW sub-formats.
+
+| Family | Formats |
+| --- | --- |
+| **Images** | JPEG, TIFF, BigTIFF, PNG, GIF, BMP, WebP, HEIF, AVIF, JPEG XL, JPEG 2000, BPG, OpenEXR, PFM, Radiance HDR, FLIF, GIMP XCF, MIFF, SVG, ICO, Photoshop PSD, Paint Shop Pro, WordPerfect Graphics, DjVu, DPX, Photo CD, PCX, PGF, PICT, PPM, Sony PMP, Casio CAM, XISF |
+| **Camera RAW** | [36 formats from 20+ makers](/reference/formats/camera-raw) |
+| **Video and containers** | QuickTime/MP4 family (MOV, MP4, M4A, 3GP, …), Matroska MKV, WebM (only with `--detector magika`; signature detection reports WebM files as MKV), FLV, SWF, AVI, MPEG-2 TS (MTS/M2TS), ASF/WMV, MXF, DV, WTV, RealMedia, RED R3D, MOI |
+| **Audio** | MP3, FLAC, AAC, WAV, AIFF, Ogg Vorbis, Opus, Monkey's Audio (APE), Musepack (MPC), RealAudio (RA, RAM), Olympus DSS, Audible AA |
+| **Documents and text** | PDF, EPS/PostScript, DOCX, XLSX, PPTX, Apple Pages/Numbers/Keynote, EPUB, OLE compound documents (DOC, XLS, PPT, FlashPix), InDesign, HTML, plain text, CSV, vCard, iCalendar, email (EML), TNEF, Palm database (PDB, MOBI), XMP, XML, property lists |
+| **Archives** | ZIP, Capture One EIP, RAR, 7z, ISO 9660, TAR, `ar`, gzip, BitTorrent |
+| **Fonts** | TrueType, OpenType, WOFF, WOFF2, AFM, PFB, PFM (printer font metrics), Mac resource fonts (dfont) |
+| **Executables** | Windows PE (EXE/DLL; [details](/reference/formats/pe-executable), [Rich header](/features/pe-rich-header)), ELF, Mach-O |
+| **Other** | ICC profiles, X.509 certificates, Canon VRD/DR4, MIE, macOS sidecars, Windows shortcuts (LNK), Lytro LFP, SQLite, Windows Prefetch, Windows Registry hives, Windows event logs (EVTX), PCAP/PCAPNG, DWG, DXF, STL, OBJ, glTF, Garmin FIT, FITS, HDF5, DICOM, MRC, Zeiss CZI, iTunes ITC, FLIR FPF |
+
+### MakerNotes
+
+Maker notes are dispatched by signature or by `Make`
+(`src/parsers/tiff/makernote_dispatcher.rs`). The dispatcher covers Canon,
+Nikon, Sony, Panasonic, FujiFilm, Olympus/OM Digital, Pentax/Asahi/Ricoh
+Imaging, Samsung, Leica, Minolta/Konica Minolta, Apple, DJI, FLIR, GoPro,
+InfiRay, Nintendo, Parrot, Reconyx, RED, Casio, GE/General Imaging, HP, JVC,
+Kodak, Motorola, Ricoh, Sanyo, Phase One and Sigma. It also covers
+maker-note blocks written by software: Capture One, FotoStation, GIMP,
+InDesign, Nikon Capture, Photoshop and Scalado. See
+[MakerNotes](/reference/makernotes).
+
+## Parsed generically
+
+These are identified correctly, but read by a generic reader:
+
+- **Text read as plain text**: RTF, JSON, `.url` files and InDesign INX.
+  They get `File:LineCount`, `WordCount`, `Newlines` and `MIMEEncoding`, not
+  ExifTool's tags for the format.
+- **ZIP-based documents read as ZIP**: OpenDocument (ODS, ODT, …), IDML,
+  Sketch and VSDX. They get `ZIP:` tags, not their document properties.
+
+## Identified only
+
+OxiDex's type identification is generated from ExifTool's own extension and
+magic-number tables. It knows 299 FileTypes, far more than have parsers. A
+file of a type with no parser is returned with its identity and filesystem
+tags only. On a release build, WMF and JPEG XR (JXR) files, for example,
+come back as `"Status": "IdentifiedOnly"`.
+
+Reading the detection code at the tip, these ExifTool types have no parser
+route, so expect them to be identified at best: EXV, BZ2, MNG, JNG, TTC,
+CUR, CHM, DEX, JUMBF/C2PA, DWF, DSF, LA, OFR, PAC, WavPack, FLIR SEQ/FFF,
+WMF, JXR/HDP/WDP, DCX, LIF, RWZ, NKA, AVC, QTIF, MPEG program streams
+(MPEG, M2V, VOB) and LRI. This list comes from reading code, not from
+running sample files. Treat it as a guide, and check a file with `oxidex -j`.
+
+## Writable formats
+
+| Format | Written |
+| --- | --- |
+| JPEG | EXIF (APP1) only |
+| TIFF, and TIFF-structured RAW (NEF, CR2, ARW, DNG, PEF, RW2, IIQ, …) | IFD entries, surgically in place |
+| PNG | `tEXt`, `iTXt`, `zTXt`, `eXIf` |
+| PDF | an appended Info dictionary |
+
+Nothing else can be written, including BigTIFF, ORF, RAF, MRW, X3F, CR3,
+CRW, video and HEIC. Most writable tags are **not yet proven** against
+ExifTool; see [Writing metadata](/guide/writing).
+
+## Tag definitions
+
+The tag database holds 16,684 tag definitions, synced from ExifTool's
+documentation view (`exiftool -listx`). They are browsable by domain under
+[Tag domains](/tag-domains/). A definition says ExifTool knows a tag, not
+that OxiDex reads it.
 
 ## Implementation notes
 
-- [PE Rich Header extraction](/features/pe-rich-header)
-- [Office document forensic metadata](/features/OFFICE_FORENSIC_METADATA)
-- [GPS movement and tracking tags](/features/GPS_MOVEMENT_TRACKING)
-
-## Additional Resources
-
-- [Tag Database](/reference/tag-database) - Complete tag reference
-- [API Reference](/reference/api-reference) - Using formats in code
-- [CLI Usage](/guide/cli-usage) - Command-line examples
-- [ExifTool Format Support](https://exiftool.org/#supported) - Original format list
+- [Camera RAW](/reference/formats/camera-raw)
+- [PE executables](/reference/formats/pe-executable) and [PE Rich header](/features/pe-rich-header)
+- [GPS movement tags](/features/GPS_MOVEMENT_TRACKING)
+- [Office forensic metadata](/features/OFFICE_FORENSIC_METADATA)

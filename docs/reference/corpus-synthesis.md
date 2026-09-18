@@ -134,7 +134,7 @@ until generation runs (CanonCustom's function tags, NikonCapture's
 capture-editing tags, NikonCustom's per-body settings layouts). The subset run
 below empirically resolves several of these.
 
-Full per-table classification: [`corpus-synthesis-classification.json`](./corpus-synthesis-classification.json).
+Full per-table classification: [`corpus-synthesis-classification.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/corpus-synthesis-classification.json).
 
 ### Note on the 22 vs 21 discrepancy
 
@@ -224,7 +224,7 @@ correctly by oxidex.
 | ExifTool round-trip OK (exiftool itself accepted the write) | 304 | 81.1% |
 | **oxidex read correctly** | **284** | **75.7%** (93.4% of the 304 that round-tripped) |
 
-Full per-tag results: [`corpus-synthesis-subset-report.json`](./corpus-synthesis-subset-report.json).
+Full per-tag results: [`corpus-synthesis-subset-report.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/corpus-synthesis-subset-report.json).
 
 ### What WRITE_NOOP actually measures
 

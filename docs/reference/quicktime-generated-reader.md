@@ -40,7 +40,7 @@ fixture improvement, not full-corpus conformance or a global generated percentag
 Four of the 50 comparisons check absent output for unknown atoms; they are not
 newly observed tag identities. No writing behavior was added or measured.
 
-The [machine-readable report](quicktime-generated-reading-13.59.json) records
+The [machine-readable report](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/quicktime-generated-reading-13.59.json) records
 source state, binary hash, tool/helper hashes, oracle commit and every observation.
 The run built the exact compiler-reported binary and checked the 247-file oracle
 source manifest before and after measurement. Its dirty-tree state is explicit.

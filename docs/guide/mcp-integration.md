@@ -7,6 +7,14 @@ release cycle: [github.com/swack-tools/oxidex-mcp](https://github.com/swack-tool
 It was split out of this repository on 2025-11-19; nothing under `oxidex/`
 builds it.
 
+::: warning Not yet verified against 2.0
+oxidex-mcp depends on this repository's `main` branch through Git, and it
+was last updated on 2025-11-22, before the 2.0 changes. Tag keys and some
+API signatures changed in 2.0 (see
+[Migrating from 1.x to 2.0](/guide/migrating-from-1x)). Its behaviour
+against the v2.0.0-beta.1 library has not been tested.
+:::
+
 ## What the server provides
 
 The server speaks JSON-RPC 2.0 over stdin/stdout and exposes five tools (from

@@ -82,48 +82,16 @@ Each domain crate pre-compiles its YAML tag definitions to binary format at buil
 
 This converts one-time deserialization work from runtime to compile time, avoiding repeated YAML parsing on every program start while keeping the source readable and maintainable.
 
-## Supported Formats
+## What the definitions cover
 
-### By Tag Count
+The definitions are grouped into six domains, one per crate. The generated
+[tag-domain pages](/tag-domains/) list every table and tag in each domain.
+They come from the same YAML the crates embed, and `just docs-generate-tags`
+refreshes them.
 
-| Module | Tags | Description |
-|--------|------|-------------|
-| DICOM | 3,149 | Medical imaging |
-| NikonCustom | 3,512 | Nikon custom settings |
-| Nikon | 2,398 | Nikon MakerNotes |
-| Sony | 1,148 | Sony MakerNotes |
-| QuickTime | 1,069 | Video metadata |
-| Canon | 930 | Canon MakerNotes |
-| Casio | 930 | Casio MakerNotes |
-| Pentax | 876 | Pentax MakerNotes |
-| EXIF | 718 | Core EXIF specification |
-
-### By Category
-
-**Standard Formats:**
-- EXIF, GPS, XMP, IPTC, JFIF, TIFF
-
-**MakerNotes (30+ vendors):**
-- Canon, Nikon, Sony, Olympus, Panasonic, Pentax, FujiFilm
-- Samsung, Minolta, Kodak, Casio, Ricoh, etc.
-
-**Video:**
-- QuickTime, MP4, Matroska, Flash, ASF, MPEG, H264
-
-**Audio:**
-- ID3, FLAC, Ogg, Vorbis, AAC, APE
-
-**Specialized:**
-- DICOM (medical), FITS (astronomy), MXF, PDF, PostScript
-
-**RAW:**
-- DNG, CR2, NEF, ARW, CanonRaw, SigmaRaw, MinoltaRaw
-
-**Graphics:**
-- PNG, GIF, BMP, PSD, JPEG, JPEG2000, OpenEXR, ICO
-
-**Documents:**
-- HTML, XML, SVG, VCard, LNK
+A definition records that ExifTool documents a tag. It is not evidence that
+OxiDex extracts it. For what OxiDex actually reads, see
+[ExifTool parity](/guide/exiftool-parity).
 
 ## Usage
 

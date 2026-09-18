@@ -1,6 +1,6 @@
 # Recorded source-processor inventory
 
-[`source-processor-inventory-13.59.json`](source-processor-inventory-13.59.json)
+[`source-processor-inventory-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/source-processor-inventory-13.59.json)
 is a source-shape report generated from the recorded ExifTool 13.59 Perl 5.38
 table dump. It records the dump hash, the immutable selector commit, selector
 file hashes, category counts, and conservation totals. It is not a measure of

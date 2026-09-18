@@ -1,65 +1,67 @@
 # Introduction
 
-OxiDex is a modern, high-performance Rust implementation of the industry-standard [ExifTool](https://exiftool.org/) metadata management library and command-line application.
+OxiDex is a Rust reimplementation of [ExifTool](https://exiftool.org/), Phil
+Harvey's metadata reader and writer. It is a command-line tool, a Rust
+library and a C library. Its target is ExifTool's own output: the same tag
+names, groups and values that ExifTool 13.59 prints for the same file.
 
-## What is OxiDex?
+::: warning v2.0.0-beta.1: a pre-release
+These docs describe the 2.0 line, built on the `refactor/tag-machinery`
+branch. It is a beta: output and API may still change before 2.0.0. Tag
+keys, value formatting and parts of the API changed since 1.x; see
+[Migrating from 1.x to 2.0](/guide/migrating-from-1x). The last stable
+release is [v1.2.1](https://github.com/swack-tools/oxidex/releases/tag/v1.2.1).
+:::
 
-OxiDex provides a memory-safe, high-performance alternative to the Perl-based ExifTool while maintaining full compatibility with its extensive metadata tag support. It delivers superior performance through zero-cost abstractions, native cross-compilation capabilities, and seamless integration into modern software ecosystems.
+## How it works
 
-## Key Capabilities
+ExifTool is mostly a generic engine plus declarative tag tables written in
+Perl. OxiDex does not retype those tables. It dumps them from the pinned
+ExifTool source and generates Rust from them: tag IDs, byte layouts,
+selection conditions and value conversions. CI verifies the generated code
+against the live Perl. Procedural code, such as the walkers that find the
+tables inside a JPEG, TIFF or QuickTime file, is ported by hand, one named
+Perl subroutine at a time. See [Architecture](/architecture/).
 
-### Metadata Extraction
-Read metadata from 140+ format families including images (JPEG, PNG, TIFF, RAW), videos (MP4, MKV, AVI), audio (MP3, FLAC), and documents (PDF).
+## What it can do today
 
-### Metadata Writing
-Modify EXIF, XMP, and IPTC metadata with atomic file operations ensuring data integrity.
+- ✅ 16,684 metadata tag definitions, synced from ExifTool's own tag database. A definition says a tag exists, not that OxiDex reads it.
+- ✅ **Reading.** 129 detectable formats have a parser, among them camera
+  RAW with 36 sub-formats. Many more types are identified but not parsed.
+  See [Supported formats](/reference/formats/).
+- ✅ **Measured parity.** 2,378 ExifTool catalog entries are proven read on
+  ExifTool's own test corpus, and CI fails any change that loses one. See
+  [ExifTool parity](/guide/exiftool-parity) and the [status page](/status/).
+- 🔶 **Writing.** JPEG EXIF, TIFF and TIFF-based RAW, PNG and PDF can be
+  written, atomically. 19 tags are proven byte-for-byte against ExifTool.
+  See [Writing metadata](/guide/writing).
+- ✅ **Speed.** 3.0x ExifTool 13.59 on a single JPEG and 1.83x per core on
+  a 194-file corpus, with more from parallel batch reads. See
+  [Performance](/performance/).
+- ✅ **Interfaces.** An ExifTool-style CLI, a Rust library, a C API, and a
+  separate MCP server.
 
-### Batch Processing
-Process thousands of files in parallel, leveraging all CPU cores for maximum performance.
+## What it is not (yet)
 
-### Format Detection
-Automatically identify file formats using magic byte detection, even when file extensions are incorrect.
+- **Not a complete ExifTool.** Many tags ExifTool reads are still missing,
+  and the parity measurements list them. Where a conversion cannot be
+  reproduced exactly, OxiDex omits the tag rather than print a plausible
+  wrong value.
+- **Not a drop-in replacement for scripts.** The arguments are ExifTool-style,
+  but some options differ. Most notably, `-n` is a dry run and there is no
+  `_original` backup. Output layout also differs. See
+  [Differences from ExifTool](/guide/cli-usage#differences-from-exiftool).
+- **Not a general writer.** Most formats and most tags cannot yet be
+  written, or are not yet proven.
 
-## Who Should Use OxiDex?
+## Next steps
 
-**Photographers:** Manage metadata in large photo libraries efficiently, with parallel batch processing.
-
-**Archivists:** Preserve and extract metadata from diverse file formats with memory-safe operations.
-
-**Developers:** Integrate metadata management into applications via Rust library API or C FFI bindings.
-
-**System Administrators:** Deploy static binaries with no runtime dependencies across multiple platforms.
-
-## Current Status
-
-**Version:** 1.2.1 (crate version in `Cargo.toml`)
-
-- ✅ 16,684 metadata tag definitions across 140+ format families (see [Tag Coverage](/reference/tag-coverage-analysis) for the measured extraction-conformance score)
-- ✅ 140+ format families
-- ⏳ Published speed figures are stale and being re-measured against the pinned ExifTool ([status](/performance/))
-- ✅ Full CLI with backward compatibility
-- ✅ Rust library API and C FFI bindings
-- ✅ Cross-platform binaries (Linux, macOS, Windows)
-
-## Next Steps
-
-- [Installation Guide](/guide/getting-started) - Install OxiDex via cargo, homebrew, or binaries
-- [CLI Usage](/guide/cli-usage) - Learn command-line interface
-- [Library API](/guide/library-api) - Integrate OxiDex into Rust projects
-- [Performance](/performance/) - View benchmark comparisons
-
-## Project Goals
-
-1. **ExifTool Extraction Parity:** Match ExifTool's output on every tag it reads, measured by [conformance score](/reference/tag-coverage-analysis#measured-extraction-coverage)
-2. **High Performance:** measurably faster than the Perl implementation, with the figures published from a pinned, reproducible benchmark
-3. **Memory Safety:** Eliminate vulnerabilities through Rust's ownership system
-4. **Drop-in Replacement:** CLI compatibility for seamless migration
-5. **Developer-Friendly:** Clean API for library and FFI integration
+- [Install OxiDex](/guide/getting-started)
+- [Command line](/guide/cli-usage)
+- [Rust library](/guide/library-api)
+- [Writing metadata](/guide/writing)
 
 ## License
 
-OxiDex is released under the GNU General Public License v3.0 (GPL-3.0).
-
-## Acknowledgments
-
-This project is inspired by [ExifTool](https://exiftool.org/) by Phil Harvey. OxiDex is an independent reimplementation and is not affiliated with or endorsed by the original ExifTool project.
+GPL-3.0. OxiDex is an independent reimplementation, and is not affiliated
+with or endorsed by the ExifTool project.

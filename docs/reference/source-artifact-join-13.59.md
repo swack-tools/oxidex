@@ -1,6 +1,6 @@
 # Recorded source-to-artifact join
 
-[`source-artifact-join-13.59.json`](source-artifact-join-13.59.json) joins all
+[`source-artifact-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/source-artifact-join-13.59.json) joins all
 1,512 table identities in the recorded ExifTool 13.59 Perl 5.38 dump to the
 binary, IFD, and keyed generated-artifact shapes at one immutable commit. The
 full 1,512-row result is an external replay artifact; the committed JSON is a

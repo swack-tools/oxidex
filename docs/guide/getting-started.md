@@ -1,187 +1,73 @@
-# Getting Started
+# Installation
 
-This guide will help you install OxiDex and run your first commands.
+::: warning Beta: v2.0.0-beta.1
+These docs describe the 2.0 line. Until its binaries are published on the
+[releases page](https://github.com/swack-tools/oxidex/releases), build it
+from source as shown below. The previous stable release is
+[v1.2.1](https://github.com/swack-tools/oxidex/releases/tag/v1.2.1). It
+behaves differently in several ways; see
+[Migrating from 1.x to 2.0](/guide/migrating-from-1x).
+:::
 
-## Installation
-
-OxiDex provides multiple installation methods. Choose the one that works best for your workflow.
-
-### Option 1: Cargo (Recommended for Rust Users)
-
-Install directly from crates.io:
-
-```bash
-cargo install oxidex
-```
-
-Verify installation:
+## Build from source
 
 ```bash
-oxidex --version
-```
-
-### Option 2: Homebrew (macOS)
-
-For macOS users with [Homebrew](https://brew.sh):
-
-```bash
-# Install from Homebrew formula (source build)
-brew install --build-from-source https://raw.githubusercontent.com/swack-tools/oxidex/main/packaging/homebrew/oxidex.rb
-
-# Verify installation
-oxidex --version
-```
-
-**Note:** The Homebrew formula builds from source, which may take 5-10 minutes.
-
-### Option 3: Pre-Built Binaries
-
-Download static binaries from the [GitHub Releases](https://github.com/swack-tools/oxidex/releases) page:
-
-**Linux (x86_64):**
-```bash
-wget https://github.com/swack-tools/oxidex/releases/download/v1.1.0/oxidex-x86_64-linux-musl.tar.gz
-tar xzf oxidex-x86_64-linux-musl.tar.gz
-sudo mv oxidex /usr/local/bin/
-oxidex --version
-```
-
-**Linux (ARM64):**
-```bash
-wget https://github.com/swack-tools/oxidex/releases/download/v1.1.0/oxidex-aarch64-linux-musl.tar.gz
-tar xzf oxidex-aarch64-linux-musl.tar.gz
-sudo mv oxidex /usr/local/bin/
-oxidex --version
-```
-
-**macOS (Intel):**
-```bash
-wget https://github.com/swack-tools/oxidex/releases/download/v1.1.0/oxidex-x86_64-macos.tar.gz
-tar xzf oxidex-x86_64-macos.tar.gz
-sudo mv oxidex /usr/local/bin/
-oxidex --version
-```
-
-**macOS (Apple Silicon):**
-```bash
-wget https://github.com/swack-tools/oxidex/releases/download/v1.1.0/oxidex-aarch64-macos.tar.gz
-tar xzf oxidex-aarch64-macos.tar.gz
-sudo mv oxidex /usr/local/bin/
-oxidex --version
-```
-
-**Windows (x86_64):**
-Download `oxidex-x86_64-windows.zip` from releases, extract, and add to PATH.
-
-### Option 4: Build from Source
-
-For development or custom builds:
-
-```bash
-# Clone the repository
 git clone https://github.com/swack-tools/oxidex.git
 cd oxidex
-
-# Build release binary
+git switch refactor/tag-machinery   # the 2.0 line (or check out the v2.0.0-beta.1 tag once it exists)
 cargo build --release
-
-# Run
 ./target/release/oxidex --version
 
-# Optional: Install to system
+# optional: put it on your PATH
 cargo install --path .
 ```
 
-## First Steps
+`rust-toolchain.toml` pins the Rust toolchain (1.97.1), and rustup installs
+it on first build. The crate uses edition 2024. A release build compiles the
+six `oxidex-tags-*` crates and the generated tables, so the first build takes
+a while.
 
-### Extract Metadata from a File
+Optional Cargo features:
+
+| Feature | Adds |
+| --- | --- |
+| `magika` | the Magika file-type detector (`--detector magika`) |
+| `exiftool-comparison` | the ExifTool comparison tests (development only) |
+
+::: danger Do not run `cargo install oxidex`
+The `oxidex` name on crates.io belongs to an unrelated, reserved stub crate
+(version 0.0.1). OxiDex is not published on crates.io. Install from source
+or from a GitHub release.
+:::
+
+## Prebuilt binaries
+
+Releases on GitHub carry prebuilt binaries. v1.2.1 has these:
+
+| Platform | Asset |
+| --- | --- |
+| Linux x86_64 (static, musl) | `oxidex-x86_64-unknown-linux-musl` |
+| Linux ARM64 (static, musl) | `oxidex-aarch64-unknown-linux-musl` |
+| macOS Apple Silicon | `oxidex-aarch64-apple-darwin`, or the `.dmg` |
+| Windows x86_64 | `oxidex-x86_64-pc-windows-gnu.exe` |
+
+Download the asset for your platform, make it executable (`chmod +x`) and
+put it on your `PATH`. Release tags also publish a container image,
+`swackhamer/oxidex`, on Docker Hub.
+
+## First commands
 
 ```bash
-oxidex photo.jpg
-```
-
-Output:
-```
- FileName: photo.jpg
-FileSize: 2.3 MB
-Make: Canon
-Model: Canon EOS 5D Mark IV
-DateTimeOriginal: 2024:11:15 14:23:05
-ISO: 400
-FNumber: 5.6
-ExposureTime: 1/250
-...
-```
-
-### Extract Specific Tags
-
-```bash
+oxidex photo.jpg                          # every tag
 oxidex -Make -Model -DateTimeOriginal photo.jpg
+oxidex -j -a -G1 photo.jpg                # JSON, comparable with `exiftool -j -a -G1`
+oxidex -EXIF:Artist="Jane Doe" photo.jpg  # write (in place, atomic)
 ```
 
-Output:
-```
-Make: Canon
-Model: Canon EOS 5D Mark IV
-DateTimeOriginal: 2024:11:15 14:23:05
-```
+Then continue with the [command line guide](/guide/cli-usage) or the
+[Rust library guide](/guide/library-api).
 
-### Write Metadata
+## Getting help
 
-```bash
-oxidex -Artist="Jane Doe" -Copyright="Copyright 2024" photo.jpg
-```
-
-### Process Multiple Files
-
-```bash
-# Recursive directory scan
-oxidex -r /path/to/photos/
-
-# Specific file pattern
-oxidex *.jpg
-```
-
-### Output Formats
-
-**JSON:**
-```bash
-oxidex -json photo.jpg
-```
-
-**CSV (for batch analysis):**
-```bash
-oxidex -csv -r /path/to/photos/ > metadata.csv
-```
-
-## Verification
-
-Test your installation with a sample command:
-
-```bash
-# Create a test file (if you don't have one)
-echo "test" > test.txt
-
-# Extract metadata
-oxidex test.txt
-```
-
-Expected output should include file information like FileName, FileSize, etc.
-
-## Next Steps
-
-- [CLI Usage Guide](/guide/cli-usage) - Learn all command-line options
-- [Library API Guide](/guide/library-api) - Use OxiDex in Rust projects
-- [Troubleshooting](/guide/troubleshooting) - Common issues and solutions
-
-## System Requirements
-
-- **OS:** Linux (Ubuntu 18.04+), macOS (10.15+), Windows (10+)
-- **Architecture:** x86_64 or ARM64
-- **For source builds:** Rust 1.75+
-
-## Getting Help
-
-- [GitHub Issues](https://github.com/swack-tools/oxidex/issues) - Report bugs or request features
-- [Troubleshooting Guide](/guide/troubleshooting) - Common problems
-- [GitHub Discussions](https://github.com/swack-tools/oxidex/discussions) - Ask questions
+- [Troubleshooting](/guide/troubleshooting)
+- [GitHub issues](https://github.com/swack-tools/oxidex/issues)

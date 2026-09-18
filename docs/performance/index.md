@@ -1,184 +1,116 @@
 # Performance
 
-OxiDex is compiled Rust and outperforms the Perl ExifTool by a small-integer factor per core.
+OxiDex is a compiled Rust binary. Measured against the pinned Perl ExifTool
+13.59 on the same machine, it is about **3x faster on a single file** and
+**1.8x faster per core** on a real 194-file corpus. The parallel reader
+(rayon) adds more on multi-core machines. Those are the only speed claims
+this site makes. Every number on this page names the instrument, commit,
+ExifTool build and machine it came from.
 
-## Current results (pinned ExifTool 13.59)
+::: tip Two kinds of numbers, never mixed
+- **Committed numbers** come from a local run on the maintainer's
+  workstation, under the repository's exclusive heavy-job lock.
+  They are in `benches/benchmark_results.md` and in the first table below.
+- **CI numbers** come from `.github/workflows/benchmarks.yml` on a shared
+  GitHub-hosted runner. They are *indicative* and are never committed.
 
-Measured by `benches/exiftool_comparison.sh` at commit `8f04e288` (oxidex 1.2.1
-release build, fat LTO) against ExifTool 13.59 from the pinned tree under perl
-5.38.2 with the OOXML.docx capability probe asserted; hyperfine `--warmup 5
---runs 30`, both commands in one invocation, Apple M5 (10 cores). The host was
-not idle (load1 6.7-8.4); load and top CPU consumers are recorded in
-`benches/benchmark_results.log`. Full tables: `benches/benchmark_results.md`.
-
-| Scenario | Perl ExifTool | OxiDex | ExifTool / OxiDex (median) |
-|----------|---------------|--------|---------------------------|
-| 112-byte JPEG (process startup) | 30.8 ms | 8.4 ms | 3.66x |
-| `Canon.jpg -j -a -G1` | 45.5 ms | 15.0 ms | 3.03x |
-| 1000-file batch `-r` (OxiDex parallel) | 1169.6 ms | 273.3 ms | 4.28x |
-| Write one tag | 80.8 ms | 14.6 ms | 5.53x |
-| Format detection (one JPEG) | 30.9 ms | 8.3 ms | 3.74x |
-| 194-file `t/images -j -a -G1`, parallel | 704.0 ms | 114.6 ms | 6.15x |
-| same, `RAYON_NUM_THREADS=1` | 707 ms | 386 ms | 1.83x |
-
-## Historical results (2025-12-03)
-
-::: warning Historical record, not a performance claim
-The table below was produced on 2025-12-03 against an unpinned "latest"
-ExifTool and OxiDex 1.1.0. It is kept for comparison only.
+Different hardware, core count and background load separate the two kinds.
+Compare a CI number only with other runs of the same workflow.
 :::
 
-The following benchmarks compare OxiDex against the original Perl ExifTool running on identical hardware.
+## Committed measurement (#821)
 
-### Summary
+| Item | Detail |
+| --- | --- |
+| Instrument | `benches/exiftool_comparison.sh` with `benches/instrument_check.py`; hyperfine 1.20.0, `--warmup 5 --runs 30 -N`, both commands in one invocation |
+| OxiDex | commit `8f04e288`, oxidex 1.2.1 built with the shipped `[profile.release]` (fat LTO, `codegen-units=1`) |
+| ExifTool | 13.59 from the pinned source tree under perl 5.38.2. The `OOXML.docx` capability probe was asserted before timing started. |
+| Machine | Apple M5 laptop (10 cores, macOS 27.0), not idle: load1 6.7 to 8.4, recorded per scenario in `benches/benchmark_results.log` |
+| Date | 2026-09-18 |
 
-| Scenario | Perl ExifTool | OxiDex | Speedup |
-|----------|---------------|--------|---------|
-| Single JPEG Read | 116.5ms ± 15.6ms | 31.8ms ± 14.1ms | **3.7x faster** |
-| Batch Processing (1000 files) | 1911.4ms ± 171.9ms | 197.6ms ± 3.1ms | **9.7x faster** |
-| Write Operation | 200.7ms ± 50.4ms | 23.0ms ± 1.6ms | **8.7x faster** |
-| Format Detection | 67.3ms ± 13.9ms | 10.4ms ± 3.6ms | **6.5x faster** |
+| Scenario | ExifTool (median) | OxiDex (median) | ExifTool / OxiDex |
+|----------|------------------:|----------------:|------------------:|
+| 112-byte JPEG stub (measures process startup) | 30.8 ms | 8.4 ms | 3.66x |
+| `t/images/Canon.jpg -j -a -G1` | 45.5 ms | 15.0 ms | 3.03x |
+| Write one tag | 80.8 ms | 14.6 ms | 5.53x |
+| Format detection, one JPEG | 30.9 ms | 8.3 ms | 3.74x |
+| 1000-file batch `-r` (OxiDex parallel, ExifTool single-threaded) | 1169.6 ms | 273.3 ms | 4.28x |
+| 194-file `t/images -j -a -G1`, OxiDex parallel | 704 ms | 114.6 ms | 6.15x |
+| same corpus, `RAYON_NUM_THREADS=1` (**like-for-like, per core**) | 707 ms | 386 ms | **1.83x** |
 
-### Benchmark Metadata
+The full tables in `benches/benchmark_results.md` add minima, mean ± σ and
+maxima, and give each ratio on both medians and minima. They also record
+these caveats:
 
-- **Date:** 2025-12-03 08:45:23 UTC
-- **Commit:** [`502bdba1`](https://github.com/swack-tools/oxidex/commit/502bdba1)
+- On `Canon.jpg`, ExifTool's σ/mean is 28%, because of one 96 ms outlier.
+- The rayon rows measure OxiDex using every core against single-threaded
+  Perl. The per-core figure is the `RAYON_NUM_THREADS=1` row.
+- #830 (lazy magic-regex compilation, a static tag-ID index) and #832
+  (Composite dependency resolution) landed after this measurement. Both
+  removed costs that the #821 profile identified, and each PR records its
+  own before/after measurements. The committed table has not been re-run since.
 
-### System Specifications
+The profile behind this table is in `benches/spike/DISPATCH_PERF.md`. It
+measured the whole generated table engine at 0.66% of a corpus read, and
+found the dominant costs were per-process initialisation and Composite
+allocation, not tag dispatch.
 
-- **OS:** Linux (Ubuntu 22.04)
-- **CPU:** x86_64 (4 cores)
-- **Memory:** 8GB RAM
-- **Perl ExifTool:** unpinned ("latest" at the time; not the repository pin)
-- **OxiDex:** version 1.1.0
+## Indicative CI measurement (#825)
 
-## Live Benchmark Reports
+`.github/workflows/benchmarks.yml` runs the same script on every push to
+`refactor/tag-machinery`. It uses the shipped release profile, the pinned
+ExifTool and the same capability probe, with hyperfine `--warmup 3 --runs 20`.
+The run publishes a step summary and a 90-day `benchmark-comparison`
+artifact. The workflow is **non-blocking**: it has no regression threshold,
+and it fails only when the measurement itself is refused (a missing or stale
+binary, a wrong or degraded oracle, or a dirty tree).
 
-View detailed interactive benchmark results from our CI/CD pipeline:
+The run that proved the workflow in #825 (run `35355315041`, commit
+`24184580`, `ubuntu-24.04`, 4 vCPU AMD EPYC 7763) gave these ratios:
+5.59x startup, 5.12x `Canon.jpg`, 11.95x write, 5.39x detection, 5.50x
+batch, 7.50x corpus (parallel) and **3.63x corpus single-threaded**. They are
+higher than the committed numbers because ExifTool runs about 2.7 to 3 times
+slower on that runner, while OxiDex runs only about 1.5 to 1.8 times slower.
+That gap is the reason CI numbers are labelled indicative and kept out of
+the committed table.
+
+## Criterion micro-benchmarks
+
+The in-process Criterion suites (`parse_benchmarks`, `integration_benchmarks`)
+run in `ci.yml`'s `metrics` job **only on pushes to `main`**. That job uses
+a CI-only profile (`lto=false`, 16 codegen units) that no release ships, so
+its absolute times are not comparable with the tables above.
+`deploy-docs.yml` publishes the latest reports with the site:
 
 <div class="benchmark-links">
 
-- 📊 <a href="/benchmarks/report/index.html" target="_blank">Main Benchmark Report</a>
-- 📁 <a href="/benchmarks/single_extraction/report/index.html" target="_blank">Single File Extraction</a>
-- 📦 <a href="/benchmarks/batch_100_jpegs/report/index.html" target="_blank">Batch Processing (100 JPEGs)</a>
-- 🎯 <a href="/benchmarks/format_comparison/report/index.html" target="_blank">Format Comparison</a>
-- 🔍 <a href="/benchmarks/format_detection/report/index.html" target="_blank">Format Detection</a>
-- 📝 <a href="/benchmarks/full_read_metadata/report/index.html" target="_blank">Full Metadata Read</a>
+- <a href="/benchmarks/report/index.html" target="_blank">All Criterion reports</a>
+- <a href="/benchmarks/single_extraction/report/index.html" target="_blank">Single file extraction</a>
+- <a href="/benchmarks/batch_100_jpegs/report/index.html" target="_blank">Batch of 100 JPEGs</a>
+- <a href="/benchmarks/format_comparison/report/index.html" target="_blank">Format comparison</a>
+- <a href="/benchmarks/format_detection/report/index.html" target="_blank">Format detection</a>
+- <a href="/benchmarks/full_read_metadata/report/index.html" target="_blank">Full metadata read</a>
 
 </div>
 
-These reports are automatically generated by [Criterion.rs](https://github.com/bheisler/criterion.rs) on every commit to main and include:
-- Performance graphs with statistical analysis
-- Historical trend comparisons
-- Outlier detection
-- Detailed timing breakdowns
+The deploy stamps the following lines with the date of that deploy and the
+commit whose `ci.yml` run produced the published reports. A local build
+without reports shows the placeholders.
 
-## Key Performance Improvements
+- **Date:** not stamped (local build)
+- **Commit:** not stamped (local build)
 
-### 1. Single File Operations (3.7x faster)
+## Claims this site does not make
 
-Zero-cost abstractions and compiled code eliminate Perl interpreter overhead:
-- No runtime interpretation
-- Direct memory access
-- Optimized binary parsing with `nom`
+Release notes for 1.x published much larger multipliers. Those figures came
+from a 112-byte stub file (so they measured process startup), from an
+unpinned ExifTool 13.36 found on `PATH`, and from parallel OxiDex timed
+against single-threaded Perl. They survive only in a labelled historical
+section of `benches/benchmark_results.md` and in the 1.x changelog entries.
+They are not comparable with the tables above, and the #821 profile does not
+support them.
 
-### 2. Batch Processing (9.7x faster)
+## Reproduce it
 
-Parallel processing with [Rayon](https://github.com/rayon-rs/rayon) leverages all CPU cores:
-- Process 1000 files in 197.6ms vs 1911.4ms
-- Linear scaling with CPU core count
-- Efficient work stealing scheduler
-
-### 3. Write Operations (8.7x faster)
-
-Efficient binary manipulation and atomic file operations:
-- In-place metadata updates
-- Memory-mapped I/O with `memmap2`
-- Atomic file writes prevent corruption
-
-### 4. Format Detection (6.5x faster)
-
-Native compiled code dramatically outperforms interpreted Perl:
-- Efficient magic byte matching
-- Compile-time optimizations
-- CPU cache-friendly algorithms
-
-## Reproducing Benchmarks
-
-### Comparative Benchmarks (vs Perl ExifTool)
-
-Run the comparative benchmark suite:
-
-```bash
-# Install prerequisites
-brew install hyperfine exiftool  # macOS
-# or
-sudo apt install hyperfine libimage-exiftool-perl  # Ubuntu
-
-# Build OxiDex in release mode
-cargo build --release
-
-# Run comparison benchmarks
-./benches/exiftool_comparison.sh
-
-# View results
-cat benches/benchmark_results.md
-```
-
-### Library Micro-Benchmarks
-
-Run detailed benchmarks for internal operations:
-
-```bash
-# Run all benchmarks
-cargo bench
-
-# Run specific benchmark
-cargo bench format_detection
-cargo bench jpeg_segment_parsing
-cargo bench tiff_ifd_parsing
-cargo bench full_read_metadata
-```
-
-View HTML reports:
-
-```bash
-# macOS
-open target/criterion/report/index.html
-
-# Linux
-xdg-open target/criterion/report/index.html
-
-# Windows
-start target/criterion/report/index.html
-```
-
-## Profiling
-
-For detailed profiling information, see [Profiling Guide](/performance/profiling).
-
-## Performance Tips
-
-### For Maximum Throughput
-
-1. **Use batch processing:** Process multiple files in one command for parallelism
-2. **Extract specific tags only:** Use `-TagName` to avoid parsing entire file
-3. **Binary output:** Use `-b` for binary tag values (faster than formatting)
-4. **Disable verbose output:** Use `-q` for quiet mode
-
-### Example: Fast Batch Extraction
-
-```bash
-# Extract just Make, Model, DateTimeOriginal from 10,000 JPEGs
-oxidex -Make -Model -DateTimeOriginal -csv -r photos/ > metadata.csv
-```
-
-## Ongoing Optimization
-
-We continuously monitor and improve performance:
-- Automated benchmarks on every commit
-- Profiling with [samply](https://github.com/mstange/samply)
-- Flamegraph analysis
-- Memory allocation tracking
-
-See our [optimization strategy](/performance/optimization-strategy) for current focus areas.
+See [Benchmarks](/performance/benchmarks) for the exact commands, and
+[Profiling](/performance/profiling) for finding where time goes.
