@@ -141,19 +141,9 @@ export default defineConfig({
         {
           text: 'Performance',
           items: [
-            { text: 'Overview', link: '/performance/' },
+            { text: 'Measured results', link: '/performance/' },
             { text: 'Benchmarks', link: '/performance/benchmarks' },
-            { text: 'Profiling', link: '/performance/profiling' },
-            { text: 'Optimization Strategy', link: '/performance/optimization-strategy' }
-          ]
-        },
-        {
-          text: 'Historical Data',
-          collapsed: true,
-          items: [
-            { text: 'Baseline (2025-11-15)', link: '/performance/baseline-2025-11-15' },
-            { text: 'Post-Optimization (2025-11-15)', link: '/performance/post-optimization-2025-11-15' },
-            { text: 'Compilation Speedup', link: '/performance/compilation-speedup' }
+            { text: 'Profiling', link: '/performance/profiling' }
           ]
         }
       ],

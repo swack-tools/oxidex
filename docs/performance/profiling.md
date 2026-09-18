@@ -2,6 +2,8 @@
 
 This guide explains how to profile OxiDex to identify performance bottlenecks and validate optimizations.
 
+The most recent whole-binary profile is `benches/spike/DISPATCH_PERF.md` (#821). It found that per-process initialisation and Composite allocation dominated a single read, and that generated-table dispatch cost 0.66% of a corpus read. #830 and #832 then targeted those costs.
+
 ## Quick Start: Text-Based Profiling
 
 For accessible, cross-platform performance analysis without visual tools:
@@ -502,4 +504,4 @@ just bench                         # Run all benchmarks
 - Small I/O (many small reads)
 - Parser overhead (nom combinators)
 
-**Success:** 2-3x improvement in targeted hot paths, maintaining correctness.
+A change is an improvement when a measurement shows it: rerun the same benchmark on the same machine, and state the instrument beside the number.
