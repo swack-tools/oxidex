@@ -1,6 +1,6 @@
 # Testing Guide
 
-OxiDex has a comprehensive testing strategy including unit tests, integration tests, and ExifTool comparison tests.
+OxiDex is tested at three levels: unit and integration tests (`cargo test`), comparison against the pinned ExifTool (the instruments below), and the CI gates described in the [contributing guide](/contributing/#what-ci-enforces).
 
 ## Testing Overview
 
@@ -21,18 +21,26 @@ by measurement, not by a hand-maintained parity report:
 ## Running Tests
 
 ```bash
-# Run all tests (always use --release due to memory requirements)
-cargo test --release
+# The whole workspace (what the local checks in the contributing guide run)
+cargo test --workspace
 
-# Run specific test module
-cargo test --release parsers::jpeg
+# The library tests with the release profile
+cargo test --lib --release
 
-# Run with output
-cargo test --release -- --nocapture
+# One module, with output
+cargo test --lib parsers::jpeg -- --nocapture
 
-# Run ExifTool comparison tests
-cargo test --release --features exiftool-comparison
+# ExifTool comparison tests (need the pinned ExifTool; see the contributing guide)
+cargo test --features exiftool-comparison
+
+# Ignored tests are not run by default; sweep them per target after a rename
+cargo test --workspace -- --ignored
 ```
+
+`cargo test --workspace --release` can fail with bogus `panic strategy` or
+duplicate-`chrono` errors after `cargo clippy --all-features` has shared the
+target directory. This is an output filename collision, not a test failure;
+`cargo clean --release -p chrono -p oxidex` clears it.
 
 ## Test Organization
 

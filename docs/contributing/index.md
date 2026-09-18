@@ -1,627 +1,185 @@
-# Contributing to OxiDex
+# Contributing
 
-For metadata-generation work, start with [Tag machinery status](../TAG_MACHINERY_STATUS.md)
-and the [automation backlog](../AUTOMATION-AND-TESTER-PLAN.md). They distinguish
-landed implementation, remaining gaps and historical plans on the refactor branch.
+This page describes how a change reaches `refactor/tag-machinery`, the
+branch where the refactor happens. It also covers the checks the change must
+pass and the measurement rules every claim must follow. The rules are
+committed in the repository root: `AGENTS.md` holds the substance and
+`CLAUDE.md` the workflow. This page summarises both. Where they differ, the
+committed files win.
 
-Thank you for your interest in contributing to OxiDex! This guide will help you get started with development, testing, and submitting contributions.
+::: info Unreleased: `refactor/tag-machinery`
+The refactor branch is far ahead of `main` and of the v1.2.1 release. All
+day-to-day work lands on it. What goes to `main` is the maintainer's decision
+alone. Never push to `main`, merge into it or rebase onto it.
+:::
 
-## Getting Started
+## Start from the plan
 
-### Prerequisites
+Before picking something up, read the
+[autogeneration plan](/AUTOGENERATION-PLAN). It states the goal, the measured
+state and the ordered next steps. The mechanism is described in the
+[v2 design](/AUTOGENERATION-V2-DESIGN), and the working scoreboard is the
+[progress page](/AUTOGENERATION-PROGRESS). The [project status](/status/)
+page summarises the measured state for readers outside the project.
+<!-- /status/ arrives with #837; see ignoreDeadLinks in config.mts -->
 
-- **Rust:** 1.75+ (install via [rustup](https://rustup.rs/))
-- **Git:** Version control
-- **C Compiler:** GCC or Clang (for building dependencies)
-- **Optional:** ExifTool Perl (for comparison tests)
-
-### Development Setup
-
-1. **Clone the repository:**
+## Set up
 
 ```bash
 git clone https://github.com/swack-tools/oxidex.git
 cd oxidex
+git switch refactor/tag-machinery
+cargo build --release          # rust-toolchain.toml pins the toolchain (1.97.1)
 ```
 
-2. **Build the project:**
+To measure anything against ExifTool you also need:
+
+- **The pinned ExifTool.** `.exiftool-version` names it (13.59). Recipes
+  that need it fetch that exact release into `$EXIFTOOL_CACHE_DIR` (default
+  `/tmp/oxidex-exiftool-cache`). Never use an `exiftool` found on `PATH`.
+- **A perl that can load `Archive::Zip`.** Set `EXIFTOOL_PERL` if the
+  default perl cannot. `scripts/exiftool_oracle.py` explains why this matters.
+- **`just` and `uv`.** Most instruments are `just` recipes or `uv run`
+  Python scripts.
+
+## How a change lands
+
+1. **One change, one worktree, one branch.** Branch
+   `staging/<slug>` off the current tip, in its own worktree:
+
+   ```bash
+   git fetch origin
+   git worktree add -b staging/<slug> ../oxidex-<slug> origin/refactor/tag-machinery
+   cd ../oxidex-<slug> && tools/preflight.sh --upstream
+   ```
+
+   `tools/preflight.sh` prints the worktree root, the branch and the number
+   of uncommitted files. It exits non-zero on a protected branch (`main`,
+   `refactor/tag-machinery`), on a dirty tree, or on a stale base. Never edit
+   a worktree that someone else is working in.
+
+2. **Re-verify before you implement.** Other sessions land competing fixes
+   often. Confirm that the defect still reproduces at the fresh tip, and
+   measure its scope with a named instrument. If the tip already contains
+   the fix, stop and report the work as superseded.
+
+3. **Verify with the instrument for the change.** Tag work is verified by a
+   comparison against the pinned ExifTool across the corpus, not by unit
+   tests alone. Report before and after counts with the instrument named,
+   for example "MISSING 2 → 0 under `just compare-file`".
+
+4. **Open a PR against `refactor/tag-machinery`.** Before you open it and
+   again before it merges, run
+   `git fetch origin && git rebase origin/refactor/tag-machinery`. Rebase onto
+   the tip, never onto `main`. The PR must name the instrument beside every
+   number.
+
+5. **CI, then independent verification.** The change merges, squash only,
+   after CI and after the maintainer or coordinator has independently checked
+   the central claim. The author's report of that claim is not enough.
+
+Rulesets on `main` and on the tip reject force-pushes and deletions.
+
+## Checks to run locally
 
 ```bash
-cargo build --release
+cargo fmt --all --check
+cargo clippy --release --all-features -- -D warnings
+cargo test --workspace
+python3 -m unittest discover -s tools/ci -p 'test_*.py'
+uv run scripts/sync_tag_stats.py --check
 ```
 
-**Note:** Always use `--release` flag due to tag database memory requirements. Debug builds will OOM (>32GB RAM).
-
-3. **Run tests:**
-
-```bash
-cargo test --release
-```
-
-4. **Install development tools:**
-
-```bash
-# Formatter
-rustup component add rustfmt
-
-# Linter
-rustup component add clippy
-
-# Benchmark runner
-cargo install criterion
-
-# Code coverage
-cargo install cargo-tarpaulin
-```
-
-### Project Structure
-
-```
-oxidex/
-├── src/
-│   ├── bin/              # CLI binary
-│   ├── core/             # Core metadata types
-│   ├── parsers/          # Format-specific parsers
-│   │   ├── jpeg/
-│   │   ├── tiff/
-│   │   ├── png/
-│   │   └── ...
-│   ├── ffi/              # C FFI bindings
-│   └── lib.rs            # Library entry point
-├── exiftool-tags/        # Tag database (separate crate)
-├── tests/                # Integration tests
-├── benches/              # Benchmarks
-├── docs/                 # Documentation
-└── examples/             # Example code
-```
-
-## Development Workflow
-
-### 1. Create a Branch
-
-```bash
-git checkout -b feature/your-feature-name
-# or
-git checkout -b fix/bug-description
-```
-
-**Branch naming:**
-- `feature/` - New features
-- `fix/` - Bug fixes
-- `perf/` - Performance improvements
-- `docs/` - Documentation updates
-- `refactor/` - Code refactoring
-
-### 2. Make Changes
-
-Follow the [Coding Standards](#coding-standards) below.
-
-### 3. Test Your Changes
-
-```bash
-# Run all tests
-cargo test --release
-
-# Run specific test
-cargo test --release test_name
-
-# Run with output
-cargo test --release -- --nocapture
-```
-
-### 4. Format and Lint
-
-```bash
-# Format code
-cargo fmt
-
-# Check formatting
-cargo fmt -- --check
-
-# Run linter
-cargo clippy --release -- -D warnings
-```
-
-### 5. Commit Your Changes
-
-Use conventional commit messages:
-
-```bash
-git commit -m "feat: add HEIC format support"
-git commit -m "fix: resolve JPEG thumbnail corruption"
-git commit -m "perf: optimize TIFF IFD parsing"
-git commit -m "docs: update API reference"
-```
-
-**Commit message format:**
-```
-<type>: <description>
-
-[optional body]
-
-[optional footer]
-```
-
-**Types:**
-- `feat` - New feature
-- `fix` - Bug fix
-- `perf` - Performance improvement
-- `docs` - Documentation changes
-- `test` - Test additions/changes
-- `refactor` - Code refactoring
-- `chore` - Maintenance tasks
-
-### 6. Push and Create Pull Request
-
-```bash
-git push origin feature/your-feature-name
-```
-
-Then create a pull request on GitHub.
-
-## Coding Standards
-
-### Rust Style Guide
-
-Follow the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/):
-
-**Naming Conventions:**
-```rust
-// Types: PascalCase
-struct MetadataMap { }
-enum TagValue { }
-
-// Functions: snake_case
-fn parse_jpeg(data: &[u8]) -> Result<Metadata> { }
-
-// Constants: SCREAMING_SNAKE_CASE
-const MAX_TAG_SIZE: usize = 65536;
-
-// Modules: snake_case
-mod jpeg_parser;
-```
-
-**Error Handling:**
-```rust
-// Use Result for fallible operations
-fn read_file(path: &Path) -> Result<Metadata, ExifToolError> {
-    let file = File::open(path)?;
-    parse_metadata(file)
-}
-
-// Provide context in errors
-Err(ExifToolError::ParseError {
-    message: format!("Invalid JPEG marker: {:02X}", marker),
-    offset: Some(offset),
-})
-```
-
-**Documentation:**
-```rust
-/// Parses JPEG metadata from raw bytes.
-///
-/// # Arguments
-///
-/// * `data` - Raw JPEG file data
-///
-/// # Returns
-///
-/// * `Ok(Metadata)` - Parsed metadata
-/// * `Err(ExifToolError)` - Parse error with context
-///
-/// # Examples
-///
-/// ```
-/// use oxidex::parsers::jpeg::parse_jpeg;
-///
-/// let data = std::fs::read("photo.jpg")?;
-/// let metadata = parse_jpeg(&data)?;
-/// ```
-pub fn parse_jpeg(data: &[u8]) -> Result<Metadata, ExifToolError> {
-    // Implementation
-}
-```
-
-### Code Comments
-
-**When to comment:**
-- Complex algorithms
-- Non-obvious optimizations
-- Workarounds for external limitations
-- Magic numbers (explain what they represent)
-
-**When NOT to comment:**
-- Self-explanatory code
-- Obvious operations
-- Every line (let code speak for itself)
-
-**Good comments:**
-```rust
-// JPEG markers are big-endian 16-bit values starting with 0xFF
-let marker = u16::from_be_bytes([data[0], data[1]]);
-
-// Skip thumbnail data (already extracted in previous pass)
-if tag_id == 0x0201 { continue; }
-
-// Per EXIF spec, GPS tags use different byte order than main IFD
-let gps_byte_order = detect_gps_byte_order(data);
-```
-
-### Testing Standards
-
-**Unit Tests:**
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_jpeg_marker() {
-        let data = [0xFF, 0xD8];  // JPEG SOI marker
-        let marker = parse_marker(&data).unwrap();
-        assert_eq!(marker, JpegMarker::SOI);
-    }
-
-    #[test]
-    fn test_parse_invalid_marker() {
-        let data = [0x00, 0x00];  // Invalid
-        assert!(parse_marker(&data).is_err());
-    }
-}
-```
-
-**Integration Tests:**
-```rust
-// tests/integration_tests.rs
-use oxidex::Metadata;
-
-#[test]
-fn test_read_real_jpeg() {
-    let metadata = Metadata::from_path("tests/fixtures/sample.jpg")
-        .expect("Failed to read test file");
-
-    assert_eq!(metadata.get_string("EXIF:Make").unwrap(), "Canon");
-    assert_eq!(metadata.get_integer("EXIF:ISO").unwrap(), 400);
-}
-```
-
-### Benchmarking
-
-Add benchmarks for performance-critical code:
-
-```rust
-// benches/parse_benchmarks.rs
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use oxidex::parsers::jpeg::parse_jpeg;
-
-fn benchmark_jpeg_parsing(c: &mut Criterion) {
-    let data = std::fs::read("tests/fixtures/large.jpg").unwrap();
-
-    c.bench_function("parse_jpeg", |b| {
-        b.iter(|| parse_jpeg(black_box(&data)))
-    });
-}
-
-criterion_group!(benches, benchmark_jpeg_parsing);
-criterion_main!(benches);
-```
-
-Run benchmarks:
-```bash
-cargo bench
-```
-
-## Adding New Features
-
-### Adding a New File Format
-
-1. **Create parser module:**
-
-```bash
-mkdir -p src/parsers/your_format
-touch src/parsers/your_format/mod.rs
-```
-
-2. **Implement format detection:**
-
-```rust
-// src/core/file_format.rs (illustrative)
-pub fn detect_format(data: &[u8]) -> Option<FileFormat> {
-    match &data[0..4] {
-        // Your format magic number
-        [0x89, b'Y', b'O', b'U'] => Some(FileFormat::YourFormat),
-        // ... other formats
-        _ => None,
-    }
-}
-```
-
-3. **Implement parser:**
-
-```rust
-// src/parsers/your_format/mod.rs
-use crate::core::{Metadata, TagValue};
-use crate::error::{Result, ExifToolError};
-
-pub fn parse_your_format(data: &[u8]) -> Result<Metadata> {
-    let mut metadata = Metadata::new();
-
-    // Parse format-specific structures
-    // Extract tags
-    // Populate metadata
-
-    Ok(metadata)
-}
-```
-
-4. **Add tests:**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_your_format() {
-        let data = include_bytes!("../../../tests/fixtures/sample.your");
-        let metadata = parse_your_format(data).unwrap();
-        assert!(metadata.len() > 0);
-    }
-}
-```
-
-5. **Add integration test:**
-
-Create test file in `tests/fixtures/` and add integration test.
-
-6. **Update documentation:**
-
-Add format to `docs/formats.md` with:
-- File extensions
-- Supported metadata types
-- Tag count
-- Common use cases
-
-### Adding New Tags
-
-1. **Tags are auto-generated from ExifTool source**
-
-The tag database is automatically synchronized. To add custom tags:
-
-```rust
-// For custom tags not in ExifTool
-metadata.insert("Custom:YourTag", TagValue::new_string("value"));
-```
-
-2. **To update from latest ExifTool:**
-
-```bash
-rm exiftool-tags/src/tag_db/generated_tags.rs
-cargo build --release
-```
-
-## Testing
-
-### Running Tests
-
-```bash
-# All tests (always use --release)
-cargo test --release
-
-# Specific module
-cargo test --release parsers::jpeg
-
-# With output
-cargo test --release -- --nocapture
-
-# Single test
-cargo test --release test_parse_jpeg_marker
-```
-
-### Test Data
-
-Place test files in `tests/fixtures/`:
-
-```
-tests/fixtures/
-├── jpeg/
-│   ├── sample_with_exif.jpg
-│   ├── sample_no_metadata.jpg
-│   └── corrupted.jpg
-├── tiff/
-├── png/
-└── ...
-```
-
-### Code Coverage
-
-```bash
-cargo tarpaulin --release --out Html
-open tarpaulin-report.html
-```
-
-## Pull Request Guidelines
-
-### Before Submitting
-
-- [ ] Code compiles without warnings: `cargo build --release`
-- [ ] All tests pass: `cargo test --release`
-- [ ] Code is formatted: `cargo fmt -- --check`
-- [ ] Linter passes: `cargo clippy --release -- -D warnings`
-- [ ] Documentation updated if needed
-- [ ] Benchmarks added for performance-critical changes
-- [ ] CHANGELOG.md updated (for notable changes)
-
-### PR Description Template
-
-```markdown
-## Description
-
-Brief description of changes.
-
-## Type of Change
-
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Performance improvement
-- [ ] Documentation update
-- [ ] Refactoring
-
-## Testing
-
-Describe testing done:
-- Unit tests added/modified
-- Integration tests added
-- Manual testing performed
-
-## Checklist
-
-- [ ] Code follows project style guidelines
-- [ ] Self-review completed
-- [ ] Comments added for complex code
-- [ ] Documentation updated
-- [ ] Tests pass locally
-- [ ] No new warnings introduced
-```
-
-### Review Process
-
-1. **Automated Checks:** CI runs tests, linting, benchmarks
-2. **Code Review:** Maintainer reviews code quality, design
-3. **Feedback:** Address review comments
-4. **Approval:** Maintainer approves and merges
-
-## Performance Guidelines
-
-### Optimization Principles
-
-1. **Measure first:** Profile before optimizing
-2. **Focus on hot paths:** Optimize frequently-called code
-3. **Avoid premature optimization:** Clarity > premature speed
-4. **Document trade-offs:** Explain complex optimizations
-
-### Using Profiling
-
-```bash
-# Install samply
-cargo install samply
-
-# Profile benchmark
-samply record target/release/oxidex photo.jpg
-
-# Opens Firefox Profiler with results
-```
-
-See [Profiling Guide](/performance/profiling) for details.
-
-### Benchmarking Changes
-
-```bash
-# Baseline
-cargo bench
-cp -r target/criterion target/criterion-baseline
-
-# Make changes
-# ...
-
-# Re-benchmark
-cargo bench
-
-# Compare results in target/criterion/report/index.html
-```
-
-## Documentation
-
-### Building the Documentation Site
-
-The site is [VitePress](https://vitepress.dev/) and lives in `docs/`. A fresh clone
-builds with no extra setup:
-
-```bash
-cd docs
-npm ci
-npm run docs:build   # or: npm run docs:dev
-```
-
-**About `docs/reference/comparison/`.** The per-format ExifTool comparison report is a
-generated artifact, not a checked-in one — the directory is listed in `.gitignore` and
-the deploy workflow regenerates it on every deploy. So on a clean checkout it is empty.
-
-You do **not** need to generate it to build or preview the docs. `npm run docs:build`
-runs `docs/scripts/ensure-comparison-stub.mjs` first, which drops a clearly-labelled
-placeholder page at `/reference/comparison/` so every link resolves and the build
-succeeds. If you want the real tables locally:
-
-```bash
-just compare-exiftool-full-update
-```
-
-That downloads a sample corpus, builds the `tag-comparison` binary in release mode and
-runs it against a real ExifTool install, so it needs a Rust toolchain plus Perl and
-takes a while. Once it has run, the stub script sees the generated `index.md` and leaves
-it alone.
-
-The `Docs Build` CI workflow builds the site from a clean checkout on every PR that
-touches `docs/`, deliberately *without* running the generator — that is what keeps the
-cold-clone build honest.
-
-### Two markdown patterns that silently break the build
-
-VitePress compiles markdown through Vue, so two things that look like prose are treated
-as code and fail the build. Both have broken this site before:
-
-- A line that **starts** with a bare angle-bracket tag is parsed as a Vue component.
-- Unfenced double curly braces are parsed as a Vue interpolation.
-
-Keep either inside a fenced code block or inline backticks and they are safe.
-
-### Inline Documentation
-
-Use rustdoc for all public APIs:
-
-```rust
-/// Parses JPEG metadata.
-///
-/// # Arguments
-///
-/// * `data` - Raw file bytes
-///
-/// # Errors
-///
-/// Returns error if:
-/// - File is not valid JPEG
-/// - Metadata is corrupted
-pub fn parse_jpeg(data: &[u8]) -> Result<Metadata> {
-    // ...
-}
-```
-
-### User Documentation
-
-Update relevant documentation in `docs/`:
-- `docs/formats.md` - Format support
-- `docs/api.md` - API changes
-- `docs/cli.md` - CLI changes
-
-## Getting Help
-
-- **GitHub Discussions:** Ask questions
-- **GitHub Issues:** Report bugs, request features
-- **Discord:** Join community chat (link in README)
-
-## Code of Conduct
-
-Be respectful, inclusive, and collaborative. See `CODE_OF_CONDUCT.md` for full guidelines.
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the GNU General Public License v3.0 (GPL-3.0).
-
-## Additional Resources
-
-- [Rust Book](https://doc.rust-lang.org/book/)
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
-- [Cargo Book](https://doc.rust-lang.org/cargo/)
-- [ExifTool Documentation](https://exiftool.org/)
-- [Architecture](/reference/architecture) - System design
-- [Profiling Guide](/performance/profiling) - Performance optimization
+`just ci-standard` runs the same set CI runs: formatting, the cbindgen
+header check, clippy, a release build, the tests and the C FFI test.
+
+Two known traps:
+
+- `cargo test --workspace --release` fails even on an unmodified base with
+  about 120 bogus `panic strategy` or duplicate-`chrono` errors. The cause is
+  an output filename collision after `cargo clippy --all-features`. It is
+  never caused by your change. Clear it with
+  `cargo clean --release -p chrono -p oxidex`, or use `cargo test --workspace`.
+- `cargo test --workspace` skips `#[ignore]`d tests. After a key rename, run
+  `--ignored` per target and diff the result against a baseline worktree.
+
+## What CI enforces
+
+`ci.yml` runs on every pull request and on every push to `main` and
+`refactor/tag-machinery`.
+
+| Job | What it guarantees |
+| --- | --- |
+| **Lint & Audit** | `cargo fmt`, clippy with `-D warnings`, and a RustSec audit. It also runs the `tools/ci` unit tests and the corpus-guard checks, the **parity ratchet**, and `sync_tag_stats.py --check`. |
+| **Build & Test** | Installs ExifTool from `.exiftool-version` and asserts both its version and `Archive::Zip`. Then it runs the full test suite (nextest, then doc tests), the native-Perl replay tests and the C header check. |
+| **Corpus Read Regression Gate** | Builds `oxidex` and takes a read receipt over the pinned ExifTool's `t/images`. It then fails if any catalog entry that the published `catalog-corpus-observed-13.59.json` marks as a matched read is no longer credited. Lost entries are named. An untrusted measurement is *refused* (exit 2), never passed. |
+| **Verify Generated Tables** | Regenerates the transcribed tables from the pinned Perl source and fails on drift. It proves the tables against live Perl and checks the catalog join and staleness. `just verify-tables` is the local equivalent. |
+
+Two of these in more detail, and the workflows beside `ci.yml`:
+
+- **Parity ratchet** (in Lint & Audit). `tools/ci/parity_ratchet.py` reads only committed JSON and compares 25 named counts
+  in the committed measurement JSON with the floors in
+  `tools/ci/parity_floors.json`. Proven reads may only rise and known
+  defects may only fall, and denominators must match exactly. Floors move
+  only through `parity_ratchet.py raise`.
+- **Benchmarks.** `benchmarks.yml` times the release binary against the
+  pinned ExifTool on every push to the tip. It is indicative and non-blocking
+  (see [Benchmarks](/performance/benchmarks)).
+- **Docs.** `docs-build.yml` builds the site from cold on every PR that
+  touches `docs/`. See [Docs site](/contributing/docs-site).
+
+## Measurement rules
+
+Every number is a claim about the tool that produced it. The wrong tool fails
+silently and confidently, in whichever direction you already expected. The
+short form of the rules in `AGENTS.md`:
+
+- **Name the instrument.** Write "MISSING 2 under `just compare-file`", not
+  "2 tags missing". A number without its instrument and commit is not
+  evidence.
+- **Never grade against an unpinned ExifTool.** Use the oracle in
+  `scripts/exiftool_oracle.py` (Python) or `src/exiftool_oracle.rs` (Rust),
+  never a bare `exiftool`. Its `-ver` must print 13.59 **and** it must pass
+  the `OOXML.docx` → `DOCX` capability probe. A perl without `Archive::Zip`
+  prints the right version while every container format degrades.
+- **Detected is not parsed.** A correct `File:FileType` can sit on top of an
+  empty parse. Check `format_dispatch` for the format, or read the MISSING
+  count from `just compare-file`.
+- **Never approximate a conversion.** A plausible but wrong value under a
+  real ExifTool tag name is worse than an absent tag. Omit the value and
+  count it.
+- **A gap in a transcribed table is not evidence the tag does not exist.**
+  The generator omits whatever it cannot model. Diff the table against the
+  `%Image::ExifTool::<Module>::<Table>` hash in the pinned source.
+- **Tag knowledge is not tag coverage.** The `oxidex-tags-*` definition
+  counts come from ExifTool's documentation view. They say a tag exists, not
+  that OxiDex can read it. Only a comparison run measures coverage.
+- **Trust the header.** Measurement scripts print an `=== instrument ===`
+  header naming the binary (with a staleness warning), the commit, whether
+  the tree is dirty, the oracle and the corpus. A dirty tree refuses to
+  measure unless `OXIDEX_ALLOW_DIRTY_TREE=1` is set.
+- **Regenerate baselines yourself.** Build a baseline from the same commit
+  you compare against. Do not reuse one you were handed.
+
+## Conventions
+
+- Generated code and generated reports are never edited by hand. Regenerate
+  them with their generator. That covers `src/exiftool_tables/`, the
+  `oxidex-tags-*` data, the catalog reports under `docs/reference/` and
+  `docs/tag-domains/`.
+- Historical or hand-captured test data goes in
+  `tools/exiftool-tables/testdata/`, never in `tests/fixtures/`. CI
+  regenerates the fixtures from the pin and fails the lint job on a
+  difference.
+- Leave a `HANDOFF.md` (repository root, untracked) at each milestone of a
+  long change. It should record the branch and base, what landed, what was
+  validated with which instrument, and the exact next command.
+
+## Further reading
+
+- [Measuring coverage](/contributing/measuring-coverage): the conformance instrument and its classes
+- [Docs site](/contributing/docs-site): how this site is built, previewed and deployed
+- [Release checklist](/contributing/release-checklist)
+- [Code quality patterns](/contributing/development/code-quality-patterns) and [TagRegistry refactoring](/contributing/development/tagregistry-refactoring)
+- [Testing](/contributing/testing/) and [test failure triage](/contributing/testing/TEST_FAILURE_TRIAGE)
+- [Transcription](/TRANSCRIPTION): how ExifTool's tables are transcribed

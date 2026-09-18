@@ -132,8 +132,7 @@ export default defineConfig({
             { text: 'Multi-Crate Tags', link: '/architecture/multi-crate-tags' },
             { text: 'Parser Shared Infrastructure', link: '/architecture/parser-shared-infrastructure' },
             { text: 'Parser Migration Guide', link: '/architecture/parser-migration-guide' },
-            { text: 'OxiDex Tags Shared', link: '/architecture/oxidex-tags-shared' },
-            { text: 'Docs Site Deployment', link: '/architecture/github-pages-setup' }
+            { text: 'OxiDex Tags Shared', link: '/architecture/oxidex-tags-shared' }
           ]
         }
       ],
@@ -151,33 +150,33 @@ export default defineConfig({
         {
           text: 'Contributing',
           items: [
-            { text: 'Getting Started', link: '/contributing/' },
-            { text: 'Release Checklist', link: '/contributing/release-checklist' }
-          ]
-        },
-        {
-          text: 'Development',
-          items: [
-            { text: 'Tag Machinery Status', link: '/TAG_MACHINERY_STATUS' },
-            { text: 'Automation Backlog', link: '/AUTOMATION-AND-TESTER-PLAN' },
-            { text: 'Development Guide', link: '/contributing/development/' },
-            { text: 'Code Quality Patterns', link: '/contributing/development/code-quality-patterns' },
-            { text: 'TagRegistry Refactoring', link: '/contributing/development/tagregistry-refactoring' }
+            { text: 'How work lands', link: '/contributing/' },
+            { text: 'Measuring coverage', link: '/contributing/measuring-coverage' },
+            { text: 'Docs site: build and deploy', link: '/contributing/docs-site' },
+            { text: 'Release checklist', link: '/contributing/release-checklist' }
           ]
         },
         {
           text: 'Testing',
           items: [
-            { text: 'Testing Guide', link: '/contributing/testing/' },
-            { text: 'Test Failure Triage', link: '/contributing/testing/TEST_FAILURE_TRIAGE' }
+            { text: 'Testing', link: '/contributing/testing/' },
+            { text: 'Test failure triage', link: '/contributing/testing/TEST_FAILURE_TRIAGE' }
           ]
         },
         {
-          text: 'ExifTool Comparison',
-          collapsed: true,
+          text: 'Code',
           items: [
-            { text: 'Measuring Coverage', link: '/contributing/measuring-coverage' },
-            { text: 'ExifTool Coverage Report', link: '/reference/tag-coverage-analysis' }
+            { text: 'Code quality patterns', link: '/contributing/development/code-quality-patterns' },
+            { text: 'TagRegistry refactoring', link: '/contributing/development/tagregistry-refactoring' }
+          ]
+        },
+        {
+          text: 'Direction',
+          items: [
+            { text: 'Autogeneration plan', link: '/AUTOGENERATION-PLAN' },
+            { text: 'Autogeneration v2 design', link: '/AUTOGENERATION-V2-DESIGN' },
+            { text: 'Autogeneration progress', link: '/AUTOGENERATION-PROGRESS' },
+            { text: 'Transcription', link: '/TRANSCRIPTION' }
           ]
         }
       ],

@@ -9,7 +9,7 @@ OxiDex follows a hexagonal (ports and adapters) architecture that separates conc
 - [Parser Migration Guide](./parser-migration-guide.md) - Guide for migrating parsers
 - [Parser Shared Infrastructure](./parser-shared-infrastructure.md) - Common parser infrastructure
 - [OxiDex Tags Shared](./oxidex-tags-shared.md) - Shared tag definitions
-- [Docs Site Deployment](./github-pages-setup.md) - How this documentation site is built and deployed
+- [Docs Site Deployment](/contributing/docs-site) - How this documentation site is built and deployed
 
 ## Architecture Overview
 
