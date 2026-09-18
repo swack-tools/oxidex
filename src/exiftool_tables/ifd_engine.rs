@@ -1233,15 +1233,19 @@ fn generated_row(
         }
     };
     // A `PrintConv` whose text is exactly the value it was given (ISO's
-    // `s/\s+/, /g` on a single number, a `tr/ /./` with no space) changes
-    // nothing ExifTool prints: the row keeps its typed value, as a tag with
-    // no `PrintConv` does, so the library's typed accessors see what the
-    // hand arm gave them.
+    // `s/\s+/, /g` on a single number) changes nothing ExifTool prints: the
+    // row keeps its typed value, as a tag with no `PrintConv` does, so the
+    // library's typed accessors see what the hand arm gave them.
+    // Only for a field the static table withholds (whose previous producer
+    // was the hand arm, which gave the typed value) and only where no
+    // conversion stage replaced `$val` (the typed value IS what `ReadValue`
+    // read): a field the static engine already reported keeps the String
+    // display it always had, and a converted number is never handed to
+    // name-keyed output rules as if it were the raw one.
     let print = report.print.filter(|print| {
         let before = match &report.value {
-            Some(conv::Out::Scalar(v)) => Some(v.perl_string()),
-            Some(conv::Out::Binary(_)) => None,
-            None => perl_scalar(raw).map(|v| v.perl_string()),
+            None if tag.omitted.any() => perl_scalar(raw).map(|v| v.perl_string()),
+            _ => None,
         };
         !matches!((print, before), (conv::Out::Scalar(p), Some(b)) if p.is_defined() && p.perl_string() == b)
     });
