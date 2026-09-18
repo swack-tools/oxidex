@@ -821,6 +821,22 @@ def positive_seconds(value):
     return seconds
 
 
+def select_convert_unix_time_semantics(et_lib):
+    """Prove which `ConvertUnixTime` the pinned tree carries and compile
+    every translation against the matching Rust port (exprs.py's
+    CONVERT_UNIX_TIME_SEMANTICS). The release label plays no part: 11.78
+    and 12.64 carry the truncating body, 13.59 the flooring one, and a
+    body matching neither refuses every ConvertUnixTime expression -- it
+    then counts as untranslated, not as verified or failed. The Perl side
+    of this run then checks the chosen port probe by probe."""
+    name, source = exprs.detect_convert_unix_time_semantics(et_lib)
+    exprs.set_convert_unix_time_semantics(name)
+    digest = hashlib.sha256((source or "").encode()).hexdigest()[:16]
+    shown = name if name is not None else "NONE MATCHED -- ConvertUnixTime refused"
+    print(f"ConvertUnixTime: pinned sub (folded sha256 {digest}) -> {shown}")
+    return name
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tables_json")
@@ -850,6 +866,7 @@ def main():
 
     version, counter, counts_by_expr = census(args.tables_json)
     perl_version = capability_probe(args.perl, args.et_lib, version)
+    cut_semantics = select_convert_unix_time_semantics(args.et_lib)
 
     # Every expression the shipped translator (TRANSLATIONS + compile())
     # claims to handle, across all three value domains -- this is the whole
@@ -947,6 +964,15 @@ def main():
         s = re.sub(r"\s+", " ", raw.strip())[:70]
         print(f"  {status}  probes(pass={p} fail={f} skip={sk})  {s}")
 
+    failing = sorted(e for e, st in per_expr.items() if st[1] > 0 or st[0] == 0)
+    if failing:
+        print()
+        print(f"FAILING expressions ({len(failing)}; probes pass/fail/skip):")
+        for raw in failing:
+            p, f, sk = per_expr[raw]
+            shown = re.sub(r"\s+", " ", raw.strip())[:100]
+            print(f"  {p}/{f}/{sk}  {shown}")
+
     if fail_examples:
         print()
         print("FAILING probe examples (raw_expr, probe, perl, rust):")
@@ -1004,6 +1030,12 @@ def main():
             "use_counts": {"verified": verified_uses, "total": sum(counter.values())},
             "verified_expressions": verified,
         }
+        if cut_semantics != exprs.DEFAULT_CONVERT_UNIX_TIME_SEMANTICS:
+            # Only a non-default port is recorded, so a ledger proven with
+            # the default port stays byte-identical to what it always was.
+            # codegen.load_oracle_ledger reads this back and compiles with
+            # the same port the probes above exercised.
+            artifact["helper_semantics"] = {"ConvertUnixTime": cut_semantics}
         args.ledger_out.parent.mkdir(parents=True, exist_ok=True)
         args.ledger_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote oracle ledger  {args.ledger_out}")

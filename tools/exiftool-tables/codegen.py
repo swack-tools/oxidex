@@ -295,6 +295,23 @@ def load_oracle_ledger(path, tables_json, version):
             f"      this tables.json: {digest!r}  (this host's `perl` is "
             f"{local_perl})"
         )
+    # Which helper ports the oracle ran (verify_exprs.py writes the field
+    # only when a pinned sub needed a non-default port; absent means the
+    # default, the only port a ledger without the field can have been
+    # proven with). Applied below, so this generation compiles each
+    # approved expression to exactly the Rust that was verified.
+    helper_semantics = ledger.get("helper_semantics", {})
+    cut = exprs.DEFAULT_CONVERT_UNIX_TIME_SEMANTICS
+    if isinstance(helper_semantics, dict) and set(helper_semantics) <= {"ConvertUnixTime"}:
+        cut = helper_semantics.get("ConvertUnixTime", cut)
+    if (not isinstance(helper_semantics, dict)
+            or set(helper_semantics) - {"ConvertUnixTime"}
+            or (cut is not None and cut not in exprs.CONVERT_UNIX_TIME_SEMANTICS)):
+        problems.append(
+            f"helper_semantics {helper_semantics!r}: only ConvertUnixTime is "
+            f"known, and it must be one of {sorted(exprs.CONVERT_UNIX_TIME_SEMANTICS)} "
+            "or null"
+        )
     fail_count = ledger.get("probe_counts", {}).get("fail")
     if fail_count != 0:
         problems.append(
@@ -316,6 +333,7 @@ def load_oracle_ledger(path, tables_json, version):
             f"{LEDGER_REMEDY}"
         )
 
+    exprs.set_convert_unix_time_semantics(cut)
     return set(ledger["verified_expressions"])
 
 
