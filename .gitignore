@@ -165,3 +165,4 @@ comparison.json
 # Local overhaul progress ledger -- deliberately untracked (plan rule 8):
 # it is per-session state and would conflict across parallel step branches.
 OVERHAUL_PROGRESS.md
+HANDOFF.md
