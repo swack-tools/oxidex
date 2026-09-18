@@ -21,7 +21,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
-from module_absence import SCHEMA, NotAbsent, prove_module_absent, validate_absence_record  # noqa: E402
+from module_absence import (  # noqa: E402
+    SCHEMA, TABLE_SCHEMA, NotAbsent, prove_module_absent, prove_table_absent, validate_absence_record)
 from test_hydrated_catalog_universe import CANONICAL_LIB, CANONICAL_PERL, NATIVE_READY  # noqa: E402
 
 INFIRAY_GEN = ROOT / "scripts/gen_infiray_tables.pl"
@@ -131,6 +132,65 @@ class ProveModuleAbsent(unittest.TestCase):
         for module in ("InfiRay", "NikonSettings"):
             with self.subTest(module=module), self.assertRaisesRegex(NotAbsent, "present"):
                 prove_module_absent(CANONICAL_LIB, module)
+
+
+CANON_OLD = "package Image::ExifTool::Canon;\n%Image::ExifTool::Canon::FileInfo = ( 60 => 'LensType' );\n1;\n"
+
+
+class ProveTableAbsent(unittest.TestCase):
+    """The same proof one level down: a named table of a module that exists."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def test_absent_table_is_recorded_with_module_hash(self):
+        lib = make_lib(self.tmp, modules={"Canon": CANON_OLD})
+        record = prove_table_absent(lib, "Canon", "RFLensType")
+        self.assertEqual(record["kind"], TABLE_SCHEMA)
+        self.assertIs(record["module_file_present"], True)
+        self.assertEqual(record["table"], "RFLensType")
+        self.assertEqual(record["occurrences_in_release"], {"RFLensType": 0})
+        self.assertRegex(record["module_sha256"], r"^[0-9a-f]{64}$")
+        validate_absence_record(record, "Canon", "RFLensType")
+        with self.assertRaises(NotAbsent):
+            validate_absence_record(record, "Canon")        # not a module absence
+        with self.assertRaises(NotAbsent):
+            validate_absence_record({**record, "module_sha256": None}, "Canon", "RFLensType")
+
+    def test_table_name_still_in_its_module_refuses_as_present(self):
+        # Present, perhaps in a changed shape: the strict loader decides, never "absent".
+        lib = make_lib(self.tmp, modules={"Canon": CANON_OLD.replace("60 => 'LensType'",
+                                                                     "61 => { Name => 'RFLensType' }")})
+        with self.assertRaisesRegex(NotAbsent, "present in Image/ExifTool/Canon.pm"):
+            prove_table_absent(lib, "Canon", "RFLensType")
+
+    def test_table_named_elsewhere_refuses_as_moved(self):
+        lib = make_lib(self.tmp, modules={"Canon": CANON_OLD,
+                                          "Exif": "package Image::ExifTool::Exif;\n# use Canon RFLensType\n1;\n"})
+        with self.assertRaisesRegex(NotAbsent, "moved"):
+            prove_table_absent(lib, "Canon", "RFLensType")
+
+    def test_missing_module_is_not_a_table_absence(self):
+        with self.assertRaisesRegex(NotAbsent, "prove the module absent instead"):
+            prove_table_absent(make_lib(self.tmp), "Canon", "RFLensType")
+
+    def test_cli_selects_table_granularity(self):
+        lib = make_lib(self.tmp, modules={"Canon": CANON_OLD})
+        run = subprocess.run([sys.executable, str(HERE / "module_absence.py"), "--lib", str(lib),
+                              "--module", "Canon", "--table", "RFLensType"], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["kind"], TABLE_SCHEMA)
+
+    @unittest.skipUnless(OLD_LIB.is_dir(), "ExifTool 11.78 source tree unavailable")
+    def test_real_1178_canon_has_no_rf_lens_table(self):
+        record = prove_table_absent(OLD_LIB, "Canon", "RFLensType")
+        self.assertEqual(record["occurrences_in_release"], {"RFLensType": 0})
+
+    @unittest.skipUnless(CANONICAL_LIB and CANONICAL_LIB.is_dir(), "pinned ExifTool tree unavailable")
+    def test_pinned_canon_has_the_rf_lens_table(self):
+        with self.assertRaisesRegex(NotAbsent, "present in Image/ExifTool/Canon.pm"):
+            prove_table_absent(CANONICAL_LIB, "Canon", "RFLensType")
 
 
 def fake_repo(root: Path, pin: str) -> Path:
