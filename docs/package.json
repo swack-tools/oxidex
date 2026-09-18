@@ -8,7 +8,8 @@
     "comparison:stub": "node scripts/ensure-comparison-stub.mjs",
     "docs:dev": "npm run comparison:stub && vitepress dev",
     "docs:build": "npm run comparison:stub && vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:preview": "vitepress preview",
+    "docs:check-links": "node scripts/check-base-links.mjs"
   },
   "devDependencies": {
     "vitepress": "^1.5.0",
