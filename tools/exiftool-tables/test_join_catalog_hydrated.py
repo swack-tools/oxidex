@@ -492,6 +492,31 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                     self.assertRaisesRegex(ValueError, "does not write directly"):
                 join.build(cat, hyd, "c", "h", **args)
 
+    def test_corpus_reads_split_the_uncredited_bucket_by_native_reachability(self):
+        cat = catalog([entry("Title"), entry("Artist", "\xa9ART"), entry("Album", "\xa9alb")])
+        hyd = hydrated({"titl": {"Name": "Title"}, "\xa9ART": {"Name": "Artist"}, "\xa9alb": {"Name": "Album"}},
+                       total=3)
+        credited, native = {(TABLE, "titl", 0)}, {(TABLE, "titl", 0), (TABLE, "\xa9ART", 0)}
+        counts = {"credited_catalog_entries": 1, "credited_coordinates_outside_catalog": 0,
+                  "native_catalog_entries": 2, "native_coordinates_outside_catalog": 0,
+                  "metric_c": dict.fromkeys(("corpus_files", "distinct_group1_tag_identities_native",
+                                             "distinct_group1_tag_identities_matched",
+                                             "distinct_group1_tag_identities_print_mode_matched",
+                                             "credited_source_coordinates", "withheld_source_coordinates"), 0)}
+        receipt = {"producer": {"source_commit": "a" * 40}}
+        with patch.object(join.catalog_corpus_reads, "observed_reads", return_value=(credited, native, counts)):
+            result = join.build(cat, hyd, "c", "h", corpus_read_evidence=receipt)
+        self.assertEqual({row["catalog"]["name"]: row["observed_read"] for row in result["entries"]},
+                         {"Title": "observed_matched_read", "Artist": "native_read_not_matched",
+                          "Album": "not_observed_yet"})
+        self.assertEqual(result["counts"]["observed_read"],
+                         {"native_read_not_matched": 1, "not_observed_yet": 1, "observed_matched_read": 1})
+        self.assertEqual(result["counts"]["corpus_read_attribution"]["native_catalog_entries"], 2)
+        self.assertIn("reachability ceiling) | 2 |", join.report(result))
+        # Without corpus evidence nothing is natively read: the source join keeps two states.
+        plain = join.build(cat, hyd, "c", "h")
+        self.assertEqual(plain["counts"]["observed_read"], {"not_observed_yet": 3})
+
     def test_name_conflict_and_absence_are_truthful(self):
         result = join.build(catalog([entry("Title"), entry("Missing", "miss")]),
                             hydrated({"titl": {"Name": "Different"}}, total=2), "c", "h")

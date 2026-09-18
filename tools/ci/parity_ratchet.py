@@ -250,13 +250,18 @@ def cmd_report(args, root):
         counts, path = split_metric(name, sources)
         found, value = dig(counts, path)
         shown = value if found else "ABSENT"
-        share = ""
-        denominator = spec.get("share_of")
-        if found and denominator:
+        shares = []
+        # `share_of` names one denominator or several, e.g. the reachability
+        # ceiling first (match-within-reach), then the whole catalog.
+        denominators = spec.get("share_of") or []
+        if isinstance(denominators, str):
+            denominators = [denominators]
+        for denominator in denominators if found else []:
             d_counts, d_path = split_metric(denominator, sources)
             d_found, total = dig(d_counts, d_path)
             if d_found and total:
-                share = f"  {100.0 * value / total:6.2f}% of {total}"
+                shares.append(f"{100.0 * value / total:6.2f}% of {total} ({d_path.rsplit('.', 1)[-1]})")
+        share = ("  " + "; ".join(shares)) if shares else ""
         print(f"  {name:<{width}}  {str(shown):>8}  ({spec['direction']} {spec['floor']}){share}")
         if spec.get("note"):
             print(f"  {'':<{width}}  {spec['note']}")
