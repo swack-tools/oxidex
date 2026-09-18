@@ -1,8 +1,14 @@
 # Tag machinery: completed work and useful next steps
 
 For current goals and measurable next steps, use the
-[plain-English autogeneration plan](./AUTOGENERATION-PLAN.md).
-The measurements below retain their stated historical scope.
+[plain-English autogeneration plan](./AUTOGENERATION-PLAN.md). The mechanism
+is specified in the [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) (approved
+2026-09-18: generated conversions over a session, a real grammar instead of
+template transpilation, a helper library, per-field mixed mode replacing
+table-level Gate A); the scoreboard is [autogeneration progress](./AUTOGENERATION-PROGRESS.md).
+The measurements below retain their stated historical scope, and the
+priorities under "What is incomplete" are the 2026-09-10 recommendation, not
+the current order, which the plan owns.
 
 **Integration baseline measured below:** `refactor/tag-machinery` at
 [`4fb705da`](https://github.com/swack-tools/oxidex/commit/4fb705da43ec97c4c8d1786617021984e3a943e7),
@@ -480,6 +486,9 @@ audit; build the missing integration incrementally, with negative controls.
 
 | Document | How to use it |
 | --- | --- |
+| [Autogeneration plan](./AUTOGENERATION-PLAN.md) | Owns the goal, the measured state and the ordered next steps |
+| [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) | Owns the mechanism; supersedes template transpilation and table-level Gate A as the path forward |
+| [autogeneration progress](./AUTOGENERATION-PROGRESS.md) | Working scoreboard, newest checkpoint first |
 | This page | Dated integration status, evidence limits and dispositions; update after a relevant landing |
 | [Automation backlog](./AUTOMATION-AND-TESTER-PLAN.md) | Remaining useful work and acceptance criteria; proposals do not authorize changes to running branches |
 | [Transcription](./TRANSCRIPTION.md) | Method and historical lessons; old census figures are labeled historical |
@@ -488,6 +497,7 @@ audit; build the missing integration incrementally, with negative controls.
 | [Bump report](./reference/bump-reports/13.58-to-13.59.md) | Historical experiment with explicit limits; do not reuse its percentage as current |
 | [Corpus synthesis](./reference/corpus-synthesis.md) | Historical sample-generation feasibility study, not a general walk checker |
 | `OVERHAUL_OXIDEX_PLAN.md` and `OVERHAUL_STEP*_*.md` | Original roadmap and design decisions; no stage is complete merely because its design was approved |
+| [Documentation audit, 2026-09-18](./DOCS-AUDIT-2026-09-18.md) | Disposition of every tracked Markdown file at `aaa1583a`: generated, current, historical, updated or removed, with the instrument for each |
 | Local `HANDOFF.md` | Short-lived owner/queue/next-command context; verify branch/gate facts and copy durable results into this page |
 | Local `OVERHAUL_PROGRESS.md` | August execution history; not today's checklist |
 | Local `docs/TAG_MACHINERY_RECONCILIATION.md` | August 28 audit against `63d13641`; useful historical findings, including defects subsequently fixed |
