@@ -63,7 +63,7 @@ entry.
 | --- | --- |
 | `--no-print-conv` | Raw stored values, without ExifTool's print conversion (ExifTool's `-n`). For example, `FNumber: 14` instead of `14.0`, and `Flash: 0` instead of `No Flash`. |
 | `--csv` | Two columns, `Tag,Value`, one row per tag |
-| `--extended-output` | Also show OxiDex's own diagnostic tags, which have no ExifTool counterpart (JPEG SOF details, undecoded MakerNote hex, per-entry ZIP forensics). They are hidden by default so the default output matches ExifTool's. |
+| `--extended-output` | Also show three classes of OxiDex's own diagnostic tags, which are hidden by default: JPEG SOF details, undecoded MakerNote hex, and per-entry ZIP forensics. Other OxiDex-only tags are still printed by default, among them executable hardening and import summaries, `OOXML:` document properties, and `EXE:Rich*`. Comparisons with ExifTool count them as EXTRA. |
 | `--strict` | Fail a damaged or unidentifiable read instead of returning the partial result |
 | `--detector magika` | Use the Magika model for file-type detection. Needs a build with `--features magika`. |
 | `-e` | Accepted and ignored. ExifTool formatting is now the default. |
@@ -130,7 +130,9 @@ oxidex '-FileName<${IFD0:Make}_${IFD0:Model}' photo.jpg
 | `-s` | short tag names, repeatable | drops the group; otherwise partial |
 | Tags | every tag ExifTool reads | see [ExifTool parity](/guide/exiftool-parity) |
 
-The exit status is 1 when a file cannot be opened or written, or, with
-`--strict`, when a read is incomplete. Without `--strict`, a damaged or
-unparsed file still exits 0; its JSON carries a `Status` key (see
-[Troubleshooting](/guide/troubleshooting)).
+The exit status is 1 when a file cannot be opened or written. For a
+**single file**, a damaged or unparsed read still exits 0, and its JSON
+carries a `Status` key; `--strict` turns that into exit 1. With **several
+files or `-r`**, a damaged or unidentifiable file is reported on stderr as
+`Error reading <file>: …` and the command exits 1. See
+[Troubleshooting](/guide/troubleshooting).

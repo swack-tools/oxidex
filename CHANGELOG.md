@@ -19,12 +19,12 @@ Every entry below was checked against the v1.2.1 tag and the code at the tip.
 
 **Command line**
 - **ExifTool's print conversion is on by default** (#643). Values now match ExifTool's display form (`Flash: Auto, Did not fire`, `FNumber: 1.8`) instead of raw numbers. Use `--no-print-conv` for raw values. OxiDex's `-n` is still the rename dry run, not ExifTool's `-n`. `-e`/`--exiftool-compat` are accepted and do nothing.
-- **A file that cannot be fully read no longer fails the command** (`c343c69d`). The command exits 0 with the filesystem and identity tags, a `File:Warning`, and in JSON a top-level `"Status"` of `Partial`, `IdentifiedOnly` or `Unsupported`. Pass `--strict` for the old fail-fast behaviour.
+- **A single file that cannot be fully read no longer fails the command** (`c343c69d`). The command exits 0 with the filesystem and identity tags, a `File:Warning`, and in JSON a top-level `"Status"` of `Partial`, `IdentifiedOnly` or `Unsupported`. Pass `--strict` for the old fail-fast behaviour. Reads of several files, or of a directory with `-r`, still report `Error reading <file>` and exit 1 for a damaged or unidentifiable file, and their JSON carries no `Status`.
 - **Tags with no ExifTool counterpart are hidden by default** (`a9072ba6`). This covers hex-fallback names for unknown tags (such as `IFD0:0xF999`), JPEG SOF diagnostics and ZIP per-entry forensics. `--extended-output` shows them.
 
 **JSON output**
 - **Values are typed the way ExifTool's `EscapeJSON` types them** (#425, `c3a7508e`, #813). Numeric-looking values become JSON numbers written exactly as spelled (`2.00` stays `2.00`), and `true`/`false` become booleans. Floats use Perl's `%.15g` (`2`, not `2.0`). Rationals print as their 10-significant-digit quotient, or `"inf"`/`"undef"`, not as `"n/d"` strings.
-- **A top-level `"Status"` key** appears for any read that did not parse completely (see above).
+- **A top-level `"Status"` key** appears for any single-file read that did not parse completely (see above).
 
 **Text and CSV output**
 - The binary placeholder is now ExifTool's `(Binary data N bytes, use -b option to extract)` (#360).

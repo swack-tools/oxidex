@@ -15,7 +15,7 @@ may still change before 2.0.0.
 | 1.x | 2.0 | What to do |
 | --- | --- | --- |
 | Raw values (`Flash: 24`, `FNumber: 9/5`) | ExifTool's display values (`Flash: Auto, Did not fire`, `FNumber: 1.8`) | Pass `--no-print-conv` if you parse raw values. `-n` is still the rename dry run, not ExifTool's `-n`. |
-| An unreadable or unparsed file printed `Error:` and exited 1 | Exits 0 with the identity and filesystem tags, plus a `File:Warning` | Pass `--strict` to fail as before, or check `Status` in JSON |
+| An unreadable or unparsed file printed `Error:` and exited 1 | For a single file: exits 0 with the identity and filesystem tags, plus a `File:Warning`. Several files or `-r` still report `Error reading …` and exit 1. | Pass `--strict` to fail as before, or check `Status` in JSON |
 | Unknown tags printed under hex names (`IFD0:0xF999`) | Hidden, together with OxiDex's own diagnostic tags | Pass `--extended-output` to see them |
 | `(Binary, N bytes)` | `(Binary data N bytes, use -b option to extract)` | Update any pattern that matches the placeholder |
 | Dates in RFC 3339 form | `YYYY:MM:DD HH:MM:SS` | Parse ExifTool's date form |
@@ -29,9 +29,9 @@ may still change before 2.0.0.
   Floats use Perl's `%.15g` (`2`, not `2.0`). Rationals are a quotient, or
   `"inf"`/`"undef"`, not an `"n/d"` string. Do not assume every value is a
   string.
-- **A new top-level key, `"Status"`,** appears when a read did not complete:
-  `Partial`, `IdentifiedOnly` or `Unsupported`. A fully parsed file has no
-  `Status` key.
+- **A new top-level key, `"Status"`,** appears when a single-file read did
+  not complete: `Partial`, `IdentifiedOnly` or `Unsupported`. A fully parsed
+  file has no `Status` key. Multi-file and `-r` output does not carry it.
 
 ## If you match on tag names or groups
 

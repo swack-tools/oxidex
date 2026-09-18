@@ -23,8 +23,19 @@ In JSON output, a read that did not complete carries a top-level `Status`:
 - `IdentifiedOnly`: no parser exists for the identified type.
 - `Unsupported`: the file was not identified at all.
 
-A fully parsed file has no `Status` key. The library reports the same
-through `read_metadata_report` (see the [Rust library guide](/guide/library-api#knowing-how-far-a-read-got)).
+A fully parsed file has no `Status` key.
+
+The `Status` key is added only when you read a single file. When you read
+several files or a directory (`-r`), the batch reader handles problems
+differently:
+
+- an identified-but-unparsed file is listed with its identity tags and no
+  `Status`;
+- a damaged or unidentifiable file is reported on stderr as
+  `Error reading <file>: …`, its JSON entry holds only `SourceFile`, and the
+  command exits 1.
+
+The library reports the same through `read_metadata_report` (see the [Rust library guide](/guide/library-api#knowing-how-far-a-read-got)).
 To make an incomplete read an error, pass `--strict`.
 
 ## A tag I expected is missing, or its value differs from ExifTool
