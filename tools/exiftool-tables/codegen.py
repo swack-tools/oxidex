@@ -4314,12 +4314,15 @@ def main():
     import garmin_fit_specs
     fit_protocol = None
     if args.fit_protocol_fact:
-        with open(args.fit_protocol_fact, encoding="utf-8") as fh:
-            fit_protocol = json.load(fh)
+        # An empty or unparsable fact is a crashed capture: refused loudly.
+        fit_protocol = garmin_fit_specs.load_fact(args.fit_protocol_fact)
+    # A dump without the Garmin module still generates when a fact was
+    # captured: `generate` admits only a proven-absent fact for this release
+    # (zero FIT rows) and raises on anything else.
     fit_src, fit_ledger = (
         garmin_fit_specs.generate(doc, verified_exprs, fit_protocol)
-        if garmin_fit_specs.MODULE in (doc.get("modules") or {})
-        and (names is None or garmin_fit_specs.MODULE in names)
+        if (names is None or garmin_fit_specs.MODULE in names)
+        and (garmin_fit_specs.MODULE in (doc.get("modules") or {}) or fit_protocol is not None)
         else ("", None)
     )
 
@@ -4460,7 +4463,11 @@ def main():
             raise SystemExit("--fit-out requested but the dump has no Garmin module in scope")
         if not args.fit_protocol_fact:
             raise SystemExit("--fit-out requires --fit-protocol-fact (capture_garmin_fit_fact.pl)")
-        if not fit_ledger["protocol"]["admitted"]:
+        if garmin_fit_specs.is_module_absent(fit_ledger):
+            print("NOTE: Garmin module ABSENT from ExifTool "
+                  f"{fit_ledger['source']['exiftool_version']} (proven from its source tree): "
+                  "the FIT reader extracts nothing")
+        elif not fit_ledger["protocol"]["admitted"]:
             # Recorded, not fatal: an upgrade that changes ProcessFIT must
             # regenerate to a fully withheld FIT table (and a failing
             # `fit::tests::generated_protocol_is_admitted`) until reviewed.

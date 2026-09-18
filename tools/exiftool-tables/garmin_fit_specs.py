@@ -25,12 +25,22 @@ The executor's control flow is written against one reviewed ProcessFIT body
 (docs/reference/garmin-fit-source-review.md). A changed body, a changed value
 reader or an unresolved base-type capture refuses the whole protocol rather
 than letting new Perl run under old semantics.
+
+A release that predates `Image::ExifTool::Garmin` (first shipped in 13.56) is
+a third, explicit state, distinct from both: `module_absent`. It is admitted
+only from a `garmin_fit_module_absent_v1` fact (capture_garmin_fit_fact.pl's
+source-tree proof) for the dump's own release, and only when the dump itself
+carries no Garmin module. It generates zero FIT rows, messages and base types
+and a Rust protocol that extracts nothing. A missing, empty or unparsable
+fact, or one that contradicts the dump, raises: a crashed capture is never
+read as an absent module.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import exprs
@@ -94,6 +104,13 @@ DOCUMENTATION_ROW_KEYS = frozenset({"Notes", "SeparateTable", "PrintConvColumns"
 INERT_EXTRA_KEYS = frozenset({"IsTimeStamp"})
 TABLE_META_KEYS = frozenset({"GROUPS", "VARS", "NOTES", "TAG_PREFIX"})
 DOMAINS = {"num": "ConvDomain::Num", "str": "ConvDomain::Str", "bytes": "ConvDomain::Bytes"}
+PROTOCOL_KIND = "garmin_fit_reader_protocol_v1"
+MODULE_ABSENT_KIND = "garmin_fit_module_absent_v1"
+MODULE_ABSENT_KEYS = frozenset({
+    "kind", "native_identity", "module", "module_file", "module_file_present", "exiftool_module",
+    "library_inventory", "garmin_references", "fit_extension_lookup",
+})
+SHA256_HEX = frozenset("0123456789abcdef")
 
 
 def sha256_json(value) -> str:
@@ -111,7 +128,7 @@ def body_sha256(fact) -> str | None:
 
 def protocol_reasons(protocol) -> list[str]:
     """Reasons the reviewed executor may not run over this source at all."""
-    if not isinstance(protocol, dict) or protocol.get("kind") != "garmin_fit_reader_protocol_v1":
+    if not isinstance(protocol, dict) or protocol.get("kind") != PROTOCOL_KIND:
         return ["missing_or_changed_reader_protocol:kind"]
     reasons = []
     if body_sha256(protocol.get("process_fit")) not in REVIEWED_PROCESS_FIT_DEPARSE_SHA256:
@@ -224,16 +241,91 @@ def table_groups(meta, module_default):
             groups.get("2") or "Other")
 
 
+def is_sha256(value) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= SHA256_HEX
+
+
+def module_absence_errors(document, fact) -> list[str]:
+    """Why `fact` does not prove this dump's release ships no Garmin module
+    (empty when it does). The release label only binds the fact to the dump;
+    the proof is the captured source-tree evidence."""
+    if not isinstance(fact, dict) or fact.get("kind") != MODULE_ABSENT_KIND:
+        return ["not_a_module_absent_fact"]
+    errors = [f"unexpected_key:{key}" for key in sorted(set(fact) - MODULE_ABSENT_KEYS)]
+    errors += [f"missing_key:{key}" for key in sorted(MODULE_ABSENT_KEYS - set(fact))]
+    identity = fact.get("native_identity") or {}
+    if not isinstance(identity, dict) or str(identity.get("exiftool_version")) != str(document.get("exiftool_version")):
+        errors.append("release_differs_from_dump")
+    if fact.get("module") != f"Image::ExifTool::{MODULE}" or fact.get("module_file") != f"Image/ExifTool/{MODULE}.pm":
+        errors.append("wrong_module")
+    if fact.get("module_file_present") is not False:
+        errors.append("module_file_not_proven_absent")
+    if fact.get("garmin_references") != []:
+        errors.append("garmin_referenced_in_source")
+    exiftool_module = fact.get("exiftool_module") or {}
+    if not (isinstance(exiftool_module, dict) and exiftool_module.get("source_file") == "Image/ExifTool.pm"
+            and is_sha256(exiftool_module.get("source_sha256"))):
+        errors.append("exiftool_module_unauthenticated")
+    inventory = fact.get("library_inventory") or {}
+    if not (isinstance(inventory, dict) and is_sha256(inventory.get("sha256"))
+            and isinstance(inventory.get("file_count"), int) and inventory["file_count"] > 0):
+        errors.append("library_inventory_unauthenticated")
+    if MODULE in (document.get("modules") or {}):
+        errors.append("dump_carries_the_module")
+    return errors
+
+
+def compile_module_absent(document, fact):
+    """The explicit zero-row result for a release proven to lack the module."""
+    errors = module_absence_errors(document, fact)
+    if errors:
+        raise ValueError("Garmin module absence is not proven: " + ", ".join(errors))
+    version = str(document.get("exiftool_version"))
+    return {
+        "schema": SCHEMA,
+        "scope": ("generated FIT declarations and their runtime connection; "
+                  "observed reading is recorded separately by verify_garmin_fit_reader.py"),
+        "review": REVIEW,
+        "source": {"exiftool_version": version, "table_sha256": {}},
+        "module_state": "absent",
+        "module_absence": {key: fact[key] for key in sorted(MODULE_ABSENT_KEYS)},
+        "protocol": {
+            "kind": MODULE_ABSENT_KIND,
+            "admitted": False,
+            "reasons": [],
+            "options": {"Unknown": "not_exposed", "ExtractEmbedded": "not_exposed",
+                        "reachable_mode": "none"},
+        },
+        "base_types": [],
+        "messages": [],
+        "tables": {},
+        "rows": [],
+        "counts": {
+            "source_rows": 0,
+            "generated": 0,
+            "refused": 0,
+            "by_runtime_connection": {},
+            "refusal_reasons": {},
+        },
+    }
+
+
+def is_module_absent(result) -> bool:
+    return result.get("module_state") == "absent"
+
+
 def compile_document(document, verified_exprs, protocol=None):
     pin = (ROOT / ".exiftool-version").read_text().strip()
     if str(document.get("exiftool_version")) != pin:
         raise ValueError("source dump differs from repository pin")
+    if protocol is None:
+        protocol = document.get("garmin_fit_reader_protocol")
+    if isinstance(protocol, dict) and protocol.get("kind") == MODULE_ABSENT_KIND:
+        return compile_module_absent(document, protocol)
     module = (document.get("modules") or {}).get(MODULE)
     if not isinstance(module, dict) or FIT_TABLE not in (module.get("tables") or {}):
         raise ValueError("source dump has no Garmin::FIT table")
     tables = module["tables"]
-    if protocol is None:
-        protocol = document.get("garmin_fit_reader_protocol")
     blocked = protocol_reasons(protocol)
     # Every declared base type enters ProcessFIT's field list and record
     # size, so one the executor cannot size makes every field list wrong.
@@ -436,7 +528,50 @@ FORMATS = {
 }
 
 
+def render_module_absent_rust(result) -> str:
+    absence = result["module_absence"]
+    version = result["source"]["exiftool_version"]
+    return "\n".join([
+        "// @generated by tools/exiftool-tables/garmin_fit_specs.py; DO NOT EDIT.",
+        f"//! Garmin FIT: ExifTool {version} ships no `Image::ExifTool::Garmin` module.",
+        "//!",
+        "//! Proven from the selected source tree by capture_garmin_fit_fact.pl",
+        f"//! (library inventory sha256 {absence['library_inventory']['sha256']},",
+        f"//! {absence['library_inventory']['file_count']} files; Image/ExifTool.pm sha256",
+        f"//! {absence['exiftool_module']['source_sha256']}). The release defines no FIT",
+        "//! message, field or base type, so this protocol extracts nothing. The empty",
+        "//! table and group names below are never read: `FitProtocol::active` is false.",
+        "",
+        "use super::fit_schema::{FitProtocol, FitTable, FitUnavailable};",
+        "",
+        "static FIT_TABLE_MODULE_ABSENT: FitTable = FitTable {",
+        '    table: "",',
+        '    group0: "",',
+        '    group1: "",',
+        '    group2: "",',
+        "    fields: &[],",
+        "};",
+        "",
+        "/// The FIT protocol as generated from the pinned source.",
+        "pub(crate) static FIT_PROTOCOL: FitProtocol = FitProtocol {",
+        "    refusal: Some(FitUnavailable::ModuleAbsent {",
+        f"        exiftool_version: {rust_str(version)},",
+        "    }),",
+        "    base_types: &[],",
+        "    messages: &[],",
+        "    common: &FIT_TABLE_MODULE_ABSENT,",
+        "    header_name: None,",
+        '    header_group0: "",',
+        '    header_group1: "",',
+        '    header_group2: "",',
+        "};",
+        "",
+    ])
+
+
 def render_rust(result) -> str:
+    if is_module_absent(result):
+        return render_module_absent_rust(result)
     lines = [
         "// @generated by tools/exiftool-tables/garmin_fit_specs.py; DO NOT EDIT.",
         "//! Garmin FIT message and field specs from the pinned hydrated dump.",
@@ -502,7 +637,7 @@ def render_rust(result) -> str:
             f"invalid: {rust_str(base['invalid'])}, admitted: {str(base['admitted']).lower()} }},")
     lines.append("];")
     lines.append("")
-    refusal = "None" if protocol["admitted"] else f"Some({rust_str(reason)})"
+    refusal = "None" if protocol["admitted"] else f"Some(super::fit_schema::FitUnavailable::Refused({rust_str(reason)}))"
     lines.extend([
         "/// The FIT protocol as generated from the pinned source.",
         "pub(crate) static FIT_PROTOCOL: FitProtocol = FitProtocol {",
@@ -536,11 +671,33 @@ def generate(document, verified_exprs, protocol=None):
 def bounded_projection(document, protocol) -> dict:
     """The Garmin module of a full dump plus the protocol fact: everything
     `generate` reads, so the committed ledger and Rust replay from it."""
+    if isinstance(protocol, dict) and protocol.get("kind") == MODULE_ABSENT_KIND:
+        # No module to project; `generate` re-proves the absence from the fact.
+        errors = module_absence_errors(document, protocol)
+        if errors:
+            raise ValueError("Garmin module absence is not proven: " + ", ".join(errors))
+        modules = {}
+    else:
+        modules = {MODULE: document["modules"][MODULE]}
     return {
         "exiftool_version": document.get("exiftool_version"),
-        "modules": {MODULE: document["modules"][MODULE]},
+        "modules": modules,
         "garmin_fit_reader_protocol": protocol,
     }
+
+
+def load_fact(path) -> dict:
+    """A capture_garmin_fit_fact.pl output. An empty or unparsable file is what
+    a crashed capture leaves behind; it is refused, never read as absence."""
+    text = Path(path).read_text()
+    if not text.strip():
+        raise ValueError(f"{path}: empty Garmin FIT fact (the capture failed); refusing")
+    try:
+        fact = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: unparsable Garmin FIT fact (the capture failed); refusing") from exc
+    # Any other shape reaches `protocol_reasons`, which refuses the protocol.
+    return fact
 
 
 def unbound_verified_expressions(path: Path) -> set[str]:
@@ -569,7 +726,7 @@ def main():
                         help="write the bounded source fixture the unit tests replay")
     args = parser.parse_args()
     document = json.loads(args.dump.read_text())
-    protocol = json.loads(args.protocol_fact.read_text()) if args.protocol_fact else None
+    protocol = load_fact(args.protocol_fact) if args.protocol_fact else None
     if args.write_bounded:
         if protocol is None:
             parser.error("--write-bounded requires --protocol-fact")
@@ -583,6 +740,9 @@ def main():
         args.ledger_out.write_text(serialized(result))
     if args.rust_out:
         args.rust_out.write_text(rust)
+    if is_module_absent(result):
+        print(f"Garmin module ABSENT from ExifTool {result['source']['exiftool_version']} "
+              "(proven from its source tree): zero FIT rows", file=sys.stderr)
     print(json.dumps(result["counts"], indent=2, sort_keys=True))
 
 

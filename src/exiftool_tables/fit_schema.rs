@@ -125,12 +125,28 @@ pub struct FitMessage {
     pub withheld: Option<&'static str>,
 }
 
+/// Why the generated FIT protocol extracts nothing. The two states are
+/// deliberately distinct: a refusal is a capture the executor was not
+/// reviewed against (or could not be captured at all), while an absent
+/// module is a release that defines no FIT reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FitUnavailable {
+    /// The generator refused the captured protocol (a changed ProcessFIT
+    /// body or value reader); the reasons, joined.
+    Refused(&'static str),
+    /// The selected ExifTool release ships no `Image::ExifTool::Garmin`
+    /// module, proven from its own source tree by
+    /// `capture_garmin_fit_fact.pl` (`garmin_fit_module_absent_v1`). That
+    /// release reads no FIT tag, so neither does OxiDex.
+    ModuleAbsent { exiftool_version: &'static str },
+}
+
 /// The whole generated FIT protocol.
 #[derive(Clone, Copy, Debug)]
 pub struct FitProtocol {
-    /// `Some(reason)` when the generator refused the protocol (a changed
-    /// ProcessFIT body or value reader); the executor then extracts nothing.
-    pub refusal: Option<&'static str>,
+    /// `Some(_)` when the executor must extract nothing: the generator
+    /// refused the protocol, or the release has no Garmin module.
+    pub refusal: Option<FitUnavailable>,
     /// Sorted by `id`.
     pub base_types: &'static [FitBaseType],
     /// Sorted by `num`.
@@ -146,6 +162,12 @@ pub struct FitProtocol {
 }
 
 impl FitProtocol {
+    /// Whether the executor may walk a FIT stream at all.
+    #[must_use]
+    pub const fn active(&self) -> bool {
+        self.refusal.is_none()
+    }
+
     #[must_use]
     pub fn base_type(&self, id: u8) -> Option<&'static FitBaseType> {
         self.base_types

@@ -682,7 +682,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         garmin_fit_ledger, garmin_fit_source, garmin_fit_rust, dump_source=ifd_source, expr_ledger=ifd_expr_ledger,
         protocol_fact=garmin_fit_protocol_fact,
         catalog_sources=catalog["producer"]["sources"], rust_matches=quicktime_rust_matches)
-    if garmin_fit:
+    if garmin_fit_source is not None:
+        # Supplied artifacts were replayed above (a proven-absent module
+        # replays to zero rows); their digests must match either way.
         expected_fit_digests = {"source_sha256": hashlib.sha256(garmin_fit_source).hexdigest(),
                                 "ledger_sha256": canonical_hash(garmin_fit_ledger),
                                 "rust_sha256": hashlib.sha256(garmin_fit_rust.encode()).hexdigest()}
