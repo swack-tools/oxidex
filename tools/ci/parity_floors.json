@@ -18,9 +18,9 @@
     "            computed against it has to be re-read, not silently adopted"
   ],
   "measured_at": {
-    "commit": "0f92071b",
+    "commit": "3afa224d527f",
     "exiftool": "13.59",
-    "note": "initial seed from the committed catalog-hydrated-join report"
+    "note": "corpus observed receipt refreshed to the 9f6092e0 runtime (PR #79x)"
   },
   "metrics": {
     "join:counts.catalog_ordinary_entries": {
@@ -86,25 +86,25 @@
     },
     "observed:counts.corpus_read_attribution.credited_catalog_entries": {
       "direction": "at_least",
-      "floor": 1963
+      "floor": 2265
     },
     "observed:counts.corpus_read_attribution.metric_c.credited_source_coordinates": {
       "direction": "at_least",
-      "floor": 2287
+      "floor": 2642
     },
     "observed:counts.corpus_read_attribution.metric_c.distinct_group1_tag_identities_matched": {
       "direction": "at_least",
-      "floor": 2586,
+      "floor": 2969,
       "note": "Group1:TagName identities matching in BOTH print and raw modes"
     },
     "observed:counts.observed_read.not_observed_yet": {
       "direction": "at_most",
-      "floor": 31524,
+      "floor": 31222,
       "note": "the read backlog; falls as the corpus receipt credits more entries"
     },
     "observed:counts.observed_read.observed_matched_read": {
       "direction": "at_least",
-      "floor": 1963,
+      "floor": 2265,
       "note": "catalog entries proven read against pinned ExifTool on the corpus",
       "share_of": "join:counts.catalog_ordinary_entries"
     }
