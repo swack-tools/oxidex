@@ -95,7 +95,7 @@ load1() { uptime | sed -E 's/.*load averages?: ([0-9.]+).*/\1/'; }
 # Machine state around a timed run: load1/5/15 and the top 5 CPU consumers,
 # to the console and to benchmark_results.log (kept beside the report).
 snap() {
-    { echo "[$1] $(uptime)"; ps -Ao pcpu,args -r | head -6 | sed "s/^/[$1]   /" | cut -c1-140; } | tee -a "$RUN_LOG"
+    { echo "[$1] $(uptime)"; ps -Ao pcpu,args -r | sed -n '1,6p' | sed "s/^/[$1]   /" | cut -c1-140; } | tee -a "$RUN_LOG"
 }
 stamp_load() { snap "$SCENARIO before"; }
 stamp_after() { snap "$SCENARIO after"; }

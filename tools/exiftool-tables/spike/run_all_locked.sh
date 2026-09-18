@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../../.." || exit 1
 EVID="$1"; OX="$PWD/target/release/oxidex"; ST="$PWD/benches/spike/target/release/stages"
 C="${OXIDEX_PINNED_EXIFTOOL:-/tmp/oxidex-exiftool-cache/exiftool}/t/images"
 load1() { uptime | sed -E 's/.*load averages?: ([0-9.]+).*/\1/'; }
-snap() { echo "[$1] $(uptime)"; ps -Ao pcpu,args -r | head -6 | sed "s/^/[$1]   /" | cut -c1-140; }
+snap() { echo "[$1] $(uptime)"; ps -Ao pcpu,args -r | sed -n '1,6p' | sed "s/^/[$1]   /" | cut -c1-140; }
 bash tools/exiftool-tables/spike/run_timing.sh "$EVID" "$OX" 2>&1 | tee "$EVID/hyperfine.txt"
 RC=${PIPESTATUS[0]}; echo "run_timing exit=$RC"; [ "$RC" = 0 ] || exit $RC
 echo; echo "=== stages (load1 $(load1)) sha256=$(shasum -a 256 "$ST" | cut -d' ' -f1) ==="; snap "stages before"
