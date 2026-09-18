@@ -97,15 +97,16 @@ impl SVGParser {
         None
     }
 
-    /// Parses dimension value, preserving units like "px", "em", "in", "%"
-    /// ExifTool keeps units intact, so we should too
-    fn parse_dimension(value: &str) -> Option<String> {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            Some(trimmed.to_string())
-        } else {
-            None
+    /// XMP::SVG's `width`/`height` ValueConv, `$val =~ s/px$//; $val`.
+    ///
+    /// The attribute text is returned verbatim apart from that one strip. A
+    /// value carrying an XML entity is omitted rather than guessed at: this
+    /// scanner does not unescape, and ExifTool's XML parser does.
+    fn svg_dimension_value_conv(raw: &str) -> Option<String> {
+        if raw.contains('&') {
+            return None;
         }
+        Some(raw.strip_suffix("px").unwrap_or(raw).to_string())
     }
 
     /// XMP.pm's `%dateTimeInfo` uses `ConvertDateTime` for dc:date, changing
@@ -124,16 +125,6 @@ impl SVGParser {
         match rest {
             Some(rest) => format!("{date} {rest}"),
             None => date,
-        }
-    }
-
-    /// Parses viewBox attribute: "minX minY width height"
-    fn parse_viewbox(viewbox: &str) -> Option<(String, String)> {
-        let parts: Vec<&str> = viewbox.split_whitespace().collect();
-        if parts.len() == 4 {
-            Some((parts[2].to_string(), parts[3].to_string()))
-        } else {
-            None
         }
     }
 
@@ -617,37 +608,27 @@ impl FormatParser for SVGParser {
                 .unwrap_or(text.len());
             let svg_tag = &text[svg_start..svg_end];
 
-            // Extract width and height
-            if let Some(width) = Self::extract_attribute(svg_tag, "width")
-                && let Some(parsed) = Self::parse_dimension(&width)
-            {
-                metadata.insert("ImageWidth".to_string(), TagValue::String(parsed.clone()));
-                // Also add SVG:Width for Worker 26 compatibility
-                metadata.insert("SVG:Width".to_string(), TagValue::new_string(parsed));
-            }
-
-            if let Some(height) = Self::extract_attribute(svg_tag, "height")
-                && let Some(parsed) = Self::parse_dimension(&height)
-            {
-                metadata.insert("ImageHeight".to_string(), TagValue::String(parsed.clone()));
-                // Also add SVG:Height for Worker 26 compatibility
-                metadata.insert("SVG:Height".to_string(), TagValue::new_string(parsed));
-            }
-
-            // Extract viewBox for dimensions if width/height not present
-            if let Some(viewbox) = Self::extract_attribute(svg_tag, "viewBox") {
-                metadata.insert(
-                    "SVG:ViewBox".to_string(),
-                    TagValue::new_string(viewbox.clone()),
-                );
-
-                // If no width/height, try to extract from viewBox
-                if !metadata.contains_key("ImageWidth")
-                    && let Some((vb_width, vb_height)) = Self::parse_viewbox(&viewbox)
+            // XMP2.pl's `%Image::ExifTool::XMP::SVG` table (GROUPS 0 and 1
+            // both `SVG`) names the root `width`/`height` attributes
+            // `ImageWidth`/`ImageHeight`, with `ValueConv => '$val =~ s/px$//;
+            // $val'` -- a case-sensitive strip of one trailing `px` and
+            // nothing else: no trim, no unit parsing. Pinned 13.59:
+            // `width="4in"` -> `[SVG] ImageWidth: 4in`, `"100px"` -> `100`,
+            // `" 12 "` -> ` 12 `, `"7PX"` -> `7PX`. `viewBox` is never read
+            // as a dimension (a viewBox-only file has no ImageWidth at all),
+            // and there is no `SVG:Width`/`SVG:Height`. See
+            // oxidex-ops/evidence/20260917-fits-svg/oracle-13.59-svg-edgecases.txt.
+            for (attr, tag) in [("width", "SVG:ImageWidth"), ("height", "SVG:ImageHeight")] {
+                if let Some(value) = Self::extract_attribute(svg_tag, attr)
+                    .and_then(|raw| Self::svg_dimension_value_conv(&raw))
                 {
-                    metadata.insert("ImageWidth".to_string(), TagValue::String(vb_width));
-                    metadata.insert("ImageHeight".to_string(), TagValue::String(vb_height));
+                    metadata.insert(tag.to_string(), TagValue::String(value));
                 }
+            }
+
+            // ViewBox is reported as-is; it never stands in for a dimension.
+            if let Some(viewbox) = Self::extract_attribute(svg_tag, "viewBox") {
+                metadata.insert("SVG:ViewBox".to_string(), TagValue::new_string(viewbox));
             }
 
             // Extract xmlns (namespace) - ExifTool calls this "Xmlns"
@@ -657,12 +638,8 @@ impl FormatParser for SVGParser {
 
             // Extract version - ExifTool calls this "SVGVersion" or "Version"
             if let Some(version) = Self::extract_attribute(svg_tag, "version") {
-                metadata.insert(
-                    "SVG:SVGVersion".to_string(),
-                    TagValue::String(version.clone()),
-                );
-                // Also add SVG:Version for Worker 26 compatibility
-                metadata.insert("SVG:Version".to_string(), TagValue::new_string(version));
+                // XMP::SVG `version => 'SVGVersion'`; there is no `SVG:Version`.
+                metadata.insert("SVG:SVGVersion".to_string(), TagValue::String(version));
             }
 
             // Extract preserveAspectRatio
@@ -790,11 +767,11 @@ mod tests {
         let metadata = parser.parse(&reader).unwrap();
 
         assert_eq!(metadata.get("FileType").unwrap().as_string(), Some("SVG"));
-        assert_eq!(metadata.get("ImageWidth").unwrap().as_string(), Some("200"));
-        assert_eq!(
-            metadata.get("ImageHeight").unwrap().as_string(),
-            Some("150")
-        );
+        assert_eq!(metadata.get_string("SVG:ImageWidth"), Some("200"));
+        assert_eq!(metadata.get_string("SVG:ImageHeight"), Some("150"));
+        assert!(metadata.get("ImageWidth").is_none());
+        assert!(metadata.get("SVG:Width").is_none());
+        assert!(metadata.get("SVG:Version").is_none());
         assert_eq!(metadata.get("Title").unwrap().as_string(), Some("Test SVG"));
         assert_eq!(
             metadata.get("Description").unwrap().as_string(),
@@ -810,42 +787,55 @@ mod tests {
         );
     }
 
+    /// Pinned 13.59 on a viewBox-only root: `[SVG] ViewBox: 0 0 640 480` and
+    /// no ImageWidth/ImageHeight under any group, hence no Composite:ImageSize.
     #[test]
-    fn test_svg_viewbox() {
-        let svg_data = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"></svg>"#;
+    fn test_svg_viewbox_is_not_a_dimension() {
+        let svg_data = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480"></svg>"#;
 
         let reader = BufferedReader::from_bytes(svg_data.as_bytes());
-        let parser = SVGParser;
-        let metadata = parser.parse(&reader).unwrap();
+        let mut metadata = SVGParser.parse(&reader).unwrap();
+        crate::composite::apply(&mut metadata);
 
-        assert_eq!(metadata.get("ImageWidth").unwrap().as_string(), Some("100"));
-        assert_eq!(
-            metadata.get("ImageHeight").unwrap().as_string(),
-            Some("200")
-        );
-        assert_eq!(
-            metadata.get("SVG:ViewBox").unwrap().as_string(),
-            Some("0 0 100 200")
-        );
+        assert_eq!(metadata.get_string("SVG:ViewBox"), Some("0 0 640 480"));
+        for (key, _) in metadata.iter() {
+            let name = key.rsplit(':').next().unwrap_or(key);
+            assert!(
+                !matches!(
+                    name,
+                    "ImageWidth" | "ImageHeight" | "ImageSize" | "Megapixels"
+                ),
+                "ExifTool 13.59 emits no {key} for a viewBox-only SVG"
+            );
+        }
     }
 
+    /// XMP::SVG width/height ValueConv is `s/px$//` and nothing else. Every
+    /// expectation is pinned 13.59 `-a -G1 -s` output
+    /// (oxidex-ops/evidence/20260917-fits-svg/oracle-13.59-svg-edgecases.txt).
     #[test]
-    fn test_svg_dimension_units() {
-        let svg_data = r#"<svg width="300px" height="200em"></svg>"#;
-
-        let reader = BufferedReader::from_bytes(svg_data.as_bytes());
-        let parser = SVGParser;
-        let metadata = parser.parse(&reader).unwrap();
-
-        // Units should be preserved to match ExifTool behavior
-        assert_eq!(
-            metadata.get("ImageWidth").unwrap().as_string(),
-            Some("300px")
-        );
-        assert_eq!(
-            metadata.get("ImageHeight").unwrap().as_string(),
-            Some("200em")
-        );
+    fn test_svg_dimensions_match_pinned_value_conv() {
+        let cases = [
+            (r#"width="4in" height="3in""#, "4in", "3in"),
+            (r#"width="100px" height="50.5px""#, "100", "50.5"),
+            (r#"width="100%" height="10cm""#, "100%", "10cm"),
+            (r#"width=" 12 " height="7PX""#, " 12 ", "7PX"),
+        ];
+        for (attrs, width, height) in cases {
+            let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" {attrs}></svg>"#);
+            let reader = BufferedReader::from_bytes(svg.as_bytes());
+            let metadata = SVGParser.parse(&reader).unwrap();
+            assert_eq!(
+                metadata.get_string("SVG:ImageWidth"),
+                Some(width),
+                "{attrs}"
+            );
+            assert_eq!(
+                metadata.get_string("SVG:ImageHeight"),
+                Some(height),
+                "{attrs}"
+            );
+        }
     }
 
     #[test]
@@ -949,11 +939,8 @@ mod tests {
         let parser = SVGParser;
         let metadata = parser.parse(&reader).unwrap();
 
-        assert_eq!(metadata.get("ImageWidth").unwrap().as_string(), Some("100"));
-        assert_eq!(
-            metadata.get("ImageHeight").unwrap().as_string(),
-            Some("200")
-        );
+        assert_eq!(metadata.get_string("SVG:ImageWidth"), Some("100"));
+        assert_eq!(metadata.get_string("SVG:ImageHeight"), Some("200"));
     }
 
     /// The old gate was a bare `contains("<svg")`, so an HTML document that

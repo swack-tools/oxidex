@@ -155,7 +155,6 @@ impl FITSParser {
     fn parse_header(reader: &dyn FileReader) -> Result<MetadataMap> {
         let mut metadata = MetadataMap::new();
         let mut offset = 0usize;
-        let mut naxis_values: Vec<i64> = Vec::new();
 
         // Read header blocks until END keyword
         loop {
@@ -179,11 +178,7 @@ impl FITSParser {
                     let _ = comment;
 
                     match keyword.as_str() {
-                        "END" => {
-                            // Process collected data
-                            Self::finalize_metadata(&mut metadata, &naxis_values);
-                            return Ok(metadata);
-                        }
+                        "END" => return Ok(metadata),
                         // ProcessFITS consumes SIMPLE while validating the
                         // signature, so it is not reported as metadata.
                         "SIMPLE" => {}
@@ -217,7 +212,6 @@ impl FITSParser {
                                     format!("FITS:{}", Self::tag_name(&keyword)),
                                     TagValue::Integer(axis_val),
                                 );
-                                naxis_values.push(axis_val);
                             }
                         }
                         _ => {
@@ -240,25 +234,15 @@ impl FITSParser {
             }
         }
 
-        Self::finalize_metadata(&mut metadata, &naxis_values);
+        // No derived ImageWidth/ImageHeight/ImageDepth here: FITS.pm's
+        // ProcessFITS emits each header card under its own `FITS:` name
+        // (`NAXIS1` -> `Naxis1`) and nothing else, and no Composite reads
+        // the axes. Pinned 13.59 on a NAXIS=3 file (4x3x2) reports only
+        // `[FITS] Naxis/Naxis1/Naxis2/Naxis3` -- no ImageWidth under any
+        // group and no Composite:ImageSize. The bare, group-less keys this
+        // used to insert were extras, and they fed a Composite:ImageSize and
+        // Megapixels that ExifTool never computes for FITS.
         Ok(metadata)
-    }
-
-    /// Finalizes metadata by calculating dimensions and other derived values
-    fn finalize_metadata(metadata: &mut MetadataMap, naxis_values: &[i64]) {
-        // Calculate image dimensions
-        if naxis_values.len() >= 2 {
-            let width = naxis_values[0];
-            let height = naxis_values[1];
-
-            metadata.insert("ImageWidth".to_string(), TagValue::Integer(width));
-            metadata.insert("ImageHeight".to_string(), TagValue::Integer(height));
-
-            if naxis_values.len() >= 3 {
-                let depth = naxis_values[2];
-                metadata.insert("ImageDepth".to_string(), TagValue::Integer(depth));
-            }
-        }
     }
 }
 
@@ -1422,6 +1406,41 @@ mod tests {
                 Some("fractional reference".into()),
             ))
         );
+    }
+
+    /// Pinned ExifTool 13.59, `-a -G1 -s` on this exact 4x3x2 header, reports
+    /// `[FITS] Naxis: 3`, `Naxis1: 4`, `Naxis2: 3`, `Naxis3: 2` and nothing
+    /// dimensional besides -- no ImageWidth/ImageHeight/ImageDepth under any
+    /// group, and no Composite:ImageSize or Megapixels (FITS.pm declares no
+    /// such tags and no Composite). Evidence:
+    /// oxidex-ops/evidence/20260917-fits-svg/oracle-13.59-a-G1-s.txt.
+    #[test]
+    fn naxis_axes_derive_no_image_dimensions_or_composites() {
+        let reader = TestReader::new(fits(&[
+            "SIMPLE  =                    T / conforms",
+            "BITPIX  =                    8",
+            "NAXIS   =                    3",
+            "NAXIS1  =                    4",
+            "NAXIS2  =                    3",
+            "NAXIS3  =                    2",
+            "END",
+        ]));
+        let mut metadata = FITSParser.parse(&reader).unwrap();
+        crate::composite::apply(&mut metadata);
+
+        assert_eq!(metadata.get_integer("FITS:Naxis1"), Some(4));
+        assert_eq!(metadata.get_integer("FITS:Naxis2"), Some(3));
+        assert_eq!(metadata.get_integer("FITS:Naxis3"), Some(2));
+        for (key, _) in metadata.iter() {
+            let name = key.rsplit(':').next().unwrap_or(key);
+            assert!(
+                !matches!(
+                    name,
+                    "ImageWidth" | "ImageHeight" | "ImageDepth" | "ImageSize" | "Megapixels"
+                ),
+                "ExifTool 13.59 emits no {key} for FITS"
+            );
+        }
     }
 
     #[test]

@@ -485,6 +485,67 @@ fn red_blue_balance(i: Inputs<'_>, blue: bool) -> Option<f64> {
     }
 }
 
+/// ExifTool's `Image::ExifTool::IsFloat` (ExifTool.pm:5947-5953), exactly:
+///
+/// ```text
+/// return 1 if $_[0] =~ /^[+-]?(?=\d|\.\d)\d*(\.\d*)?([Ee]([+-]?\d+))?$/;
+/// return 0 unless $_[0] =~ /^[+-]?(?=\d|,\d)\d*(,\d*)?([Ee]([+-]?\d+))?$/;
+/// $_[0] =~ tr/,/./;   # but translate ',' to '.'
+/// ```
+///
+/// No trimming and no unit stripping. Returns the value as IsFloat leaves it
+/// (`,` translated to `.` in the second form, since IsFloat edits `$_[0]` in
+/// place and callers then use it), or `None` when IsFloat is false.
+pub(super) fn exiftool_is_float(value: &str) -> Option<String> {
+    fn matches(value: &str, point: u8) -> bool {
+        let b = value.as_bytes();
+        let mut i = 0;
+        if matches!(b.first(), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        // (?=\d|<point>\d)
+        let lookahead = match b.get(i) {
+            Some(c) if c.is_ascii_digit() => true,
+            Some(&c) if c == point => b.get(i + 1).is_some_and(u8::is_ascii_digit),
+            _ => false,
+        };
+        if !lookahead {
+            return false;
+        }
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        if b.get(i) == Some(&point) {
+            i += 1;
+            while b.get(i).is_some_and(u8::is_ascii_digit) {
+                i += 1;
+            }
+        }
+        if matches!(b.get(i), Some(b'e' | b'E')) {
+            i += 1;
+            if matches!(b.get(i), Some(b'+' | b'-')) {
+                i += 1;
+            }
+            let start = i;
+            while b.get(i).is_some_and(u8::is_ascii_digit) {
+                i += 1;
+            }
+            if i == start {
+                return false;
+            }
+        }
+        // Perl's `$` (no /m) also matches just before one final newline.
+        i == b.len() || (i + 1 == b.len() && b[i] == b'\n')
+    }
+    if matches(value, b'.') {
+        Some(value.to_string())
+    } else if matches(value, b',') {
+        Some(value.replace(',', "."))
+    } else {
+        None
+    }
+}
+
 /// ExifTool's `Image::ExifTool::IsFloat` (ExifTool.pm:5947-5953), applied to a
 /// value that reaches this layer already carrying its `PrintConv` unit suffix.
 ///
@@ -1229,12 +1290,16 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                     return Computed::new(v4.to_string(), v4.to_string());
                 }
             }
-            let (w, h) = (f(get(i, 0))?, f(get(i, 1))?);
+            // `return "$val[0] $val[1]" if IsFloat($val[0]) and
+            // IsFloat($val[1]); return undef;` -- the gate is strict IsFloat
+            // and the join is of the values themselves, not of a parse of
+            // them. A lenient numeric read here turned SVG's `4in`/`3in` into
+            // a `4x3` ImageSize that ExifTool 13.59 does not produce, and
+            // truncated SVG's `50.5` where ExifTool prints `100x50.5`.
+            let w = exiftool_is_float(get(i, 0)?)?;
+            let h = exiftool_is_float(get(i, 1)?)?;
             // ValueConv yields "W H"; PrintConv is `$val =~ tr/ /x/`.
-            Computed::new(
-                format!("{} {}", w as i64, h as i64),
-                format!("{}x{}", w as i64, h as i64),
-            )
+            Computed::new(format!("{w} {h}"), format!("{w}x{h}"))
         }
 
         // require: ImageSize
@@ -2408,6 +2473,46 @@ mod tests {
         );
         // A tiny image drops into the 6-decimal branch.
         assert_eq!(c("Megapixels", &[Some("2x2")]).as_deref(), Some("0.000004"));
+    }
+
+    /// Exif.pm:4762 gates ImageSize on strict `IsFloat` and joins the values
+    /// verbatim. Pinned 13.59 on SVG roots (oxidex-ops/evidence/
+    /// 20260917-fits-svg/oracle-13.59-svg-edgecases.txt): `4in`/`3in`,
+    /// `100%`/`10cm`, ` 12 `/`7PX` and `100.0`/`0x10` yield no ImageSize;
+    /// `100`/`50.5` -> `100x50.5`, `1e2`/`+5.` -> `1e2x+5.`, `100.0`/`50` ->
+    /// `100.0x50` (and Megapixels `0.000000`, from `/\d+/g` reading 100 and 0).
+    #[test]
+    fn image_size_requires_exiftool_is_float_and_keeps_values_verbatim() {
+        for (w, h) in [
+            ("4in", "3in"),
+            ("100%", "10cm"),
+            (" 12 ", "7PX"),
+            ("100.0", "0x10"),
+            ("", ""),
+        ] {
+            assert_eq!(c("ImageSize", &[Some(w), Some(h)]), None, "{w:?} {h:?}");
+        }
+        assert_eq!(
+            c("ImageSize", &[Some("100"), Some("50.5")]).as_deref(),
+            Some("100x50.5")
+        );
+        assert_eq!(
+            c("ImageSize", &[Some("1e2"), Some("+5.")]).as_deref(),
+            Some("1e2x+5.")
+        );
+        assert_eq!(
+            c("ImageSize", &[Some("100.0"), Some("50")]).as_deref(),
+            Some("100.0x50")
+        );
+        assert_eq!(
+            c("Megapixels", &[Some("100.0 50")]).as_deref(),
+            Some("0.000000")
+        );
+        assert_eq!(exiftool_is_float("1,5").as_deref(), Some("1.5"));
+        assert_eq!(exiftool_is_float(".5").as_deref(), Some(".5"));
+        assert_eq!(exiftool_is_float("5e"), None);
+        assert_eq!(exiftool_is_float("."), None);
+        assert_eq!(exiftool_is_float("inf"), None);
     }
 
     #[test]
