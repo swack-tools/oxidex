@@ -13,7 +13,8 @@ use crate::core::tag_conversion::{
 };
 use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
 use crate::exiftool_tables::{
-    Ctx, Emitted, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif,
+    Ctx, Emitted, EntryRead, IfdDir, IfdTable, MemberValue, engine_reports, find_ifd_table,
+    process_exif_decoded, read_ifd,
 };
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
@@ -1146,19 +1147,20 @@ fn tiff_ifd0_offset(reader: &dyn FileReader, byte_order: ByteOrder) -> Option<u6
 }
 
 /// Interop ids the hand arm of [`parse_interop_subifd`] keeps producing
-/// beside the engine: withheld or not transcribed by the generated
-/// `Exif::Main`. Sorted (binary-searched). Pinned by
-/// `interop_residual_is_exactly_the_hand_remainder`.
+/// beside the engine: withheld (with no generated arm) or not transcribed by
+/// the generated `Exif::Main`. Sorted (binary-searched). Pinned by
+/// `interop_residual_is_exactly_the_hand_remainder`. 0x0002 InteropVersion
+/// left the list when its `RawConv` (`$val =~ s/\0+$//; $val`, Exif.pm:436)
+/// got a generated arm (Autogeneration v2); an entry the arm declines has no
+/// engine row, so it falls through to the hand arm below as any engine miss
+/// does.
 ///
-/// * 0x0002 InteropVersion -- `omitted.raw_conv` (`$val =~ s/\0+$//; $val`,
-///   Exif.pm:436);
 /// * 0x0103 Compression -- `omitted.raw_conv` (sets `$$self{Compression}`);
 ///   `collect_ifd1_thumbnail` still reads `InteropIFD:Compression`;
 /// * 0x0201 / 0x0202 -- absent (`IsOffset`/`OffsetPair` `_variants`, see
 ///   [`IFD1_RESIDUAL_IDS`]): OtherImageStart/Length and the derived
 ///   OtherImage.
 const INTEROP_RESIDUAL_IDS: &[u16] = &[
-    INTEROP_VERSION,
     TAG_COMPRESSION,
     TAG_OTHER_IMAGE_START,
     TAG_OTHER_IMAGE_LENGTH,
@@ -2747,14 +2749,18 @@ fn rebuild_thumbnail_tiff(
 /// `Exif::Main` table reports the thumbnail IFD ([`parse_ifd1`]): exactly the
 /// ids `IFD_EXIF_MAIN` withholds or never transcribed.
 ///
-/// * `omitted.raw_conv` -- 0x00FE SubfileType, 0x0103 Compression, 0x010F
-///   Make, 0x0110 Model, 0x0131 Software, 0x013B Artist, 0x8298 Copyright.
-///   Each carries a `RawConv` the generator does not model (Exif.pm 13.59:
-///   0xfe's `SetPriorityDir`/`PageCount` block, 0x103's `IdentifyRawFile`,
-///   0x10f/0x110/0x131's `$val =~ s/\s+$//; $$self{X} = $val`, 0x13b's
-///   `s/\s+$//`, 0x8298's NUL-separated notice sub), so the engine withholds
-///   them and the shared Exif::Main converter the IFD0 walk uses
-///   (`exif_entry_to_tag_value`) reports them here.
+/// * `omitted.raw_conv` with no generated arm -- 0x00FE SubfileType, 0x0103
+///   Compression, 0x8298 Copyright. Each carries a `RawConv` neither the
+///   static generator nor the v2 backend models (Exif.pm 13.59: 0xfe's
+///   `SetPriorityDir`/`PageCount` block, 0x103's `IdentifyRawFile`, 0x8298's
+///   `Options('CharsetEXIF')`/`Decode` notice sub; `conv::exif_main::REFUSED`),
+///   so the engine withholds them and the shared Exif::Main converter the
+///   IFD0 walk uses (`exif_entry_to_tag_value`) reports them here. 0x010F
+///   Make, 0x0110 Model, 0x0131 Software and 0x013B Artist left this list
+///   when their `RawConv` (`$val =~ s/\s+$//; $$self{X} = $val`) got a
+///   generated arm (Autogeneration v2): the engine reports them, and an
+///   entry the arm declines at run time comes back here through
+///   [`ifd1_engine_rows`]'s declined list.
 /// * absent from the static -- 0x0111 StripOffsets, 0x0117 StripByteCounts,
 ///   0x0201 ThumbnailOffset, 0x0202 ThumbnailLength: `_variants` groups whose
 ///   every alternative is `IsOffset`/`OffsetPair`/`DataTag`, which the
@@ -2768,12 +2774,8 @@ fn rebuild_thumbnail_tiff(
 const IFD1_RESIDUAL_IDS: &[u16] = &[
     TAG_SUBFILE_TYPE,
     TAG_COMPRESSION,
-    TAG_MAKE,
-    TAG_MODEL,
     TAG_STRIP_OFFSETS,
     TAG_STRIP_BYTE_COUNTS,
-    TAG_SOFTWARE,
-    TAG_ARTIST,
     TAG_THUMBNAIL_OFFSET,
     TAG_THUMBNAIL_LENGTH,
     TAG_COPYRIGHT,
@@ -2917,6 +2919,7 @@ pub fn parse_ifd1(
             byte_order,
             tiff_base,
             Ifd1Hand::Thumbnail,
+            &[],
             metadata,
             &mut collected,
         );
@@ -2939,7 +2942,7 @@ pub fn parse_ifd1(
         "IFD1 at {ifd1_offset}: tiff_data and reader address different bytes"
     );
 
-    ifd1_engine_rows(
+    let declined = ifd1_engine_rows(
         table,
         tiff_data,
         ifd1_offset,
@@ -2960,6 +2963,7 @@ pub fn parse_ifd1(
         byte_order,
         tiff_base,
         Ifd1Hand::Residual { priority },
+        &declined,
         metadata,
         &mut collected,
     );
@@ -2979,6 +2983,11 @@ pub fn parse_ifd1(
 /// defined, else a `LOW_PRIORITY_DIR` makes it 0, else 1. No `Exif::Main`
 /// tag declares a `Priority` other than 0 (`Emitted::low_priority` carries
 /// those and the `Avoid` default), so "0 if either" is exact for this table.
+///
+/// Returns the engine-reported ids whose entry the walk left
+/// [`EntryRead::Unread`] -- a generated arm that declined the entry where the
+/// static table withholds the conversion (mixed mode): the residual hand
+/// collector produces those entries as it did before the arm existed.
 fn ifd1_engine_rows(
     table: &'static IfdTable,
     tiff_data: &[u8],
@@ -2986,9 +2995,9 @@ fn ifd1_engine_rows(
     byte_order: ByteOrder,
     low_priority_dir: bool,
     metadata: &mut MetadataMap,
-) {
+) -> Vec<u16> {
     let Ok(ifd_start) = usize::try_from(ifd1_offset) else {
-        return;
+        return Vec::new();
     };
     let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     for (member, key) in [("Make", "IFD0:Make"), ("Model", "IFD0:Model")] {
@@ -2998,7 +3007,7 @@ fn ifd1_engine_rows(
     }
     let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
-    process_exif(
+    let reads = process_exif_decoded(
         table,
         IfdDir {
             data: tiff_data,
@@ -3013,6 +3022,20 @@ fn ifd1_engine_rows(
         &mut ctx,
         &mut emitted,
     );
+    let declined: Vec<u16> = match (
+        reads,
+        read_ifd(tiff_data, ifd_start, byte_order.to_io_byte_order()),
+    ) {
+        (Some(reads), Some(entries)) => entries
+            .iter()
+            .zip(&reads.entries)
+            .filter(|(entry, read)| {
+                **read == EntryRead::Unread && engine_reports(table, entry.tag_id)
+            })
+            .map(|(entry, _)| entry.tag_id)
+            .collect(),
+        _ => Vec::new(),
+    };
     for row in emitted {
         // FENCE: this call site reports IFD1's own `Exif::Main` rows only.
         // Anything else arrived through a `SubDirectory` edge whose target
@@ -3047,6 +3070,7 @@ fn ifd1_engine_rows(
             Instance::default(),
         );
     }
+    declined
 }
 
 /// The `group1` every IFD1 occurrence is recorded under: empty, like every
@@ -3075,6 +3099,7 @@ fn collect_ifd1_thumbnail(
     byte_order: ByteOrder,
     tiff_base: u64,
     mode: Ifd1Hand,
+    declined: &[u16],
     context: &MetadataMap,
     metadata: &mut MetadataMap,
 ) {
@@ -3090,7 +3115,10 @@ fn collect_ifd1_thumbnail(
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
         // Beside the engine, the hand path reads only the ids the generated
         // table leaves to it; everything else is the engine's.
-        if residual && IFD1_RESIDUAL_IDS.binary_search(tag_id).is_err() {
+        if residual
+            && IFD1_RESIDUAL_IDS.binary_search(tag_id).is_err()
+            && !declined.contains(tag_id)
+        {
             continue;
         }
         match *tag_id {
@@ -3334,6 +3362,7 @@ pub fn parse_ifd1_directory(
         byte_order,
         tiff_base,
         Ifd1Hand::Thumbnail,
+        &[],
         metadata,
         &mut collected,
     );
@@ -4529,7 +4558,7 @@ mod exif_subifd_tests {
     /// rather than falling back to the hand arm's `undef` / `2.971 1`
     /// (ExifTool numifies both: `1.0`, `2.8`; construct K-N).
     #[test]
-    fn aperture_values_are_the_engines_and_an_unnumifiable_one_is_absent() {
+    fn aperture_values_are_the_engines_including_the_ones_perl_numifies() {
         let at = tail_at(2);
         let data = exif_block(
             &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
@@ -4541,7 +4570,10 @@ mod exif_subifd_tests {
             Some(TagValue::Float(f)) => assert!((f - 2f64.powf(2.5)).abs() < 1e-12, "{f}"),
             other => panic!("-n ApertureValue: {other:?}"),
         }
-        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+        // The generated arm evaluates `2 ** ($val / 2)` over the `undef`
+        // string ReadValue gives a 0/0 rational, which Perl numifies to 0:
+        // `1.0`, as pinned ExifTool prints it (construct K-N, now closed).
+        assert_eq!(engine.get_string("ExifIFD:MaxApertureValue"), Some("1.0"));
         let hand = walk_exif(&data, None, None, &[]);
         assert!(
             hand.get("ExifIFD:MaxApertureValue").is_some(),
@@ -4552,10 +4584,10 @@ mod exif_subifd_tests {
             &[(0x9205, RATIONAL, 2, tail_at(1))],
             &[rational(2971, 1000), rational(1, 1)].concat(),
         );
-        assert!(
-            walk_exif(&data, None, exif_main(), &[])
-                .get("ExifIFD:MaxApertureValue")
-                .is_none()
+        // `"2.971 1" / 2` numifies the leading number: 2.8, as ExifTool.
+        assert_eq!(
+            walk_exif(&data, None, exif_main(), &[]).get_string("ExifIFD:MaxApertureValue"),
+            Some("2.8")
         );
 
         // Review finding (E-2, D-2): `2**($val/2)` of 2147483648/1
@@ -4569,18 +4601,18 @@ mod exif_subifd_tests {
             &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
             &[rational(2_147_483_648, 1), rational(7, 0)].concat(),
         );
+        // The generated arms print both infinities as Perl does (`Inf`),
+        // so they are reported by the engine; the overflow no longer needs
+        // the hand arm, and 7/0's `inf` is no longer absent.
         let engine = walk_exif(&data, None, exif_main(), &[]);
-        let hand = walk_exif(&data, None, None, &[]);
-        let aperture = engine
-            .get("ExifIFD:ApertureValue")
-            .expect("the hand arm's row");
-        assert_eq!(Some(aperture), hand.get("ExifIFD:ApertureValue"));
-        assert_eq!(
-            crate::core::exiftool_compat::format_tag_value("ExifIFD:ApertureValue", aperture)
-                .as_string(),
-            Some("Inf")
-        );
-        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+        for name in ["ExifIFD:ApertureValue", "ExifIFD:MaxApertureValue"] {
+            let value = engine.get(name).expect("the generated arm's row");
+            assert_eq!(
+                crate::core::exiftool_compat::format_tag_value(name, value).as_string(),
+                Some("Inf"),
+                "{name}"
+            );
+        }
     }
 
     /// Review finding (E-2): AmbientTemperature as a signed 0/-1 -- the
@@ -5462,12 +5494,13 @@ mod ifd1_tests {
             "the residual split assumes the engine walks IFD1; with Exif::Main off \
              the hand collector runs whole (Ifd1Hand::Thumbnail)"
         );
-        // Every residual id is withheld (a non-empty `omitted`) or absent
-        // from the static altogether (the offset class: no tag, no group).
+        // Every residual id is one the engine does not report -- withheld
+        // (a non-empty `omitted`) with no generated arm -- or absent from the
+        // static altogether (the offset class: no tag, no group).
         for &id in IFD1_RESIDUAL_IDS {
             match IFD_EXIF_MAIN.tag(id) {
                 Some(tag) => assert!(
-                    tag.omitted.any(),
+                    tag.omitted.any() && !engine_reports(&IFD_EXIF_MAIN, id),
                     "0x{id:04x} {} is reported by the generated table but also read by \
                      the IFD1 residual -- a double insert",
                     tag.name
@@ -5487,16 +5520,15 @@ mod ifd1_tests {
             .collect();
         assert_eq!(
             withheld,
-            vec![
-                TAG_SUBFILE_TYPE,
-                TAG_COMPRESSION,
-                TAG_MAKE,
-                TAG_MODEL,
-                TAG_SOFTWARE,
-                TAG_ARTIST,
-                TAG_COPYRIGHT
-            ]
+            vec![TAG_SUBFILE_TYPE, TAG_COMPRESSION, TAG_COPYRIGHT]
         );
+        // The four trimmed strings left the residual for their generated
+        // arms (Autogeneration v2); an entry an arm declines returns to the
+        // hand arm through `ifd1_engine_rows`'s declined list.
+        for id in [TAG_MAKE, TAG_MODEL, TAG_SOFTWARE, TAG_ARTIST] {
+            assert!(IFD_EXIF_MAIN.tag(id).unwrap().omitted.raw_conv);
+            assert!(engine_reports(&IFD_EXIF_MAIN, id), "0x{id:04x}");
+        }
         for &id in &withheld {
             assert!(IFD_EXIF_MAIN.tag(id).unwrap().omitted.raw_conv);
         }
@@ -5514,7 +5546,7 @@ mod ifd1_tests {
         // Conversely: nothing the engine reports is a residual id (this is
         // what catches RowsPerStrip, which left the hand path).
         for tag in IFD_EXIF_MAIN.tags {
-            if tag.omitted.any() || tag.subdir.is_some() || tag.flags.unknown {
+            if !engine_reports(&IFD_EXIF_MAIN, tag.id) {
                 continue;
             }
             assert!(
@@ -6429,11 +6461,7 @@ mod interop_tests {
             INTEROP_RESIDUAL_IDS.windows(2).all(|w| w[0] < w[1]),
             "INTEROP_RESIDUAL_IDS is binary-searched and must stay sorted"
         );
-        assert_eq!(
-            INTEROP_RESIDUAL_IDS,
-            [0x0002, 0x0103, 0x0201, 0x0202],
-            "spec 3.2"
-        );
+        assert_eq!(INTEROP_RESIDUAL_IDS, [0x0103, 0x0201, 0x0202], "spec 3.2");
         // Each residual id is withheld (a non-empty `omitted`) or absent.
         for &id in INTEROP_RESIDUAL_IDS {
             assert!(

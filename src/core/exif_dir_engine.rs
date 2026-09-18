@@ -77,6 +77,12 @@ struct Row {
     /// 0 iff the tag's effective priority is 0 (`Priority => 0`, or `Avoid`
     /// with no priority of its own; ExifTool.pm:9469-9473), else 1.
     priority: u8,
+    /// The row's field was the hand arm's before a generated conversion arm
+    /// took it (its static conversion is `omitted`; Autogeneration v2): it
+    /// keeps the priority the hand residual recorded it at --
+    /// [`tag_priority_is_zero`] -- through [`DirEngineRows::at_priority`], so
+    /// a 0xfe4e WhiteBalance (`Avoid`) still cannot displace the 0xa403 row.
+    keeps_priority: bool,
     consumed: bool,
 }
 
@@ -205,7 +211,7 @@ impl DirEngineRows {
     /// so `-TAG` selection stays where the hand arm left it (the InteropIFD
     /// caller). E-2 chooses per directory.
     pub(crate) fn at_priority(mut self, priority: u8) -> Self {
-        for row in &mut self.rows {
+        for row in self.rows.iter_mut().filter(|row| !row.keeps_priority) {
             row.priority = priority;
         }
         self
@@ -406,15 +412,24 @@ pub(crate) fn walk(
         // infinity, and the compiled `sprintf("%.1f",$val)` is Rust's
         // `format!`, which prints `inf` where Perl prints `Inf`. The row is
         // dropped as the engine's own absence (`undecoded`), so the entry
-        // keeps its hand arm, which prints ExifTool's `Inf`.
-        if matches!(&row.value_conv, Some(TagValue::Float(f)) if !f.is_finite()) {
+        // keeps its hand arm, which prints ExifTool's `Inf`. A generated arm
+        // (Autogeneration v2) prints the infinity as Perl does (`rt::sprintf`
+        // spells `Inf`), so only Rust's lowercase spelling is dropped.
+        if matches!(&row.value_conv, Some(TagValue::Float(f)) if !f.is_finite())
+            && matches!(&row.value, TagValue::String(s) if s.contains("inf"))
+        {
             rows.unrenderable.push(row.name);
             continue;
         }
-        let stored = row_entry
+        let entry = row_entry
             .get(&index)
-            .and_then(|&entry| ifd_entries.as_deref()?.get(entry))
-            .and_then(|entry| stored_value(tiff, entry, order));
+            .and_then(|&entry| ifd_entries.as_deref()?.get(entry));
+        let stored = entry.and_then(|entry| stored_value(tiff, entry, order));
+        let taken_from_hand = entry.is_some_and(|entry| {
+            table
+                .tag(entry.tag_id)
+                .is_some_and(|tag| tag.omitted.any() && tag.name == row.name)
+        });
         let display = datetime_typed(engine_row_value(row.value));
         let no_print_conv = match (row.value_conv, row.rational) {
             (Some(value_conv), _) => datetime_typed(engine_row_value(value_conv)),
@@ -431,6 +446,7 @@ pub(crate) fn walk(
             } else {
                 SHIM_DEFAULT_PRIORITY
             },
+            keeps_priority: taken_from_hand,
             consumed: false,
         });
     }
@@ -629,6 +645,19 @@ mod tests {
         0xfe56, 0xfe57, 0xfe58,
     ];
 
+    /// The withheld ids a generated conversion arm now takes
+    /// (Autogeneration v2 mixed mode, `exiftool_tables::conv`): the engine
+    /// reports them through the arm, and the hand arm runs only for an entry
+    /// the arm declines (`EntryRead::Unread`). 53 of the 80; the other 27
+    /// are `conv::exif_main::REFUSED`. Sorted.
+    const EXIF_MAIN_GENERATED_TAKES: &[u16] = &[
+        0x0002, 0x010f, 0x0110, 0x0131, 0x013b, 0x0153, 0x80a6, 0x87af, 0x87b0, 0x8827, 0x9000,
+        0x9101, 0x9201, 0x9206, 0x9209, 0x9216, 0x9290, 0x9291, 0x9292, 0xa000, 0xa216, 0xa40d,
+        0xa432, 0xc5e0, 0xc612, 0xc613, 0xc616, 0xc61b, 0xc61c, 0xc630, 0xc65d, 0xc6fa, 0xc6fb,
+        0xc6fc, 0xc71b, 0xc726, 0xc772, 0xc7aa, 0xcd39, 0xfde8, 0xfde9, 0xfdea, 0xfe4c, 0xfe4d,
+        0xfe4e, 0xfe51, 0xfe52, 0xfe53, 0xfe54, 0xfe55, 0xfe56, 0xfe57, 0xfe58,
+    ];
+
     /// Plain `Exif::Main` tags that are `SubDirectory` edges (28): the
     /// engine descends or marks them and never reports the tag itself.
     /// Sorted.
@@ -688,6 +717,15 @@ mod tests {
             withheld, EXIF_MAIN_WITHHELD,
             "EXIF_MAIN_WITHHELD: {SNAPSHOT_MOVED}"
         );
+        let taken: Vec<u16> = withheld
+            .iter()
+            .copied()
+            .filter(|&id| crate::exiftool_tables::conv::claims(table, table.tag(id).unwrap()))
+            .collect();
+        assert_eq!(
+            taken, EXIF_MAIN_GENERATED_TAKES,
+            "EXIF_MAIN_GENERATED_TAKES: {SNAPSHOT_MOVED}"
+        );
         let edges: Vec<u16> = table
             .tags
             .iter()
@@ -731,10 +769,18 @@ mod tests {
         assert_eq!(rows.owner(0x927c, true), Owner::Hand, "MakerNote");
         assert_ne!(rows.owner(0xa005, false), Owner::Engine, "InteropOffset");
         assert_ne!(rows.owner(0xa005, true), Owner::Engine, "InteropOffset");
-        for &id in EXIF_MAIN_WITHHELD.iter().chain(EXIF_MAIN_ABSENT) {
+        let hand_withheld: Vec<u16> = EXIF_MAIN_WITHHELD
+            .iter()
+            .copied()
+            .filter(|id| !EXIF_MAIN_GENERATED_TAKES.contains(id))
+            .collect();
+        for &id in hand_withheld.iter().chain(EXIF_MAIN_ABSENT) {
             for silence in [false, true] {
                 assert_eq!(rows.owner(id, silence), Owner::Hand, "{id:#06x}");
             }
+        }
+        for &id in EXIF_MAIN_GENERATED_TAKES {
+            assert_eq!(rows.owner(id, true), Owner::Engine, "{id:#06x}");
         }
         let unknown: Vec<u16> = table
             .tags
@@ -771,9 +817,10 @@ mod tests {
         // The partition is total: every declared id is exactly one of
         // engine, withheld, edge, unknown.
         assert_eq!(
-            emit.len() + EXIF_MAIN_WITHHELD.len() + EXIF_MAIN_EDGES.len() + unknown.len(),
+            emit.len() + hand_withheld.len() + EXIF_MAIN_EDGES.len() + unknown.len(),
             all_ids(table).len(),
-            "engine + withheld + edges + unknown must cover every declared id once"
+            "engine (incl. generated arms) + hand-withheld + edges + unknown must cover every \
+             declared id once"
         );
     }
 
@@ -1236,8 +1283,12 @@ mod tests {
             &MetadataMap::new(),
         );
         assert_eq!(rows.entries(), Some(2));
-        assert!(rows.rows.is_empty(), "{:?}", rows.rows);
-        assert!(!rows.undecoded(0x9202), "decoded, then withheld");
+        // 0/0 reads as the string `undef`, which `2 ** ($val / 2)` numifies
+        // to 0: the generated arm reports ExifTool's `1.0`.
+        let names: Vec<&str> = rows.rows.iter().map(|row| row.name).collect();
+        assert_eq!(names, ["ApertureValue"]);
+        assert_eq!(rows.rows[0].display, TagValue::String("1.0".to_string()));
+        assert!(!rows.undecoded(0x9202), "decoded");
         assert!(
             !rows.undecoded(0x829a),
             "past the block: ExifTool's Bad offset"
@@ -1327,10 +1378,13 @@ mod tests {
             "ExifIFD",
             &MetadataMap::new(),
         );
+        // The generated arm spells the overflow as Perl does, so the row is
+        // kept (Autogeneration v2); only Rust's `inf` spelling is dropped.
         let names: Vec<&str> = rows.rows.iter().map(|row| row.name).collect();
-        assert_eq!(names, ["MaxApertureValue"]);
-        assert_eq!(rows.rows[0].display, TagValue::String("5.7".to_string()));
-        assert!(rows.undecoded(0x9202), "the hand arm's to print");
+        assert_eq!(names, ["ApertureValue", "MaxApertureValue"]);
+        assert_eq!(rows.rows[0].display, TagValue::String("Inf".to_string()));
+        assert_eq!(rows.rows[1].display, TagValue::String("5.7".to_string()));
+        assert!(!rows.undecoded(0x9202));
         assert!(!rows.undecoded(0x9205));
     }
 

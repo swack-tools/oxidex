@@ -149,6 +149,7 @@ use crate::core::TagValue;
 use crate::io::ByteOrder;
 
 use super::cond::{self, MemberValue};
+use super::conv::{self, Arm};
 use super::enabled_serial;
 use super::engine::{self, Dir, Emitted, Guard};
 use super::exprs;
@@ -156,6 +157,7 @@ use super::ifd_schema::{
     IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag, RawConvEffect,
 };
 use super::runtime::{self, DecodedValue, decode_value_of};
+use super::session::{ByteOrder as SessionByteOrder, MemberVal, Session};
 use super::subdir::BaseExpr;
 use super::{
     Fmt, SerialDir, SerialEmissionSink, SerialTable, SerialWalkResult, find_ifd_table,
@@ -900,6 +902,16 @@ fn walk(
     ctx.members
         .insert("SubfileType", MemberValue::Str(String::new()));
 
+    // Autogeneration v2: the table's generated conversion arms, run first
+    // for every field they claim (mixed mode, `conv` module doc), over a
+    // session carrying this directory's byte order (`GetByteOrder()`).
+    let generated = conv::decoder(table);
+    let mut session = Session::new();
+    session.byte_order = Some(match dir.byte_order {
+        ByteOrder::Little => SessionByteOrder::LittleEndian,
+        ByteOrder::Big => SessionByteOrder::BigEndian,
+    });
+
     let mut warn_count = 0u32;
     for (index, entry) in entries.iter().enumerate() {
         // Exif.pm:6455-6457.
@@ -1010,6 +1022,36 @@ fn walk(
         // ExifTool.pm:6312-6320: `ReadValue` keeps the fraction beside the
         // number (`TAG_EXTRA{Rational}`, Exif.pm:7185).
         let fraction = single_rational(&raw);
+        // Mixed mode (Autogeneration v2): a generated arm takes the field
+        // first; on a decline the existing path below runs for this entry.
+        let mut declined = false;
+        if let Some(decode) = generated.filter(|_| conv::claims(table, tag)) {
+            match generated_arm(decode, &session, tag, &raw) {
+                Arm::Decline(_) => declined = true,
+                Arm::Suppress => continue,
+                Arm::Report(report) => {
+                    for (key, value) in &report.writes {
+                        match member_of(value) {
+                            Some(member) => {
+                                ctx.members.insert(key, member);
+                            }
+                            None => {
+                                ctx.members.remove(key);
+                            }
+                        }
+                        let _ = session.set_member(key, value.clone());
+                    }
+                    let Some(group1) = group1_of(table, tag, &dir) else {
+                        continue;
+                    };
+                    out.push(generated_row(table, tag, group1, &raw, fraction, report));
+                    if let Some(reads) = decoded.as_deref_mut() {
+                        reads.rows.push((out.len() - 1, index));
+                    }
+                    continue;
+                }
+            }
+        }
         // ExifTool.pm:6107-6120: the rational `ReadValue` hands on is already
         // `RoundFloat($n / $d, 10)`, so everything below -- the `RawConv`
         // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
@@ -1028,6 +1070,14 @@ fn walk(
         // although ExifTool never runs a PrintConv on a scalar-ref value
         // (ExifTool.pm:3533): over-refusing is the safe direction.
         if omitted.any() {
+            // A field whose generated arm declined this entry and whose
+            // static conversion is withheld: the engine cannot vouch for the
+            // absence, so the caller's hand arm runs (`EntryRead::Unread`).
+            if declined {
+                if let Some(reads) = decoded.as_deref_mut() {
+                    reads.entries[index] = EntryRead::Unread;
+                }
+            }
             continue;
         }
         let binary = tag.flags.binary && tag.value_conv.is_none();
@@ -1089,6 +1139,134 @@ fn walk(
         }
     }
     Some(())
+}
+
+/// The Perl scalar `ReadValue` hands a conversion (ExifTool.pm:6297-6330):
+/// an integer IV, a `float`/`double` NV, a rational's `RoundFloat` string
+/// (or `inf`/`undef`), a string or byte run as its bytes, a fixed-count
+/// entry as ONE space-joined string. `None` for bytes that are not UTF-8,
+/// which `MemberVal::Str` cannot hold: the arm is not called.
+fn perl_scalar(raw: &DecodedValue) -> Option<MemberVal> {
+    Some(match raw {
+        DecodedValue::Integer(i) => MemberVal::Int(*i),
+        DecodedValue::Float(f) => MemberVal::Float(*f),
+        DecodedValue::UnsignedRational(..) | DecodedValue::SignedRational(..) => {
+            MemberVal::Str(ifd_perl_string(raw)?)
+        }
+        DecodedValue::StringBytes(bytes) | DecodedValue::Undefined(bytes) => {
+            MemberVal::Str(String::from_utf8(bytes.clone()).ok()?)
+        }
+        DecodedValue::String(s) => MemberVal::Str(s.clone()),
+        DecodedValue::Array(values) => MemberVal::Str(
+            values
+                .iter()
+                .map(ifd_perl_string)
+                .collect::<Option<Vec<_>>>()?
+                .join(" "),
+        ),
+    })
+}
+
+/// Runs `tag`'s generated arm on the entry's `ReadValue` result. A value
+/// the arm cannot be handed declines. (No Exif::Main arm reads the eval-site
+/// `$count`/`$format`; the backend refuses any that would.)
+fn generated_arm(decode: conv::Decode, session: &Session, tag: &IfdTag, raw: &DecodedValue) -> Arm {
+    match perl_scalar(raw) {
+        Some(val) => decode(session, tag.id, &val),
+        None => Arm::Decline("value bytes are not UTF-8"),
+    }
+}
+
+/// `$$self{X} = v` as the `Cond` grammar's member: an IV as `Num`, anything
+/// else as its string; `undef` clears it.
+fn member_of(value: &MemberVal) -> Option<MemberValue> {
+    match value {
+        MemberVal::Int(i) => Some(MemberValue::Num(*i)),
+        MemberVal::Undef => None,
+        other => Some(MemberValue::Str(other.perl_string())),
+    }
+}
+
+/// A generated arm's scalar as the value an IFD row carries: an IV as
+/// `Integer`, an NV as `Float` (printed `%.15g` by every writer), anything
+/// else as its Perl string.
+fn scalar_tag_value(value: &MemberVal) -> TagValue {
+    match value {
+        MemberVal::Int(i) => TagValue::Integer(*i),
+        MemberVal::Float(f) => TagValue::Float(*f),
+        other => TagValue::String(other.perl_string()),
+    }
+}
+
+fn out_tag_value(out: &conv::Out) -> TagValue {
+    match out {
+        conv::Out::Scalar(v) => scalar_tag_value(v),
+        // ExifTool.pm:3535-3539 / exiftool:3983-3988, as the static path
+        // renders a `Binary` tag.
+        conv::Out::Binary(bytes) => TagValue::String(format!(
+            "(Binary data {} bytes, use -b option to extract)",
+            bytes.len()
+        )),
+    }
+}
+
+/// The row for a generated arm's report: the same shape the static path
+/// builds below -- the default-mode value, the `-n` value when a `PrintConv`
+/// ran, and the fraction only where the value is the rational unconverted.
+fn generated_row(
+    table: &'static IfdTable,
+    tag: &'static IfdTag,
+    group1: &'static str,
+    raw: &DecodedValue,
+    fraction: Option<(i64, i64)>,
+    report: conv::Report,
+) -> Emitted {
+    let unconverted = match &report.value {
+        Some(out) => out_tag_value(out),
+        None => {
+            let rounded = round_rationals(raw.clone());
+            if tag.flags.list {
+                runtime::to_tag_value(&rounded)
+            } else {
+                ifd_exiftool_value(&rounded)
+            }
+        }
+    };
+    // A `PrintConv` whose text is exactly the value it was given (ISO's
+    // `s/\s+/, /g` on a single number) changes nothing ExifTool prints: the
+    // row keeps its typed value, as a tag with no `PrintConv` does, so the
+    // library's typed accessors see what the hand arm gave them.
+    // Only for a field the static table withholds (whose previous producer
+    // was the hand arm, which gave the typed value) and only where no
+    // conversion stage replaced `$val` (the typed value IS what `ReadValue`
+    // read): a field the static engine already reported keeps the String
+    // display it always had, and a converted number is never handed to
+    // name-keyed output rules as if it were the raw one.
+    let print = report.print.filter(|print| {
+        let before = match &report.value {
+            None if tag.omitted.any() => perl_scalar(raw).map(|v| v.perl_string()),
+            _ => None,
+        };
+        !matches!((print, before), (conv::Out::Scalar(p), Some(b)) if p.is_defined() && p.perl_string() == b)
+    });
+    let untouched = report.value.is_none() && print.is_none();
+    let (value, value_conv) = match &print {
+        Some(print) => (out_tag_value(print), Some(unconverted)),
+        None => (unconverted, None),
+    };
+    Emitted {
+        module: table.module,
+        table: table.table,
+        group0: tag.groups.g0.unwrap_or(table.group0),
+        group1,
+        group2: tag.groups.g2.unwrap_or(table.group2),
+        name: tag.name,
+        value,
+        low_priority: effective_priority(table, tag) == Some(0),
+        avoid: tag.flags.avoid,
+        rational: fraction.filter(|_| untouched),
+        value_conv,
+    }
 }
 
 /// The `(numerator, denominator)` of a single rational `ReadValue` result

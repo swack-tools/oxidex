@@ -91,6 +91,16 @@ else:
         assert json.loads(flag('--fit-protocol-fact').read_text())['marker']=='explicit-A'
         output(flag('--fit-out'),'garmin-fit');output(flag('--fit-ledger-out'),'garmin-fit-ledger')
         output(flag('--value-conv-ledger-out'),'value-ledger')
+    elif name=='conv_codegen.py':
+        dump(args[0])
+        assert args[args.index('--table')+1]=='Exif::Main'
+        assert {flag('-o'),flag('--ledger')}=={root/item.path for item in artifacts.select(producer='conv_codegen')}
+        output(flag('-o'),name);output(flag('--ledger'),name+'-ledger')
+    elif name=='conv_oracle.py':
+        assert '--write' in args and args[args.index('--table')+1]=='Exif::Main'
+        assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        assert flag('--exiftool-dir')==lib.parent
+        output(artifact_path('conv-exif-main-oracle'),name)
     elif name=='serial_directory.py':
         dump(args[0]);output(flag('--rust-output'),'serial')
         assert flag('--rust-output')==artifact('serial_directory')
