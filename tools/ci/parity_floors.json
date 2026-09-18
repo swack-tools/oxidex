@@ -1,0 +1,117 @@
+{
+  "_README": [
+    "Floors for tools/ci/parity_ratchet.py, read from the committed published",
+    "measurements under docs/public/measurements/ (which CI already pins for",
+    "exact drift). Seeded at 0f92071b, ExifTool 13.59.",
+    "",
+    "Metrics are '<source>:<dotted path into counts>'. Sources may name a",
+    "sub-document with '#key'.",
+    "",
+    "Floors move only by `parity_ratchet.py raise`, committed beside the change",
+    "that earned it. A drop that is genuinely intended stays a deliberate,",
+    "reviewable act -- never a side effect of regenerating a snapshot.",
+    "",
+    "direction:",
+    "  at_least  progress; falling is a regression",
+    "  at_most   defect backlog; rising is a regression",
+    "  exact     denominator; ANY change is a refusal, because every ratio",
+    "            computed against it has to be re-read, not silently adopted"
+  ],
+  "measured_at": {
+    "commit": "0f92071b",
+    "exiftool": "13.59",
+    "note": "initial seed from the committed catalog-hydrated-join report"
+  },
+  "metrics": {
+    "join:counts.catalog_ordinary_entries": {
+      "direction": "exact",
+      "floor": 33487,
+      "note": "the read denominator: every ordinary BuildTagLookup entry"
+    },
+    "join:counts.implementation.blocked_generated_reader_refusal": {
+      "direction": "at_most",
+      "floor": 156,
+      "note": "rows a generated reader explicitly refuses"
+    },
+    "join:counts.implementation.generated_reader_declaration_option_gated": {
+      "direction": "at_least",
+      "floor": 1123
+    },
+    "join:counts.implementation.generated_reader_declaration_unobserved": {
+      "direction": "at_least",
+      "floor": 778
+    },
+    "join:counts.implementation.source_row_not_yet_consumed": {
+      "direction": "at_most",
+      "floor": 18562,
+      "note": "the not-started pile; the headline number to drive down"
+    },
+    "join:counts.observed_read.not_observed_yet": {
+      "direction": "at_most",
+      "floor": 33487,
+      "note": "CI does not yet bind corpus read evidence, so this is still the whole catalog; it falls once --corpus-read-evidence is wired in"
+    },
+    "join:counts.status.source_row_joined": {
+      "direction": "exact",
+      "floor": 33487,
+      "note": "every catalog entry must still join a source row"
+    },
+    "join:counts.write_parity.generated_writer_declarations": {
+      "direction": "at_least",
+      "floor": 19
+    },
+    "join:counts.write_parity.native_writable_entries": {
+      "direction": "exact",
+      "floor": 14169,
+      "note": "the write denominator: entries ExifTool's Writable column marks writable"
+    },
+    "join:counts.write_parity.native_writable_unique_case_insensitive_names": {
+      "direction": "exact",
+      "floor": 7068
+    },
+    "join:counts.write_parity.observed_matched_write": {
+      "direction": "at_least",
+      "floor": 0,
+      "note": "the honest zero: no write has yet been observed to match an ExifTool read-back"
+    },
+    "join:counts.writer_implementation.writer_not_declared": {
+      "direction": "at_most",
+      "floor": 14150,
+      "note": "writable entries with no writer declaration at all"
+    },
+    "observed:counts.catalog_ordinary_entries": {
+      "direction": "exact",
+      "floor": 33487,
+      "note": "must equal the join's denominator; a split here means the two snapshots describe different catalogs"
+    },
+    "observed:counts.corpus_read_attribution.credited_catalog_entries": {
+      "direction": "at_least",
+      "floor": 1963
+    },
+    "observed:counts.corpus_read_attribution.metric_c.credited_source_coordinates": {
+      "direction": "at_least",
+      "floor": 2287
+    },
+    "observed:counts.corpus_read_attribution.metric_c.distinct_group1_tag_identities_matched": {
+      "direction": "at_least",
+      "floor": 2586,
+      "note": "Group1:TagName identities matching in BOTH print and raw modes"
+    },
+    "observed:counts.observed_read.not_observed_yet": {
+      "direction": "at_most",
+      "floor": 31524,
+      "note": "the read backlog; falls as the corpus receipt credits more entries"
+    },
+    "observed:counts.observed_read.observed_matched_read": {
+      "direction": "at_least",
+      "floor": 1963,
+      "note": "catalog entries proven read against pinned ExifTool on the corpus",
+      "share_of": "join:counts.catalog_ordinary_entries"
+    }
+  },
+  "schema": 1,
+  "sources": {
+    "join": "docs/public/measurements/catalog-hydrated-join-13.59.json",
+    "observed": "docs/public/measurements/catalog-corpus-observed-13.59.json#observed_join"
+  }
+}

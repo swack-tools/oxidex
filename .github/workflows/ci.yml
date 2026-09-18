@@ -108,6 +108,17 @@ jobs:
       # stayed red for two days looking like a single broken test.
       - run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
       - run: python3 tools/ci/check-corpus-guards.py
+      # The parity ratchet. The catalog-join job already refuses any drift
+      # from the published measurements, but that check enforces "identical",
+      # not "not worse": the moment someone regenerates the snapshot -- which
+      # is exactly what a drift failure tells them to do -- a regression lands
+      # as easily as an improvement and CI goes green again either way. This
+      # reads the same committed measurements and fails when a tracked count
+      # moved the wrong way, so lowering one stays a deliberate act
+      # (`parity_ratchet.py raise`) rather than a side effect.
+      # Committed JSON only: no ExifTool, no build, ~1 s.
+      - run: python3 tools/ci/parity_ratchet.py report
+      - run: python3 tools/ci/parity_ratchet.py check
       # Also pure-Python and buildless. update-coverage-docs rewrites these
       # numbers on every push to main, so this is not what keeps them correct
       # -- it is what catches a rule that has STOPPED MATCHING. Each rule
