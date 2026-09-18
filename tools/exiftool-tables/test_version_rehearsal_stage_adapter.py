@@ -542,6 +542,40 @@ class AdapterTests(unittest.TestCase):
         with executor._HostLock(lock): pass
 
 
+class LiveInventoryProofTests(unittest.TestCase):
+    """The generate/build artifact proof hashes the release's regenerated
+    inventory, not the pinned release's module list (#823's split tables:
+    11.78 drops binary/dji.rs and adds ifd/json.rs)."""
+
+    def test_artifact_rows_hash_the_regenerated_module_set(self):
+        with TemporaryDirectory() as temp:
+            checkout = Path(temp)
+            for item in artifacts.ARTIFACTS:
+                path = checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(fixture_text(item))
+            (checkout / "src/exiftool_tables/binary/dji.rs").unlink()
+            binary = [s for s in artifacts.module_stems("binary") if s != "dji"]
+            (checkout / "src/exiftool_tables/binary/mod.rs").write_text(table_modules.render_hub("//! binary\n", binary, ""))
+            (checkout / "src/exiftool_tables/ifd/json.rs").write_text("json")
+            ifd = sorted([*artifacts.module_stems("ifd"), "json"])
+            (checkout / "src/exiftool_tables/ifd/mod.rs").write_text(table_modules.render_hub("//! ifd\n", ifd, ""))
+            rows = adapter._artifact_rows(checkout)
+            paths = [row["path"] for row in rows]
+            self.assertEqual(paths, [item.path for item in artifacts.inventory(checkout)])
+            self.assertIn("src/exiftool_tables/ifd/json.rs", paths)
+            self.assertNotIn("src/exiftool_tables/binary/dji.rs", paths)
+            json_row = next(row for row in rows if row["path"] == "src/exiftool_tables/ifd/json.rs")
+            self.assertEqual(json_row["sha256"], hashlib.sha256(b"json").hexdigest())
+            self.assertEqual(adapter._validate_artifacts(checkout, rows), rows)
+            # A proof taken against the pinned (13.59) list does not validate here.
+            pinned = [{"path": item.path, "sha256": "0" * 64, "bytes": 0} for item in artifacts.ARTIFACTS]
+            with self.assertRaises(adapter.Refused):
+                adapter._validate_artifacts(checkout, pinned)
+            # And the proof binds content: a changed member no longer validates.
+            (checkout / "src/exiftool_tables/ifd/json.rs").write_text("changed")
+            with self.assertRaisesRegex(adapter.Refused, "no longer matches"):
+                adapter._validate_artifacts(checkout, rows)
+
+
 class CurrentGeneratedMatrixContractTests(unittest.TestCase):
     def test_actual_committed_operands_define_complete_matrix_and_family_counts(self):
         # Read the real joined ledger/Rust operands. This is a compiler-contract

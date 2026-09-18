@@ -156,6 +156,20 @@ class WriteSetTests(unittest.TestCase):
         (self.root / 'src/exiftool_tables/ifd/exif.rs').unlink()   # the hub still declares it
         self.reject(saved)
 
+    def test_unsorted_or_duplicate_hub_module_lines_fail(self):
+        stems = list(artifacts.module_stems('ifd', self.root))
+        hub = self.root / 'src/exiftool_tables/ifd/mod.rs'
+        for label, lines in (('unsorted', [stems[1], stems[0], *stems[2:]]),
+                             ('duplicate', [stems[0], *stems])):
+            with self.subTest(label):
+                saved = self.snap(tier='1')
+                original = hub.read_text()
+                hub.write_text('//! generated hub; DO NOT EDIT\n' + ''.join(f'mod {s};\n' for s in lines))
+                # A duplicate is already a duplicate declared output to `validate`.
+                with self.assertRaisesRegex(ValueError, 'not sorted and unique|duplicate artifact'):
+                    artifacts.check(self.root, saved)
+                hub.write_text(original)
+
     def test_module_file_is_not_writable_from_the_other_tier(self):
         saved = self.snap(tier='2')
         stems = sorted(set(artifacts.module_stems('binary', self.root)) - {'dji'})
