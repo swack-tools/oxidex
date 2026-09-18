@@ -159,7 +159,7 @@ instrument keeps lying in a new way, not because the old ways stopped:
 7. **Hermetic tests inherited the ambient environment.** Fixtures read
    `FLEET_HUB_URL` et al. from the real environment instead of their temp
    repos — green on the developer's laptop, red only on the gate host, and
-   the failure text blamed a merge conflict. Fix: `tests/_env.py` scrubs
+   the failure text blamed a merge conflict. Fix: `tools/fleet/tests/_env.py` scrubs
    `FLEET_*`/`KEEL_*`/`EXIFTOOL_CACHE_DIR`/`GIT_SSH_COMMAND` for every
    fixture, plus a fence test that runs the suite with hostile values
    exported and requires green.
@@ -219,6 +219,67 @@ tree refuses to measure at all unless `OXIDEX_ALLOW_DIRTY_TREE=1` is set,
 in which case the header says so. See `scripts/instrument.py`'s module
 docstring for the full rationale; `src/bin/jpeg-tag-matrix/instrument.rs`
 mirrors it for the one harness that isn't Python.
+
+## Before the first edit, and before the first remote command
+
+The rules above are about trusting a *measurement*. These are about trusting the
+*place you are working* — the same failure one layer down, and the cheapest of
+them to check. `tools/preflight.sh` performs the mechanical half; run it first.
+
+**Know which checkout you are in.** `tools/preflight.sh` prints the worktree
+root, whether it is the main checkout or a linked worktree, the branch, and the
+uncommitted-file count, and it exits non-zero on a protected branch (`main`,
+`refactor/tag-machinery`) or a dirty tree. Never edit the main checkout while
+operating from a worktree, and never edit a worktree another agent owns: several
+agents sharing one tree is not hypothetical here — a live acceptance run found
+its tree gone dirty 58 s in, from a sibling's staged edits, and everything
+measured after that point was measuring an unknown tree. One agent, one
+worktree, one branch:
+`git -C <repo> worktree add -b <branch> /Users/allen/git/<dir> <base>`.
+
+**Start from a base you have just verified, not one you were handed.** Before
+implementing: `tools/preflight.sh --upstream` (fetches origin and reports how far
+behind the base is), then re-confirm the defect still reproduces *at that HEAD*
+and measure its scope with a named instrument. Re-check before opening a PR. If
+upstream already contains the fix, stop and report it superseded — this is
+incident 4 above ("a stale supplied baseline") in its other form: there, an old
+baseline manufactured credit for someone else's work; here, a stale base
+manufactures work that no longer exists.
+
+**Leave a handoff at every milestone.** `HANDOFF.md` (repo root, untracked) is
+the one place a successor — or you, after a context reset — reads to resume:
+branch and base SHA, PR/CI state, what landed, what is still broken, what was
+validated with which instrument, and the exact next command. A session that ends
+without it has to be re-derived from git log and guesswork; sessions here have
+been interrupted mid-wave by outages, restarts and quota limits often enough
+that this is the difference between resuming and restarting.
+
+**Verify reach before remote work, and plan before destroying.**
+`tools/preflight.sh --host <h> --github --k8s` proves ssh reachability, GitHub
+identity and the current kube context *before* a command depends on them. For
+anything destructive — deleting refs, resources, or state; rewriting shared
+history; reinstalling units — produce a dry-run plan plus the dependency and
+reference checks first, and wait for the maintainer's approval. Dry-run-by-
+default is already the pattern in `tools/fleet/rollout/` (`install_hook.sh`,
+`seed_desired.py`, `rulesets.py` all require an explicit `--execute` and refuse
+when a precondition is missing); match it rather than inventing a new shape.
+
+**Config that a container owns must not be edited under it.** Stop the
+container, edit, restart, then confirm the change actually persisted — a running
+container may rewrite or simply outlive the edit, and the edit that vanished on
+restart looks exactly like the edit that was never made. Never delete a
+Kubernetes identity or RBAC object before listing the workloads that reference
+it. Reject any manifest still carrying a placeholder: a template applied
+verbatim fails in whichever direction is hardest to see.
+
+**Long runs must survive being interrupted.** Corpus sweeps, fleet checks and
+CI/PR polling: persist state to a file as you go, cap parallelism (this laptop
+has 10 cores; more than about two concurrent heavy waves degrades the timing-
+sensitive measurements everything else depends on, and a starved measurement is
+a corrupted instrument), isolate every worker in its own explicit worktree, and
+report a blocked item as blocked instead of retrying it forever. A 45-minute
+poll loop that could never exit, and a watcher that died with its ssh
+connection, are both in this repo's history.
 
 ## Architecture
 Hexagonal (ports/adapters) with three layers:
