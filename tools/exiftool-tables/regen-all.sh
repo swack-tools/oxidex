@@ -221,8 +221,10 @@ echo "=========================================================="
 # remains unreconstructed.
 # Nikon settings preserves the current table exactly and independently checks
 # its ordered variants against live Perl, including the named state projection.
+# The release lib/ proves a MANIFEST id missing from the dump absent (loaded
+# with $EXIFTOOL_PERL); an unproven missing id still refuses.
 python3 "$HERE/gen_sony_main_extra_tables.py" "$JSON" \
-    -o "$(artifact_path sony-main)"
+    -o "$(artifact_path sony-main)" --exiftool-lib "$LIB"
 python3 "$HERE/gen_minolta_a100_tables.py" "$JSON" \
     -o "$(artifact_path minolta-a100)"
 python3 "$HERE/gen_nikon_settings_tables.py" "$JSON" \
