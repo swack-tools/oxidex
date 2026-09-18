@@ -1,18 +1,17 @@
-# ExifTool-RS Performance Benchmarks
+<!-- historical -->
+## Historical results (ExifTool 13.36, `exiftool-rs` 0.1.0, measured 2025-10-30)
 
 > **Historical record.** These timings compare `exiftool-rs` 0.1.0 with a bare
 > `exiftool` 13.36 found on `PATH`, not the repository pin (`.exiftool-version`,
-> 13.59). The [autogeneration plan](../docs/AUTOGENERATION-PLAN.md) records this
-> table as stale and untrustworthy and a refresh against the current binary and
-> the pinned ExifTool as in progress. `benches/exiftool_comparison.sh` is the
-> instrument that produced it.
+> 13.59), with `hyperfine --warmup 3` and no instrument header (no commit, no
+> binary hash, no load). The "single file" is a 112-byte stub, so that row
+> measured process startup, and the batch row is rayon against single-threaded
+> Perl. Kept verbatim so the change is visible; not comparable to the current
+> table above.
 
 > **Path notation:** Recorded commands show checkout-relative files and executables. `benchmark-work/` is a relative presentation alias for the original temporary benchmark directory; timings, inputs and tool versions are unchanged, and no files were moved.
 
-
-Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
-
-## System Specifications
+#### System Specifications
 
 - **OS**: Darwin 25.0.0
 - **Architecture**: arm64
@@ -22,9 +21,9 @@ Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
 - **Perl ExifTool**: 13.36
 - **ExifTool-RS**: 0.1.0
 
-## Benchmark Results
+### Benchmark Results
 
-### 1. Single File Extraction (JPEG with EXIF)
+#### 1. Single File Extraction (JPEG with EXIF)
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
@@ -33,7 +32,7 @@ Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
 
 **Speedup**: 16.06x faster
 
-### 2. Batch Processing (1000+ JPEG Files)
+#### 2. Batch Processing (1000+ JPEG Files)
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
@@ -42,7 +41,7 @@ Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
 
 **Speedup**: 64.94x faster
 
-### 3. Write Operation (Modify EXIF Tag)
+#### 3. Write Operation (Modify EXIF Tag)
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
@@ -51,7 +50,7 @@ Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
 
 **Speedup**: 13.32x faster
 
-### 4. Format Detection
+#### 4. Format Detection
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
@@ -59,44 +58,3 @@ Comparative benchmarks between ExifTool-RS (Rust) and Perl ExifTool.
 | `'target/release/exiftool-rs' 'benchmark-work/detection_test/test.jpg' > /dev/null` | 2.8 ± 0.1 | 2.3 | 3.1 | 1.00 |
 
 **Speedup**: 14.20x faster
-
-## Interpretation
-
-ExifTool-RS demonstrates significant performance improvements over Perl ExifTool across all tested scenarios:
-
-1. **Single File Extraction**: Rust's zero-cost abstractions and efficient memory management eliminate interpreter overhead.
-2. **Batch Processing**: Parallel processing with Rayon provides substantial speedup when processing multiple files.
-3. **Write Operations**: Efficient binary manipulation and atomic file operations improve write performance.
-4. **Format Detection**: Simple magic byte detection showcases the performance benefits of compiled code vs. interpreted Perl.
-
-## Reproducing These Benchmarks
-
-To reproduce these benchmarks on your system:
-
-```bash
-# 1. Ensure prerequisites are installed
-brew install hyperfine exiftool  # macOS
-# or
-sudo apt install hyperfine libimage-exiftool-perl  # Ubuntu
-
-# 2. Build ExifTool-RS in release mode
-cargo build --release
-
-# 3. Run the benchmark suite
-./benches/exiftool_comparison.sh
-
-# 4. View results
-cat benches/benchmark_results.md
-```
-
-**Note**: Results will vary based on your hardware, OS, and system load. For consistent results, close unnecessary applications and ensure the system is not thermal throttling.
-
-## Additional Benchmarks
-
-For library-level micro-benchmarks (format detection, JPEG parsing, TIFF parsing, etc.), run:
-
-```bash
-cargo bench
-```
-
-Results will be generated in `target/criterion/` as HTML reports.
