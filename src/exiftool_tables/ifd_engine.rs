@@ -1232,8 +1232,21 @@ fn generated_row(
             }
         }
     };
-    let untouched = report.value.is_none() && report.print.is_none();
-    let (value, value_conv) = match &report.print {
+    // A `PrintConv` whose text is exactly the value it was given (ISO's
+    // `s/\s+/, /g` on a single number, a `tr/ /./` with no space) changes
+    // nothing ExifTool prints: the row keeps its typed value, as a tag with
+    // no `PrintConv` does, so the library's typed accessors see what the
+    // hand arm gave them.
+    let print = report.print.filter(|print| {
+        let before = match &report.value {
+            Some(conv::Out::Scalar(v)) => Some(v.perl_string()),
+            Some(conv::Out::Binary(_)) => None,
+            None => perl_scalar(raw).map(|v| v.perl_string()),
+        };
+        !matches!((print, before), (conv::Out::Scalar(p), Some(b)) if p.is_defined() && p.perl_string() == b)
+    });
+    let untouched = report.value.is_none() && print.is_none();
+    let (value, value_conv) = match &print {
         Some(print) => (out_tag_value(print), Some(unconverted)),
         None => (unconverted, None),
     };
