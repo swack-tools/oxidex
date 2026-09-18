@@ -48,6 +48,17 @@ while ignoring only formatting; a processor algorithm change is refused until a
 new grammar version and native proof are added. Table rows are not part of this
 grammar and continue to flow from the captured source facts.
 
+Two complete grammar versions are accepted, selected only by the captured body.
+`v1` is the processor that, under the non-default `SaveFormat` / `SaveBin`
+options, also stores `TAG_EXTRA{$key}{G6}` and `TAG_EXTRA{$key}{BinVal}` after
+`FoundTag`; `v0` is the same token stream without those option-gated stores
+(ExifTool 11.78 and 12.64 ship it). Neither store is modeled by the descriptor
+or the Rust serial engine, so both grammars describe the same modeled
+algorithm. `test_serial_processor_grammar.py` pins that `v0` is `v1` with
+exactly that span replaced; copied-native tests in `test_serial_directory.py`
+prove a pinned-source edit to the `v0` shape compiles identical rows and a
+partial edit refuses.
+
 The committed 13.59 recorded-input report
 `serial-layout-inventory-processserialdata.json` contains eight selected tables:
 130 native entries and 132 native alternatives. Eight tables produce descriptor

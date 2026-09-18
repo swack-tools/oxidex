@@ -18,6 +18,20 @@ PINNED_DUMP = os.environ.get("OXIDEX_TABLES_JSON")
 # below requires a caller-supplied recorded dump and validates its provenance.
 PROCESSOR_BODY = '($$$) {\n    package Image::ExifTool::Canon;\n    use strict;\n    (my($et, $dirInfo, $tagTablePtr) = @_);\n    (my($dataPt) = $dirInfo->{\'DataPt\'});\n    (my($offset) = $dirInfo->{\'DirStart\'});\n    (my($size) = $dirInfo->{\'DirLen\'});\n    (my($base) = ($dirInfo->{\'Base\'} || 0));\n    (my($verbose) = $et->Options(\'Verbose\'));\n    (my($dataPos) = ($dirInfo->{\'DataPos\'} || 0));\n    (my($unknown) = $et->Options(\'Unknown\', 1));\n    ($et->{\'NO_UNKNOWN\'} = 1);\n    ($verbose and $et->VerboseDir(\'SerialData\', (undef), $size));\n    (my($defaultFormat) = ($tagTablePtr->{\'FORMAT\'} || \'int8u\'));\n    my($index, %val);\n    (my($pos) = 0);\n    for (($index = 0); ($tagTablePtr->{$index} and ($pos <= $size)); (++$index)) {\n        ((my $tagInfo = $et->GetTagInfo($tagTablePtr, $index)) or (last));\n        (my($format) = $tagInfo->{\'Format\'});\n        (my($count) = 1);\n        if ($format) {\n            if (($format =~ /(.*)\\[(.*)\\]/)) {\n                ($format = $1);\n                ($count = $2);\n                ($count = eval($count));\n                ($@ and (warn(("Format $tagInfo->{\'Name\'}: $@")), (last)));\n            } elsif (($format eq \'string\')) {\n                ($count = (($size > $pos) ? ($size - $pos) : 0));\n            }\n        } else {\n            ($format = $defaultFormat);\n        }\n        (my($len) = ((&Image::ExifTool::FormatSize($format) || 1) * $count));\n        ((($pos + $len) > $size) and (last));\n        (my($val) = ReadValue($dataPt, ($pos + $offset), $format, $count, ($size - $pos)));\n        (defined($val) or (last));\n        if ($verbose) {\n            $et->VerboseInfo($index, $tagInfo, \'Index\', $index, \'Table\', $tagTablePtr, \'Value\', $val, \'DataPt\', $dataPt, \'Size\', $len, \'Start\', ($pos + $offset), \'Addr\', ((($pos + $offset) + $base) + $dataPos), \'Format\', $format, \'Count\', $count);\n        }\n        ($val{$index} = $val);\n        if ($tagInfo->{\'SubDirectory\'}) {\n            (my($subTablePtr) = GetTagTable($tagInfo->{\'SubDirectory\'}{\'TagTable\'}));\n            (my(%dirInfo) = (\'DataPt\', (\\$val), \'DataPos\', ($dataPos + $pos), \'DirStart\', 0, \'DirLen\', length($val)));\n            $et->ProcessDirectory((\\%dirInfo), $subTablePtr);\n        } elsif ((not($tagInfo->{\'Unknown\'}) or $unknown)) {\n            ($count and (my($key) = $et->FoundTag($tagInfo, $val)));\n            if ($key) {\n                ($et->{\'OPTIONS\'}{\'SaveFormat\'} and ($et->{\'TAG_EXTRA\'}{$key}{\'G6\'} = $format));\n                ($et->{\'OPTIONS\'}{\'SaveBin\'} and ($et->{\'TAG_EXTRA\'}{$key}{\'BinVal\'} = substr($$dataPt, ($pos + $offset), $len)));\n            }\n        }\n        ($pos += $len);\n    }\n    $et->Options(\'Unknown\', $unknown);\n    delete $et->{\'NO_UNKNOWN\'};\n    (return 1);\n}'
 
+# The reporting branch of PROCESSOR_BODY (grammar V1), and the same branch as
+# captured from a processor without the SaveFormat/SaveBin stores (grammar V0).
+V1_REPORTING_BLOCK = (
+    "            ($count and (my($key) = $et->FoundTag($tagInfo, $val)));\n"
+    "            if ($key) {\n"
+    "                ($et->{'OPTIONS'}{'SaveFormat'} and ($et->{'TAG_EXTRA'}{$key}{'G6'} = $format));\n"
+    "                ($et->{'OPTIONS'}{'SaveBin'} and ($et->{'TAG_EXTRA'}{$key}{'BinVal'} = "
+    "substr($$dataPt, ($pos + $offset), $len)));\n"
+    "            }\n"
+)
+V0_REPORTING_BLOCK = "            ($count and $et->FoundTag($tagInfo, $val));\n"
+assert PROCESSOR_BODY.count(V1_REPORTING_BLOCK) == 1
+
+
 def processor(body=PROCESSOR_BODY):
     return {
         "__perl": "CODE",
@@ -203,6 +217,48 @@ class SerialDescriptorTests(unittest.TestCase):
         ))
         with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
             self.compile(quoted_fake)
+
+    def test_processor_without_option_gated_tag_extra_compiles_the_same_descriptor(self):
+        # The shared processor as captured without SaveFormat/SaveBin stores
+        # (grammar V0). Only the two source fingerprints that cover the
+        # processor body may differ: every row, gate and modeled effect must be
+        # identical to the V1 descriptor.
+        v0_body = PROCESSOR_BODY.replace(V1_REPORTING_BLOCK, V0_REPORTING_BLOCK)
+        self.assertNotEqual(v0_body, PROCESSOR_BODY)
+        v1 = self.compile(table(PROCESSOR_BODY))
+        v0 = self.compile(table(v0_body))
+        self.assertEqual(v0["processor"]["source_body_sha256"], serial_directory_facts.deparse_sha256(v0_body))
+        for fingerprint in (("processor", "source_body_sha256"), ("table_facts", "native_table_sha256")):
+            section, key = fingerprint
+            self.assertNotEqual(v0[section].pop(key), v1[section].pop(key), fingerprint)
+        self.assertEqual(v0, v1)
+
+    def test_partial_option_gated_tag_extra_excisions_refuse(self):
+        # Acceptance is by whole-body token stream, not by "V1 minus something":
+        # dropping only one of the stores, or keeping the key capture with no
+        # consumer, is neither grammar and must refuse.
+        save_format = (
+            "\n                ($et->{'OPTIONS'}{'SaveFormat'} and ($et->{'TAG_EXTRA'}{$key}{'G6'} = $format));"
+        )
+        save_bin = (
+            "\n                ($et->{'OPTIONS'}{'SaveBin'} and ($et->{'TAG_EXTRA'}{$key}{'BinVal'} = "
+            "substr($$dataPt, ($pos + $offset), $len)));"
+        )
+        self.assertIn(save_format, PROCESSOR_BODY)
+        self.assertIn(save_bin, PROCESSOR_BODY)
+        partials = {
+            "only SaveFormat removed": PROCESSOR_BODY.replace(save_format, ""),
+            "only SaveBin removed": PROCESSOR_BODY.replace(save_bin, ""),
+            "key captured, block removed": PROCESSOR_BODY.replace(
+                V1_REPORTING_BLOCK, "            ($count and (my($key) = $et->FoundTag($tagInfo, $val)));\n"),
+            "V0 call without the count guard": PROCESSOR_BODY.replace(
+                V1_REPORTING_BLOCK, "            $et->FoundTag($tagInfo, $val);\n"),
+        }
+        for label, body in partials.items():
+            with self.subTest(label):
+                self.assertNotEqual(body, PROCESSOR_BODY)
+                with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
+                    self.compile(table(body))
 
     def test_unmodeled_table_and_row_properties_are_preserved_and_gate_refused(self):
         changed = table()
@@ -506,6 +562,39 @@ class CopiedNativeSerialSource(unittest.TestCase):
         self.assertIn("SerialCount::PriorRaw { serial_index: 4 }", baseline_source)
         self.assertIn("SerialCount::PriorRaw { serial_index: 6 }", changed_source)
         self.assertNotEqual(baseline_source, changed_source)
+
+    # The pinned source's reporting statement, and the same statement written
+    # without the SaveFormat/SaveBin TAG_EXTRA stores (grammar V0).
+    V1_SOURCE_REPORTING = (
+        "            my $key = $et->FoundTag($tagInfo, $val) if $count;\n"
+        "            if ($key) {\n"
+        "                $$et{TAG_EXTRA}{$key}{G6} = $format if $$et{OPTIONS}{SaveFormat};\n"
+        "                $$et{TAG_EXTRA}{$key}{BinVal} = substr($$dataPt, $pos+$offset, $len) if $$et{OPTIONS}{SaveBin};\n"
+        "            }\n"
+    )
+    V0_SOURCE_REPORTING = "            $et->FoundTag($tagInfo, $val) if $count;\n"
+
+    def test_source_without_option_gated_tag_extra_compiles_identical_rows(self):
+        baseline_table = self.dump(Path(PINNED_SOURCE) / "lib")
+        baseline = serial_directory.compile_serial_inventory("Canon", "AFInfo", baseline_table)
+        changed_table = self.dump(self.copied(self.V1_SOURCE_REPORTING, self.V0_SOURCE_REPORTING))
+        changed = serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_table)
+        self.assertNotEqual(changed["processor"]["source_body_sha256"], baseline["processor"]["source_body_sha256"])
+        self.assertEqual(changed["entries"], baseline["entries"])
+        self.assertEqual(changed["gate_a"], baseline["gate_a"])
+        self.assertEqual(changed["processor"]["effects_in_order"], baseline["processor"]["effects_in_order"])
+
+    def test_source_with_one_tag_extra_store_removed_refuses(self):
+        for store in (
+            "                $$et{TAG_EXTRA}{$key}{G6} = $format if $$et{OPTIONS}{SaveFormat};\n",
+            "                $$et{TAG_EXTRA}{$key}{BinVal} = substr($$dataPt, $pos+$offset, $len) if $$et{OPTIONS}{SaveBin};\n",
+        ):
+            with self.subTest(store=store.strip()):
+                self.assertIn(store, self.V1_SOURCE_REPORTING)
+                changed_table = self.dump(self.copied(
+                    self.V1_SOURCE_REPORTING, self.V1_SOURCE_REPORTING.replace(store, "")))
+                with self.assertRaisesRegex(serial_directory.SerialDirectoryRefused, "complete executable grammar"):
+                    serial_directory.compile_serial_inventory("Canon", "AFInfo", changed_table)
 
     def test_source_unknown_option_mutation_cannot_be_faked_by_a_quoted_string(self):
         changed_source = self.dump(self.copied(
