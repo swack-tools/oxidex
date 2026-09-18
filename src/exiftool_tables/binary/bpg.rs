@@ -1,0 +1,216 @@
+//! ExifTool `BPG` ProcessBinaryData tables, generated from ExifTool
+//! 13.59's own Perl hashes -- one file per module; `mod.rs` beside this
+//! file is the hub that declares and re-exports it.
+//!
+//! DO NOT EDIT. Regenerate with `just regen-tables` (see `mod.rs`).
+
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+
+// Everything a table literal names -- the schema types, `ExprId`, the
+// `cond`/`subdir`/`ifd_schema` imports -- is in scope in the hub, and a glob
+// import of the parent module brings its private imports along (RFC 1560).
+#[allow(unused_imports)]
+use super::*;
+
+/// `Image::ExifTool::BPG::Main` -- 8 fields,
+/// 0 `_variants` groups (Step 23).
+/// Generated from ExifTool's in-memory tag table. Do not edit by hand.
+pub static BPG_MAIN: BinaryTable = BinaryTable {
+    module: "BPG",
+    table: "Main",
+    group0: "File",
+    group1: "File",
+    group2: "Image",
+    first_entry: 0,
+    default_format: Fmt::Int8u,
+    offsets_sound_until: Some(6),
+    priority: None,
+    gate_a: GateA {
+        blocked_by: &[("tag_var_format", 3), ("offsets_sound_until", 1)],
+    },
+    fields: &[
+        Field {
+            index: 4,
+            sub: None,
+            name: "PixelFormat",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0xe000,
+                shift: 13,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::IntEnum(&[
+                (0, "Grayscale"),
+                (1, "4:2:0 (chroma at 0.5, 0.5)"),
+                (2, "4:2:2 (chroma at 0.5, 0)"),
+                (3, "4:4:4"),
+                (4, "4:2:0 (chroma at 0, 0.5)"),
+                (5, "4:2:2 (chroma at 0, 0)"),
+            ]),
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 4,
+            sub: Some(1),
+            name: "Alpha",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0x1004,
+                shift: 0,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::PartialEnumInt {
+                exact: &[
+                    (0, "No Alpha Plane"),
+                    (4, "Alpha Exists (W color component)"),
+                    (4096, "Alpha Exists (color not premultiplied)"),
+                    (4100, "Alpha Exists (color premultiplied)"),
+                ],
+                other: None,
+                print_hex: true,
+            },
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 4,
+            sub: Some(2),
+            name: "BitDepth",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0xf00,
+                shift: 8,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: Some(ExprId::Val82CBA2E),
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 4,
+            sub: Some(3),
+            name: "ColorSpace",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0xf0,
+                shift: 4,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::IntEnum(&[
+                (0, "YCbCr (BT 601)"),
+                (1, "RGB"),
+                (2, "YCgCo"),
+                (3, "YCbCr (BT 709)"),
+                (4, "YCbCr (BT 2020)"),
+                (5, "BT 2020 Constant Luminance"),
+            ]),
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 4,
+            sub: Some(4),
+            name: "Flags",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0xb,
+                shift: 0,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::Bitmask {
+                exact: &[],
+                bits: &[
+                    (0, "Animation"),
+                    (1, "Limited Range"),
+                    (3, "Extension Present"),
+                ],
+            },
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 6,
+            sub: None,
+            name: "ImageWidth",
+            format: Some(Fmt::Var(VarFmt {
+                spelling: "var_ue7",
+                kind: VarKind::Ue7,
+            })),
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 7,
+            sub: None,
+            name: "ImageHeight",
+            format: Some(Fmt::Var(VarFmt {
+                spelling: "var_ue7",
+                kind: VarKind::Ue7,
+            })),
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+        Field {
+            index: 8,
+            sub: None,
+            name: "ImageLength",
+            format: Some(Fmt::Var(VarFmt {
+                spelling: "var_ue7",
+                kind: VarKind::Ue7,
+            })),
+            count: 1,
+            mask: None,
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        },
+    ],
+    variants: &[],
+};

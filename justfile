@@ -1284,7 +1284,7 @@ verify-tables version="":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    GENERATED="src/exiftool_tables/binary_tables.rs"
+    GENERATED="src/exiftool_tables/binary/mod.rs"
     VERSION="{{version}}"
     if [[ -z "$VERSION" ]]; then
         VERSION=$(tr -d '[:space:]' < .exiftool-version)
@@ -1327,7 +1327,7 @@ verify-tables version="":
 # generated ProcessBinaryData tables the generic engine may walk, and why not.
 #
 # GENERATED, not hand-audited: it reads gate A out of the committed
-# src/exiftool_tables/binary_tables.rs and gate B's allowlist out of
+# src/exiftool_tables/binary/ and gate B's allowlist out of
 # src/exiftool_tables/enabled.rs, so it cannot disagree with the artifacts it
 # describes. Needs neither Perl nor a corpus. `cargo test
 # every_table_lands_in_exactly_one_enablement_class` pins the same split from

@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 import verify_quicktime_reader as read_verifier
+import table_modules
 import verify_quicktime_keys_reader as keys_verifier
 
 PATH = Path(__file__).with_name("join_catalog_hydrated.py")
@@ -77,13 +78,14 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
-        source, binary, rust, ledger = (root / name for name in ("source.json", "binary.rs", "ifd.rs", "ledger.json"))
+        source, binary, rust, ledger = (root / name for name in ("source.json", "binary/mod.rs", "ifd/mod.rs", "ledger.json"))
         source.write_text(json.dumps(document))
         command = ["python3", str(PATH.with_name("codegen.py")), str(source), "-o", str(binary),
                    "--ifd-out", str(rust), "--ifd-identity-ledger-out", str(ledger)]
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        return source.read_bytes(), json.loads(ledger.read_text()), rust.read_text()
+        # The IFD artifact is its file set: the hub plus one file per module.
+        return source.read_bytes(), json.loads(ledger.read_text()), table_modules.read_files(rust)
 
     def test_unnamed_detached_ifd_refusal_is_accounted_without_declaration_credit(self):
         source, ledger, rust = self.ifd_facts({"Artist": "Artist"})
@@ -96,7 +98,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                                           "tags": {"Artist": {"Name": "Artist"}}}}}}
         digests = {"source_sha256": hashlib.sha256(source).hexdigest(),
                    "ledger_sha256": hashlib.sha256(json.dumps(ledger).encode()).hexdigest(),
-                   "rust_sha256": hashlib.sha256(rust.encode()).hexdigest()}
+                   "rust_sha256": hashlib.sha256(table_modules.logical_text(rust).encode()).hexdigest()}
         result = join.build(cat, hyd, "catalog", "hydrated", ifd_source=source, ifd_ledger=ledger,
                             ifd_rust=rust, ifd_input_digests=digests)
         row = result["entries"][0]
@@ -122,7 +124,7 @@ class CatalogHydratedJoinTests(unittest.TestCase):
                 "315": {"Name": "Artist"}, "316": {"Name": "Omitted"}}}}}}
         digests = {"source_sha256": hashlib.sha256(source).hexdigest(),
                    "ledger_sha256": hashlib.sha256(json.dumps(ledger).encode()).hexdigest(),
-                   "rust_sha256": hashlib.sha256(rust.encode()).hexdigest()}
+                   "rust_sha256": hashlib.sha256(table_modules.logical_text(rust).encode()).hexdigest()}
         result = join.build(cat, hyd, "catalog", "hydrated", ifd_source=source, ifd_ledger=ledger,
                             ifd_rust=rust, ifd_input_digests=digests)
         states = {row["catalog"]["name"]: row for row in result["entries"]}
@@ -133,11 +135,13 @@ class CatalogHydratedJoinTests(unittest.TestCase):
         for bad_source, bad_ledger, bad_rust in (
             (source + b" ", ledger, rust),
             (source, {**ledger, "rows": ledger["rows"][:-1]}, rust),
-            (source, ledger, rust + "// tampered\n"),
+            (source, ledger, {**rust, "exif.rs": rust["exif.rs"] + "// tampered\n"}),
+            (source, ledger, {name: text for name, text in rust.items() if name != "exif.rs"}),
+            (source, ledger, table_modules.logical_text(rust)),
         ):
             with self.subTest(mutated=True), self.assertRaises(ValueError):
                 join.ifd_implementation(bad_source, bad_ledger, bad_rust)
-        forged_rust = rust.replace('name: "Artist"', 'name: "Forged"', 1)
+        forged_rust = {**rust, "exif.rs": rust["exif.rs"].replace('name: "Artist"', 'name: "Forged"', 1)}
         self.assertNotEqual(forged_rust, rust)
         forged_ledger = copy.deepcopy(ledger)
         forged_ledger["source"]["ifd_rust_sha256"] = join.codegen._canonical_ifd_rust_sha256(forged_rust)

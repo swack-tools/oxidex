@@ -23,6 +23,7 @@ import unittest
 
 import reachability
 import verify
+import table_modules
 import verify_serial_directory
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -989,7 +990,7 @@ class GeneratedSerialEdgeMutations(unittest.TestCase):
     def test_actual_generated_canon_serial_provenance_mutations_fail(self):
         import tempfile
 
-        original_ifd = self.ifd_path.read_text(encoding="utf-8")
+        original_ifd = table_modules.read_logical(self.ifd_path)
         original_serial = self.serial_path.read_text(encoding="utf-8")
         _, baseline = self._verify(self.ifd_path, self.serial_path)
         self.assertEqual(baseline, 0, "generated source must verify before mutations")

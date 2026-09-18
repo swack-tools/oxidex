@@ -2,7 +2,7 @@
 """Step 28 corpus-synthesis: generate + round-trip-verify a subset of the
 "synthesizable" tables from synth_classify.py's output.
 
-Field data comes from src/exiftool_tables/binary_tables.rs (ALREADY verified
+Field data comes from src/exiftool_tables/binary/ (ALREADY verified
 against ExifTool by `just verify-tables`), not re-derived from dump_tables.pl
 JSON -- see rust_fields.py's docstring for why.
 
@@ -45,6 +45,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from synth_carriers import CARRIER_MAP  # noqa: E402
 from synth_rust_fields import parse_table_fields, is_scalar_writable  # noqa: E402
+import table_modules  # noqa: E402 -- the per-module artifact layout
 
 VENDOR_FILE = {
     "Canon": "CanonEOS_R8.jpg",
@@ -205,7 +206,7 @@ def main() -> None:
     args = ap.parse_args()
 
     args.work.mkdir(parents=True, exist_ok=True)
-    rs_text = args.binary_tables.read_text()
+    rs_text = table_modules.read_logical(args.binary_tables)
     exiftool_cmd = [args.exiftool]
 
     selection = [

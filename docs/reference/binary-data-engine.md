@@ -76,7 +76,7 @@ A table is walked by the engine only if **both** pass. Opt-in: off until
 proven (design D1).
 
 **Gate A — static soundness**, computed by `codegen.py` and emitted into
-`binary_tables.rs` as `GateA { blocked_by }`. A table passes when every field
+`binary/<module>.rs` as `GateA { blocked_by }`. A table passes when every field
 ExifTool declares was either fully transcribed or emitted with an explicit
 `Omitted` flag, every `PrintConv` was reproduced exactly, every
 `SubDirectory` edge compiled, and no refused `var_*` field left a live
@@ -100,7 +100,7 @@ per table with its evidence; per-table revert is that one line.
 
 Run `just reachability` (or `just reachability docs/reference/step28-reachability.json`
 for the per-table JSON, committed alongside this page) — the census is **generated** from the committed
-artifacts (gate A out of `binary_tables.rs`, gate B out of `enabled.rs`), so
+artifacts (gate A out of `binary/`, gate B out of `enabled.rs`), so
 it cannot disagree with what it describes. `cargo test
 every_table_lands_in_exactly_one_enablement_class` checks the structural
 invariants the split must satisfy (every table lands in exactly one class,
@@ -253,7 +253,7 @@ claim is the zero.
   `cargo test --workspace` → 4,202 lib tests + all integration suites green;
   `cargo fmt --all`; `cargo clippy --all-targets` (no new warnings from this
   change); `just reachability`; a byte-identical regeneration check on
-  `binary_tables.rs` before touching `codegen.py`.
+  `binary/<module>.rs` before touching `codegen.py`.
 * **Not run:** `just ci-standard` and any release build (gated centrally);
   gate B for the 375 eligible tables (they have no call site, so there is
   nothing to measure); the corpus-synthesis harness

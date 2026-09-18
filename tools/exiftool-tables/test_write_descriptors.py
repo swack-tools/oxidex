@@ -321,8 +321,9 @@ class InactiveWriteDescriptorTests(unittest.TestCase):
             root = Path(directory)
             tables = root / "tables.json"
             tables.write_text(json.dumps(payload), encoding="utf-8")
-            ordinary = root / "ordinary.rs"
-            with_sidecar = root / "with-sidecar.rs"
+            # `-o` names a mod.rs hub (one file per ExifTool module beside it).
+            ordinary = root / "ordinary" / "mod.rs"
+            with_sidecar = root / "with-sidecar" / "mod.rs"
             sidecar = root / "inactive_write.rs"
             common = [sys.executable, str(Path(__file__).with_name("codegen.py")), str(tables)]
             subprocess.run([*common, "-o", str(ordinary)], check=True, text=True, capture_output=True)

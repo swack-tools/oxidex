@@ -8,7 +8,7 @@ Start/Base string which looks valid has the same runtime meaning in Perl and
 Rust.  This script supplies that missing, live-evaluation check.
 
 Corpus: every ``Some(SubdirEdge { ... })`` actually committed in
-``binary_tables.rs``.  The edge is joined by its (module, table, tag-index)
+``binary/mod.rs`` and its module files.  The edge is joined by its (module, table, tag-index)
 to raw Start/Base text read independently from ExifTool's live Perl hashes by
 ``oracle.pl``.  Thus it checks the 64 shipped edges, rather than a prospective
 grammar accepted by ``subdirs.py``.
@@ -393,7 +393,7 @@ def run_rust(jobs, edges, timeout):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("generated_rs", nargs="?", type=Path, default=REPO_ROOT / "src/exiftool_tables/binary_tables.rs")
+    parser.add_argument("generated_rs", nargs="?", type=Path, default=REPO_ROOT / "src/exiftool_tables/binary/mod.rs")
     parser.add_argument("et_lib", nargs="?", type=Path, default=Path(DEFAULT_ET_LIB))
     parser.add_argument("--exiftool", default=DEFAULT_EXIFTOOL, help="explicit pinned executable; never defaults to PATH exiftool")
     parser.add_argument("--perl", default="/usr/bin/perl", help="interpreter used with --et-lib for eval harnesses")

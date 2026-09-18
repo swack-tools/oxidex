@@ -36,7 +36,11 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import table_modules  # noqa: E402 -- the per-module artifact layout
 
 
 class Refusal(ValueError):
@@ -305,9 +309,9 @@ def retire(text, migrations):
 
 def verify_shared_route(migrations, shared_tables, enabled_tables):
     try:
-        binary = Path(shared_tables).read_bytes().decode("utf-8")
+        binary = table_modules.read_logical(shared_tables)
         enabled = Path(enabled_tables).read_text()
-    except (OSError, UnicodeDecodeError) as error:
+    except (OSError, UnicodeDecodeError, SystemExit) as error:
         raise Refusal(f"unreadable shared route input: {error}") from error
     for migration in migrations:
         module = re.escape(migration["module"])
@@ -386,7 +390,9 @@ def identity_record(source, migrations, input_text, output_text, shared_tables, 
         ],
         "input_sha256": hashlib.sha256(input_text.encode()).hexdigest(),
         "output_sha256": hashlib.sha256(output_text.encode()).hexdigest(),
-        "shared_tables_sha256": hashlib.sha256(Path(shared_tables).read_bytes()).hexdigest(),
+        "shared_tables_sha256": hashlib.sha256(
+            table_modules.read_logical(shared_tables).encode("utf-8")
+        ).hexdigest(),
         "enabled_tables_sha256": hashlib.sha256(Path(enabled_tables).read_bytes()).hexdigest(),
         "unsafe_indexes": list(unsafe_indexes),
     }

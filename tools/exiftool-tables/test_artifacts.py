@@ -7,6 +7,9 @@ import tempfile
 import unittest
 
 import artifacts
+import table_modules
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ManifestTests(unittest.TestCase):
@@ -16,12 +19,12 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(all_items)
         self.assertTrue(artifacts.select(1))
         self.assertTrue(artifacts.select(2))
-        self.assertEqual(len(all_items), 66)
+        self.assertEqual(len(all_items), 66 + 82 + 107)
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_keys_specs")},
                          {"quicktime-keys-specs", "quicktime-keys-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_userdata_specs")},
                          {"quicktime-userdata-specs", "quicktime-userdata-ledger"})
-        self.assertEqual(len(artifacts.select(1)), 43)
+        self.assertEqual(len(artifacts.select(1)), 43 + 82 + 107)
         self.assertEqual(len(artifacts.select(2)), 23)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
@@ -29,6 +32,29 @@ class ManifestTests(unittest.TestCase):
         for producer in {a.producer for a in all_items}:
             self.assertEqual(artifacts.select(producer=producer),
                              [a for a in all_items if a.producer == producer])
+
+    def test_module_files_match_the_committed_hubs(self):
+        """The per-module entries are a static list; the committed hubs'
+        `mod` lines are what the generator actually wrote. A release that adds
+        or drops an ExifTool module must change both, and this is the test
+        that names artifacts.py when only one moved."""
+        for kind, stems in (("binary", artifacts.BINARY_MODULE_STEMS), ("ifd", artifacts.IFD_MODULE_STEMS)):
+            with self.subTest(kind=kind):
+                self.assertEqual(list(stems), sorted(set(stems)))
+                hub = REPO_ROOT / "src" / "exiftool_tables" / kind / table_modules.MOD_RS
+                if not hub.is_file():
+                    self.skipTest(f"{hub} is not on this tree")
+                self.assertEqual(
+                    table_modules.declared_stems(hub), list(stems),
+                    f"src/exiftool_tables/{kind}/ declares a different module set than "
+                    f"artifacts.{kind.upper()}_MODULE_STEMS -- update the manifest",
+                )
+                on_disk = sorted(p.stem for p in hub.parent.glob("*.rs") if p.name != table_modules.MOD_RS)
+                self.assertEqual(on_disk, list(stems), f"orphan or missing module file under {hub.parent}")
+                by_key = {item.key: item for item in artifacts.select(producer="codegen")}
+                for stem in stems:
+                    item = by_key[f"{kind}-{stem}"]
+                    self.assertEqual((item.tier, item.path), (1, f"src/exiftool_tables/{kind}/{stem}.rs"))
 
     def test_invalid_and_duplicate_declarations_fail(self):
         first = artifacts.ARTIFACTS[0]

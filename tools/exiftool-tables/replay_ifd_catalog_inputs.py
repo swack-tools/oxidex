@@ -16,15 +16,21 @@ import re
 import tempfile
 
 import codegen
+import table_modules
 
 
 def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def replay(source: bytes, expected: dict, rust: str,
+def replay(source: bytes, expected: dict, rust: dict,
            old_oracle: bytes, fresh_oracle: bytes) -> dict:
+    """`rust` is the committed IFD artifact's file set (`table_modules.read_files`
+    of `src/exiftool_tables/ifd/mod.rs`); the ledger binds its
+    `codegen.IFD_RUST_HASH_FORMAT` digest."""
     document = json.loads(source)
+    if not isinstance(rust, dict):
+        raise ValueError("IFD Rust artifact must be its file set, not one string")
     old, fresh = json.loads(old_oracle), json.loads(fresh_oracle)
     if not all(isinstance(item, dict) for item in (document, expected, old, fresh)):
         raise ValueError("IFD replay inputs must be objects")
@@ -32,7 +38,7 @@ def replay(source: bytes, expected: dict, rust: str,
     if (expected.get("schema") != "oxidex_ifd_identity_ledger_v1"
             or expected.get("exiftool_version") != document.get("exiftool_version")
             or binding.get("expr_ledger_sha256") != digest(old_oracle)
-            or binding.get("ifd_rust_hash_format") != "rustfmt-2024"):
+            or binding.get("ifd_rust_hash_format") != codegen.IFD_RUST_HASH_FORMAT):
         raise ValueError("committed IFD inputs have inconsistent source/oracle bindings")
     # The old source bytes need not exist on this runner. Their digest must
     # still agree between the committed identity ledger and oracle receipt.
@@ -64,7 +70,7 @@ def replay(source: bytes, expected: dict, rust: str,
             raise ValueError("fresh expression oracle is not bound to this capture") from exc
     chunks, index, _, rows = codegen.gen_ifd_tables(
         document, sorted(document.get("modules", {})), verified)
-    rendered = codegen.render_ifd_file(str(document.get("exiftool_version")), chunks, index)
+    rendered = codegen.render_ifd_files(str(document.get("exiftool_version")), chunks, index)
     artifact_sha = codegen._canonical_ifd_rust_sha256(rust)
     if (binding.get("ifd_rust_sha256") != artifact_sha
             or codegen._canonical_ifd_rust_sha256(rendered) != artifact_sha):
@@ -87,7 +93,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--committed-ledger", type=Path, required=True)
-    parser.add_argument("--committed-rust", type=Path, required=True)
+    parser.add_argument("--committed-rust", type=Path, required=True,
+                        help="the committed IFD hub, src/exiftool_tables/ifd/mod.rs (its "
+                             "module files are read from beside it)")
     parser.add_argument("--committed-expr-ledger", type=Path, required=True)
     parser.add_argument("--fresh-expr-ledger", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -97,7 +105,7 @@ def main() -> None:
     if args.output.exists() or args.output.resolve() in {path.resolve() for path in inputs}:
         parser.error("output must be a new path distinct from every input")
     result = replay(args.source.read_bytes(), json.loads(args.committed_ledger.read_bytes()),
-                    args.committed_rust.read_text(), args.committed_expr_ledger.read_bytes(),
+                    table_modules.read_files(args.committed_rust), args.committed_expr_ledger.read_bytes(),
                     args.fresh_expr_ledger.read_bytes())
     with args.output.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")

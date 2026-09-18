@@ -23,9 +23,12 @@ sys.path.insert(0, str(HERE))
 import inventory_source_processors as source_inventory
 
 
+sys.path.insert(0, str(HERE))
+import table_modules  # noqa: E402 -- the per-module artifact layout
+
 ARTIFACT_PATHS = {
-    "binary": "src/exiftool_tables/binary_tables.rs",
-    "ifd": "src/exiftool_tables/ifd_tables.rs",
+    "binary": "src/exiftool_tables/binary/mod.rs",
+    "ifd": "src/exiftool_tables/ifd/mod.rs",
     # The schema may be committed without an emitted keyed artifact.  That is
     # an observable result, never a reason to shrink the source denominator.
     "keyed": "src/exiftool_tables/keyed_tables.rs",
@@ -34,6 +37,13 @@ ARTIFACT_TYPES = {
     "binary": ("BinaryTable", "ALL_BINARY_TABLES", "OmittedNativeField"),
     "ifd": ("IfdTable", "ALL_IFD_TABLES", None),
     "keyed": ("KeyedDirectoryTable", "ALL_KEYED_TABLES", "OmittedKeyedNativeRow"),
+}
+# The single-file layout these two artifacts had before the per-module split.
+# An artifact commit from before it is still joinable: the hub path is tried
+# first and the legacy file second; which one answered is recorded.
+LEGACY_ARTIFACT_PATHS = {
+    "binary": "src/exiftool_tables/binary_tables.rs",
+    "ifd": "src/exiftool_tables/ifd_tables.rs",
 }
 ENABLEMENT_PATHS = {"binary": ("src/exiftool_tables/enabled.rs", "ENABLED"), "ifd": ("src/exiftool_tables/enabled_ifd.rs", "ENABLED_IFD")}
 # Candidate executor locations, not proof of a registry call or file-format
@@ -363,12 +373,48 @@ def parse_sidecar_tables(text: str, kind: str) -> Counter[tuple[str, str]]:
     return Counter((rust_string(module), rust_string(table)) for module, table in found)
 
 
+def artifact_blob(repo: Path, commit: str, kind: str, path: str) -> tuple[bytes | None, dict[str, Any]]:
+    """The artifact's text at `commit` as one blob, plus how it was laid out.
+
+    A split artifact (`.../mod.rs` plus one file per module) is read through
+    `table_modules.read_files_with` against the commit's tree and joined as
+    its logical text, so `parse_tables` sees the monolith's declaration
+    order; its `sha256` is over that logical text and `files` lists every
+    per-file digest. A commit from before the split answers at the legacy
+    single-file path instead.
+    """
+    if table_modules.is_split(path):
+        directory = path.rsplit("/", 1)[0]
+        blobs: dict[str, bytes] = {}
+
+        def reader(name: str) -> str | None:
+            blob = git_blob_or_none(repo, commit, f"{directory}/{name}")
+            if blob is None:
+                return None
+            blobs[name] = blob
+            return blob.decode("utf-8")
+
+        if git_blob_or_none(repo, commit, path) is not None:
+            files = table_modules.read_files_with(reader)
+            return table_modules.logical_text(files).encode("utf-8"), {
+                "path": path, "layout": "per-module",
+                "files": {f"{directory}/{name}": sha(blobs[name]) for name in sorted(files)},
+            }
+        legacy = LEGACY_ARTIFACT_PATHS.get(kind)
+        if legacy is not None:
+            blob = git_blob_or_none(repo, commit, legacy)
+            if blob is not None:
+                return blob, {"path": legacy}
+        return None, {"path": path}
+    return git_blob_or_none(repo, commit, path), {"path": path}
+
+
 def artifact_snapshot(repo: Path, commit: str) -> tuple[dict[str, Any], dict[str, dict[tuple[str, str], dict[str, Any]]], dict[str, Counter[tuple[str, str]]]]:
     snapshot: dict[str, Any] = {"commit": commit, "artifacts": {}}
     parsed: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
     sidecars: dict[str, Counter[tuple[str, str]]] = {}
     for kind, path in ARTIFACT_PATHS.items():
-        blob = git_blob_or_none(repo, commit, path)
+        blob, layout = artifact_blob(repo, commit, kind, path)
         if blob is None:
             if kind in {"binary", "ifd"}:
                 raise ValueError(f"required {kind} artifact is absent at {commit}: {path}")
@@ -381,9 +427,10 @@ def artifact_snapshot(repo: Path, commit: str) -> tuple[dict[str, Any], dict[str
         parsed[kind] = tables
         sidecars[kind] = parse_sidecar_tables(text, kind)
         snapshot["artifacts"][kind] = {
-            "path": path,
+            "path": layout["path"],
             "state": "present",
             "sha256": sha(blob),
+            **({"layout": layout["layout"], "files": layout["files"]} if "layout" in layout else {}),
             **accounting,
             "sidecar_omitted_rows": sum(sidecars[kind].values()),
         }

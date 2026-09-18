@@ -35,6 +35,7 @@ import exprs
 import hooks
 import others
 import subdirs
+import table_modules
 
 # ExifTool format names -> (Rust Fmt variant, byte width).  Sized formats
 # (string[32]) are handled separately since their width is per-field.
@@ -1690,9 +1691,9 @@ pub static {ident}: BinaryTable = BinaryTable {{
 # `Condition` compiler and `subdirs.py`'s `TagTable`/`Base` grammar.
 # Deliberately NOT shared: the run-wide counters (a separate `Counter`, so the
 # binary REPORT's numbers do not move when these tables are added) and the
-# output file (`--ifd-out`), so `binary_tables.rs`'s table literals stay
+# output file (`--ifd-out`), so `binary/mod.rs`'s table literals stay
 # byte-for-byte what they were. The one place the two files touch is the
-# `ExprId` enum, which lives in `binary_tables.rs` and must carry every
+# `ExprId` enum, which lives in `binary/mod.rs` and must carry every
 # conversion either file references -- which is why `main()` always runs this
 # pass, `--ifd-out` or not.
 
@@ -2785,21 +2786,56 @@ def ifd_table_ident(mod_name, tbl_name):
     return "IFD_" + re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
 
 
-def _canonical_ifd_rust_sha256(source):
+# The `ifd_rust_hash_format` an identity ledger records. It names what the
+# digest is over: the split file set (`mod.rs` plus one file per module),
+# rustfmt'd together, hashed as a sorted (name, bytes) sequence. The
+# pre-split value was "rustfmt-2024" (one file); a ledger carrying that
+# label is refused by the replay tools rather than silently re-hashed.
+IFD_RUST_HASH_FORMAT = "rustfmt-2024-per-module"
+
+
+def _canonical_ifd_rust_sha256(files):
     """Hash the same rustfmt-normalized IFD artifact regen.sh commits.
 
-    The ledger must survive the formatting stage that follows codegen.py in
-    regeneration. Using rustfmt on an isolated temporary copy keeps the
-    emitted Rust bytes untouched while binding replay to its final artifact.
+    `files` is the rendered (or committed) file set, `{"mod.rs": ...,
+    "<module>.rs": ...}` as `render_ifd_files` / `table_modules.read_files`
+    produce it. The ledger must survive the formatting stage that follows
+    codegen.py in regeneration, so the set is laid out in an isolated
+    temporary directory and rustfmt is run on its hub -- rustfmt follows the
+    hub's `mod` declarations into every module file, exactly as
+    `format_artifacts 1` does on the committed tree -- which keeps the
+    emitted Rust bytes untouched while binding replay to the final artifact.
     """
-    with tempfile.TemporaryDirectory(prefix="oxidex-ifd-ledger-") as directory:
-        candidate = Path(directory) / "ifd_tables.rs"
-        candidate.write_text(source, encoding="utf-8")
-        subprocess.run(
-            ["rustfmt", "--edition", "2024", "--config-path", str(Path(__file__).resolve().parents[2] / "rustfmt.toml"), str(candidate)],
-            check=True, capture_output=True, text=True,
+    if not isinstance(files, dict):
+        raise TypeError("expected the IFD artifact's file set ({name: text}), not one string")
+    hub = files.get(table_modules.MOD_RS)
+    if not isinstance(hub, str) or not all(isinstance(text, str) for text in files.values()):
+        raise ValueError("IFD artifact file set has no mod.rs hub or a non-text member")
+    declared = {f"{stem}.rs" for stem in table_modules.MOD_LINE_RE.findall(hub)}
+    if set(files) != declared | {table_modules.MOD_RS}:
+        # A hub whose `mod` lines and the files beside it disagree is not an
+        # artifact regen.sh could have written; refuse it as a ValueError so
+        # the replay/join callers report it as the binding failure it is.
+        raise ValueError(
+            "IFD artifact file set does not match its hub's `mod` declarations: "
+            f"missing={sorted(declared - set(files))} extra={sorted(set(files) - declared - {table_modules.MOD_RS})}"
         )
-        return hashlib.sha256(candidate.read_bytes()).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="oxidex-ifd-ledger-") as directory:
+        target = Path(directory) / "ifd"
+        table_modules.write_files(target / table_modules.MOD_RS, files)
+        formatted = subprocess.run(
+            ["rustfmt", "--edition", "2024", "--config-path",
+             str(Path(__file__).resolve().parents[2] / "rustfmt.toml"),
+             str(target / table_modules.MOD_RS)],
+            check=False, capture_output=True, text=True,
+        )
+        if formatted.returncode:
+            raise ValueError(f"IFD artifact does not rustfmt: {formatted.stderr.strip()[-400:]}")
+        digest = hashlib.sha256()
+        for name in sorted(files):
+            data = (target / name).read_bytes()
+            digest.update(name.encode("utf-8") + b"\0" + len(data).to_bytes(8, "big") + data)
+        return digest.hexdigest()
 
 
 def _ifd_identity_source_sha256(source):
@@ -2996,7 +3032,7 @@ def gen_ifd_tables(doc, module_names, verified_exprs):
                 mod_name, tbl_name, tbl, ifd_stats, verified_exprs, ctx,
                 include_identity_ledger=True,
             )
-            chunks.append(source)
+            chunks.append(TableChunk(source, mod_name, tbl_name))
             ledger.extend({"module": mod_name, "table": tbl_name, "full_name": f"Image::ExifTool::{mod_name}::{tbl_name}", **row} for row in rows)
             ident = ifd_table_ident(mod_name, tbl_name)
             if ident in idents:
@@ -3017,8 +3053,15 @@ IFD_PRELUDE = '''//! ExifTool IFD-style tag tables -- the `Exif::ProcessExif` ta
 //! ```sh
 //! perl tools/exiftool-tables/dump_tables.pl <exiftool>/lib > tables.json
 //! python3 tools/exiftool-tables/codegen.py tables.json \\
-//!     -o src/exiftool_tables/binary_tables.rs --ifd-out <this file>
+//!     -o src/exiftool_tables/binary/mod.rs --ifd-out src/exiftool_tables/ifd/mod.rs
 //! ```
+//!
+//! This file is the hub of a one-file-per-ExifTool-module layout: every
+//! `IfdTable` static lives in `<module>.rs` beside it (`exif.rs`, `canon.rs`,
+//! ...) and the `pub use <module>::*;` block below re-exports each one, so
+//! `ifd_tables::IFD_EXIF_MAIN` resolves exactly as it did when this was one
+//! file. `tools/exiftool-tables/table_modules.py` owns the layout;
+//! `src/exiftool_tables/mod.rs` mounts this hub as `ifd_tables`.
 //!
 //! Selection is `codegen.py::is_ifd_table`: every table whose `PROCESS_PROC`
 //! is absent (ExifTool.pm:9052 defaults it to `Exif::ProcessExif`) or names
@@ -3044,12 +3087,12 @@ IFD_PRELUDE = '''//! ExifTool IFD-style tag tables -- the `Exif::ProcessExif` ta
 #![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
 
 /// The ExifTool release these tables were transcribed from. Must equal
-/// `super::EXIFTOOL_VERSION` (`binary_tables.rs`'s stamp): the two files are
-/// one regeneration, and a skew between them is the mixed-release hazard
+/// `super::EXIFTOOL_VERSION` (`binary/mod.rs`'s stamp): the two artifacts
+/// are one regeneration, and a skew between them is the mixed-release hazard
 /// `tools/exiftool-tables/regen-all.sh` exists to prevent.
 pub const IFD_EXIFTOOL_VERSION: &str = "__VERSION__";
 
-// Imported unconditionally, for binary_tables.rs's reason: which of these a
+// Imported unconditionally, for binary/mod.rs's reason: which of these a
 // given run constructs depends on the pinned tree, not on this file's logic,
 // so a conditional `use` would be generator-output nondeterminism.
 #[allow(unused_imports)]
@@ -3163,8 +3206,53 @@ IFD_REPORT = (
 )
 
 
-def render_ifd_file(version, chunks, index_rows):
-    """Render the complete IFD Rust artifact from one compiler result."""
+IFD_MODULE_HEADER = '''//! ExifTool `__MODULE__` IFD-style tables, generated from ExifTool
+//! __VERSION__'s own Perl hashes -- one file per module; `mod.rs` beside this
+//! file is the hub that declares and re-exports it.
+//!
+//! DO NOT EDIT. Regenerate with `just regen-tables` (see `mod.rs`).
+
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+
+// Everything a table literal names -- the `ifd_schema` types, `ExprId`, the
+// `cond`/`subdir`/`validation` imports -- is in scope in the hub, and a glob
+// import of the parent module brings its private imports along (RFC 1560).
+#[allow(unused_imports)]
+use super::*;
+'''
+
+BINARY_MODULE_HEADER = '''//! ExifTool `__MODULE__` ProcessBinaryData tables, generated from ExifTool
+//! __VERSION__'s own Perl hashes -- one file per module; `mod.rs` beside this
+//! file is the hub that declares and re-exports it.
+//!
+//! DO NOT EDIT. Regenerate with `just regen-tables` (see `mod.rs`).
+
+#![allow(clippy::unreadable_literal, clippy::too_many_lines, unused_parens)]
+
+// Everything a table literal names -- the schema types, `ExprId`, the
+// `cond`/`subdir`/`ifd_schema` imports -- is in scope in the hub, and a glob
+// import of the parent module brings its private imports along (RFC 1560).
+#[allow(unused_imports)]
+use super::*;
+'''
+
+HUB_MODULES_INTRO = '''
+// One file per ExifTool module, declared in rustfmt's order and re-exported
+// so every table static keeps the path it had when this was one file
+// (tools/exiftool-tables/table_modules.py owns the layout).
+'''
+
+
+def _module_header(template, version):
+    def header(module):
+        return template.replace("__MODULE__", module).replace("__VERSION__", version)
+    return header
+
+
+def render_ifd_files(version, chunks, index_rows):
+    """Render the complete IFD Rust artifact from one compiler result as its
+    file set: `{"mod.rs": hub, "<module>.rs": that module's tables, ...}`
+    (`table_modules.render_files`)."""
     ifd_index = (
         "\n/// Every generated IFD-style table, sorted by `(module, table)` for\n"
         "/// `find_ifd_table`'s binary search.\n"
@@ -3172,7 +3260,26 @@ def render_ifd_file(version, chunks, index_rows):
         + "\n".join(index_rows)
         + "\n];\n"
     )
-    return IFD_PRELUDE.replace("__VERSION__", version) + "".join(chunks) + ifd_index
+    head = IFD_PRELUDE.replace("__VERSION__", version) + HUB_MODULES_INTRO
+    return table_modules.render_files(
+        head, ifd_index, _module_header(IFD_MODULE_HEADER, version), chunks
+    )
+
+
+def render_binary_files(version, version_block, expr_enum, chunks, index, omissions):
+    """The binary artifact's file set: the hub carries the prelude, the
+    support types (`others.RUST_SUPPORT`), the shared `ExprId` enum, the
+    `mod`/`pub use` block, `ALL_BINARY_TABLES` and `OMITTED_NATIVE_FIELDS`;
+    each `<module>.rs` carries that module's `BinaryTable` statics."""
+    head = (
+        PRELUDE.replace("__VERSION_BLOCK__", version_block)
+        + others.RUST_SUPPORT
+        + expr_enum
+        + HUB_MODULES_INTRO
+    )
+    return table_modules.render_files(
+        head, index + omissions, _module_header(BINARY_MODULE_HEADER, version), chunks
+    )
 
 
 def print_ifd_report(ifd_stats):
@@ -3222,14 +3329,36 @@ def print_ifd_report(ifd_stats):
             print(f"    {n:>5}  {flat if len(flat) <= 100 else flat[:97] + '...'}")
 
 
+class TableChunk(str):
+    """One table's Rust source, tagged with the ExifTool module that owns it
+    so `table_modules.render_files` can file it under `<module>.rs`. A plain
+    `str` everywhere else (`"".join`, substring tests, `in`) -- the tag is
+    the only addition."""
+
+    def __new__(cls, text, module, table):
+        chunk = super().__new__(cls, text)
+        chunk.module = module
+        chunk.table = table
+        return chunk
+
+
 PRELUDE = '''//! ExifTool binary tag tables, generated from ExifTool's own Perl hashes.
 //!
 //! DO NOT EDIT. Regenerate with:
 //!
 //! ```sh
 //! perl tools/exiftool-tables/dump_tables.pl <exiftool>/lib > tables.json
-//! python3 tools/exiftool-tables/codegen.py tables.json -o <this file>
+//! python3 tools/exiftool-tables/codegen.py tables.json \\
+//!     -o src/exiftool_tables/binary/mod.rs --ifd-out src/exiftool_tables/ifd/mod.rs
 //! ```
+//!
+//! This file is the hub of a one-file-per-ExifTool-module layout: the
+//! schema types and the shared `ExprId` enum live here, every table static
+//! lives in `<module>.rs` beside it (`canon.rs`, `nikon.rs`, ...), and the
+//! `pub use <module>::*;` block below re-exports each one so
+//! `binary_tables::CANON_CAMERASETTINGS` resolves exactly as it did when
+//! this was one file. `tools/exiftool-tables/table_modules.py` owns the
+//! layout; `src/exiftool_tables/mod.rs` mounts this hub as `binary_tables`.
 //!
 //! Only ExifTool's ProcessBinaryData tables are emitted here -- the ones with a
 //! FORMAT and a field per offset. That is deliberate: those tables carry the
@@ -4205,15 +4334,20 @@ REPORT = (
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tables_json")
-    ap.add_argument("-o", "--out", required=True)
+    ap.add_argument(
+        "-o", "--out", required=True,
+        help="the binary tables' mod.rs hub (src/exiftool_tables/binary/mod.rs); "
+        "one <module>.rs per ExifTool module is written beside it",
+    )
     ap.add_argument("--modules", nargs="*", help="limit to these modules")
     ap.add_argument("--expr-ledger", help="PASS-only ledger from verify_exprs.py")
     ap.add_argument("--value-conv-ledger-out", help="write R2 ValueConv refusal/coverage ledger")
     ap.add_argument(
         "--ifd-out",
-        help="write the IFD-style (Exif::ProcessExif) tables here "
-        "(src/exiftool_tables/ifd_tables.rs); they are generated and reported "
-        "either way, so the shared ExprId enum in -o does not depend on this flag",
+        help="write the IFD-style (Exif::ProcessExif) tables here -- a mod.rs hub "
+        "(src/exiftool_tables/ifd/mod.rs) with one file per ExifTool module beside "
+        "it; they are generated and reported either way, so the shared ExprId enum "
+        "in -o does not depend on this flag",
     )
     ap.add_argument(
         "--ifd-identity-ledger-out",
@@ -4286,7 +4420,7 @@ def main():
                 omitted_native,
             )
             if out:
-                chunks.append(out)
+                chunks.append(TableChunk(out, mod_name, tbl_name))
                 ident = re.sub(r"[^A-Za-z0-9]", "_", f"{mod_name}_{tbl_name}").upper()
                 index_rows.append(f"    &{ident},")
 
@@ -4303,7 +4437,7 @@ def main():
 
     # Like IFD source, keyed source must be compiled before the shared ExprId
     # enum is frozen. `--keyed-out` controls writing its opt-in artifact, not
-    # which variants binary_tables.rs declares; otherwise a keyed-only
+    # which variants binary/mod.rs declares; otherwise a keyed-only
     # oracle-approved conversion emits a dangling ExprId reference.
     import keyed_directory
     keyed_src, keyed_stats = keyed_directory.generate(doc, verified_exprs, names)
@@ -4400,20 +4534,30 @@ def main():
         f'pub const EXIFTOOL_VERSION: &str = "{version}";'
     )
 
-    with open(args.out, "w", encoding="utf-8") as fh:
-        fh.write(PRELUDE.replace("__VERSION_BLOCK__", version_block))
-        fh.write(others.RUST_SUPPORT)
-        fh.write(gen_expr_enum(used))
-        fh.write(joined)
-        fh.write(index)
-        fh.write(omissions)
-
+    # Both artifacts are directories now (one file per ExifTool module plus a
+    # `mod.rs` hub -- see table_modules.py); `-o`/`--ifd-out` name the hubs.
+    # Render both before writing either, so a refused layout (a module whose
+    # name is not a Rust identifier, two modules sharing a file) cannot leave
+    # a half-written binary directory behind.
+    binary_files = render_binary_files(
+        version, version_block, gen_expr_enum(used), chunks, index, omissions
+    )
     ifd_output = None
     if args.ifd_out:
-        ifd_output = render_ifd_file(version, ifd_chunks, ifd_index_rows)
-        with open(args.ifd_out, "w", encoding="utf-8") as fh:
-            fh.write(ifd_output)
-        print(f"wrote IFD tables     {args.ifd_out}")
+        ifd_output = render_ifd_files(version, ifd_chunks, ifd_index_rows)
+    for hub in (args.out, args.ifd_out):
+        if hub and Path(hub).name != table_modules.MOD_RS:
+            raise SystemExit(
+                f"{hub}: -o/--ifd-out must name a `{table_modules.MOD_RS}` hub "
+                "(e.g. src/exiftool_tables/binary/mod.rs); the generator writes one "
+                "file per ExifTool module beside it"
+            )
+    for stale in table_modules.write_files(Path(args.out), binary_files):
+        print(f"removed stale module file {stale}")
+    if args.ifd_out:
+        for stale in table_modules.write_files(Path(args.ifd_out), ifd_output):
+            print(f"removed stale module file {stale}")
+        print(f"wrote IFD tables     {args.ifd_out} (+{len(ifd_output) - 1} module files)")
 
     if args.ifd_identity_ledger_out:
         source_bytes = Path(args.tables_json).read_bytes()
@@ -4430,7 +4574,7 @@ def main():
                 "expr_ledger_sha256": (hashlib.sha256(Path(args.expr_ledger).read_bytes()).hexdigest()
                                        if args.expr_ledger is not None else None),
                 "ifd_rust_sha256": _canonical_ifd_rust_sha256(ifd_output),
-                "ifd_rust_hash_format": "rustfmt-2024",
+                "ifd_rust_hash_format": IFD_RUST_HASH_FORMAT,
             },
             "counts": {"rows": len(ifd_identity_ledger), "emitted": emitted, "refused": refused,
                        "reader_eligible": eligible, "reader_omitted": omitted},
@@ -4527,7 +4671,7 @@ def main():
             json.dump(ledger, fh, indent=2, sort_keys=True)
             fh.write("\n")
         print(f"wrote ValueConv ledger  {args.value_conv_ledger_out}")
-    print(f"wrote {args.out}")
+    print(f"wrote {args.out} (+{len(binary_files) - 1} module files)")
     printed = set()
     for heading, rows in REPORT:
         if heading:

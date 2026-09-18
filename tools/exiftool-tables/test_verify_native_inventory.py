@@ -19,6 +19,7 @@ import tempfile
 import unittest
 
 import verify
+import table_modules
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -107,8 +108,8 @@ pub static OMITTED_NATIVE_FIELDS: &[OmittedNativeField] = &[
             self.parse(duplicate)
 
     def test_current_shared_schema_parses_every_declared_field(self):
-        path = REPO_ROOT / "src/exiftool_tables/binary_tables.rs"
-        source = path.read_text(encoding="utf-8")
+        path = REPO_ROOT / "src/exiftool_tables/binary/mod.rs"
+        source = table_modules.read_logical(path)
         # Exercise the real regenerated schema. Injecting new members into
         # this file would duplicate them after the first regeneration and
         # test invalid Rust instead of the artifact the verifier must read.
@@ -126,7 +127,7 @@ pub static OMITTED_NATIVE_FIELDS: &[OmittedNativeField] = &[
         # checks both new literal shapes without depending on a future full
         # regeneration: table FORMAT => string has a stride payload, while an
         # explicit per-field bare string is a separate remainder form.
-        source = (REPO_ROOT / "src/exiftool_tables/binary_tables.rs").read_text(encoding="utf-8")
+        source = table_modules.read_logical(REPO_ROOT / "src/exiftool_tables/binary/mod.rs")
         source = source.replace(
             "default_format: Fmt::Int16u,", "default_format: Fmt::Str(1),", 1
         )
@@ -257,8 +258,8 @@ class CopiedSonyTag202aMutations(unittest.TestCase):
         actually writes the corresponding artifact.
         """
         tables = Path(self.tmp.name) / "tables.json"
-        binary = Path(self.tmp.name) / "binary_tables.rs"
-        ifd = Path(self.tmp.name) / "ifd_tables.rs"
+        binary = Path(self.tmp.name) / "binary" / "mod.rs"
+        ifd = Path(self.tmp.name) / "ifd" / "mod.rs"
         with tables.open("w", encoding="utf-8") as fh:
             subprocess.run(
                 [

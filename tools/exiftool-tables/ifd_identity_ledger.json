@@ -279284,8 +279284,8 @@
   "schema": "oxidex_ifd_identity_ledger_v1",
   "source": {
     "expr_ledger_sha256": "15bab46fb753019ed6b1c35644be803be1d3cce13ecd61f090c0b6dc39b80cac",
-    "ifd_rust_hash_format": "rustfmt-2024",
-    "ifd_rust_sha256": "ed6e48b6596f16abe0b1cfc8f0d365d8a319e4cb88b418c91db0f34d0ec08b89",
+    "ifd_rust_hash_format": "rustfmt-2024-per-module",
+    "ifd_rust_sha256": "33e356954844f863db2c4421e6c6d7bf36c8ed4346b789475befe25770c86ed2",
     "tables_json_sha256": "536386691b0df2e6a6ebabed21bb8eb2de5dd66947901a4ea3284c87eecaf461"
   }
 }
