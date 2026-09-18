@@ -150,8 +150,41 @@ sub emit {
 
 no warnings 'once';
 my ($canon, $canon_base, $canon_frac) = rows('canon', \%Image::ExifTool::Canon::canonLensTypes);
-my ($rf, $rf_base, $rf_frac) = rows('canon_rf', $Image::ExifTool::Canon::FileInfo{61}{PrintConv});
-die "Canon RF grew fractional alternatives; explicit runtime support required\n" if $rf_frac;
+# A release that predates the RF lens table (11.78's FileInfo has no key 61)
+# is an explicit state, proven from that release's own source by
+# module_absence.py --table: Canon.pm is present and neither it nor any other
+# file names RFLensType. The version label is never consulted. Key 61 being
+# present takes the strict path below, so a changed shape still refuses.
+my ($rf, $rf_base, $rf_frac, $rf_absent);
+if (exists $Image::ExifTool::Canon::FileInfo{61}) {
+    ($rf, $rf_base, $rf_frac) = rows('canon_rf', $Image::ExifTool::Canon::FileInfo{61}{PrintConv});
+    die "Canon RF grew fractional alternatives; explicit runtime support required\n" if $rf_frac;
+} else {
+    $rf_absent = rf_table_absence();
+    ($rf, $rf_base, $rf_frac) = ([], 0, 0);
+}
+
+sub rf_table_absence {
+    require JSON::PP;
+    my @cmd = ($ENV{OXIDEX_PYTHON} || 'python3', "$FindBin::Bin/module_absence.py",
+               '--lib', $lib, '--module', 'Canon', '--table', 'RFLensType');
+    open(my $ph, '-|', @cmd) or die "cannot run module_absence.py: $!\n";
+    my $json = do { local $/; <$ph> };
+    close $ph;
+    die "canon_rf: FileInfo has no RFLensType entry but its absence is not proven "
+        . "(module_absence.py exit " . ($? >> 8) . ")\n" if $?;
+    my $proof = JSON::PP->new->decode($json);
+    my $occ = $proof->{occurrences_in_release};
+    die "canon_rf: malformed absence record from module_absence.py\n"
+        unless ($proof->{kind} // '') eq 'exiftool_table_absent_v1'
+            && ($proof->{module} // '') eq 'Canon' && ($proof->{table} // '') eq 'RFLensType'
+            && ref($occ) eq 'HASH' && keys(%$occ) == 1 && ($occ->{RFLensType} // 1) == 0
+            && ($proof->{module_sha256} // '') =~ /^[0-9a-f]{64}\z/
+            && ($proof->{release_inventory_sha256} // '') =~ /^[0-9a-f]{64}\z/;
+    printf STDERR "Canon RF: table absent from this release (proven from %d files)\n",
+        $proof->{release_files_scanned};
+    return $proof;
+}
 my ($pentax) = rows('pentax', \%Image::ExifTool::Pentax::pentaxLensTypes);
 my $olympus = $Image::ExifTool::Olympus::Equipment{0x0201}{PrintConv};
 my ($oly_rows, $oly_base, $oly_frac) = rows('olympus', $olympus);
@@ -162,8 +195,12 @@ my $body = emit('CANON_LENS_ALTERNATIVES',
     "/// `%Image::ExifTool::Canon::canonLensTypes`: the " . scalar(@$canon) . " integer\n"
   . "/// ids, keyed by raw ID and retaining the exact base label. Empty slices\n"
   . "/// mean no alternatives; nonempty slices follow ExifTool's `.1 .. .N` order.", $canon)
-  . emit('CANON_RF_LENS_ALTERNATIVES',
-    "/// Canon FileInfo RFLensType: all raw IDs and labels; no fractional alternatives.", $rf)
+  . emit('CANON_RF_LENS_ALTERNATIVES', $rf_absent
+    ? "/// Canon FileInfo RFLensType: absent from this release, proven from its own\n"
+    . "/// `lib/` by `module_absence.py --table` (not the version label): no file names\n"
+    . "/// `RFLensType`. Canon.pm sha256 $rf_absent->{module_sha256};\n"
+    . "/// release inventory sha256 $rf_absent->{release_inventory_sha256}."
+    : "/// Canon FileInfo RFLensType: all raw IDs and labels; no fractional alternatives.", $rf)
   . emit('PENTAX_LENS_ALTERNATIVES',
     "/// `%Image::ExifTool::Pentax::pentaxLensTypes`: the " . scalar(@$pentax) . " ids\n"
   . "/// that carry at least one `.N` alternative, keyed by validated unique base label.", $pentax);

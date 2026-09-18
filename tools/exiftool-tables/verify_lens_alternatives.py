@@ -4,6 +4,11 @@
 The oracle dumps every selected source-table entry, not producer output. This
 also checks whether labels preserve the upstream raw-ID distinction. A matching
 projection can still FAIL because the runtime string key loses that distinction.
+
+A release whose Canon FileInfo has no RFLensType entry (11.78) must carry an
+empty CANON_RF table, and only when module_absence.py re-proves the table
+absent from that release's lib/ (never from its version label), with the
+Rust doc comment bound to that proof's hashes.
 """
 from __future__ import annotations
 
@@ -17,6 +22,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from module_absence import NotAbsent, prove_table_absent, validate_absence_record  # noqa: E402
 ORACLE = r'''
 use strict; use warnings; use B (); use Cwd qw(abs_path); use JSON::PP;
 my $root=abs_path(shift @ARGV); die "no source tree\n" unless defined $root;
@@ -25,7 +32,8 @@ for my $m (@modules) { die "selected source missing $m\n" unless -f "$root/lib/$
 unshift @INC,"$root/lib";
 for my $m (@modules) { require $m; die "foreign module $m\n" unless abs_path($INC{$m}) eq abs_path("$root/lib/$m"); }
 no warnings 'once';
-my %tables=(canon=>\%Image::ExifTool::Canon::canonLensTypes,canon_rf=>$Image::ExifTool::Canon::FileInfo{61}{PrintConv},pentax=>\%Image::ExifTool::Pentax::pentaxLensTypes,olympus=>$Image::ExifTool::Olympus::Equipment{0x0201}{PrintConv});
+my $rf_absent=!exists $Image::ExifTool::Canon::FileInfo{61};
+my %tables=(canon=>\%Image::ExifTool::Canon::canonLensTypes,($rf_absent?():(canon_rf=>$Image::ExifTool::Canon::FileInfo{61}{PrintConv})),pentax=>\%Image::ExifTool::Pentax::pentaxLensTypes,olympus=>$Image::ExifTool::Olympus::Equipment{0x0201}{PrintConv});
 my %facts;
 for my $name (keys %tables) {
     my $h=$tables{$name}; die "$name is not a hash\n" unless ref($h) eq 'HASH';
@@ -40,7 +48,7 @@ for my $name (keys %tables) {
         $facts{$name}{$key}=$row;
     }
 }
-print JSON::PP->new->utf8->canonical->encode({version=>$Image::ExifTool::VERSION,tables=>\%facts});
+print JSON::PP->new->utf8->canonical->encode({version=>$Image::ExifTool::VERSION,tables=>\%facts,canon_rf_entry_absent=>$rf_absent?JSON::PP::true:JSON::PP::false});
 '''
 STRING = r'"(?:\\.|[^"\\])*"'
 TOKEN = re.compile(STRING + r'|//[^\n]*')
@@ -177,10 +185,31 @@ def compare(facts, rust):
                 errors.append('olympus: runtime assumes no alternatives')
         else:
             expected[family] = projected
+    if facts.get('canon_rf_entry_absent') is True:
+        if 'canon_rf' in facts['tables']:
+            errors.append('canon_rf: oracle reported both absent and present')
+        # Proven absent by the caller (check_rf_absence); no RF rows exist.
+        expected['canon_rf'] = {}
     for family in ('canon', 'canon_rf', 'pentax'):
         if rust.get(family) != expected.get(family):
             errors.append(f'{family}: complete Rust alternatives differ from native Perl projection')
     return {'errors':errors, 'counts':counts, 'projection_matches':rust == expected}
+
+
+def check_rf_absence(facts, source_dir, text):
+    """Re-prove an absent RF table from the release and bind it to the Rust."""
+    if facts.get('canon_rf_entry_absent') is not True:
+        return None
+    try:
+        record = validate_absence_record(
+            prove_table_absent(Path(source_dir) / 'lib', 'Canon', 'RFLensType'), 'Canon', 'RFLensType')
+    except NotAbsent as exc:
+        raise ValueError(f'canon_rf: FileInfo has no RFLensType entry but absence is not proven: {exc}') from exc
+    for key in ('module_sha256', 'release_inventory_sha256'):
+        if f'sha256 {record[key]}' not in text:
+            raise ValueError(f'canon_rf: empty RF table is not bound to this release ({key})')
+    return {k: record[k] for k in ('kind', 'module_sha256', 'release_inventory_sha256',
+                                   'release_files_scanned', 'occurrences_in_release')}
 
 
 def main():
@@ -207,7 +236,10 @@ def main():
         source = args.rust_file.read_text()
         if not source.startswith('//!') or f'`.exiftool-version`, {pin}' not in source:
             raise ValueError('expected complete file header with selected pin')
+        absence = check_rf_absence(facts, args.exiftool_dir, source)
         report.update(compare(facts, read_rust(source)))
+        if absence is not None:
+            report['canon_rf_absence'] = absence
         report.update(version=pin, source_facts=facts,
                       rust_sha256=hashlib.sha256(args.rust_file.read_bytes()).hexdigest())
         if not report['errors']:
