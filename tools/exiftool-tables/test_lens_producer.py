@@ -25,7 +25,7 @@ class LensProducerTests(unittest.TestCase):
         self.root = self.base / 'repo'
         self.tools = self.root / 'tools/exiftool-tables'
         self.tools.mkdir(parents=True)
-        for name in ('dump_lens_alternatives.pl', 'verify_lens_alternatives.py'):
+        for name in ('dump_lens_alternatives.pl', 'verify_lens_alternatives.py', 'module_absence.py'):
             if (HERE / name).exists():
                 shutil.copy2(HERE / name, self.tools / name)
         (self.root / '.exiftool-version').write_text('13.59\n')
