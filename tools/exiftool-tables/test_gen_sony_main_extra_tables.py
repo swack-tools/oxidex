@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -157,6 +158,98 @@ class Header(unittest.TestCase):
                 generator.generate(data)
         finally:
             generator.MANIFEST[:] = saved
+
+
+
+PERL = os.environ.get("EXIFTOOL_PERL") or shutil.which("perl")
+EVIDENCE_DUMPS = Path(os.environ.get("OXIDEX_TEST_REHEARSAL_DUMPS",
+                                     "/Users/allen/oxidex-ops/evidence/20260917-rehearsal-diag/dumps"))
+from test_module_entry_absence import LIB_1178, LIB_1264, make_lib  # noqa: E402
+
+
+def dump(tags, version="11.78"):
+    return {"exiftool_version": version, "modules": {"Sony": {"tables": {"Main": {"tags": tags}}}}}
+
+
+@unittest.skipUnless(PERL, "needs a perl")
+class ProvenAbsentIds(unittest.TestCase):
+    """A MANIFEST id missing from the dump emits no row only when proven absent."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        saved = generator.MANIFEST[:]
+        self.addCleanup(generator.MANIFEST.__setitem__, slice(None), saved)
+        generator.MANIFEST[:] = [0x2031, 0x2032, 0xB041]
+        # The fake lib's Sony::Main holds 0x2031 and 0xb041, not 0x2032.
+        self.data = dump({"8241": {"Name": "SerialNumber"}, "45121": {"Name": "ExposureMode"}})
+
+    def rows(self, text):
+        return re.findall(r"^    MainExtraTag \{ id: (0x[0-9a-f]+), name: \"([^\"]+)\"", text, re.M)
+
+    def test_proven_absent_id_emits_no_row_and_names_its_proof(self):
+        lib = make_lib(self.tmp)
+        text = generator.generate(self.data, lib, PERL)
+        self.assertEqual(self.rows(text), [("0x2031", "SerialNumber"), ("0xb041", "ExposureMode")])
+        self.assertIn("// Absent: `0x2032`.", text)
+        self.assertIn("prove_entry_absent", text)
+        self.assertIn("loaded Sony::Main: 2 tag ids", text)
+
+    def test_missing_id_without_a_lib_still_refuses(self):
+        with self.assertRaisesRegex(generator.Unsupported, "0x2032.*--exiftool-lib"):
+            generator.generate(self.data)
+
+    def test_missing_id_the_release_names_refuses(self):
+        # The dump lacks 0x2032 but the release's Sony.pm defines it (changed or
+        # not): the dump is not this release's table, and nothing is invented.
+        lib = make_lib(self.tmp, extra="    0x2032 => { Name => 'Changed' },\n")
+        with self.assertRaisesRegex(generator.Unsupported, "not proven absent"):
+            generator.generate(self.data, lib, PERL)
+
+    def test_dump_from_another_table_refuses(self):
+        lib = make_lib(self.tmp)
+        data = dump({"8241": {"Name": "SerialNumber"}, "45121": {"Name": "ExposureMode"},
+                     "45122": {"Name": "Extra"}})
+        with self.assertRaisesRegex(generator.Unsupported, "differ from the table loaded"):
+            generator.generate(data, lib, PERL)
+
+    def test_present_id_with_an_unregistered_definition_still_refuses(self):
+        lib = make_lib(self.tmp)
+        self.data["modules"]["Sony"]["tables"]["Main"]["tags"]["8241"]["Condition"] = "$$self{Model} eq 'X'"
+        with self.assertRaisesRegex(generator.Unsupported, "0x2031.*unregistered Condition"):
+            generator.generate(self.data, lib, PERL)
+
+    def test_all_present_emits_no_absence_note(self):
+        generator.MANIFEST[:] = [0x2031, 0xB041]
+        text = generator.generate(self.data, make_lib(self.tmp), PERL)
+        self.assertNotIn("Absent:", text)
+        self.assertEqual(text, generator.generate(self.data))
+
+
+@unittest.skipUnless(PERL and LIB_1178.is_dir() and LIB_1264.is_dir()
+                     and (EVIDENCE_DUMPS / "tables-11.78.json").is_file()
+                     and (EVIDENCE_DUMPS / "tables-12.64.json").is_file(),
+                     "needs the 11.78/12.64 source trees and their dumps")
+class HistoricalGeneration(unittest.TestCase):
+    def generate(self, release, lib):
+        data = json.loads((EVIDENCE_DUMPS / f"tables-{release}.json").read_text())
+        return generator.generate(data, lib, PERL)
+
+    def test_1178(self):
+        text = self.generate("11.78", LIB_1178)
+        self.assertEqual(len(re.findall(r"^    MainExtraTag \{", text, re.M)), 26)
+        self.assertIn("// Absent: `0x2032`, `0x2033`, `0x2034`, `0x2035`, `0x2036`, `0x2037`, "
+                      "`0x2039`, `0x204a`, `0x205c`.", text)
+
+    def test_1264(self):
+        text = self.generate("12.64", LIB_1264)
+        self.assertEqual(len(re.findall(r"^    MainExtraTag \{", text, re.M)), 33)
+        self.assertIn("// Absent: `0x204a`, `0x205c`.", text)
+
+    def test_a_dump_against_the_wrong_release_refuses(self):
+        data = json.loads((EVIDENCE_DUMPS / "tables-12.64.json").read_text())
+        with self.assertRaisesRegex(generator.Unsupported, "differ from the table loaded"):
+            generator.generate(data, LIB_1178, PERL)
 
 
 if __name__ == "__main__":

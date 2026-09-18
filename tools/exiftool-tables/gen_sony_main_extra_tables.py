@@ -30,16 +30,34 @@ recovered for `codegen_subdirs.py`. Adding a tag to this file means adding
 its id to MANIFEST here, by hand, after confirming `main_table.rs` still has
 no entry for it.
 
+A MANIFEST id missing from the dump is refused unless ``--exiftool-lib``
+proves it absent from that release (11.78's Sony::Main has no 0x2032..0x2039,
+0x204a or 0x205c; 12.64's has no 0x204a or 0x205c). The proof is
+``module_absence.prove_entry_absent``: the release's own perl loads the
+release's own lib/ and the id is not a key of ``%Image::ExifTool::Sony::Main``,
+and the id is named nowhere in ``Sony.pm``. The proof's digest of the loaded
+table's ids must equal the dump's, so the dump and the proof read the same
+table. A proven-absent id emits no row -- never an invented one -- and is
+listed with its proof in the generated header. The version label decides
+nothing. An id present in the dump goes through the strict translation below,
+so a present entry with an unregistered or changed definition still refuses.
+
 usage:
   dump_tables.pl <exiftool-lib> Sony > tables.json
-  gen_sony_main_extra_tables.py tables.json -o main_extra_tables.rs
+  gen_sony_main_extra_tables.py tables.json -o main_extra_tables.rs \
+      [--exiftool-lib <exiftool-lib>] [--perl <perl>]
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import shutil
 import sys
+
+from module_absence import (NotAbsent, loaded_tag_ids_sha256, prove_entry_absent,
+                            validate_entry_absence_record)
 
 # ---------------------------------------------------------------------------
 # The manifest: every Sony::Main tag id `main_extra_tables.rs` covers, in the
@@ -304,12 +322,64 @@ use super::main_extra::{MCond, MainExtraTag};
 '''
 
 
-def generate(data):
+def prove_absent_ids(main, missing, lib, perl):
+    """Entry absence records for ``missing`` MANIFEST ids, proven from ``lib``, or raise."""
+    if not missing:
+        return []
+    first = missing[0]
+    if lib is None:
+        raise Unsupported(first, "?", "id not present in Sony::Main; pass --exiftool-lib so its "
+                          "absence can be proven from the release")
+    if not perl:
+        raise Unsupported(first, "?", "id not present in Sony::Main; no perl to load the release with")
+    dump_ids = []
+    for key in main:
+        if not re.fullmatch(r"[0-9]+", key):
+            raise Unsupported(first, "?", f"Sony::Main dump key {key!r} is not a decimal tag id")
+        dump_ids.append(int(key))
+    records = []
+    for tag_id in missing:
+        try:
+            record = validate_entry_absence_record(
+                prove_entry_absent(lib, "Sony", "Main", tag_id, perl), "Sony", "Main", tag_id)
+        except (NotAbsent, ValueError, OSError) as error:
+            raise Unsupported(tag_id, "?", f"id not present in the Sony::Main dump and not proven "
+                              f"absent from the release: {error}") from error
+        if record["loaded_table_tag_ids_sha256"] != loaded_tag_ids_sha256(dump_ids):
+            raise Unsupported(tag_id, "?", "the dump's Sony::Main ids differ from the table loaded "
+                              f"from {lib}: the dump does not come from this release")
+        records.append(record)
+    return records
+
+
+def render_absent_note(records):
+    if not records:
+        return []
+    first = records[0]
+    ids = ", ".join(f"`{r['tag_id_hex']}`" for r in records)
+    return [
+        "// MANIFEST ids absent from this release's `%Image::ExifTool::Sony::Main`, so no",
+        "// row is emitted for them. Proven by `tools/exiftool-tables/module_absence.py`",
+        "// `prove_entry_absent` from the release's own `lib/` (the version label is not",
+        "// used): not a key of the table loaded by its perl, and named nowhere in `Sony.pm`.",
+        f"// Absent: {ids}.",
+        f"// `Image/ExifTool.pm` sha256 {first['exiftool_pm_sha256']};",
+        f"// `Image/ExifTool/Sony.pm` sha256 {first['module_sha256']};",
+        f"// loaded Sony::Main: {first['loaded_table_tag_ids']} tag ids, sha256 {first['loaded_table_tag_ids_sha256']};",
+        f"// release inventory: {first['release_files_scanned']} files, sha256 {first['release_inventory_sha256']}.",
+    ]
+
+
+def generate(data, lib=None, perl=None):
     main = data["modules"]["Sony"]["tables"]["Main"]["tags"]
     pools = Pools()
     rows = []
+    absent = prove_absent_ids(main, [t for t in MANIFEST if str(t) not in main], lib, perl)
+    absent_ids = {r["tag_id"] for r in absent}
     for tag_id in MANIFEST:
         key = str(tag_id)
+        if tag_id in absent_ids:
+            continue
         if key not in main:
             raise Unsupported(tag_id, "?", "id not present in Sony::Main")
         entry = main[key]
@@ -329,6 +399,9 @@ def generate(data):
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", version):
         raise Unsupported(0, "?", f"malformed exiftool_version: {version!r}")
     out = [HEADER.replace("{version}", version)]
+    note = render_absent_note(absent)
+    if note:
+        out.append("\n".join(note) + "\n")
     for i, items in enumerate(pools.maps):
         out.append(render_map_decl(f"M{i}", items))
     for i, items in enumerate(pools.bits):
@@ -346,13 +419,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("json_path")
     ap.add_argument("-o", "--output", required=True)
+    ap.add_argument("--exiftool-lib", help="release lib/ the dump came from; proves a missing MANIFEST id absent")
+    ap.add_argument("--perl", default=os.environ.get("EXIFTOOL_PERL") or shutil.which("perl"),
+                    help="perl that loads --exiftool-lib (default $EXIFTOOL_PERL, else perl on PATH)")
     args = ap.parse_args()
 
     with open(args.json_path, encoding="utf-8") as f:
         data = json.load(f)
 
     try:
-        text = generate(data)
+        text = generate(data, args.exiftool_lib, args.perl)
     except Unsupported as e:
         print(f"gen_sony_main_extra_tables.py: {e}", file=sys.stderr)
         sys.exit(1)
