@@ -255,7 +255,10 @@ def render(p, path):
            "the `regex` crate cannot compile (lookahead, backreference), so PURE here is a "
            "few uses under COVERAGE.md's rung c",
            "- the `before` rows already assume the Session; the Session-free baseline is "
-           "the first row (today's translators)", "",
+           "the first row (today's translators, `run_spike.baseline_accepts` at this "
+           "commit -- in Frame A that also credits code refs, Conditions and Composite "
+           "forms, which COVERAGE.md's Frame A rung a (`translate_or_compile_any` alone) "
+           "did not, so the two can differ by a few uses)", "",
            "## Helper sets", "",
            f"- before ({len(p['before_ports'])}, the spike's complete ports at a29874aa): "
            + ", ".join(f"`{x}`" for x in p["before_ports"]),
