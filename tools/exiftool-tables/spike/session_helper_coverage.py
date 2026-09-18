@@ -152,6 +152,7 @@ def main():
         info.sites.append(site)
     for info in infos.values():
         S.analyse(info)
+        info.baseline = S.baseline_accepts(info.sites[0])
 
     # Every helper/data dependency name the classifier produced, resolved to
     # a qualified Perl sub where one exists.
@@ -179,7 +180,8 @@ def main():
     results = {}
     for name, fi in frames.items():
         total = sum(i.uses for i in fi)
-        rows = []
+        rows = [("exprs.py/conds.py today, no Session (COVERAGE.md rung a)",
+                 sum(i.uses for i in fi if i.baseline), sum(1 for i in fi if i.baseline))]
         parsed = sum(i.uses for i in fi if i.parsed)
         rows.append(("parseable by the spike grammar", parsed,
                      sum(1 for i in fi if i.parsed)))
@@ -248,7 +250,12 @@ def render(p, path):
            f"- pinned release declared by the dump: **{ins['exiftool_version']}**",
            f"- ExifTool Perl source read (never executed): `{ins['lib']}`",
            "- no oxidex binary and no `exiftool` process is run; this is a dependency "
-           "ceiling, not an evaluation", "",
+           "ceiling, not an evaluation",
+           "- every rung below `parseable` also excludes uses needing a regex construct "
+           "the `regex` crate cannot compile (lookahead, backreference), so PURE here is a "
+           "few uses under COVERAGE.md's rung c",
+           "- the `before` rows already assume the Session; the Session-free baseline is "
+           "the first row (today's translators)", "",
            "## Helper sets", "",
            f"- before ({len(p['before_ports'])}, the spike's complete ports at a29874aa): "
            + ", ".join(f"`{x}`" for x in p["before_ports"]),
