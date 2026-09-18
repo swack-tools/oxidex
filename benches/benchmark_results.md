@@ -1,5 +1,12 @@
 # ExifTool-RS Performance Benchmarks
 
+> **Historical record.** These timings compare `exiftool-rs` 0.1.0 with a bare
+> `exiftool` 13.36 found on `PATH`, not the repository pin (`.exiftool-version`,
+> 13.59). The [autogeneration plan](../docs/AUTOGENERATION-PLAN.md) records this
+> table as stale and untrustworthy and a refresh against the current binary and
+> the pinned ExifTool as in progress. `benches/exiftool_comparison.sh` is the
+> instrument that produced it.
+
 > **Path notation:** Recorded commands show checkout-relative files and executables. `benchmark-work/` is a relative presentation alias for the original temporary benchmark directory; timings, inputs and tool versions are unchanged, and no files were moved.
 
 

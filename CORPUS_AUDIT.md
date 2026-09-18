@@ -1,5 +1,11 @@
 # Full-corpus coverage audit
 
+> **Historical record (2026-07-30).** Graded against ExifTool **13.55**, which is
+> not the repository pin (13.59); per `AGENTS.md` such numbers are not comparable
+> with pinned measurements. Kept because `src/bin/tag-comparison/models/mod.rs`
+> cites §0 for why the per-format coverage percentage is not a read-coverage figure.
+> Current measured parity is in the [autogeneration plan](docs/AUTOGENERATION-PLAN.md).
+
 Measured 2026-07-30 against `origin/main` @ `fbb38f9f`, ExifTool 13.55,
 corpus `/tmp/oxidex-exiftool-cache/combined-samples` (4238 files).
 

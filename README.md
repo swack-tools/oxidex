@@ -12,7 +12,7 @@ OxiDex is a memory-safe, drop-in replacement for the Perl-based ExifTool. It def
 
 ## Why OxiDex?
 
-- **3.7-9.7x faster** than Perl ExifTool ([see benchmarks](https://oxidex.net/performance/benchmarks))
+- **Compiled, parallel Rust** - the published speed comparison against Perl ExifTool is stale and being re-measured against the pinned 13.59 ([status](https://oxidex.net/performance/))
 - **Memory safe** - No buffer overflows, use-after-free, or data races
 - **Drop-in compatible** - Same CLI arguments as original ExifTool
 - **Cross-platform** - Static binaries for Linux, macOS, and Windows
@@ -58,17 +58,24 @@ oxidex --detector=magika unknown_file
 ## Documentation
 
 - [User Guide](https://oxidex.net/) - Installation, usage, and format support
-- [Benchmarks](https://oxidex.net/performance/#benchmark-results) - Performance comparison with Perl ExifTool
+- [Performance](https://oxidex.net/performance/) - benchmark status and how to reproduce measurements
 - [API Reference](https://docs.rs/oxidex) - Rust library documentation
-- [Tag Machinery Status](docs/TAG_MACHINERY_STATUS.md) - Completed work, partial implementations and useful next steps
+- [Autogeneration plan](docs/AUTOGENERATION-PLAN.md) - the goal, the measured state and the ordered next steps; the mechanism is in [AUTOGENERATION-V2-DESIGN.md](docs/AUTOGENERATION-V2-DESIGN.md)
+- [Tag Machinery Status](docs/TAG_MACHINERY_STATUS.md) - Dated integration status, evidence limits and the documentation map
 - [Automation Backlog](docs/AUTOMATION-AND-TESTER-PLAN.md) - Remaining upgrade, verification and migration work
 - [AI Harness](docs/AI_HARNESS.md) - Harness architecture and historical experiments
 - [GitHub Issues](https://github.com/swack-tools/oxidex/issues) - Bug reports and feature requests
 
 ## Closing the parity gap
 
-Coverage work starts with [transcribing ExifTool's declarations](docs/TRANSCRIPTION.md),
-extending shared decoding/conversion rules and routing real extraction through those tables.
+The goal is that a change to ExifTool's tag definitions flows into OxiDex by
+regeneration, without anyone retyping a tag name, byte layout, camera-selection
+rule or conversion. The [autogeneration plan](docs/AUTOGENERATION-PLAN.md) owns
+the goal, the measured state and the next steps; the
+[v2 design](docs/AUTOGENERATION-V2-DESIGN.md) specifies the mechanism (generated
+conversions over a session, a real grammar, a helper library, per-field mixed
+mode); [progress](docs/AUTOGENERATION-PROGRESS.md) is the scoreboard.
+[Transcription](docs/TRANSCRIPTION.md) documents the method and its history.
 Generation, runtime activation and measured output are tracked separately.
 
 [Tag Machinery Status](docs/TAG_MACHINERY_STATUS.md) records the audited integration

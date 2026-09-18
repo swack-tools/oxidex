@@ -1,5 +1,10 @@
 # Keel — agent server specification
 
+> **Historical design record (2026-08-21, base tree `fd154c5d`).** Keel was not
+> adopted as the way work runs: the [autogeneration plan](./AUTOGENERATION-PLAN.md#how-the-work-is-run)
+> runs the work on one host, one agent per worktree and `staging/<slug>` branch.
+> Kept because `tools/fleet/` and its tests cite the mechanisms specified here.
+
 Status: design, post-review. Supersedes the topology in `docs/FLEET.md` §3–§4 (ref hub on one
 bare repo, per-host polling `fleetd`, cron train, chat-session operator). Carries every mechanism
 in `docs/FLEET.md` §4 that the 2026-08-14..20 incidents proved; replaces only the substrate those

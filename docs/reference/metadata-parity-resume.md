@@ -2,6 +2,11 @@
 
 Resumed by the maintainer on 2026-09-15 after the tranche consolidated in PR [#779](https://github.com/swack-tools/oxidex/pull/779). The first resumed milestone is the generated Garmin FIT reader ([source review](garmin-fit-source-review.md)). PRs #682 and #683 were closed as superseded by #787.
 
+> The process described under "First actions" predates the current working rules:
+> work now runs on one host, one agent per worktree and `staging/<slug>` branch, per the
+> [autogeneration plan](../AUTOGENERATION-PLAN.md#how-the-work-is-run); the evidence links
+> below remain the right starting point.
+
 ## Read first
 
 - [Checkpoint and exact denominators](goal-checkpoint-20260914.md)

@@ -1,7 +1,9 @@
 # Generated reading, writing and ExifTool upgrades
 
 Updated September 14, 2026. This records the expanded read/write and version
-objective alongside the [main plan](../AUTOGENERATION-PLAN.md).
+objective at that date. The [main plan](../AUTOGENERATION-PLAN.md) now owns the
+goal and order of work and the [v2 design](../AUTOGENERATION-V2-DESIGN.md) the
+mechanism; the checkpoints below are accurate for the commits they name.
 
 ## Current status
 

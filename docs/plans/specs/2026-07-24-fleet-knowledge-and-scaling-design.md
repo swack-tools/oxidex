@@ -1,4 +1,9 @@
 # Fleet Knowledge & Scaling: Squads, Job Tiers, Evidence-Bearing Merges
+> **Historical fleet design (2026-07-24).** Kept because `scripts/attribute_gaps.py`,
+> `scripts/distill_lessons.py`, `scripts/overlord_sweep.py`, `scripts/foundation_jobs.toml`
+> and `config.example.toml` cite it. Fleet expansion is not the current coverage
+> strategy; see the [autogeneration plan](../../AUTOGENERATION-PLAN.md).
+
 
 > **Path notation:** `worktrees/` paths are relative to the historical OxiDex state directory, not this repository; no worktree is relocated or implied to remain present.
 

@@ -72,6 +72,11 @@ The parser extracts metadata from:
 
 Both PE32 (32-bit) and PE32+ (64-bit) formats are supported.
 
+## Rich Header
+
+The undocumented Visual Studio Rich Header is decoded separately; see
+[PE Rich Header extraction](/features/pe-rich-header).
+
 ## Limitations
 
 - Section headers and data directories are not currently parsed

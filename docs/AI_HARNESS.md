@@ -5,7 +5,10 @@
 > adoption; fleet expansion is deferred. See
 > [Tag machinery status](./TAG_MACHINERY_STATUS.md) and the
 > [remaining-work backlog](./AUTOMATION-AND-TESTER-PLAN.md) before treating this
-> historical workflow as the next implementation task.
+> historical workflow as the next implementation task. Work now runs on one host,
+> one agent per worktree and branch, as the
+> [autogeneration plan](./AUTOGENERATION-PLAN.md#how-the-work-is-run) states; the
+> fleet described here is not how work runs.
 
 OxiDex is a Rust reimplementation of ExifTool. The **AI harness** — referred to internally as
 "the fleet" — is an autonomous system that runs continuously against the repository to find

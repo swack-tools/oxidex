@@ -185,7 +185,7 @@ After creating a GitHub release:
 
 ```bash
 # Calculate SHA256 of the release tarball
-curl -sL https://github.com/oxidex/oxidex/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
+curl -sL https://github.com/swack-tools/oxidex/archive/refs/tags/v1.2.1.tar.gz | shasum -a 256
 
 # Update the sha256 field in packaging/homebrew/oxidex.rb
 ```
@@ -353,7 +353,7 @@ cargo build --release
 cargo generate-rpm
 
 # Update Homebrew formula SHA256
-curl -sL https://github.com/oxidex/oxidex/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
+curl -sL https://github.com/swack-tools/oxidex/archive/refs/tags/v1.2.1.tar.gz | shasum -a 256
 # Update packaging/homebrew/oxidex.rb with the hash
 ```
 
@@ -414,7 +414,7 @@ cargo generate-rpm
 
 **Solution**: Recalculate and update the SHA256 hash:
 ```bash
-curl -sL https://github.com/oxidex/oxidex/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
+curl -sL https://github.com/swack-tools/oxidex/archive/refs/tags/v1.2.1.tar.gz | shasum -a 256
 # Update sha256 in packaging/homebrew/oxidex.rb
 ```
 
@@ -501,7 +501,7 @@ Potential improvements for the packaging system:
 - **Homebrew Formula Cookbook**: https://docs.brew.sh/Formula-Cookbook
 - **Debian Policy Manual**: https://www.debian.org/doc/debian-policy/
 - **RPM Packaging Guide**: https://rpm-packaging-guide.github.io/
-- **OxiDex Project**: https://github.com/oxidex/oxidex
+- **OxiDex Project**: https://github.com/swack-tools/oxidex
 
 ---
 

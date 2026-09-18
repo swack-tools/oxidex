@@ -79,7 +79,7 @@ This architecture ensures:
 
 ### 1. Application Layer
 
-#### CLI Binary (`src/bin/oxidex.rs`)
+#### CLI Binary (`src/main.rs`, with the argument handling in `src/cli/`)
 
 Command-line interface providing ExifTool-compatible syntax:
 
@@ -377,7 +377,7 @@ impl FileWriter {
        fn parse(&self, reader: &dyn FileReader) -> Result<MetadataMap>;
    }
    ```
-3. **Register in format registry** - Add to `src/formats/mod.rs`
+3. **Register the parser** - Add the dispatch arm in `src/core/format_dispatch.rs`
 4. **Add tests** - Unit tests + integration tests
 5. **Update tag database** - If new tags are needed
 

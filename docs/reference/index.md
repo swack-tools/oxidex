@@ -1,32 +1,95 @@
 # Reference Documentation
 
-Welcome to the OxiDex reference documentation. This section provides detailed technical information about the library architecture, APIs, and supported formats.
+Technical reference for the library, the CLI's FFI, the tag database and the
+measured state of ExifTool parity. Where a page carries numbers, it names the
+instrument and commit they came from; a page without both is a record, not a
+claim about the current tip.
+
+## Where the work stands
+
+- [Autogeneration plan](/AUTOGENERATION-PLAN) - the goal, the measured state and the ordered next steps
+- [Autogeneration v2 design](/AUTOGENERATION-V2-DESIGN) - the mechanism: generated conversions over a session, a real grammar, a helper library, per-field mixed mode
+- [Autogeneration progress](/AUTOGENERATION-PROGRESS) - the working scoreboard, newest checkpoint first
+- [Tag machinery status](/TAG_MACHINERY_STATUS) - dated integration status and evidence limits
+- [Transcription](/TRANSCRIPTION) - the method, with its historical experiments
 
 ## Contents
 
 ### [Architecture](/reference/architecture)
-Learn about OxiDex's internal design, including the hexagonal architecture, parser system, and core abstractions.
+OxiDex's internal design: the hexagonal layering, parser dispatch and core abstractions.
 
 ### [API Reference](/reference/api-reference)
-Comprehensive Rust library API documentation with examples and usage patterns.
+The Rust library API with examples. The longer [Rust API document](/reference/api/) covers the same surface in more detail.
 
 ### [FFI API](/reference/ffi-api)
-C-compatible Foreign Function Interface for integrating OxiDex with other programming languages (Python, Node.js, Go, etc.).
+The C-compatible interface for other languages (Python, Node.js, Go).
 
 ### [Tag Database](/reference/tag-database)
-Information about the metadata tag database, including supported tag families and auto-generation from ExifTool source.
+How tag definitions are synced from ExifTool and organised into the `oxidex-tags-*` crates.
 
-### [Tag Coverage Analysis](/reference/tag-coverage-analysis)
-Detailed analysis of the gap between defined tags and extracted tags, with recommendations for improving coverage.
+### [MakerNotes](/reference/makernotes)
+Manufacturer-specific metadata support.
+
+### [ExifTool Coverage](/reference/tag-coverage-analysis)
+The generated, CI-refreshed conformance report: definitions counted separately from measured extraction.
 
 ### [ExifTool Compatibility](/reference/comparison/)
-Empirical comparison against ExifTool, including the [JPEG Tag Support mapping](/reference/jpeg-tag-support) (every ExifTool tag OxiDex reads/writes, with working keys and example values), the [full JPEG Tag Matrix](/reference/jpeg-tag-matrix) (per-tag classification and known-bug inventory, regression-gated in CI), and [Corpus Synthesis](/reference/corpus-synthesis) (measuring how much of the 613-table binary transcription set can be made testable by writing synthetic samples with ExifTool itself).
+Per-format comparison against the pinned ExifTool, regenerated at deploy time, with the generated [JPEG Tag Support](/reference/jpeg-tag-support) and [JPEG Tag Matrix](/reference/jpeg-tag-matrix) reports.
+
+### Source catalog and observations
+Generated reports (never hand-edited; the named tool refreshes each):
+- [Source Catalog Baseline](/reference/catalog-baseline) - `catalog_snapshot.py --report`
+- [Catalog to Source Ledger](/reference/catalog-hydrated-join) - `join_catalog_hydrated.py`; the parity ratchet reads it
+- [Verified Read and Write Observations](/reference/catalog-hydrated-observed) and [Corpus Read Observations](/reference/catalog-corpus-observed) - `catalog_observed_snapshot.py --report`
+
+Hand-written companion:
+- [Hydrated Reader Source](/reference/hydrated-reader-layout-baseline) - what the hydrated-layout capture makes available to source selectors
 
 ### [Supported Formats](/reference/formats/)
-Complete list of supported file formats with implementation details and coverage information.
+Format families with implementation notes.
+
+### [Packaging](/reference/packaging/)
+Building and distributing OxiDex.
+
+## Records and checkpoints
+
+Dated records from the autogeneration work. Each is accurate for the commit it
+names and is kept as evidence; none is a statement about the current tip.
+
+**Source capture and inventories**
+- [Catalog-to-hydrated join](/CATALOG-HYDRATED-JOIN), [Hydrated catalog universe](/HYDRATED-CATALOG-UNIVERSE), [Hydrated layout projection](/HYDRATED-LAYOUT-PROJECTION)
+- [Source artifact and enablement baseline (2026-09-14)](/reference/source-artifact-baseline-20260914)
+- [Recorded source-to-artifact join, 13.59](/reference/source-artifact-join-13.59)
+- [Recorded source-processor inventory, 13.59](/reference/source-processor-inventory-13.59)
+- [Staged native serial-layout inventory](/reference/serial-layout-inventory)
+- [Native write-definition catalog](/reference/write-coverage-catalog)
+
+**Parity checkpoints**
+- [Generated metadata parity checkpoint (2026-09-14)](/reference/goal-checkpoint-20260914) and its [review record](/reference/parity-rollup-review-20260914)
+- [Resume metadata parity work](/reference/metadata-parity-resume)
+- [Source-family baseline and generic readers](/reference/source-family-migration-plan)
+- [Generated reading, writing and ExifTool upgrades](/reference/read-write-version-plan) and [the writer's input pipeline](/reference/writer-input-pipeline)
+- [Native creation of a JPEG EXIF block](/reference/native-jpeg-exif-defaults)
+- [Keyed reporting-policy validation](/reference/keyed-reporting-policy-validation)
+- [Generated ItemList reader progress](/reference/quicktime-generated-reader)
+- [Garmin FIT source review](/reference/garmin-fit-source-review)
+
+**Reader migrations and recoveries**
+- [Canon AFInfo2 production plan](/reference/afinfo2-production-plan) and [serial AFInfo plan](/reference/serial-afinfo-plan)
+- [Serial processor checkpoint](/reference/serial-processor-checkpoint), [serial runtime checkpoint](/reference/serial-runtime-checkpoint), [word-directory checkpoint](/reference/word-directory-checkpoint), [directory validation checkpoint](/reference/directory-validation-checkpoint)
+- [Real AudioV4 manual-sequence retirement](/reference/real-audio-v4-retirement)
+- [Nikon settings generator recovery](/reference/nikon-settings-generator-recovery)
+- [Sony plain-table producer recovery](/reference/sony-plain-generator-recovery) and [Sony raw-ID repair](/reference/sony-raw-id-runtime)
+- [Shared EXIF conversion reconciliation (2026-09-11)](/reference/rawconv-reconciliation-2026-09-11)
+- [Historical capture path notation](/reference/path-normalization)
+
+**Engine studies and bump exercises (August 2026)**
+- [BinaryData engine and its gates (Step 28)](/reference/binary-data-engine) and [corpus synthesis](/reference/corpus-synthesis)
+- [Step 33 format backlog](/reference/step-33-format-backlog)
+- Bump exercises: [13.55 to 13.59](/reference/bump-reports/13.55-to-13.59), [13.58 to 13.59](/reference/bump-reports/13.58-to-13.59)
 
 ## Quick Links
 
-- **Getting Started**: See the [Guide section](/guide/) for installation and usage instructions
-- **Performance**: Check out [Performance benchmarks](/performance/) for speed comparisons
-- **Contributing**: Read the [Contributing guide](/contributing/) to get involved
+- **Getting Started**: the [Guide section](/guide/) for installation and usage
+- **Performance**: the [performance page](/performance/), including the status of the published benchmarks
+- **Contributing**: the [Contributing guide](/contributing/)

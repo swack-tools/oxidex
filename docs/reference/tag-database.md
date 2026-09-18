@@ -6,51 +6,19 @@ OxiDex maintains a comprehensive tag database automatically synchronized with Ex
 
 - **Total Tags:** 16,684 tag definitions (see [Tag Coverage](/reference/tag-coverage-analysis) — this is a definitions count, not a measurement of extraction coverage)
 - **Format Families:** 140+
-- **Sync:** Manual regeneration from ExifTool master (see [Synchronization](#synchronization))
+- **Sync:** `cargo run --release --bin sync_tags` against a locally installed ExifTool, pinned by `.exiftool-version` (see [Synchronization](#synchronization))
+- **Per-domain listings:** the generated [tag domain pages](/tag-domains/) (`just docs-generate-tags`)
 
 ## Architecture
 
-### Workspace-Based Separation
-
-The tag database is implemented as a **separate workspace crate** (`exiftool-tags`) to prevent memory issues during compilation:
-
-**Crate Structure:**
-- `exiftool-tags/` - Tag database crate (always optimized)
-- `oxidex/` - Main crate (debug mode for fast iteration)
-
-**Profile Configuration:**
-```toml
-# In root Cargo.toml
-[profile.dev.package.exiftool-tags]
-opt-level = 2        # Always optimize tag database
-codegen-units = 16   # Parallel compilation
-```
-
-**Benefits:**
-- Debug builds: 100GB+ RAM → **11GB** (91% reduction)
-- Main crate stays in debug mode (fast iteration)
-- Tag database always optimized (prevents OOM)
-- Industry-standard pattern (used by rustc, diesel, syn)
-
-### Tag Generation Pipeline
-
-The tag database is automatically generated during build from Perl ExifTool source:
-
-1. **Download** - Fetches latest ExifTool master from GitHub
-2. **Discover** - Finds all 140+ .pm Perl modules recursively
-3. **Parse** - Extracts tag definitions using comprehensive regex patterns
-4. **Resolve** - Follows subdirectory references for nested tables
-5. **Generate** - Creates 124 separate module files (one per format family) + main lookup module
-   - Each family module: `exiftool-tags/src/tag_db/generated/tags_<family>.rs` (100-3,500 tags each)
-   - Main module: `exiftool-tags/src/tag_db/generated_tags.rs` (792 lines)
-   - Total: ~35,000 lines across 125 files (vs 425,000 lines in single file)
-
-## Performance
-
-- **Lookup:** O(1) via HashMap (tag_name) → TagDescriptor
-- **Memory:** ~5-10MB for 32K tags (heap-allocated lazily)
-- **Build Time:** ~4 minutes (cached after first build)
-- **Compilation:** Uses lazy initialization to avoid static allocation limits
+The definitions live in six workspace crates, one per domain
+(`oxidex-tags-core`, `-camera`, `-image`, `-media`, `-document`,
+`-specialty`), fronted by `oxidex-tags` and sharing types through
+`oxidex-tags-shared`. Each crate carries its definitions as a YAML file
+(`oxidex-tags-<domain>/src/<domain>_tags.yaml`) that `build.rs` pre-compiles
+to a binary blob at build time, so nothing is parsed at program start. The
+[Tag Database Architecture](/architecture/tag-database) page describes the
+crate layout, the build profiles and the generation pipeline in detail.
 
 ## Supported Formats
 
@@ -136,19 +104,10 @@ All 140+ ExifTool format families including:
 - **FLIR** - FLIR thermal camera
 - **Parrot** - Parrot drone
 
-## Notable Tag Counts by Module
+## Tag counts by domain
 
-| Module | Tag Count | Description |
-|--------|-----------|-------------|
-| NikonCustom | 3,512 | Custom Nikon camera settings |
-| DICOM | 3,149 | Medical imaging standard |
-| Nikon | 2,398 | Main Nikon maker notes |
-| Sony | 1,148 | Sony camera maker notes |
-| QuickTime | 1,069 | QuickTime/MP4 video metadata |
-| Casio | 930 | Casio camera metadata |
-| Canon | 930 | Canon camera maker notes |
-| Pentax | 876 | Pentax camera maker notes |
-| EXIF | 718 | Core EXIF specification |
+Per-table and per-domain counts are rendered into the [tag domain pages](/tag-domains/)
+by `just docs-generate-tags`; they are generated output and are not maintained here.
 
 ## Tag Lookup
 
@@ -179,19 +138,17 @@ All tags follow the format: `<FormatFamily>:<TagName>`
 
 ## Rebuilding the Database
 
-To force regeneration:
+Regeneration is explicit, never a side effect of `cargo build`:
 
 ```bash
-rm exiftool-tags/src/tag_db/generated_tags.rs
-cargo build
+cargo run --release --bin sync_tags
 ```
 
-The build script will:
-1. Download ExifTool source (~10MB)
-2. Extract and discover all Perl modules
-3. Parse the tag definitions
-4. Generate optimized Rust code (~6MB source)
-5. Compile into binary (~5MB in memory)
+This runs `exiftool -f -listx` against the locally installed ExifTool, routes
+each tag's table to one of the six domain crates, rewrites the crates' YAML
+files and updates `.exiftool-version`. Review the resulting `git diff` before
+committing; the release recorded in `.exiftool-version` is the one every
+comparison in this repository is graded against.
 
 ## Implementation Details
 
@@ -282,11 +239,12 @@ pub struct TagDescriptor {
 
 ## Synchronization
 
-The tag database stays synchronized with ExifTool through:
+1. **Version pin** - `.exiftool-version` names the ExifTool release the definitions were synced from
+2. **Explicit sync** - `cargo run --release --bin sync_tags` (above)
+3. **CI validation** - `scripts/sync_tag_stats.py --check` keeps the published definitions count consistent across the documentation on every PR
 
-1. **Version tracking** - `.exiftool-version` file tracks the synced commit hash
-2. **Manual sync** - Force regeneration with `rm src/tag_db/generated_tags.rs && cargo build --release`
-3. **CI validation** - Automated tests verify tag count and coverage on every PR
+A definitions count is not a coverage measurement; see
+[Measuring Coverage](/contributing/measuring-coverage).
 
 ## Additional Resources
 

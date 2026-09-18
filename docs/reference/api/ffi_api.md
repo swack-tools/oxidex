@@ -1,7 +1,7 @@
 # OxiDex C FFI API Reference
 
-**Version:** 0.1.0
-**Last Updated:** 2025-10-30
+**Crate version:** 1.2.1 (`Cargo.toml` at the time of the 2026-09-18 documentation audit)
+**Last Updated:** 2026-09-18 (exported symbols checked against `src/ffi/`)
 
 ## Table of Contents
 

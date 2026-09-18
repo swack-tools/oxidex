@@ -9,7 +9,7 @@ OxiDex provides a memory-safe, high-performance alternative to the Perl-based Ex
 ## Key Capabilities
 
 ### Metadata Extraction
-Read metadata from 300+ file formats including images (JPEG, PNG, TIFF, RAW), videos (MP4, MKV, AVI), audio (MP3, FLAC), and documents (PDF).
+Read metadata from 140+ format families including images (JPEG, PNG, TIFF, RAW), videos (MP4, MKV, AVI), audio (MP3, FLAC), and documents (PDF).
 
 ### Metadata Writing
 Modify EXIF, XMP, and IPTC metadata with atomic file operations ensuring data integrity.
@@ -22,7 +22,7 @@ Automatically identify file formats using magic byte detection, even when file e
 
 ## Who Should Use OxiDex?
 
-**Photographers:** Manage metadata in large photo libraries efficiently. Process 1000 RAW files in under 200ms.
+**Photographers:** Manage metadata in large photo libraries efficiently, with parallel batch processing.
 
 **Archivists:** Preserve and extract metadata from diverse file formats with memory-safe operations.
 
@@ -32,11 +32,11 @@ Automatically identify file formats using magic byte detection, even when file e
 
 ## Current Status
 
-**Version:** 1.1.0 (Stable Release)
+**Version:** 1.2.1 (crate version in `Cargo.toml`)
 
 - ✅ 16,684 metadata tag definitions across 140+ format families (see [Tag Coverage](/reference/tag-coverage-analysis) for the measured extraction-conformance score)
 - ✅ 140+ format families
-- ✅ 3.7-9.7x performance improvement
+- ⏳ Published speed figures are stale and being re-measured against the pinned ExifTool ([status](/performance/))
 - ✅ Full CLI with backward compatibility
 - ✅ Rust library API and C FFI bindings
 - ✅ Cross-platform binaries (Linux, macOS, Windows)
@@ -51,7 +51,7 @@ Automatically identify file formats using magic byte detection, even when file e
 ## Project Goals
 
 1. **ExifTool Extraction Parity:** Match ExifTool's output on every tag it reads, measured by [conformance score](/reference/tag-coverage-analysis#measured-extraction-coverage)
-2. **High Performance:** 10-100x faster than Perl implementation
+2. **High Performance:** measurably faster than the Perl implementation, with the figures published from a pinned, reproducible benchmark
 3. **Memory Safety:** Eliminate vulnerabilities through Rust's ownership system
 4. **Drop-in Replacement:** CLI compatibility for seamless migration
 5. **Developer-Friendly:** Clean API for library and FFI integration

@@ -1,6 +1,15 @@
 # Performance
 
-OxiDex delivers exceptional performance improvements over the Perl-based ExifTool through zero-cost abstractions, parallel processing, and native compiled code.
+OxiDex is compiled Rust and is expected to outperform the Perl ExifTool; the published figures that quantify that are currently stale.
+
+::: warning Published benchmark figures are stale
+The comparison table below was produced on 2025-12-03 against an unpinned
+"latest" ExifTool and OxiDex 1.1.0; the [autogeneration plan](/AUTOGENERATION-PLAN)
+records these figures as stale and untrustworthy and a refresh against the
+current binary and pinned ExifTool 13.59 as in progress. The CI `metrics` job
+runs only on `main`. Until the refresh lands, treat the numbers as a historical
+record, not a performance claim.
+:::
 
 ## Benchmark Results
 
@@ -25,7 +34,7 @@ The following benchmarks compare OxiDex against the original Perl ExifTool runni
 - **OS:** Linux (Ubuntu 22.04)
 - **CPU:** x86_64 (4 cores)
 - **Memory:** 8GB RAM
-- **Perl ExifTool:** latest version
+- **Perl ExifTool:** unpinned ("latest" at the time; not the repository pin)
 - **OxiDex:** version 1.1.0
 
 ## Live Benchmark Reports

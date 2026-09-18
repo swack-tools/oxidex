@@ -133,29 +133,31 @@ OxiDex uses a **builder pattern** for metadata modifications:
 
 ```rust
 Metadata::from_path("input.jpg")?
-    .set_tag("EXIF:Artist", "John Doe")?
-    .set_tag("EXIF:Copyright", "2025 John Doe")?
+    .set_tag("EXIF:Artist", "John Doe")
+    .set_tag("EXIF:Copyright", "2025 John Doe")
     .write_to("output.jpg")?;
 ```
 
 #### Key Methods
 
-##### `set_tag(tag_name: &str, value: impl Into<TagValue>) -> Result<Self>`
+##### `set_tag(self, tag_name: &str, value: impl Into<TagValue>) -> Self`
 
-Sets a single tag value.
+Sets a single tag value, consuming and returning the builder (it cannot fail).
+Use `insert(&mut self, ..)` when you hold the value by mutable reference.
 
 ```rust
-metadata.set_tag("EXIF:Make", "Canon")?;
-metadata.set_tag("EXIF:ISO", 400)?;  // Accepts integers
-metadata.set_tag("EXIF:FNumber", 2.8)?;  // Accepts floats
+let metadata = metadata
+    .set_tag("EXIF:Make", "Canon")
+    .set_tag("EXIF:ISO", 400)      // Accepts integers
+    .set_tag("EXIF:FNumber", 2.8); // Accepts floats
 ```
 
-##### `remove_tag(tag_name: &str) -> Result<Self>`
+##### `remove(&mut self, tag_name: &str) -> Option<TagValue>`
 
-Removes a tag from the metadata.
+Removes a tag from the metadata, returning the old value if it was present.
 
 ```rust
-metadata.remove_tag("EXIF:Thumbnail")?;
+metadata.remove("EXIF:Thumbnail");
 ```
 
 ##### `write_to(path: impl AsRef<Path>) -> Result<()>`
@@ -166,40 +168,39 @@ Writes the modified metadata to a new file.
 metadata.write_to("output.jpg")?;
 ```
 
-##### `write_in_place() -> Result<()>`
+##### `save() -> Result<()>`
 
-Writes the modified metadata back to the original file.
+Writes the modified metadata back to the file it was read from (`source_path()`).
 
 ```rust
 Metadata::from_path("photo.jpg")?
-    .set_tag("EXIF:Artist", "Jane Smith")?
-    .write_in_place()?;
+    .set_tag("EXIF:Artist", "Jane Smith")
+    .save()?;
 ```
 
-**Warning:** In-place writes modify the original file.
+**Warning:** `save()` modifies the original file.
 
 ### Advanced Operations
 
 #### Copy Metadata Between Files
 
+`copy_to()` returns a `CopyBuilder`; `execute()` performs the copy.
+
 ```rust
 // Copy all tags
 Metadata::from_path("source.jpg")?
-    .copy_tags_to("destination.jpg")?
+    .copy_to("destination.jpg")?
     .execute()?;
 
 // Copy specific tags only
 Metadata::from_path("source.jpg")?
-    .copy_tags_to("destination.jpg")?
+    .copy_to("destination.jpg")?
     .with_tags(&["EXIF:DateTime", "EXIF:Make", "EXIF:Model"])?
     .execute()?;
-
-// Copy all except specific tags
-Metadata::from_path("source.jpg")?
-    .copy_tags_to("destination.jpg")?
-    .exclude_tags(&["EXIF:Thumbnail", "MakerNotes:*"])?
-    .execute()?;
 ```
+
+There is no exclusion filter on the builder; to copy everything except some
+tags, `remove()` them from the `Metadata` first, then `copy_to(..).execute()`.
 
 ## Low-Level API
 
@@ -439,11 +440,8 @@ match Metadata::from_path("corrupted.jpg") {
 **`TagNotFound { tag_name }`** - Requested tag doesn't exist.
 
 ```rust
-match metadata.require_tag("EXIF:Artist") {
-    Err(ExifToolError::TagNotFound { tag_name }) => {
-        eprintln!("Required tag '{}' not found", tag_name);
-    }
-    _ => {}
+if !metadata.has_tag("EXIF:Artist") {
+    return Err(ExifToolError::TagNotFound { tag_name: "EXIF:Artist".into() });
 }
 ```
 
@@ -527,7 +525,7 @@ fn main() -> Result<()> {
     let metadata = Metadata::from_path("photo.jpg")?;
 
     println!("Found {} metadata tags:", metadata.len());
-    for (tag_name, tag_value) in metadata.iter_tags() {
+    for (tag_name, tag_value) in metadata.iter() {
         println!("  {}: {:?}", tag_name, tag_value);
     }
 

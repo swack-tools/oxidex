@@ -1,6 +1,6 @@
 # Source-family baseline and generic readers
 
-Status: active and incomplete, 2026-09-14. PR #779 is the single consolidated
+Status: record of 2026-09-14. The direction and order of work are now owned by the [autogeneration plan](../AUTOGENERATION-PLAN.md) and the [v2 design](../AUTOGENERATION-V2-DESIGN.md); the measurements and exit checks below are accurate for the commits they name. PR #779 is the single consolidated
 integration PR. Earlier writer PRs #771–#774 and follow-ups #780/#781 are
 preserved in its history. Only #779, #682 and #683 remain open; #682/#683 are
 outside this rollup. Further fixes and evidence belong in #779.

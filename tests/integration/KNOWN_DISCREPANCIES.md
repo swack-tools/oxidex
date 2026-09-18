@@ -1,6 +1,6 @@
-# Known Discrepancies Between ExifTool-RS and Perl ExifTool
+# Known Discrepancies Between OxiDex and Perl ExifTool
 
-This document tracks acceptable differences in metadata extraction between ExifTool-RS and the reference Perl ExifTool implementation.
+This document tracks acceptable differences in metadata extraction between OxiDex (formerly ExifTool-RS) and the reference Perl ExifTool implementation, pinned by `.exiftool-version`.
 
 ## Format: Tag Differences
 
@@ -8,7 +8,7 @@ This document tracks acceptable differences in metadata extraction between ExifT
 
 **Maker Notes**
 - **Status**: Partial support
-- **Reason**: Maker notes are proprietary binary formats that vary by camera manufacturer. ExifTool-RS currently extracts maker note blocks but may not decode all vendor-specific tags.
+- **Reason**: Maker notes are proprietary binary formats that vary by camera manufacturer. OxiDex currently extracts maker note blocks but may not decode all vendor-specific tags.
 - **Impact**: Lower match rates for images from Canon, Nikon, Sony cameras with extensive maker notes
 - **Mitigation**: Documented in test corpus manifest; considered acceptable for v1.0
 
@@ -77,7 +77,7 @@ This document tracks acceptable differences in metadata extraction between ExifT
 
 **TagValue Enum Serialization**
 - **Status**: By design
-- **Reason**: ExifTool-RS uses strongly-typed TagValue enum (String, Integer, Float, etc.). Perl ExifTool outputs bare values.
+- **Reason**: OxiDex uses strongly-typed TagValue enum (String, Integer, Float, etc.). Perl ExifTool outputs bare values.
 - **Example**:
   - Perl: `{"Make": "Canon"}`
   - Rust: `{"Make": {"String": "Canon"}}`
@@ -179,15 +179,12 @@ When tests fail due to known discrepancies:
 
 ## Version Tracking
 
-| ExifTool-RS Version | Perl ExifTool Version | Overall Match Rate |
-|---------------------|----------------------|-------------------|
-| 0.1.0 | 12.70 | ~95% (3 test files) |
-| 0.2.0 (planned) | 12.70 | Target: 98%+ (100+ files) |
+The historical 0.1.0-vs-12.70 match rates that used to sit here were measured on three files and are no longer meaningful. Measured parity is published in the generated [ExifTool coverage report](../../docs/reference/tag-coverage-analysis.md) and the [corpus read observations](../../docs/reference/catalog-corpus-observed.md), and the current figures with their instruments are in [the autogeneration plan](../../docs/AUTOGENERATION-PLAN.md).
 
 ## References
 
 - [ExifTool Tag Names](https://exiftool.org/TagNames/index.html)
-- [Integration Test Plan](../../docs/testing/integration_test_plan.md)
+- [Measuring coverage](../../docs/contributing/measuring-coverage.md)
 - [ExifTool JSON Format](https://exiftool.org/faq.html#Q10)
 
 ## Changelog

@@ -3,7 +3,10 @@
 > **Design baseline: September 6, 2026.** The opening problem statement describes
 > the pre-IFD implementation. I-1 through I-3 have since landed; I-4 and IFD1 work
 > must be checked separately. See [current status](../../TAG_MACHINERY_STATUS.md)
-> before using this original sequence as a task list.
+> before using this original sequence as a task list. The per-table Gate A in §3 is
+> replaced by per-field mixed mode in the
+> [autogeneration v2 design](../../AUTOGENERATION-V2-DESIGN.md) (2026-09-18).
+> `docs/FLEET-COMPLETION-PLAN.md`, cited below, is an untracked local file.
 
 Status: approved direction (maintainer, 2026-09-06 evening: "direction A, after the two parked
 binary slices"; then "just do whatever is the fastest, parallel if that works"). This file is the

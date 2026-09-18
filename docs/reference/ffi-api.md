@@ -233,30 +233,6 @@ if (result != EXIFTOOL_OK) {
 }
 ```
 
-#### `exiftool_read_bytes()`
-
-Loads metadata from memory buffer.
-
-```c
-int exiftool_read_bytes(ExifToolHandle* handle, const uint8_t* data, size_t len);
-```
-
-**Parameters:**
-- `handle`: Valid handle
-- `data`: Pointer to file data
-- `len`: Length of data in bytes
-
-**Returns:**
-- `EXIFTOOL_OK` on success
-- Error code on failure
-
-**Example:**
-
-```c
-uint8_t* buffer = read_file_into_memory("photo.jpg", &size);
-int result = exiftool_read_bytes(handle, buffer, size);
-```
-
 ### Getting Tag Values
 
 #### `exiftool_get_tag_string()`
@@ -479,34 +455,29 @@ size_t count = exiftool_get_tag_count(handle);
 printf("Found %zu tags\n", count);
 ```
 
-#### `exiftool_get_tag_names()`
+#### `exiftool_get_tag_name_at()`
 
-Gets all tag names.
+Gets the name of the tag at an index, for iterating all tags together with
+`exiftool_get_tag_count()`.
 
 ```c
-int exiftool_get_tag_names(ExifToolHandle* handle, const char** names, size_t* count);
+const char* exiftool_get_tag_name_at(ExifToolHandle* handle, size_t index);
 ```
 
 **Parameters:**
 - `handle`: Valid handle
-- `names`: Array to store tag name pointers
-- `count`: Input: array size, Output: number of tags
+- `index`: Zero-based tag index, less than `exiftool_get_tag_count(handle)`
 
 **Returns:**
-- `EXIFTOOL_OK` on success
+- Tag name, or `NULL` when the index is out of range
 
 **Example:**
 
 ```c
 size_t count = exiftool_get_tag_count(handle);
-const char** names = malloc(count * sizeof(char*));
-exiftool_get_tag_names(handle, names, &count);
-
 for (size_t i = 0; i < count; i++) {
-    printf("%s\n", names[i]);
+    printf("%s\n", exiftool_get_tag_name_at(handle, i));
 }
-
-free(names);
 ```
 
 ## Language Bindings

@@ -1,6 +1,6 @@
 # Tag Database Architecture
 
-The tag database provides O(1) lookup for 32,000+ metadata tag definitions auto-generated from ExifTool source.
+The tag database provides O(1) lookup for the metadata tag definitions synced from ExifTool's own `-listx` output (the count is in the table below and is kept current by `scripts/sync_tag_stats.py`).
 
 ## Overview
 
