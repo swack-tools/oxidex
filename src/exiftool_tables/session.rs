@@ -34,21 +34,52 @@
 //!   whitespace, a sign, digits, a fraction and an exponent, then anything
 //!   else ignored (`"12abc"` is 12, `"0x1A"` is 0, `"1e"` is 1); `inf`,
 //!   `infinity` and `nan` in any case; nothing numeric at all is 0.
+//!
+//! # Byte strings
+//!
+//! A Perl scalar is a BYTE string; a Rust `String` is UTF-8 text. A value
+//! that is not valid UTF-8 (a UCS-2 `XPTitle`, a Latin-1 `UserComment`, the
+//! output of `Decode` into a 1-byte charset) is [`MemberVal::Bytes`]. Build
+//! one with [`MemberVal::from_bytes`], which keeps valid UTF-8 as
+//! [`MemberVal::Str`] so that one Perl string has one representation;
+//! `Str` and `Bytes` holding the same bytes also compare equal. Every
+//! context above is defined on the bytes, and [`MemberVal::perl_bytes`] is
+//! the exact string context for both variants.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::exprs::perl_num;
 
 /// One Perl scalar: a `$$self{...}` data member, an ExifTool option, or a
 /// helper argument/result. `Bool` is Perl's `PL_sv_yes`/`PL_sv_no` (what a
-/// comparison or `IsInt` returns): it prints `"1"`/`""`.
-#[derive(Clone, Debug, PartialEq)]
+/// comparison or `IsInt` returns): it prints `"1"`/`""`. `Str` is a byte
+/// string that is valid UTF-8, `Bytes` one that is not (see the module doc).
+#[derive(Clone, Debug)]
 pub enum MemberVal {
     Str(String),
+    Bytes(Vec<u8>),
     Int(i64),
     Float(f64),
     Bool(bool),
     Undef,
+}
+
+/// Structural equality, except that `Str` and `Bytes` are one Perl type and
+/// compare by their bytes (a `Bytes` built directly rather than through
+/// [`MemberVal::from_bytes`] may hold valid UTF-8).
+impl PartialEq for MemberVal {
+    fn eq(&self, other: &Self) -> bool {
+        use MemberVal::{Bool, Bytes, Float, Int, Str, Undef};
+        match (self, other) {
+            (Str(_) | Bytes(_), Str(_) | Bytes(_)) => self.perl_bytes() == other.perl_bytes(),
+            (Int(a), Int(b)) => a == b,
+            (Float(a), Float(b)) => a == b,
+            (Bool(a), Bool(b)) => a == b,
+            (Undef, Undef) => true,
+            _ => false,
+        }
+    }
 }
 
 /// A scalar in numeric context: Perl keeps an integer (IV) where it can and a
@@ -77,11 +108,19 @@ pub const fn is_perl_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
 
-/// Numify a byte string exactly as Perl's `sv_2nv`/`grok_number` does for a
+/// Numify a string exactly as Perl's `sv_2nv`/`grok_number` does for a
 /// scalar that is not already numeric.
 #[must_use]
 pub fn numify_str(s: &str) -> PerlNum {
-    let b = s.as_bytes();
+    numify_bytes(s.as_bytes())
+}
+
+/// [`numify_str`] over a byte string: only an ASCII prefix is ever numeric,
+/// so any bytes after it (UTF-8 or not) are ignored exactly as Perl does.
+#[must_use]
+pub fn numify_bytes(b: &[u8]) -> PerlNum {
+    // Every slice taken below is of ASCII digits, signs, points and `e`.
+    let ascii = |r: std::ops::Range<usize>| std::str::from_utf8(&b[r]).expect("ASCII");
     let mut i = 0;
     while i < b.len() && is_perl_space(b[i]) {
         i += 1;
@@ -93,16 +132,15 @@ pub fn numify_str(s: &str) -> PerlNum {
     } else {
         false
     };
-    let rest = &s[i..];
-    let lower = rest.get(..3).map(str::to_ascii_lowercase);
-    if lower.as_deref() == Some("inf") {
+    let lower = b.get(i..i + 3).map(<[u8]>::to_ascii_lowercase);
+    if lower.as_deref() == Some(b"inf".as_slice()) {
         return PerlNum::Float(if neg {
             f64::NEG_INFINITY
         } else {
             f64::INFINITY
         });
     }
-    if lower.as_deref() == Some("nan") {
+    if lower.as_deref() == Some(b"nan".as_slice()) {
         return PerlNum::Float(f64::NAN);
     }
     let int_start = i;
@@ -138,12 +176,12 @@ pub fn numify_str(s: &str) -> PerlNum {
             j += 1;
         }
         if j > ds {
-            exp = Some(&s[i + 1..j]);
+            exp = Some(ascii(i + 1..j));
         }
     }
-    let int_digits = &s[int_start..int_end];
+    let int_digits = ascii(int_start..int_end);
     if !has_point && exp.is_none() {
-        if let Ok(v) = s[start..int_end].parse::<i64>() {
+        if let Ok(v) = ascii(start..int_end).parse::<i64>() {
             return PerlNum::Int(v);
         }
     }
@@ -158,7 +196,7 @@ pub fn numify_str(s: &str) -> PerlNum {
         if frac.0 == frac.1 {
             "0"
         } else {
-            &s[frac.0..frac.1]
+            ascii(frac.0..frac.1)
         },
         exp.unwrap_or("0"),
     );
@@ -166,11 +204,22 @@ pub fn numify_str(s: &str) -> PerlNum {
 }
 
 impl MemberVal {
+    /// A Perl byte string: [`MemberVal::Str`] when the bytes are valid
+    /// UTF-8, [`MemberVal::Bytes`] otherwise.
+    #[must_use]
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        match String::from_utf8(bytes) {
+            Ok(s) => MemberVal::Str(s),
+            Err(e) => MemberVal::Bytes(e.into_bytes()),
+        }
+    }
+
     /// Perl boolean context (`if ($x)`, `$x and ...`, `not $x`).
     #[must_use]
     pub fn is_truthy(&self) -> bool {
         match self {
             MemberVal::Str(s) => !(s.is_empty() || s == "0"),
+            MemberVal::Bytes(b) => !(b.is_empty() || b == b"0"),
             MemberVal::Int(i) => *i != 0,
             // NaN != 0.0, so NaN is true -- as in Perl.
             MemberVal::Float(f) => *f != 0.0,
@@ -184,11 +233,26 @@ impl MemberVal {
         !matches!(self, MemberVal::Undef)
     }
 
-    /// Perl string context (`"$x"`, `eq`, a regex match target).
+    /// Perl string context (`"$x"`, `eq`, a regex match target) as bytes:
+    /// exact for every variant.
+    #[must_use]
+    pub fn perl_bytes(&self) -> Cow<'_, [u8]> {
+        match self {
+            MemberVal::Str(s) => Cow::Borrowed(s.as_bytes()),
+            MemberVal::Bytes(b) => Cow::Borrowed(b),
+            other => Cow::Owned(other.perl_string().into_bytes()),
+        }
+    }
+
+    /// Perl string context as UTF-8 text. Exact for every variant except a
+    /// non-UTF-8 [`MemberVal::Bytes`], which has no `String` form: there the
+    /// invalid sequences become U+FFFD, fit for display only. Anything that
+    /// must be exact (every helper port) reads [`MemberVal::perl_bytes`].
     #[must_use]
     pub fn perl_string(&self) -> String {
         match self {
             MemberVal::Str(s) => s.clone(),
+            MemberVal::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
             MemberVal::Int(i) => i.to_string(),
             MemberVal::Float(f) => perl_num(*f),
             MemberVal::Bool(true) => "1".to_string(),
@@ -201,6 +265,7 @@ impl MemberVal {
     pub fn perl_num(&self) -> PerlNum {
         match self {
             MemberVal::Str(s) => numify_str(s),
+            MemberVal::Bytes(b) => numify_bytes(b),
             MemberVal::Int(i) => PerlNum::Int(*i),
             MemberVal::Float(f) => PerlNum::Float(*f),
             MemberVal::Bool(b) => PerlNum::Int(i64::from(*b)),
@@ -213,7 +278,7 @@ impl MemberVal {
     pub fn perl_length(&self) -> Option<usize> {
         match self {
             MemberVal::Undef => None,
-            other => Some(other.perl_string().len()),
+            other => Some(other.perl_bytes().len()),
         }
     }
 }
@@ -273,6 +338,7 @@ pub struct Session {
     pub format: Option<String>,
     members: HashMap<String, MemberVal>,
     options: HashMap<String, MemberVal>,
+    warnings: Vec<MemberVal>,
 }
 
 impl Default for Session {
@@ -282,10 +348,25 @@ impl Default for Session {
 }
 
 /// `@availableOptions` defaults (ExifTool.pm, pinned 13.59) for the options
-/// the ported helpers read. An option absent here reads as `undef`, which is
-/// also its ExifTool default (`CoordFormat`, `DateFormat`,
-/// `GlobalTimeShift`, `KeepUTCTime`, `StrictDate`).
-const DEFAULT_OPTIONS: &[(&str, &str)] = &[("ByteUnit", "SI"), ("Charset", "UTF8")];
+/// the ported helpers and their call sites read. An option absent here reads
+/// as `undef`, which is also its ExifTool default (`CoordFormat`,
+/// `DateFormat`, `GlobalTimeShift`, `KeepUTCTime`, `StrictDate`,
+/// `CharsetEXIF`, `CharsetFileName`). `CharsetRIFF` and `SystemTimeRes`
+/// default to the integer 0 (see [`Session::new`]). The helper oracle
+/// captures `Image::ExifTool->new`'s own values for all of these, and
+/// `helpers::tests::session_option_defaults_match_the_pinned_perl` holds
+/// this table to them.
+const DEFAULT_OPTIONS: &[(&str, &str)] = &[
+    ("ByteUnit", "SI"),
+    ("Charset", "UTF8"),
+    ("CharsetID3", "Latin"),
+    ("CharsetIPTC", "Latin"),
+    ("CharsetPhotoshop", "Latin"),
+    ("CharsetQuickTime", "MacRoman"),
+];
+
+/// Options whose `@availableOptions` default is the integer 0.
+const DEFAULT_ZERO_OPTIONS: &[&str] = &["CharsetRIFF", "SystemTimeRes"];
 
 impl Session {
     #[must_use]
@@ -294,8 +375,10 @@ impl Session {
             .iter()
             .map(|(k, v)| ((*k).to_string(), MemberVal::Str((*v).to_string())))
             .collect();
-        // ExifTool.pm: [ 'SystemTimeRes', 0, ... ]
-        options.insert("SystemTimeRes".to_string(), MemberVal::Int(0));
+        // ExifTool.pm: [ 'CharsetRIFF', 0, ... ], [ 'SystemTimeRes', 0, ... ]
+        for name in DEFAULT_ZERO_OPTIONS {
+            options.insert((*name).to_string(), MemberVal::Int(0));
+        }
         Self {
             make: None,
             model: None,
@@ -304,6 +387,7 @@ impl Session {
             format: None,
             members: HashMap::new(),
             options,
+            warnings: Vec::new(),
         }
     }
 
@@ -343,14 +427,37 @@ impl Session {
         Ok(())
     }
 
+    /// The keys of every untyped member set so far (`Make`/`Model` live in
+    /// their fields), in no particular order.
+    pub fn member_names(&self) -> impl Iterator<Item = &str> {
+        self.members.keys().map(String::as_str)
+    }
+
     /// `$$self{OPTIONS}{name}` (what `$self->Options(name)` returns).
     #[must_use]
     pub fn option(&self, name: &str) -> MemberVal {
         self.options.get(name).cloned().unwrap_or(MemberVal::Undef)
     }
 
+    /// `$$self{OPTIONS}{name} = value`, stored as given. This is NOT
+    /// `$self->Options(name, value)`: no alias is resolved (a charset option
+    /// must already be canonical, `Latin` not `cp1252`).
     pub fn set_option(&mut self, name: &str, value: MemberVal) {
         self.options.insert(name.to_string(), value);
+    }
+
+    /// Record a `$self->Warn($str)` call a helper made (no `$ignorable`
+    /// argument). The message is kept exactly as the helper passed it;
+    /// `Warn`'s own engine behaviour (`NoWarning`, de-duplication, the
+    /// `Warning` tag) belongs to whoever drains the list, not to the port.
+    pub fn warn(&mut self, message: MemberVal) {
+        self.warnings.push(message);
+    }
+
+    /// Every `Warn` request recorded so far, oldest first.
+    #[must_use]
+    pub fn warnings(&self) -> &[MemberVal] {
+        &self.warnings
     }
 }
 

@@ -43,6 +43,8 @@
 // unchanged paths. `tools/exiftool-tables/table_modules.py` owns the layout.
 #[path = "binary/mod.rs"]
 pub mod binary_tables;
+pub mod charset;
+pub mod charset_tables;
 pub mod cond;
 pub mod enabled;
 pub mod enabled_ifd;
