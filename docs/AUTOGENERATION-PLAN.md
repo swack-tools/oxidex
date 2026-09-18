@@ -40,15 +40,15 @@ unexercised behaviour.
 
 | Axis | Measured | Instrument, commit |
 | --- | --- | --- |
-| Read parity, catalog entries proven | **2,265 of 33,487** (6.76%); of those ExifTool reads in the corpus, **53.04% of 4,270** | published `catalog-corpus-observed-13.59.json`, evidence at `d8cb6baa`; the gap split landed in #804 |
-| Read parity, corpus identities | **3,089** `Group1:TagName` identities matched in both print and raw modes; 2,766 credited source coordinates | `corpus_read_receipt.py`, 194 files, head `af106a5a` (#813); refresh of the published snapshot in progress |
+| Read parity, catalog entries proven | **2,378 of 33,487** (7.10%); of those ExifTool reads in the corpus, **55.69% of 4,270**; 0 lost since the previous snapshot | published `catalog-corpus-observed-13.59.json`, evidence at `6ada109b` (#822), rebound to the split layout in #823 |
+| Read parity, corpus identities | **3,089** `Group1:TagName` identities matched in both print and raw modes; 2,766 credited source coordinates | `corpus_read_receipt.py`, 194 files, locked in by the ratchet in #822 |
 | Write parity | **19 of 14,169** writable entries observed (0.13%); 1020/1020 public-API scalar write operations matched | `generated_tiff_write_matrix.py --route public-api`, joined at `7547ec5b` (#797) |
 | Generated share of correct output | **38.34%** of 468,086 matched values (engine alone 33.5%) | probe census, `72eae8a5` (2026-09-13). **Stale**: 27 `src/` commits since; re-measure after the first v2 family lands |
 | Generated reader declarations | 3,666 catalog entries strict (10.9%); 5,363 loose (16.0%). ~82% of proven reads sit on rows with no generated declaration | `catalog-hydrated-join-13.59.json` counts, `0f92071b` |
 | Expression coverage | `exprs.py` translates **75.4%** of expression uses; a real grammar parses **99.7%**; session + top 22 helpers reaches **95%**; 157 helper subs, 10 complete + 4 partial ports today | coverage spike `run_spike.py`, `07d808a0` (#817), byte-identical under `PYTHONHASHSEED=1,2,3` |
-| Generated artifacts | **44** manifest outputs (22 tier 1, 22 tier 2) | `artifacts.py paths` |
-| Upgrade rehearsal 11.78 → 12.64 | **15 generation-stage blockers found; 14 merged, 1 in PR (#818).** The pin has never moved; the end-to-end run (generate → build → read/write per release) has not yet been executed | `regen-all.sh` per release, `verify_exprs.py`; ledger in `HANDOFF.md` |
-| CI guarantees | shard count derived from the matrix (#794); parity ratchet, 23 metrics (#795); corpus read-regression gate on every PR (#814); fixtures-directory guard (#811) | `tools/ci/` |
+| Generated artifacts | **255** manifest outputs after the per-module split (was 66 as two monoliths, not 44 as previously written) | `artifacts.py paths`, #823 |
+| Upgrade rehearsal 11.78 → 12.64 | **First end-to-end run done (#826).** Generate, `verify_exprs` (464/464, 520/520) and release build pass, but only with 2 local code interventions per release; `cargo test` fails 113 / 79 (13.59-specific assertions); public-API writes 2/1,530 (ConvInv whole-body template); reads 86.6% / 88.0% vs each release's own ExifTool (13.59 control 87.6%) | `docs/reference/upgrade-rehearsal-11.78-12.64.md` at `66e48654` |
+| CI guarantees | shard count derived from the matrix (#794); parity ratchet, 25 metrics (#795, raised in #822); corpus read-regression gate on every PR (#814); fixtures-directory guard (#811); non-blocking benchmark job on every push to the tip against pinned 13.59 (#825) | `tools/ci/`, `.github/workflows/benchmarks.yml` |
 | Benchmarks | **Refreshed against the pin (#821)**: oxidex vs ExifTool **13.59** (perl 5.38.2, DOCX probe asserted), measured at `8f04e288` under the exclusive lock: 3.0x on Canon.jpg, 1.83x per core on the 194-file corpus (6.15x with rayon). The 2025 `exiftool-rs 0.1.0` vs bare 13.36 table is kept below it as historical. CI `metrics` still runs only on `main` (proposal in #821) | `benches/benchmark_results.md`, `ci.yml` `metrics` |
 
 Two things these numbers say that shape the plan:
@@ -118,13 +118,26 @@ central claim, not the agent's report of it.
 
 ## The next checkpoint
 
-1. Merge #818; run step 5's end-to-end rehearsal and record its first genuine
-   failure, if any.
-2. Refresh the published read snapshot (in progress) so the ratchet locks in
-   #800, #801 and #813; refresh the benchmarks against the current binary and
-   pinned 13.59 (in progress).
-3. Start step 1: the `Session` and the first helpers, ordered by the spike's
-   curves, exercised on `Exif::Main`.
+Done since the plan was rewritten: #818 (all 15 generation blockers), the
+end-to-end rehearsal (#826), the snapshot refresh (#822), the benchmark
+refresh (#821, #825), the coverage spike (#817) and step 1's first slice
+(#824: `Session` + 17 helper ports, 7,380 probes, 0 mismatches).
+
+1. **Step 1, `Exif::Main` end to end** (in progress): conversions emitted
+   over `Session` in per-field mixed mode, 0 proven reads lost; `Decode`
+   ported (in progress) to unblock its largest refused group.
+2. **Rehearsal to zero interventions** (in progress): fix the Garmin codegen
+   gate and the FIT test coupling so 11.78 / 12.64 generate and build with no
+   local patches; per-release ConvInv templates so writes are not shut off.
+3. **Two structural findings from #826, on the path to 100%:**
+   - The test suite asserts 13.59 facts (80-110 failures per older release).
+     Tests must split into release-independent behaviour and assertions
+     derived from the release's own oracle, or every upgrade needs hand edits.
+   - Hand parsers keep 13.59 behaviour on an older pin (199 / 315 tags the
+     release's own ExifTool does not emit); only generated code follows the
+     release. This is measured evidence for step 2's retirement of hand
+     parsers, and a rehearsal metric to drive to zero.
+4. Re-measure the generated share (step 3) once `Exif::Main` lands.
 
 We do not yet have an evidence-based date for 100%. Record the effort for
 step 1 and the first expansion batch before forecasting the rest; unusual
