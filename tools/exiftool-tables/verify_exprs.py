@@ -821,20 +821,25 @@ def positive_seconds(value):
     return seconds
 
 
-def select_convert_unix_time_semantics(et_lib):
-    """Prove which `ConvertUnixTime` the pinned tree carries and compile
-    every translation against the matching Rust port (exprs.py's
-    CONVERT_UNIX_TIME_SEMANTICS). The release label plays no part: 11.78
-    and 12.64 carry the truncating body, 13.59 the flooring one, and a
-    body matching neither refuses every ConvertUnixTime expression -- it
-    then counts as untranslated, not as verified or failed. The Perl side
-    of this run then checks the chosen port probe by probe."""
-    name, source = exprs.detect_convert_unix_time_semantics(et_lib)
-    exprs.set_convert_unix_time_semantics(name)
-    digest = hashlib.sha256((source or "").encode()).hexdigest()[:16]
-    shown = name if name is not None else "NONE MATCHED -- ConvertUnixTime refused"
-    print(f"ConvertUnixTime: pinned sub (folded sha256 {digest}) -> {shown}")
-    return name
+def select_helper_semantics(et_lib):
+    """Prove which body of each release-dependent helper (exprs.py's
+    HELPER_SEMANTICS: ConvertUnixTime, Nikon PrintAFPointsLeftRight /
+    PrintAFPointsUpDown) the pinned tree carries, and compile every
+    translation against the matching Rust port. The release label plays no
+    part: the port is the one whose folded body equals the tree's sub
+    exactly, and a body matching none (or an absent sub) refuses every
+    expression reaching that helper -- it then counts as untranslated, not as
+    verified or failed. The Perl side of this run then checks the chosen
+    ports probe by probe. Returns {helper: port or None}."""
+    selection = {}
+    for helper in exprs.HELPER_SEMANTICS:
+        name, source = exprs.detect_helper_semantics(et_lib, helper)
+        selection[helper] = name
+        digest = hashlib.sha256((source or "").encode()).hexdigest()[:16]
+        shown = name if name is not None else f"NONE MATCHED -- {helper} refused"
+        print(f"{helper}: pinned sub (folded sha256 {digest}) -> {shown}")
+    exprs.set_helper_semantics(selection)
+    return selection
 
 
 def main():
@@ -866,7 +871,7 @@ def main():
 
     version, counter, counts_by_expr = census(args.tables_json)
     perl_version = capability_probe(args.perl, args.et_lib, version)
-    cut_semantics = select_convert_unix_time_semantics(args.et_lib)
+    semantics = select_helper_semantics(args.et_lib)
 
     # Every expression the shipped translator (TRANSLATIONS + compile())
     # claims to handle, across all three value domains -- this is the whole
@@ -1030,12 +1035,14 @@ def main():
             "use_counts": {"verified": verified_uses, "total": sum(counter.values())},
             "verified_expressions": verified,
         }
-        if cut_semantics != exprs.DEFAULT_CONVERT_UNIX_TIME_SEMANTICS:
-            # Only a non-default port is recorded, so a ledger proven with
-            # the default port stays byte-identical to what it always was.
-            # codegen.load_oracle_ledger reads this back and compiles with
-            # the same port the probes above exercised.
-            artifact["helper_semantics"] = {"ConvertUnixTime": cut_semantics}
+        # Only non-default ports are recorded, so a ledger proven with every
+        # default port stays byte-identical to what it always was.
+        # codegen.load_oracle_ledger reads this back and compiles with the
+        # same ports the probes above exercised.
+        defaults = exprs.default_helper_semantics()
+        recorded = {h: n for h, n in semantics.items() if n != defaults[h]}
+        if recorded:
+            artifact["helper_semantics"] = recorded
         args.ledger_out.parent.mkdir(parents=True, exist_ok=True)
         args.ledger_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote oracle ledger  {args.ledger_out}")

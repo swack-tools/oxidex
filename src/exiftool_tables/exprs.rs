@@ -484,16 +484,28 @@ pub fn convert_file_size(val: f64) -> String {
 /// for one.
 #[must_use]
 pub fn print_af_points_left_right(col: f64, ncol: f64) -> String {
-    let center = (ncol + 1.0) / 2.0;
-    if col == 0.0 {
-        "n/a".to_string()
-    } else if col == center {
-        "C".to_string()
-    } else if col < center {
-        format!("{}L of Center", perl_int(center - col))
-    } else {
-        format!("{}R of Center", perl_int(col - center))
-    }
+    af_point_relative(col, (ncol + 1.0) / 2.0, "L of Center", "R of Center")
+}
+
+/// `Image::ExifTool::Nikon::PrintAFPointsLeftRight($col, $ncol)` as ExifTool
+/// 12.64 writes it -- one line differs from the pinned 13.59 body quoted on
+/// [`print_af_points_left_right`]:
+///
+/// ```perl
+///     my $center = 1 + ($ncol + 1)/2;
+/// ```
+///
+/// A different conversion, not a variant: the center sits one column
+/// further right, so every non-zero input prints one column off the 13.59
+/// text (`PrintAFPointsLeftRight(16, 29)` is `C` here, `1R of Center` in
+/// 13.59). The generator selects this port only when the pinned tree's sub
+/// source is exactly that body (`exprs.py`'s
+/// `PRINT_AF_POINTS_LEFT_RIGHT_SEMANTICS`), and `verify_exprs.py` then
+/// proves it against that tree's own Perl; the shipped 13.59 tables never
+/// reference it.
+#[must_use]
+pub fn print_af_points_left_right_one_plus_center(col: f64, ncol: f64) -> String {
+    af_point_relative(col, 1.0 + (ncol + 1.0) / 2.0, "L of Center", "R of Center")
 }
 
 /// `Image::ExifTool::Nikon::PrintAFPointsUpDown($row, $nrow)`.
@@ -515,15 +527,42 @@ pub fn print_af_points_left_right(col: f64, ncol: f64) -> String {
 /// tree's call sites.
 #[must_use]
 pub fn print_af_points_up_down(row: f64, nrow: f64) -> String {
-    let center = (nrow + 1.0) / 2.0;
-    if row == 0.0 {
+    af_point_relative(row, (nrow + 1.0) / 2.0, "U from Center", "D from Center")
+}
+
+/// `Image::ExifTool::Nikon::PrintAFPointsUpDown($row, $nrow)` as ExifTool
+/// 12.64 writes it: `my $center = 1 + ($nrow + 1)/2;`, the rest as in
+/// [`print_af_points_up_down`]. Same relationship to the 13.59 port as
+/// [`print_af_points_left_right_one_plus_center`] has to its sibling
+/// (`PrintAFPointsUpDown(10, 17)` is `C` here, `1D from Center` in 13.59).
+#[must_use]
+pub fn print_af_points_up_down_one_plus_center(row: f64, nrow: f64) -> String {
+    af_point_relative(
+        row,
+        1.0 + (nrow + 1.0) / 2.0,
+        "U from Center",
+        "D from Center",
+    )
+}
+
+/// The body every `PrintAFPointsLeftRight`/`PrintAFPointsUpDown` release
+/// shares once `$center` is computed:
+///
+/// ```perl
+///     return 'n/a' if $v == 0;
+///     return 'C' if $v == $center;
+///     return sprintf('%d', $center - $v) . $before if $v < $center;
+///     return sprintf('%d', $v - $center) . $after if $v > $center;
+/// ```
+fn af_point_relative(v: f64, center: f64, before: &str, after: &str) -> String {
+    if v == 0.0 {
         "n/a".to_string()
-    } else if row == center {
+    } else if v == center {
         "C".to_string()
-    } else if row < center {
-        format!("{}U from Center", perl_int(center - row))
+    } else if v < center {
+        format!("{}{before}", perl_int(center - v))
     } else {
-        format!("{}D from Center", perl_int(row - center))
+        format!("{}{after}", perl_int(v - center))
     }
 }
 
@@ -1176,6 +1215,90 @@ mod tests {
         // `$col == 0` is ExifTool's out-of-focus marker, not a column.
         assert_eq!(print_af_points_left_right(0.0, 19.0), "n/a");
         assert_eq!(print_af_points_up_down(0.0, 11.0), "n/a");
+    }
+
+    /// Every output below was printed by each release's OWN
+    /// `Image::ExifTool::Nikon` sub under the pinned perl 5.38.2 and stored
+    /// with that sub's verbatim source in
+    /// `tools/exiftool-tables/testdata/nikon_af_points_relative_outputs.json`
+    /// (capture: oxidex-ops/evidence/20260918-afpoint-center). 12.64's body
+    /// has `$center = 1 + ($ncol + 1)/2`, 13.59's `($ncol + 1) / 2`; 11.78
+    /// has neither sub. Each port must reproduce its own release on every
+    /// probe and every literal, and the two must differ on every non-zero
+    /// input.
+    #[test]
+    fn print_af_points_relative_ports_match_each_release() {
+        type Port = fn(f64, f64) -> String;
+        let data: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tools/exiftool-tables/testdata/nikon_af_points_relative_outputs.json"
+        ))
+        .expect("testdata parses");
+        let releases = &data["releases"];
+        for sub in ["PrintAFPointsLeftRight", "PrintAFPointsUpDown"] {
+            assert!(releases["11.78"]["subs"][sub]["sub_source"].is_null());
+        }
+        let ports: [(&str, &str, Port); 4] = [
+            (
+                "13.59",
+                "PrintAFPointsLeftRight",
+                print_af_points_left_right,
+            ),
+            ("13.59", "PrintAFPointsUpDown", print_af_points_up_down),
+            (
+                "12.64",
+                "PrintAFPointsLeftRight",
+                print_af_points_left_right_one_plus_center,
+            ),
+            (
+                "12.64",
+                "PrintAFPointsUpDown",
+                print_af_points_up_down_one_plus_center,
+            ),
+        ];
+        let mut checked = 0;
+        for (release, sub, port) in ports {
+            let outputs = releases[release]["subs"][sub]["outputs"]
+                .as_object()
+                .expect("captured outputs");
+            assert_eq!(outputs.len(), 3, "{release} {sub}: three literals");
+            for (n, by_probe) in outputs {
+                let n: f64 = n.parse().expect("literal");
+                let by_probe = by_probe.as_object().expect("probe map");
+                assert_eq!(by_probe.len(), 39, "{release} {sub}({n})");
+                for (v, perl) in by_probe {
+                    let v: f64 = v.parse().expect("probe");
+                    assert_eq!(
+                        port(v, n),
+                        perl.as_str().expect("string"),
+                        "{release} {sub}({v}, {n})"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 4 * 3 * 39);
+
+        // NikonZ7_2.jpg carries column 16 of 29 and row 12 of 17 (the
+        // values the 13.59 test above pins): the two releases print
+        // different text for the same bytes.
+        assert_eq!(print_af_points_left_right(16.0, 29.0), "1R of Center");
+        assert_eq!(print_af_points_left_right_one_plus_center(16.0, 29.0), "C");
+        assert_eq!(print_af_points_up_down(12.0, 17.0), "3D from Center");
+        assert_eq!(
+            print_af_points_up_down_one_plus_center(12.0, 17.0),
+            "2D from Center"
+        );
+        for v in (-4..32).chain([40, 100, -50]).filter(|&v| v != 0) {
+            let v = f64::from(v);
+            assert_ne!(
+                print_af_points_left_right(v, 29.0),
+                print_af_points_left_right_one_plus_center(v, 29.0)
+            );
+            assert_ne!(
+                print_af_points_up_down(v, 17.0),
+                print_af_points_up_down_one_plus_center(v, 17.0)
+            );
+        }
     }
 
     #[test]
