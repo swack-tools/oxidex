@@ -50,9 +50,14 @@ def implementation(ledger, bounded_source, emitted_rust, *, dump_source, expr_le
     # the generated Rust; only a fresh native capture vouches for them.
     if protocol != json.loads(protocol_fact):
         raise ValueError("Garmin FIT protocol fact differs from the fresh native capture")
-    process_fit = (protocol or {}).get("process_fit") or {}
-    source_fact = catalog_sources.get(process_fit.get("source_file"))
-    if not isinstance(source_fact, dict) or source_fact.get("sha256") != process_fit.get("source_sha256"):
+    if isinstance(protocol, dict) and protocol.get("kind") == specs.MODULE_ABSENT_KIND:
+        # A release proven to ship no Garmin module: the proof is bound to the
+        # catalog's own Image/ExifTool.pm, and replay must yield zero rows.
+        source = protocol.get("exiftool_module") or {}
+    else:
+        source = (protocol or {}).get("process_fit") or {}
+    source_fact = catalog_sources.get(source.get("source_file"))
+    if not isinstance(source_fact, dict) or source_fact.get("sha256") != source.get("source_sha256"):
         raise ValueError("Garmin FIT protocol source differs from catalog provenance")
     with tempfile.TemporaryDirectory(prefix="oxidex-fit-replay-") as directory:
         dump_path, oracle_path = Path(directory) / "tables.json", Path(directory) / "expr-ledger.json"
@@ -66,6 +71,9 @@ def implementation(ledger, bounded_source, emitted_rust, *, dump_source, expr_le
     rust, expected = specs.generate(document, verified, protocol)
     if ledger != json.loads(specs.serialized(expected)) or not rust_matches(rust, emitted_rust):
         raise ValueError("Garmin FIT artifacts differ from complete source replay")
+    if specs.is_module_absent(expected):
+        # Explicitly zero declarations, not a refusal: the release has no reader.
+        return {}
     if not expected["protocol"]["admitted"]:
         raise ValueError("Garmin FIT protocol is refused; no row can be a reader declaration")
     rows = {}

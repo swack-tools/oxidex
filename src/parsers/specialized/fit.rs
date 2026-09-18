@@ -29,7 +29,7 @@ use crate::core::{
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::exprs::perl_num;
 use crate::exiftool_tables::fit_schema::{
-    FitBaseType, FitField, FitFormat, FitPrintConv, FitTable,
+    FitBaseType, FitField, FitFormat, FitPrintConv, FitProtocol, FitTable,
 };
 use crate::exiftool_tables::fit_tables::FIT_PROTOCOL;
 use crate::exiftool_tables::runtime::{self, DecodedValue, Typed};
@@ -669,6 +669,16 @@ const fn format_name(format: FitFormat) -> &'static str {
     }
 }
 
+/// A refused protocol, or a release without the Garmin module, extracts
+/// nothing (not even the header row or the ExtractEmbedded warning).
+fn extract(protocol: &FitProtocol, file: &[u8]) -> MetadataMap {
+    let mut metadata = MetadataMap::new();
+    if protocol.active() {
+        parse_records(file, &mut metadata);
+    }
+    metadata
+}
+
 pub struct FITParser;
 
 impl FITParser {
@@ -685,12 +695,8 @@ impl FormatParser for FITParser {
         if !Self::verify_signature(reader)? {
             return Err(ExifToolError::parse_error("invalid FIT signature"));
         }
-        let mut metadata = MetadataMap::new();
-        if FIT_PROTOCOL.refusal.is_none() {
-            let file = reader.read(0, reader.size() as usize)?;
-            parse_records(file, &mut metadata);
-        }
-        Ok(metadata)
+        let file = reader.read(0, reader.size() as usize)?;
+        Ok(extract(&FIT_PROTOCOL, file))
     }
 
     fn supports_format(&self, format: FileFormat) -> bool {
@@ -705,6 +711,7 @@ pub fn parse_fit_metadata(reader: &dyn FileReader) -> std::result::Result<Metada
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exiftool_tables::fit_schema::FitUnavailable;
 
     const TS: u32 = 1_100_000_000;
 
@@ -898,13 +905,76 @@ mod tests {
     fn generated_protocol_is_admitted() {
         // A regeneration that refuses the protocol (a changed ProcessFIT or
         // value reader) must fail loudly here, not ship a silent FIT reader.
-        assert_eq!(FIT_PROTOCOL.refusal, None);
-        assert!(
-            FIT_PROTOCOL
-                .messages
-                .iter()
-                .all(|message| message.withheld.is_none())
+        // A release proven to ship no Garmin module is the one other
+        // accepted state, and it must define nothing at all.
+        match FIT_PROTOCOL.refusal {
+            None => assert!(
+                FIT_PROTOCOL
+                    .messages
+                    .iter()
+                    .all(|message| message.withheld.is_none())
+            ),
+            Some(FitUnavailable::ModuleAbsent { .. }) => {
+                assert!(FIT_PROTOCOL.messages.is_empty());
+                assert!(FIT_PROTOCOL.base_types.is_empty());
+                assert!(FIT_PROTOCOL.common.fields.is_empty());
+                assert_eq!(FIT_PROTOCOL.header_name, None);
+            }
+            Some(FitUnavailable::Refused(reasons)) => panic!("FIT protocol refused: {reasons}"),
+        }
+    }
+
+    /// A protocol like the one generated for a release without the module.
+    fn module_absent_protocol() -> FitProtocol {
+        static EMPTY: FitTable = FitTable {
+            table: "",
+            group0: "",
+            group1: "",
+            group2: "",
+            fields: &[],
+        };
+        FitProtocol {
+            refusal: Some(FitUnavailable::ModuleAbsent {
+                exiftool_version: "11.78",
+            }),
+            base_types: &[],
+            messages: &[],
+            common: &EMPTY,
+            header_name: None,
+            header_group0: "",
+            header_group1: "",
+            header_group2: "",
+        }
+    }
+
+    #[test]
+    fn module_absent_and_refused_are_inactive_but_distinct() {
+        let absent = module_absent_protocol();
+        let refused = FitProtocol {
+            refusal: Some(FitUnavailable::Refused(
+                "missing_or_changed_reader_protocol:ProcessFIT",
+            )),
+            ..absent
+        };
+        assert!(!absent.active());
+        assert!(!refused.active());
+        assert_ne!(absent.refusal, refused.refusal);
+        assert!(matches!(
+            absent.refusal,
+            Some(FitUnavailable::ModuleAbsent {
+                exiftool_version: "11.78"
+            })
+        ));
+        // The same stream the pinned protocol reads yields zero tags under
+        // either inactive state (and under the generated protocol too, when
+        // this build was generated for a release without the module).
+        let stream = fit(&session_record(false));
+        assert_eq!(
+            extract(&FIT_PROTOCOL, &stream).is_empty(),
+            !FIT_PROTOCOL.active()
         );
+        assert!(extract(&absent, &stream).is_empty());
+        assert!(extract(&refused, &stream).is_empty());
     }
 
     #[test]

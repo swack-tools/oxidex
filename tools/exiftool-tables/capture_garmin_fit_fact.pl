@@ -7,6 +7,16 @@
 # A sidecar in the style of capture_raw_jfif_fact.pl: it never feeds the
 # normal table dump. garmin_fit_specs.py refuses the whole protocol unless the
 # captured bodies are the ones the executor was reviewed against.
+#
+# A release that predates the Garmin module (it first shipped in 13.56) gets
+# a different fact, `garmin_fit_module_absent_v1`, and only when absence is
+# proven from the selected tree itself: Image::ExifTool loads from that tree,
+# Image/ExifTool/Garmin.pm is absent from it (stat fails with ENOENT), and no
+# file in it declares or references the Garmin package or ProcessFIT. The
+# fact binds a digest of every file in the tree. Anything short of that
+# proof -- an unreadable tree, a Garmin reference without the module file, a
+# module file that fails to load -- dies, and an empty capture stays a
+# refusal downstream. The release label is recorded, never consulted.
 use strict;
 use warnings;
 use B;
@@ -14,6 +24,8 @@ use B::Deparse;
 use Config;
 use Cwd qw(abs_path);
 use Digest::SHA qw(sha256_hex);
+use Errno qw(ENOENT);
+use File::Find qw(find);
 use JSON::PP;
 use Sub::Util qw(subname);
 
@@ -23,6 +35,7 @@ $lib = abs_path($lib) // die "selected library unavailable\n";
 unshift @INC, $lib;
 BEGIN { no warnings 'once'; $Image::ExifTool::configFile = ''; }
 require Image::ExifTool;
+module_absent_fact() unless module_file_present();
 require Image::ExifTool::Garmin;
 # Get64u/Get64s are prototype-only in ExifTool.pm; ReadValue autoloads their
 # bodies from Writer.pl on first use, so capture the bodies that will run.
@@ -36,6 +49,67 @@ sub source {
     local $/;
     my $bytes = <$fh>;
     return (substr($path, length($lib) + 1), sha256_hex($bytes));
+}
+
+# -> true when the selected tree ships Image/ExifTool/Garmin.pm, false only
+# when stat proves it absent; any other stat failure dies.
+sub module_file_present {
+    my $path = "$lib/Image/ExifTool/Garmin.pm";
+    return 1 if stat $path;
+    die "cannot stat Image/ExifTool/Garmin.pm in selected library: $!\n" unless $! == ENOENT;
+    return 0;
+}
+
+sub module_absent_fact {
+    # Source patterns that would contradict absence: the package itself, its
+    # reader, or a table/module reference to it (13.59 ExifTool.pm names
+    # `Garmin::FIT` in its table list and maps `FIT => 'Garmin'`).
+    my @patterns = (
+        [package_declaration => qr/^\s*package\s+Image::ExifTool::Garmin\b/m],
+        [process_fit => qr/\bProcessFIT\b/],
+        [package_reference => qr/\bImage::ExifTool::Garmin\b/],
+        [table_reference => qr/\bGarmin::FIT\b/],
+        [module_name => qr/=>\s*['"]Garmin['"]/],
+    );
+    my ($exiftool_file, $exiftool_sha256) = source($INC{'Image/ExifTool.pm'});
+    my (@files, @references);
+    find({ no_chdir => 1, wanted => sub {
+        return unless -f $File::Find::name;
+        push @files, $File::Find::name;
+    } }, $lib);
+    die "selected library has no files\n" unless @files;
+    my $inventory = Digest::SHA->new(256);
+    for my $path (sort @files) {
+        my ($file, $sha256) = source($path);
+        $inventory->add("$file\0$sha256\n");
+        next unless $file =~ /\.p[lm]\z/;
+        open my $fh, '<:raw', $path or die "cannot read $file\n";
+        local $/;
+        my $text = <$fh>;
+        for my $pattern (@patterns) {
+            push @references, { file => $file, pattern => $pattern->[0] } if $text =~ $pattern->[1];
+        }
+    }
+    # A Garmin reference without the module file is a broken or partial tree,
+    # not a release without the reader: refuse rather than record absence.
+    die 'Garmin module file absent but referenced: '
+        . join(', ', map { "$$_{file}:$$_{pattern}" } @references) . "\n" if @references;
+    no warnings 'once';
+    my $fit = $Image::ExifTool::fileTypeLookup{FIT};
+    print JSON::PP->new->canonical->utf8->pretty->encode({
+        kind => 'garmin_fit_module_absent_v1',
+        native_identity => { perl_version => "$^V", exiftool_version => "$Image::ExifTool::VERSION" },
+        module => 'Image::ExifTool::Garmin',
+        module_file => 'Image/ExifTool/Garmin.pm',
+        module_file_present => JSON::PP::false,
+        exiftool_module => { source_file => $exiftool_file, source_sha256 => $exiftool_sha256 },
+        library_inventory => { file_count => scalar(@files), sha256 => $inventory->hexdigest },
+        garmin_references => [],
+        # Documentation only: where the release routes the .FIT extension.
+        fit_extension_lookup => !defined($fit) ? undef
+            : ref($fit) eq 'ARRAY' ? { file_type => '' . $fit->[0] } : { alias => '' . $fit },
+    });
+    exit 0;
 }
 
 my $deparser = B::Deparse->new('-p', '-sC');

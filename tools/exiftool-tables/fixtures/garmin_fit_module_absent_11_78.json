@@ -1,0 +1,22 @@
+{
+   "exiftool_module" : {
+      "source_file" : "Image/ExifTool.pm",
+      "source_sha256" : "caa6fe4ac1ab1bf7be369caffac635b460be8dcf1943354ff6a68a9f789f23aa"
+   },
+   "fit_extension_lookup" : {
+      "alias" : "FITS"
+   },
+   "garmin_references" : [],
+   "kind" : "garmin_fit_module_absent_v1",
+   "library_inventory" : {
+      "file_count" : 216,
+      "sha256" : "b65cc7f6072f81ed61f628f313b88db54c33da6293aef8813a6bb271feee78ae"
+   },
+   "module" : "Image::ExifTool::Garmin",
+   "module_file" : "Image/ExifTool/Garmin.pm",
+   "module_file_present" : false,
+   "native_identity" : {
+      "exiftool_version" : "11.78",
+      "perl_version" : "v5.38.2"
+   }
+}

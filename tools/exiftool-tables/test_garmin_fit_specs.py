@@ -126,7 +126,7 @@ class RegenerationTests(unittest.TestCase):
         self.assertFalse(result["protocol"]["admitted"])
         self.assertEqual(result["protocol"]["reasons"], ["missing_or_changed_reader_protocol:ProcessFIT"])
         self.assertEqual(result["counts"]["generated"], 0)
-        self.assertIn('refusal: Some("missing_or_changed_reader_protocol:ProcessFIT")', rust)
+        self.assertIn('refusal: Some(super::fit_schema::FitUnavailable::Refused("missing_or_changed_reader_protocol:ProcessFIT"))', rust)
 
     def test_unresolved_base_types_refuse_the_protocol(self):
         self.document["garmin_fit_reader_protocol"]["base_types"] = {"resolved": False, "reason": "x"}

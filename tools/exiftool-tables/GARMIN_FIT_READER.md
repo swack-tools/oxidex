@@ -25,6 +25,33 @@ from the file, so each conversion carries the domain it was compiled for
 a value in that domain and otherwise report `DomainMismatch`, which the
 executor turns into a withheld tag, never a raw fallback.
 
+## Releases without the Garmin module
+
+`Image::ExifTool::Garmin` first shipped in ExifTool 13.56 (13.59's `Changes`:
+"Added read support for Garmin FIT files"). Older releases, such as 11.78 and
+12.64 in the upgrade rehearsal, have no `Image/ExifTool/Garmin.pm` and route
+the `.FIT` extension to FITS. For them the FIT reader has three states, never
+two:
+
+| State | Fact | Ledger | Rust `FIT_PROTOCOL.refusal` |
+| --- | --- | --- | --- |
+| present, admitted | `garmin_fit_reader_protocol_v1` | rows, `protocol.admitted: true` | `None` |
+| present, refused | `garmin_fit_reader_protocol_v1` (changed bodies) | rows withheld, `protocol.reasons` | `Some(FitUnavailable::Refused(..))` |
+| module absent | `garmin_fit_module_absent_v1` | `module_state: "absent"`, zero rows | `Some(FitUnavailable::ModuleAbsent { .. })` |
+
+`capture_garmin_fit_fact.pl` records absence only from the selected tree
+itself: `Image::ExifTool` loads from it, `stat` of
+`Image/ExifTool/Garmin.pm` fails with `ENOENT`, no `.pm`/`.pl` in it declares
+or references the Garmin package, `ProcessFIT`, `Garmin::FIT` or a
+`=> 'Garmin'` module mapping, and the fact binds a sha256 over every file in
+the tree plus `Image/ExifTool.pm`'s own digest. The release label is recorded
+but never consulted. `garmin_fit_specs.py` admits the fact only for the dump's
+own release and only when the dump has no Garmin module. Anything else is a
+failure, not an absence: a crashed capture (empty or unparsable fact) raises
+in `codegen.py` and `garmin_fit_specs.py`, and a Garmin reference without the
+module file, or a module that fails to load, makes the capture itself die.
+Tests: `test_garmin_fit_module_absent.py`.
+
 ## What is and is not claimed
 
 Generated from the pinned 13.59 dump (`garmin_fit_ledger.json`, 1,898 source

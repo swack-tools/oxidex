@@ -271,6 +271,11 @@ def main():
     if not oracle.verified or oracle.version != (ROOT / ".exiftool-version").read_text().strip():
         raise SystemExit("native oracle capability/version does not match the pin")
     ledger = json.loads(LEDGER.read_text())
+    if ledger.get("module_state") == "absent":
+        # Nothing to compare: the release has no FIT reader and the generated
+        # protocol extracts nothing. Say so rather than credit or fail rows.
+        raise SystemExit(f"Garmin module absent from ExifTool {ledger['source']['exiftool_version']} "
+                         "(proven from its source tree); no FIT reader to compare")
     # Every family-1 group a FIT message can report under, withheld edges
     # included, so a refused message still counts native tags as MISSING:
     # each message table's group (Common's own never reports -- ProcessFIT
