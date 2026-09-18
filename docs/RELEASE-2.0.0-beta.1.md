@@ -130,6 +130,19 @@ track releases. A tag doesn't change it.
 | `oxidex-tags` | 1.0.4 | 2.0.0-beta.1 | Facade: re-exports `core` as a module (so `oxidex_tags::core::types::Tag` is gone) and every domain crate above. |
 | `oxidex-tags-shared` | (did not exist) | 0.1.0 | New since v1.2.1 and never released, so there's no earlier interface to break. It gained the `description`/`license` metadata a publish needs. |
 
+Evidence, `cargo-semver-checks` 0.50.0
+(`cargo semver-checks check-release -p <crate> --baseline-rev v1.2.1 --release-type minor`,
+toolchain 1.97.1): `oxidex-tags-core` fails `struct_missing` for `Tag`,
+`TagTable` and `TagDatabase` at `oxidex_tags_core::types::` and requires a
+new major version. The five domain crates and `oxidex-tags` pass all 196
+type-level checks. That tool can't see two of the breaks above. It doesn't
+follow items re-exported from another crate (so it misses `core`'s breakage
+reaching the facade and the domain crates' switch to exporting
+`oxidex_tags_core` 2.x types), and it doesn't look at data, which is where
+the removed tables are. Those two are why the rest move to 2.0.0-beta.1
+too. Table and definition counts come from the `*_tags.yaml` sources at
+`v1.2.1` and at the tip: 32,683 tag definitions before, 16,684 now.
+
 Inter-crate requirements pin the tag crates exactly (`=2.0.0-beta.1`), so
 a later beta of one tag crate can't be mixed with this beta of another.
 `oxidex-tags-shared` is required as `0.1.0`.
