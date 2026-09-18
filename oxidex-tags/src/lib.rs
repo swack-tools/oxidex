@@ -38,7 +38,7 @@ pub use oxidex_tags_specialty as specialty;
 // Re-export common types at root level for convenience
 // This maintains backward compatibility with code expecting types at the root
 pub use oxidex_tags_core::types::*;
-pub use oxidex_tags_shared::{Tag, TagDatabase, TagTable};
+pub use oxidex_tags_shared::{IdFamily, ReverseEntry, Tag, TagDatabase, TagTable, lookup_reverse};
 
 // Backward compatibility: stub implementation for old generated tag registry
 // The new YAML-based system doesn't use this, but old code may reference it

@@ -33,4 +33,13 @@ fn main() {
     let dest_path = Path::new(&out_dir).join("core_tags.bin");
 
     fs::write(&dest_path, binary_data).expect("Failed to write binary tag database file");
+
+    // The (tag ID, family) -> name reverse index, as a sorted static slice, so
+    // `oxidex::tag_db::lookup_tag_name` never decodes the database or builds
+    // a HashMap at runtime. See `oxidex_tags_shared::reverse_index`.
+    let reverse = oxidex_tags_shared::render_reverse_index(&oxidex_tags_shared::reverse_entries(
+        &tag_database,
+    ));
+    fs::write(Path::new(&out_dir).join("reverse_ids.rs"), reverse)
+        .expect("Failed to write reverse tag-ID index");
 }
