@@ -31,6 +31,13 @@ def write(path, text, executable=False):
         path.chmod(0o755)
 
 
+def output_text(version, artifact):
+    """A synthetic generated output; a split table hub also names its module
+    files, as a generated one does (artifacts.family_errors)."""
+    stems = artifacts.module_stems(artifact.key) if artifact.key in artifacts.MODULE_FAMILIES else ()
+    return f"{version}|{artifact.key}\n" + "".join(f"mod {stem};\n" for stem in stems)
+
+
 class UpgradeTransactionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="upgrade-control-")
@@ -43,7 +50,7 @@ class UpgradeTransactionTests(unittest.TestCase):
         for name in ("artifacts.py", "upgrade_transaction.py", "process_groups.py", "bump-exiftool.sh", "bump_conformance_gate.py"):
             shutil.copy2(HERE / name, self.tools / name)
         for a in artifacts.select():
-            write(self.root / a.path, f"committed-13.59|{a.key}\n")
+            write(self.root / a.path, output_text("committed-13.59", a))
         write(self.root / tx.PIN, "13.59\n")
         write(self.root / "handwritten.rs", "original\n")
         write(self.root / ".gitignore", "target/\nignored.tmp\n")
@@ -79,7 +86,8 @@ label=root.parent.name; fail=os.environ.get('TX_FAIL','')
 # Real verify_exprs builds an oracle during regeneration, before oxidex build.
 pathlib.Path(os.environ['CARGO_TARGET_DIR']).mkdir(parents=True,exist_ok=True)
 for a in artifacts.select():
-    (root/a.path).write_text(version+'|'+a.key+'\\n')
+    # A split table hub keeps naming its module files (artifacts.family_errors).
+    (root/a.path).write_text(version+'|'+a.key+'\\n'+''.join('mod %s;\\n'%s for s in (artifacts.module_stems(a.key) if a.key in artifacts.MODULE_FAMILIES else ())))
     if fail=='generate-'+label and a.tier==1: sys.exit(7)
 if fail=='undeclared': (root/'surprise.rs').write_text('oops')
 if fail=='ignored-write': (root/'ignored.tmp').write_text('oops')
@@ -107,8 +115,8 @@ if fail=='hang-build':
     import subprocess,time
     child=subprocess.Popen([sys.executable,'-c',"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); time.sleep(60)"])
     pathlib.Path(os.environ['TX_CHILD']).write_text(str(child.pid));time.sleep(60)
-versions={(root/a.path).read_text().strip().split('|')[0] for a in artifacts.select()}
-assert all((root/a.path).read_text().strip().split('|')[1]==a.key for a in artifacts.select())
+versions={(root/a.path).read_text().splitlines()[0].split('|')[0] for a in artifacts.select()}
+assert all((root/a.path).read_text().splitlines()[0].split('|')[1]==a.key for a in artifacts.select())
 assert len(versions)==1, 'mixed-tier comparison binary'
 version=versions.pop();target=pathlib.Path(sys.argv[sys.argv.index('--target-dir')+1]); assert str(target)==os.environ['CARGO_TARGET_DIR']
 binary=target/'actual/custom/oxidex'; binary.parent.mkdir(parents=True)
@@ -259,7 +267,7 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
         self.assertEqual(changes,{a.path for a in artifacts.select()}|{tx.PIN})
         self.assertEqual((self.root/tx.PIN).read_text(),'13.60\n')
         self.assertEqual(self.report()['phase'],'promoted')
-        for a in artifacts.select():self.assertEqual((self.root/a.path).read_text(),f'13.60|{a.key}\n')
+        for a in artifacts.select():self.assertEqual((self.root/a.path).read_text(),output_text('13.60',a))
 
     def prepared(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)

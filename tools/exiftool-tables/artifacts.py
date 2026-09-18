@@ -21,8 +21,6 @@ import stat
 import subprocess
 import sys
 
-import table_modules
-
 
 @dataclass(frozen=True)
 class Artifact:
@@ -54,6 +52,11 @@ class Artifact:
 # its `mod` line.
 MODULE_FAMILIES = ("binary", "ifd")
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# HUB and table_modules.MOD_LINE_RE, restated so this file
+# stays importable on its own (tests copy it into scratch repositories);
+# test_artifacts.py pins the two copies equal.
+HUB = "mod.rs"
+MOD_LINE_RE = re.compile(r"^mod ([a-z0-9_]+);$", re.M)
 _FAMILY_MEMBER = re.compile(r"src/exiftool_tables/(binary|ifd)/([a-z0-9_]+)\.rs")
 
 
@@ -65,10 +68,15 @@ def module_stems(kind, root=REPO_ROOT):
     """The module file stems the `kind` hub under `root` declares."""
     if kind not in MODULE_FAMILIES:
         raise ValueError(f"unknown split table artifact: {kind}")
-    hub = Path(root) / family_dir(kind) / table_modules.MOD_RS
+    hub = Path(root) / family_dir(kind) / HUB
+    if not hub.exists() and not hub.is_symlink():
+        # The hub is itself a declared output, so its absence is reported
+        # wherever outputs are required (`check`, `diff`, `family_errors`);
+        # it declares no module files meanwhile.
+        return ()
     if not hub.is_file() or hub.is_symlink():
-        raise ValueError(f"missing/nonregular/symlink split table hub: {family_dir(kind)}/{table_modules.MOD_RS}")
-    return tuple(table_modules.declared_stems(hub))
+        raise ValueError(f"nonregular/symlink split table hub: {family_dir(kind)}/{HUB}")
+    return tuple(MOD_LINE_RE.findall(hub.read_text(encoding="utf-8")))
 
 
 def family_errors(root=REPO_ROOT):
@@ -76,11 +84,13 @@ def family_errors(root=REPO_ROOT):
     generated set (empty when they are)."""
     errors = []
     for kind in MODULE_FAMILIES:
+        if not (Path(root) / family_dir(kind) / HUB).is_file():
+            errors.append(f"missing split table hub {family_dir(kind)}/{HUB}")
         stems = module_stems(kind, root)
         if list(stems) != sorted(set(stems)):
-            errors.append(f"{family_dir(kind)}/{table_modules.MOD_RS} module lines are not sorted and unique")
+            errors.append(f"{family_dir(kind)}/{HUB} module lines are not sorted and unique")
         directory = Path(root) / family_dir(kind)
-        on_disk = {p.stem for p in directory.glob("*.rs") if p.name != table_modules.MOD_RS}
+        on_disk = {p.stem for p in directory.glob("*.rs") if p.name != HUB}
         errors += [f"orphan module file {family_dir(kind)}/{stem}.rs (not declared by its hub)"
                    for stem in sorted(on_disk - set(stems))]
         errors += [f"declared module file {family_dir(kind)}/{stem}.rs is missing"
@@ -91,7 +101,7 @@ def family_errors(root=REPO_ROOT):
 def is_family_member(path):
     """Whether `path` is where a split table artifact's module file lives."""
     match = _FAMILY_MEMBER.fullmatch(path)
-    return bool(match) and match.group(2) + ".rs" != table_modules.MOD_RS
+    return bool(match) and match.group(2) + ".rs" != HUB
 
 
 def _module_artifacts(kind, stems):
@@ -333,7 +343,7 @@ def check(root, saved):
     # A split artifact's module file may also appear or disappear, when the
     # selected tier writes that artifact; `family_errors` below then requires
     # the regenerated hub to name exactly the files that are there.
-    writes_families = any(a.path == f"{family_dir(kind)}/{table_modules.MOD_RS}"
+    writes_families = any(a.path == f"{family_dir(kind)}/{HUB}"
                           for a in selected for kind in MODULE_FAMILIES)
     unexpected = sorted(p for p in set(changes) - allowed
                         if not (writes_families and is_family_member(p)))

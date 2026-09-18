@@ -59,6 +59,18 @@ class ManifestTests(unittest.TestCase):
                 self.assertFalse(artifacts.is_family_member(f"src/exiftool_tables/{kind}/mod.rs"))
                 self.assertFalse(artifacts.is_family_member(f"src/exiftool_tables/{kind}/sub/x.rs"))
 
+    def test_hub_grammar_matches_table_modules(self):
+        self.assertEqual(artifacts.HUB, table_modules.MOD_RS)
+        self.assertEqual(artifacts.MOD_LINE_RE.pattern, table_modules.MOD_LINE_RE.pattern)
+        self.assertEqual(artifacts.MOD_LINE_RE.flags, table_modules.MOD_LINE_RE.flags)
+
+    def test_missing_hub_declares_nothing_and_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(artifacts.module_stems("binary", tmp), ())
+            self.assertEqual(len(artifacts.inventory(tmp)), 66)
+            self.assertIn("missing split table hub src/exiftool_tables/binary/mod.rs",
+                          artifacts.family_errors(tmp))
+
     def test_manifest_digest_does_not_depend_on_the_release_module_set(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
