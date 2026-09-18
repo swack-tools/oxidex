@@ -1,5 +1,10 @@
 # Plan: make ExifTool upgrades drive the tags
 
+> **Mechanism superseded 2026-09-18.** The goal here stands; the *how* is now
+> [`AUTOGENERATION-V2-DESIGN.md`](AUTOGENERATION-V2-DESIGN.md): generated
+> conversions over a `Session` (`$self`), a real grammar instead of template
+> transpilation, per-field mixed mode instead of table-level Gate A.
+
 Updated 2026-09-13. This is the main plan for deciding what to do next.
 The [technical execution record](./UPGRADE-NEXT-STEPS.md) and
 [earlier backlog](./AUTOMATION-AND-TESTER-PLAN.md) provide supporting detail.
