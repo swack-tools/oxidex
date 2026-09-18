@@ -412,6 +412,7 @@ pub fn preinc(v: &MemberVal) -> R<MemberVal> {
             .map_or(MemberVal::Float(*i as f64 + 1.0), MemberVal::Int),
         MemberVal::Float(f) => MemberVal::Float(f + 1.0),
         MemberVal::Bool(b) => MemberVal::Int(i64::from(*b) + 1),
+        MemberVal::Bytes(_) => return Err(Decline("++ on a non-UTF-8 byte string")),
         MemberVal::Str(s) => match s.parse::<i64>() {
             Ok(i) if i.to_string() == *s => i
                 .checked_add(1)

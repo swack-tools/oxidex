@@ -5308,17 +5308,17 @@
   {
    "id": "0x00fe",
    "name": "SubfileType",
-   "reason": "method SetPriorityDir has no proven port"
+   "reason": "Image::ExifTool::SetPriorityDir has no proven port"
   },
   {
    "id": "0x00ff",
    "name": "OldSubfileType",
-   "reason": "method SetPriorityDir has no proven port"
+   "reason": "Image::ExifTool::SetPriorityDir has no proven port"
   },
   {
    "id": "0x0103",
    "name": "Compression",
-   "reason": "helper Image::ExifTool::Exif::IdentifyRawFile has no proven port"
+   "reason": "Image::ExifTool::Exif::IdentifyRawFile has no proven port"
   },
   {
    "id": "0x0111",
@@ -5348,12 +5348,12 @@
   {
    "id": "0x4747",
    "name": "XP_DIP_XML",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0x8298",
    "name": "Copyright",
-   "reason": "method Options has no proven port"
+   "reason": "Image::ExifTool::Options has no proven port"
   },
   {
    "id": "0x927c",
@@ -5363,7 +5363,7 @@
   {
    "id": "0x9286",
    "name": "UserComment",
-   "reason": "helper Image::ExifTool::Exif::ConvertExifText has no proven port"
+   "reason": "Image::ExifTool::Exif::ConvertExifText has no proven port"
   },
   {
    "id": "0x9287",
@@ -5373,42 +5373,42 @@
   {
    "id": "0x9c9b",
    "name": "XPTitle",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0x9c9c",
    "name": "XPComment",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0x9c9d",
    "name": "XPAuthor",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0x9c9e",
    "name": "XPKeywords",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0x9c9f",
    "name": "XPSubject",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xa20c",
    "name": "SpatialFrequencyResponse",
-   "reason": "helper Image::ExifTool::Exif::PrintSFR has no proven port"
+   "reason": "Image::ExifTool::Exif::PrintSFR has no proven port"
   },
   {
    "id": "0xa302",
    "name": "CFAPattern",
-   "reason": "helper Image::ExifTool::Exif::DecodeCFAPattern has no proven port"
+   "reason": "Image::ExifTool::Exif::DecodeCFAPattern has no proven port"
   },
   {
    "id": "0xa40e",
    "name": "DevelopmentTypeDescription",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xa462",
@@ -5418,12 +5418,12 @@
   {
    "id": "0xbc01",
    "name": "PixelFormat",
-   "reason": "helper Image::ExifTool::ASF::GetGUID has no proven port"
+   "reason": "Image::ExifTool::ASF::GetGUID has no proven port"
   },
   {
    "id": "0xc615",
    "name": "LocalizedCameraModel",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc634",
@@ -5433,57 +5433,57 @@
   {
    "id": "0xc68b",
    "name": "OriginalRawFileName",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6d2",
    "name": "PanasonicTitle",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6d3",
    "name": "PanasonicTitle2",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6f3",
    "name": "CameraCalibrationSig",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6f4",
    "name": "ProfileCalibrationSig",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6f6",
    "name": "AsShotProfileName",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6f8",
    "name": "ProfileName",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc6fe",
    "name": "ProfileCopyright",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc716",
    "name": "PreviewApplicationName",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc717",
    "name": "PreviewApplicationVersion",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc718",
    "name": "PreviewSettingsName",
-   "reason": "method Decode has no proven port"
+   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc740",
@@ -5506,7 +5506,7 @@
    "reason": "AST node decl not modelled"
   }
  ],
- "rust_sha256": "7c62c71f1593cc89854c8268903afc072bf2b33a2d812a70e1c299878dd618c9",
+ "rust_sha256": "bf39e55f748b70c634bdc59f74a33233aa6c11c5fd9d827a33354d104ea4505a",
  "schema": "oxidex_conv_ledger_v1",
  "table": "Exif::Main",
  "table_sha256": "7e46afd009047f158b5460b4d7cc4014d58eed686e1962b2fca922c5cb048ff1",

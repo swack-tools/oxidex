@@ -81,17 +81,17 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
     (
         0x00fe,
         "SubfileType",
-        "method SetPriorityDir has no proven port",
+        "Image::ExifTool::SetPriorityDir has no proven port",
     ),
     (
         0x00ff,
         "OldSubfileType",
-        "method SetPriorityDir has no proven port",
+        "Image::ExifTool::SetPriorityDir has no proven port",
     ),
     (
         0x0103,
         "Compression",
-        "helper Image::ExifTool::Exif::IdentifyRawFile has no proven port",
+        "Image::ExifTool::Exif::IdentifyRawFile has no proven port",
     ),
     (
         0x0111,
@@ -118,8 +118,16 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
         "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
         "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm",
     ),
-    (0x4747, "XP_DIP_XML", "method Decode has no proven port"),
-    (0x8298, "Copyright", "method Options has no proven port"),
+    (
+        0x4747,
+        "XP_DIP_XML",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
+    (
+        0x8298,
+        "Copyright",
+        "Image::ExifTool::Options has no proven port",
+    ),
     (
         0x927c,
         "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteGoogle/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyxHyperFire/MakerNoteReconyxUltraFire/MakerNoteReconyxHyperFire2/MakerNoteReconyxMicroFire/MakerNoteReconyxHyperFire4K/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
@@ -128,28 +136,48 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
     (
         0x9286,
         "UserComment",
-        "helper Image::ExifTool::Exif::ConvertExifText has no proven port",
+        "Image::ExifTool::Exif::ConvertExifText has no proven port",
     ),
     (0x9287, "LearningOptOutIn", "builtin shift not modelled"),
-    (0x9c9b, "XPTitle", "method Decode has no proven port"),
-    (0x9c9c, "XPComment", "method Decode has no proven port"),
-    (0x9c9d, "XPAuthor", "method Decode has no proven port"),
-    (0x9c9e, "XPKeywords", "method Decode has no proven port"),
-    (0x9c9f, "XPSubject", "method Decode has no proven port"),
+    (
+        0x9c9b,
+        "XPTitle",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
+    (
+        0x9c9c,
+        "XPComment",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
+    (
+        0x9c9d,
+        "XPAuthor",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
+    (
+        0x9c9e,
+        "XPKeywords",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
+    (
+        0x9c9f,
+        "XPSubject",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
     (
         0xa20c,
         "SpatialFrequencyResponse",
-        "helper Image::ExifTool::Exif::PrintSFR has no proven port",
+        "Image::ExifTool::Exif::PrintSFR has no proven port",
     ),
     (
         0xa302,
         "CFAPattern",
-        "helper Image::ExifTool::Exif::DecodeCFAPattern has no proven port",
+        "Image::ExifTool::Exif::DecodeCFAPattern has no proven port",
     ),
     (
         0xa40e,
         "DevelopmentTypeDescription",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xa462,
@@ -159,12 +187,12 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
     (
         0xbc01,
         "PixelFormat",
-        "helper Image::ExifTool::ASF::GetGUID has no proven port",
+        "Image::ExifTool::ASF::GetGUID has no proven port",
     ),
     (
         0xc615,
         "LocalizedCameraModel",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc634,
@@ -174,49 +202,57 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
     (
         0xc68b,
         "OriginalRawFileName",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
-    (0xc6d2, "PanasonicTitle", "method Decode has no proven port"),
+    (
+        0xc6d2,
+        "PanasonicTitle",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
     (
         0xc6d3,
         "PanasonicTitle2",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc6f3,
         "CameraCalibrationSig",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc6f4,
         "ProfileCalibrationSig",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc6f6,
         "AsShotProfileName",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
-    (0xc6f8, "ProfileName", "method Decode has no proven port"),
+    (
+        0xc6f8,
+        "ProfileName",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
+    ),
     (
         0xc6fe,
         "ProfileCopyright",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc716,
         "PreviewApplicationName",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc717,
         "PreviewApplicationVersion",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (
         0xc718,
         "PreviewSettingsName",
-        "method Decode has no proven port",
+        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
     ),
     (0xc740, "OpcodeList1", "AST node deref not modelled"),
     (0xc741, "OpcodeList2", "AST node deref not modelled"),

@@ -934,7 +934,7 @@ class Fn:
                 raise Refuse("GetByteOrder with arguments")
             return "byte_order(s)?"
         if q not in HELPER_CALLS:
-            raise Refuse(f"helper {q} has no proven port")
+            raise Refuse(helper_refusal(q))
         return self.helper(q, args)
 
     def helper(self, q, args, with_self=False):
@@ -982,7 +982,7 @@ class Fn:
             raise Refuse("method on something other than $self")
         q = "Image::ExifTool::" + name
         if q not in HELPER_CALLS:
-            raise Refuse(f"method {name} has no proven port")
+            raise Refuse(helper_refusal(q))
         return self.helper(q, args, with_self=True)
 
     def core(self, name, args):
@@ -1247,6 +1247,16 @@ def compile_field(mod, tid, tag):
     if not changed:
         lines[2] = "let val = raw.clone();"
     return "\n".join(lines) + "\n", {s: d for s, (_n, d) in fns.items()}, binary
+
+
+def helper_refusal(q):
+    """Why a call to `q` refuses the field: no proven port at all, or a port
+    (helpers.rs PORTS) this backend does not call yet -- `Decode`/`Encode`
+    (#829) take `&mut Session`, record warnings and work on byte strings,
+    none of which the arms' runtime carries in this slice."""
+    if q in ported_helpers():
+        return f"{q} is ported (helpers.rs) but not yet callable from a generated arm"
+    return f"{q} has no proven port"
 
 
 def ported_helpers():
