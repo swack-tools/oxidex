@@ -1,6 +1,7 @@
 """The ratchet's refusals: regression, absence, and re-baselining."""
 import contextlib
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -169,6 +170,20 @@ class MalformedInputTests(unittest.TestCase):
             ratchet.main(["check", "--floors", "/nonexistent/floors.json"])
 
 
+class ReportTests(unittest.TestCase):
+    def test_share_of_accepts_several_denominators_in_order(self):
+        spec = floors(reads=("at_least", 1), reach=("at_least", 1), catalog=("exact", 400))
+        spec["metrics"]["s:counts.reads"]["share_of"] = ["s:counts.reach", "s:counts.catalog"]
+        spec["metrics"]["s:counts.reach"]["share_of"] = "s:counts.catalog"
+        with scratch({"reads": 50, "reach": 100, "catalog": 400}, spec) as (argv, _):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(ratchet.main(["report", *argv]), 0)
+        lines = {line.split()[0]: line for line in out.getvalue().splitlines() if line.startswith("  s:")}
+        self.assertIn("50.00% of 100 (reach);  12.50% of 400 (catalog)", lines["s:counts.reads"])
+        self.assertIn("25.00% of 400 (catalog)", lines["s:counts.reach"])
+
+
 class CommittedFloorsTests(unittest.TestCase):
     """The committed floors must themselves be well-formed and honest."""
 
@@ -182,6 +197,28 @@ class CommittedFloorsTests(unittest.TestCase):
                 self.assertIn(spec["direction"], ratchet.DIRECTIONS)
                 self.assertIsInstance(spec["floor"], int)
                 self.assertNotIsInstance(spec["floor"], bool)
+
+    def test_the_observed_read_states_partition_the_catalog(self):
+        """Credited, OxiDex gap and corpus gap must account for every entry exactly once."""
+        root = pathlib.Path(__file__).resolve().parents[2]
+        sources = ratchet.read_sources(self.floors, root)
+        counts = sources["observed"]["counts"]
+        states = counts["observed_read"]
+        self.assertLessEqual(set(states), {"observed_matched_read", "native_read_not_matched", "not_observed_yet"})
+        self.assertEqual(sum(states.values()), counts["catalog_ordinary_entries"])
+        ceiling = counts["corpus_read_attribution"].get("native_catalog_entries")
+        if ceiling is not None:
+            # Every uncredited native read lies inside the reachability ceiling.
+            self.assertLessEqual(states.get("native_read_not_matched", 0), ceiling)
+
+    def test_every_share_of_names_a_readable_denominator(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        sources = ratchet.read_sources(self.floors, root)
+        for name, spec in self.floors["metrics"].items():
+            denominators = spec.get("share_of") or []
+            for denominator in [denominators] if isinstance(denominators, str) else denominators:
+                with self.subTest(name=name, denominator=denominator):
+                    self.assertTrue(ratchet.dig(*ratchet.split_metric(denominator, sources))[0])
 
     def test_the_seeded_floors_match_the_committed_join_report(self):
         """The floors claim to come from `docs/reference/catalog-hydrated-join.md`.

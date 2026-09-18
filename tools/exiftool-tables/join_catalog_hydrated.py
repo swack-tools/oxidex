@@ -676,7 +676,7 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
         if any(not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
                for value in ifd_input_digests.values()):
             raise ValueError("IFD input digest is malformed")
-    corpus_credit, corpus_counts = catalog_corpus_reads.observed_reads(
+    corpus_credit, corpus_native, corpus_counts = catalog_corpus_reads.observed_reads(
         corpus_read_evidence, catalog, quicktime_selector.ROOT)
     garmin_fit = catalog_garmin_fit.implementation(
         garmin_fit_ledger, garmin_fit_source, garmin_fit_rust, dump_source=ifd_source, expr_ledger=ifd_expr_ledger,
@@ -834,6 +834,9 @@ def build(catalog: dict, hydrated: dict, catalog_sha: str, hydrated_sha: str,
             matched_write_contexts.add((*identity, catalog_write_name))
         if identity in corpus_credit and state == "joined":
             observed_read = catalog_corpus_reads.OBSERVED_STATE
+        elif observed_read == "not_observed_yet" and identity in corpus_native:
+            # ExifTool reads this row in the corpus; OxiDex earned no credit.
+            observed_read = catalog_corpus_reads.NATIVE_STATE
         implementation_counts[implementation] += 1
         reader_counts[reader_implementation] += 1
         writer_counts[writer_state] += 1
@@ -945,7 +948,9 @@ def report(join: dict) -> str:
                   f"| Source rows credited (matched in every file read) | {metric['credited_source_coordinates']} |",
                   f"| Source rows withheld (failed in some file) | {metric['withheld_source_coordinates']} |",
                   f"| Catalog entries credited | {corpus['credited_catalog_entries']} |",
-                  f"| Credited rows outside the catalog | {corpus['credited_coordinates_outside_catalog']} |"]
+                  f"| Credited rows outside the catalog | {corpus['credited_coordinates_outside_catalog']} |",
+                  f"| Catalog entries ExifTool reads in the corpus (reachability ceiling) | {corpus['native_catalog_entries']} |",
+                  f"| Natively read rows outside the catalog | {corpus['native_coordinates_outside_catalog']} |"]
     if "write_readback" in counts:
         writes = counts["write_readback"]
         lines += ["", "## Observed public writes", "",

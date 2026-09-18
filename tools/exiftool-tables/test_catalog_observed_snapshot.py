@@ -115,6 +115,44 @@ class CatalogObservedSnapshotTests(unittest.TestCase):
         report = publication.render_report(snapshot, changed_current)
         self.assertIn("differs from historical source join", report)
 
+    def corpus_pair(self, ceiling=2):
+        evidence = receipt()
+        rows = [entry("256", "observed_matched_read"), entry("257", "native_read_not_matched"), entry("258")]
+        source = join([entry("256"), entry("257"), entry("258")])
+        observed = join(rows)
+        observed["counts"]["observed_read"] = {"native_read_not_matched": 1, "not_observed_yet": 1,
+                                               "observed_matched_read": 1}
+        observed["counts"]["corpus_read_attribution"] = {"credited_catalog_entries": 1, "native_catalog_entries": ceiling}
+        observed["inputs"]["corpus_read_evidence"] = {"sha256": publication.canonical_hash(evidence),
+                                                      "producer": evidence["producer"]}
+        return source, observed, {"corpus_read_evidence": evidence}
+
+    def test_native_read_state_splits_the_uncredited_bucket(self):
+        snapshot = publication.make_authenticated_snapshot(*self.corpus_pair())
+        publication.validate_snapshot(snapshot)
+        report = publication.render_report(snapshot)
+        self.assertIn("reachability ceiling): `2`", report)
+        self.assertIn("within that ceiling: `1` (50.0%)", report)
+        self.assertIn("OxiDex gap): `1`", report)
+        self.assertIn("corpus gap): `1`", report)
+        # A snapshot without a corpus ceiling renders exactly as before.
+        source, observed, evidence = self.authenticated_pair()
+        self.assertNotIn("ceiling", publication.render_report(
+            publication.make_authenticated_snapshot(source, observed, evidence)))
+
+    def test_native_read_state_requires_a_bound_ceiling_it_fits_under(self):
+        with self.assertRaisesRegex(ValueError, "more uncredited native reads"):
+            publication.make_authenticated_snapshot(*self.corpus_pair(ceiling=0))
+        source, observed, evidence = self.corpus_pair()
+        del observed["counts"]["corpus_read_attribution"]
+        with self.assertRaisesRegex(ValueError, "without a bound corpus receipt"):
+            publication.validate_pair(source, observed)
+        source, observed, evidence = self.corpus_pair()
+        observed["entries"][2]["observed_read"] = "invented"
+        observed["counts"]["observed_read"] = {"invented": 1, "native_read_not_matched": 1, "observed_matched_read": 1}
+        with self.assertRaisesRegex(ValueError, "unknown observed_read state"):
+            publication.validate_pair(source, observed)
+
 
 if __name__ == "__main__":
     unittest.main()

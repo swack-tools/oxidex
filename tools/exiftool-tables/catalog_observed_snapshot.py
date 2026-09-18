@@ -21,6 +21,11 @@ JOIN_SCHEMA = "oxidex_catalog_hydrated_join_v3"
 # Historical receipts keep the join schema they were produced with.
 JOIN_SCHEMAS = {"oxidex_catalog_hydrated_join_v2", JOIN_SCHEMA}
 OBSERVATION_FIELDS = {"observed_read", "observed_write", "observed_write_group1_names", "alternate_context_write_group1_names"}
+# `native_read_not_matched`: pinned ExifTool read the entry's exact source row in
+# some corpus file but OxiDex earned no credit (an OxiDex gap). `not_observed_yet`:
+# no evidence exercised the entry at all (a corpus gap, when corpus evidence is bound).
+READ_STATES = {"observed_matched_read", "native_read_not_matched", "not_observed_yet"}
+NATIVE_READ_STATE = "native_read_not_matched"
 COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
@@ -97,6 +102,18 @@ def validate_pair(source: dict, observed: dict) -> None:
             continue
         if recorded != actual:
             raise ValueError(f"observed receipt {axis} counts do not match its rows")
+    unknown = {row.get("observed_read") for row in observed_rows.values()} - READ_STATES
+    if unknown:
+        raise ValueError(f"observed receipt has an unknown observed_read state: {sorted(map(str, unknown))}")
+    native_unmatched = sum(row.get("observed_read") == NATIVE_READ_STATE for row in observed_rows.values())
+    if native_unmatched:
+        # The native state is only meaningful against a bound corpus receipt,
+        # and every such entry lies inside the receipt's reachability ceiling.
+        ceiling = observed.get("counts", {}).get("corpus_read_attribution", {}).get("native_catalog_entries")
+        if "corpus_read_evidence" not in observed.get("inputs", {}) or type(ceiling) is not int:
+            raise ValueError("observed receipt reports native reads without a bound corpus receipt")
+        if native_unmatched > ceiling:
+            raise ValueError("observed receipt reports more uncredited native reads than ExifTool read")
 
 
 def evidence_manifest(observed: dict, evidence: dict[str, dict]) -> dict:
@@ -186,6 +203,7 @@ def render_report(snapshot: dict, current_source: dict | None = None, download: 
         f"- Current source applicability: {current}",
         f"- Source denominator: `{observed['counts']['joined_records']}`",
         f"- Catalog entries with observed reads: `{read_counts.get('observed_matched_read', 0)}`",
+        *native_read_lines(observed),
         f"- Catalog entries with observed writes: `{observed['counts'].get('observed_write', {}).get('observed_matched_write', 0)}`",
         f"- Source tables retained: `{len(snapshot['source_table_observations'])}`",
         f"- Source tables with observations: `{sum(any(bucket[axis].get(state, 0) for axis, state in [('observed_read', 'observed_matched_read'), ('observed_write', 'observed_matched_write')]) for bucket in snapshot['source_table_observations'].values())}`",
@@ -194,6 +212,20 @@ def render_report(snapshot: dict, current_source: dict | None = None, download: 
         "",
         "Historical integrity checks compare the stored ledger and receipt bindings. They do not rerun the native tools or prove current runtime behavior.", "",
     ])
+
+
+def native_read_lines(observed: dict) -> list[str]:
+    """Split the uncredited read bucket into OxiDex gap and corpus gap, when measured."""
+    ceiling = observed["counts"].get("corpus_read_attribution", {}).get("native_catalog_entries")
+    if ceiling is None:
+        return []
+    reads = observed["counts"].get("observed_read", {})
+    credited = observed["counts"]["corpus_read_attribution"]["credited_catalog_entries"]
+    share = f"{100 * credited / ceiling:.1f}%" if ceiling else "n/a"
+    return [f"- Catalog entries ExifTool reads in the corpus (reachability ceiling): `{ceiling}`",
+            f"- Corpus-credited entries within that ceiling: `{credited}` ({share})",
+            f"- ExifTool reads, OxiDex not credited (`{NATIVE_READ_STATE}`, OxiDex gap): `{reads.get(NATIVE_READ_STATE, 0)}`",
+            f"- No corpus file exercises the entry (`not_observed_yet`, corpus gap): `{reads.get('not_observed_yet', 0)}`"]
 
 
 def main() -> int:
