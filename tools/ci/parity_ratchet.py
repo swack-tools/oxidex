@@ -179,6 +179,11 @@ def prepare(args, root):
     for key in ("sources", "metrics", "measured_at"):
         if key not in floors:
             raise SystemExit(f"parity ratchet: floors file has no {key!r}")
+    if not floors["metrics"]:
+        # A ratchet tracking nothing passes everything. Say so, rather than
+        # reporting OK and letting a green check mean less than it looks.
+        raise SystemExit("parity ratchet: floors file tracks no metrics; "
+                         "an empty ratchet would pass every regression")
     sources = read_sources(floors, root)
     header(floors, sources, root)
     return floors, sources

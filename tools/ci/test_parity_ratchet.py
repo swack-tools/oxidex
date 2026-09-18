@@ -158,6 +158,12 @@ class MalformedInputTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "has no 'sources'"):
                 ratchet.main(["check", *argv])
 
+    def test_an_empty_metric_set_refuses_rather_than_passing_everything(self):
+        with scratch({"reads": 1}, {"schema": 1, "measured_at": {}, "metrics": {},
+                                    "sources": {"s": "m.json"}}) as (argv, _):
+            with self.assertRaisesRegex(SystemExit, "tracks no metrics"):
+                ratchet.main(["check", *argv])
+
     def test_a_missing_file_refuses_with_its_path(self):
         with self.assertRaisesRegex(SystemExit, "not found"):
             ratchet.main(["check", "--floors", "/nonexistent/floors.json"])
