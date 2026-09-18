@@ -379,9 +379,15 @@ Error: Unsupported file format: unknown
 
 ## Future Roadmap
 
-**v1.1 (Current):** 140+ format families with full read/write support ✅
+**v1.2.1 (current crate version):** 140+ format families detected; read and write support varies per family as the tables above state
 **v2.0 Goal:** Enhanced maker notes support for all major camera vendors
 **v3.0 Goal:** Complete ExifTool extraction parity, measured by [conformance score](/reference/tag-coverage-analysis#measured-extraction-coverage), not by definitions count
+
+## Implementation notes
+
+- [PE Rich Header extraction](/features/pe-rich-header)
+- [Office document forensic metadata](/features/OFFICE_FORENSIC_METADATA)
+- [GPS movement and tracking tags](/features/GPS_MOVEMENT_TRACKING)
 
 ## Additional Resources
 

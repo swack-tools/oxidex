@@ -132,7 +132,8 @@ export default defineConfig({
             { text: 'Multi-Crate Tags', link: '/architecture/multi-crate-tags' },
             { text: 'Parser Shared Infrastructure', link: '/architecture/parser-shared-infrastructure' },
             { text: 'Parser Migration Guide', link: '/architecture/parser-migration-guide' },
-            { text: 'OxiDex Tags Shared', link: '/architecture/oxidex-tags-shared' }
+            { text: 'OxiDex Tags Shared', link: '/architecture/oxidex-tags-shared' },
+            { text: 'Docs Site Deployment', link: '/architecture/github-pages-setup' }
           ]
         }
       ],
@@ -171,15 +172,13 @@ export default defineConfig({
             { text: 'Automation Backlog', link: '/AUTOMATION-AND-TESTER-PLAN' },
             { text: 'Development Guide', link: '/contributing/development/' },
             { text: 'Code Quality Patterns', link: '/contributing/development/code-quality-patterns' },
-            { text: 'TagRegistry Refactoring', link: '/contributing/development/tagregistry-refactoring' },
-            { text: 'Archived Context', link: '/contributing/development/archived-context' }
+            { text: 'TagRegistry Refactoring', link: '/contributing/development/tagregistry-refactoring' }
           ]
         },
         {
           text: 'Testing',
           items: [
             { text: 'Testing Guide', link: '/contributing/testing/' },
-            { text: 'Integration Test Plan', link: '/contributing/testing/integration_test_plan' },
             { text: 'Test Failure Triage', link: '/contributing/testing/TEST_FAILURE_TRIAGE' }
           ]
         },
@@ -188,10 +187,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { text: 'Measuring Coverage', link: '/contributing/measuring-coverage' },
-            { text: 'Overview', link: '/contributing/testing/comparison/README' },
-            { text: 'Parity Report', link: '/contributing/testing/comparison/PARITY_REPORT' },
-            { text: 'Field Naming Guide', link: '/contributing/testing/comparison/FIELD_NAMING_GUIDE' },
-            { text: 'Test Coverage', link: '/contributing/testing/comparison/TEST_COVERAGE' }
+            { text: 'ExifTool Coverage Report', link: '/reference/tag-coverage-analysis' }
           ]
         }
       ],
@@ -217,7 +213,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the GPL-3.0 License.',
-      copyright: 'Copyright © 2024-2025 OxiDex Contributors'
+      copyright: 'Copyright © 2024-2026 OxiDex Contributors'
     },
 
     editLink: {

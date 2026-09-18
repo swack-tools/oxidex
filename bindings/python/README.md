@@ -298,7 +298,7 @@ The bindings use proper resource management:
 
 The C FFI follows these thread safety rules:
 
-- **Handle creation** (`oxidex_create`): Thread-safe, each call returns an independent handle
+- **Handle creation** (`exiftool_create`): Thread-safe, each call returns an independent handle
 - **Handle operations**: Not thread-safe - do not use the same handle from multiple threads
 - **Error messages**: Thread-safe - each thread has its own error message storage
 
@@ -310,6 +310,6 @@ This Python binding follows the same license as the OxiDex project.
 
 ## See Also
 
-- [OxiDex C FFI Documentation](../../docs/api/ffi_api.md)
+- [OxiDex C FFI Documentation](../../docs/reference/api/ffi_api.md)
 - [C Header File](../../include/oxidex.h)
-- [Rust FFI Implementation](../../src/ffi/c_api.rs)
+- [Rust FFI Implementation](../../src/ffi/mod.rs)

@@ -1,10 +1,10 @@
 # Integration Tests
 
-This directory contains integration tests for ExifTool-RS, focusing on comparison testing against the reference Perl ExifTool implementation.
+This directory contains integration tests for OxiDex (formerly ExifTool-RS), focusing on comparison testing against the reference Perl ExifTool implementation.
 
 ## Overview
 
-The integration test suite validates that ExifTool-RS produces metadata output compatible with Perl ExifTool across:
+The integration test suite validates that OxiDex produces metadata output compatible with Perl ExifTool across:
 - **5 formats**: JPEG, PNG, TIFF, PDF, MP4
 - **100+ test images**: Diverse corpus covering simple, complex, edge cases, and malformed files
 - **Multiple operations**: Read, write, copy, rename, date shift
@@ -59,7 +59,7 @@ cargo test
 
 **File**: `exiftool_comparison_tests.rs`
 
-Tests that compare JSON output from Perl ExifTool and ExifTool-RS:
+Tests that compare JSON output from Perl ExifTool and OxiDex:
 
 1. **Read Operations** (5 active tests):
    - `test_comparison_jpeg_with_exif` - Basic JPEG with EXIF
@@ -123,15 +123,15 @@ tests/fixtures/
    exiftool -json -a -G1 -struct sample.jpg
    ```
 
-2. **Execute ExifTool-RS**:
+2. **Execute OxiDex**:
    ```bash
-   exiftool-rs -json sample.jpg
+   oxidex -json sample.jpg
    ```
 
 3. **Compare JSON Outputs**:
    - Parse both JSON arrays
    - Iterate through Perl ExifTool tags (ground truth)
-   - Match against ExifTool-RS tags
+   - Match against OxiDex tags
    - Apply tolerance for floating-point values
    - Calculate match rate: `matched / total * 100`
 
@@ -152,7 +152,7 @@ tests/fixtures/
 
 ### TagValue Enum Unwrapping
 
-ExifTool-RS serializes tags as strongly-typed enums:
+OxiDex serializes tags as strongly-typed enums:
 - Perl: `{"Make": "Canon"}`
 - Rust: `{"Make": {"String": "Canon"}}`
 
@@ -282,12 +282,10 @@ If systematic differences are discovered (e.g., new Perl ExifTool version):
 ## References
 
 - **Task Specification**: I5.T9 in iteration manifest
-- **Integration Test Plan**: `docs/testing/integration_test_plan.md`
+- **Measuring coverage**: `docs/contributing/measuring-coverage.md`
 - **ExifTool JSON Format**: https://exiftool.org/faq.html#Q10
 - **Perl ExifTool Tag Names**: https://exiftool.org/TagNames/index.html
 
 ---
 
-**Maintainer**: ExifTool-RS Team
-**Last Updated**: 2025-10-30
-**Test Coverage**: 5/130+ images (5%)
+**Last Updated**: 2026-09-18 (project name and links; the layout above dates from 2025-10-30). The pinned ExifTool release is in `.exiftool-version`; never run a bare `exiftool` for comparisons (see `AGENTS.md`).

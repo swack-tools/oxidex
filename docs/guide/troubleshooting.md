@@ -439,7 +439,7 @@ time exiftool -r photos/ > /dev/null
 time oxidex -r photos/ > /dev/null
 ```
 
-Expected results: OxiDex should be 2-5x faster.
+Expected result: OxiDex should be faster; the published comparison figures are stale, so measure rather than assume a ratio (see [Performance](/performance/)).
 
 If not, report the issue with:
 - System info (OS, CPU, RAM)

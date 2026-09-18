@@ -266,7 +266,7 @@ fn matches_at_offset(data: &[u8], pattern: &[u8], offset: usize) -> bool {
 
 ```bash
 # Measure complexity with tokei
-tokei src/parsers/format_detector.rs
+tokei src/core/format_dispatch.rs
 
 # Check for clippy warnings
 cargo clippy -p oxidex

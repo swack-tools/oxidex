@@ -1,7 +1,10 @@
 # ExifTool upgrade execution plan
 
 The [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md) owns the goals,
-work order and progress measures. This file retains technical execution detail.
+work order and progress measures. This file retains technical execution detail for the PR #737–#764 tranche;
+the mechanism going forward is the [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) and the
+scoreboard is [autogeneration progress](./AUTOGENERATION-PROGRESS.md). Sections below are
+accurate for the commits they name.
 
 Started 2026-09-10 from `0683cb11447adef3945f19da5d6917c88aea2f7d`,
 the tested artifact-manifest branch. ExifTool remains pinned to **13.59**.

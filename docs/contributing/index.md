@@ -325,7 +325,7 @@ touch src/parsers/your_format/mod.rs
 2. **Implement format detection:**
 
 ```rust
-// src/formats/mod.rs
+// src/core/file_format.rs (illustrative)
 pub fn detect_format(data: &[u8]) -> Option<FileFormat> {
     match &data[0..4] {
         // Your format magic number
@@ -548,7 +548,7 @@ generated artifact, not a checked-in one — the directory is listed in `.gitign
 the deploy workflow regenerates it on every deploy. So on a clean checkout it is empty.
 
 You do **not** need to generate it to build or preview the docs. `npm run docs:build`
-runs `scripts/ensure-comparison-stub.mjs` first, which drops a clearly-labelled
+runs `docs/scripts/ensure-comparison-stub.mjs` first, which drops a clearly-labelled
 placeholder page at `/reference/comparison/` so every link resolves and the build
 succeeds. If you want the real tables locally:
 

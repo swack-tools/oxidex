@@ -2,7 +2,11 @@
 
 Start with the [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md).
 It owns the current priorities and measurable finish line; this backlog
-retains supporting acceptance criteria and historical context.
+retains supporting acceptance criteria and historical context. The mechanism
+is now the [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) (a small, closed grammar
+plus a session and helper library, per-field mixed mode); items below that
+assume the pre-v2 template translators or table-level Gate A describe the
+state at their named commits, not the next work.
 
 **Original audit: 2026-09-10 at `c7f5dd81`, ExifTool 13.59.** The current queue
 reflects the verified PR #737–#740 landings through

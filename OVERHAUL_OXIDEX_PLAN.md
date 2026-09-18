@@ -10,6 +10,11 @@
 > Step numbers and original acceptance criteria below are preserved for traceability;
 > they are not a claim that each stage passed. The appendix is an archived session
 > prompt, not an instruction to restart the overhaul. Current repository rules apply.
+> The mechanism is now the [autogeneration v2 design](docs/AUTOGENERATION-V2-DESIGN.md)
+> and the order of work is the [autogeneration plan](docs/AUTOGENERATION-PLAN.md).
+> Design-review checkpoints: [Step 10](OVERHAUL_STEP10_DESIGN.md),
+> [Step 15](OVERHAUL_STEP15_DECISION.md), [Step 18](OVERHAUL_STEP18_DESIGN.md),
+> [Step 28](OVERHAUL_STEP28_DESIGN.md).
 
 **Provenance.** This is Part VI of `../MERGED_EXIFTOOL_OXIDEX_TAG_REVIEW.md` (2026-08-10), extracted verbatim as the operative plan. It was produced by merging two independent reviews — the in-house architecture review (Parts I–IV of that document: ExifTool 13.59 Perl machinery vs oxidex, recommendations R1–R9) and an independent ChatGPT review whose 38 claims were re-verified at oxidex tip `d4456ebc` (36 confirmed, 2 already fixed by #676/#678, 0 refuted). Every work item below rests on a verified finding or on Parts I–IV analysis; the evidence and citations live in that document (Part V holds the verified runtime-correctness findings; Appendix B holds the per-claim disposition).
 

@@ -2,7 +2,9 @@
 
 > **Historical fleet design.** This records the original infrastructure proposal,
 > not current metadata-work priorities or proof that its stages deployed. See
-> [Tag machinery status](./TAG_MACHINERY_STATUS.md) for the current disposition.
+> [Tag machinery status](./TAG_MACHINERY_STATUS.md) for the current disposition
+> and the [autogeneration plan](./AUTOGENERATION-PLAN.md#how-the-work-is-run) for how
+> work actually runs today (one host, no fleet).
 
 Companion to `docs/AGENT-SERVER-SPEC.md`. Seven stages; each lands on a `staging/keel-N-*` branch
 of the code repo and must PASS `tools/fleet/gate.sh` (GATE_VERSION 8 since 2026-08-22 — v7 plus a

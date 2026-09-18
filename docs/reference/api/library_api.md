@@ -1,7 +1,7 @@
 # OxiDex Library API Reference
 
-**Version:** 0.1.0
-**Last Updated:** 2025-10-29
+**Crate version:** 1.2.1 (`Cargo.toml` at the time of the 2026-09-18 documentation audit)
+**Last Updated:** 2026-09-18 (method names checked against `src/core/metadata.rs`)
 
 ## Table of Contents
 
@@ -131,7 +131,7 @@ let make = metadata.get_string("EXIF:Make")?;  // Option<&str>
 
 ### Metadata Struct
 
-**Note:** The `Metadata` struct is the primary entry point for the high-level API. This API is **planned for implementation** and represents the future public interface.
+**Note:** The `Metadata` struct (`src/core/metadata.rs`) is the primary entry point for the high-level API.
 
 ```rust,ignore
 use oxidex::Metadata;
@@ -410,7 +410,6 @@ if let Some(iso) = metadata.get_integer("EXIF:ISO") {
 }
 ```
 
-**Alias:** This method is also available as `get_i64()` (planned).
 
 **See also:** `src/core/metadata_map.rs:135`
 
@@ -424,7 +423,6 @@ if let Some(aperture) = metadata.get_float("EXIF:FNumber") {
 }
 ```
 
-**Alias:** This method is also available as `get_f64()` (planned).
 
 **See also:** `src/core/metadata_map.rs:142`
 
@@ -484,7 +482,6 @@ for (name, value) in metadata.iter() {
 }
 ```
 
-**Alias:** This method is also available as `iter_tags()` (planned).
 
 ##### `keys(&self) -> impl Iterator<Item = &String>`
 

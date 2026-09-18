@@ -4,7 +4,7 @@ layout: home
 hero:
   name: OxiDex
   text: Modern ExifTool in Rust
-  tagline: High-performance metadata management for 300+ file formats
+  tagline: High-performance metadata management for 140+ format families
   actions:
     - theme: brand
       text: Get Started
@@ -18,8 +18,10 @@ hero:
 
 features:
   - icon: ⚡
-    title: Up to 10x Faster
-    details: 3.7-9.7x performance improvement over Perl ExifTool with zero-cost abstractions and parallel processing
+    title: Compiled Rust
+    details: Native code with parallel batch processing. The published speed figures are being re-measured against the pinned ExifTool; see the performance page for their status
+    link: /performance/
+    linkText: Benchmark status
   - icon: 🔒
     title: Memory Safe
     details: Rust eliminates buffer overflows, use-after-free bugs, and entire classes of vulnerabilities
@@ -30,7 +32,7 @@ features:
     linkText: View Coverage
   - icon: 🤖
     title: AI Integration
-    details: MCP server for Claude and other AI assistants - manage metadata through natural conversation
+    details: A separate MCP server (oxidex-mcp) lets Claude and other MCP clients read, write, search, analyze and copy metadata
   - icon: 🛠️
     title: Drop-in Replacement
     details: CLI compatible with original ExifTool syntax for seamless migration
@@ -42,7 +44,7 @@ features:
     details: Native binaries for Windows, Linux (x86_64/ARM64), and macOS (Intel/Apple Silicon)
   - icon: 📊
     title: ExifTool Compatibility
-    details: Automated tag-by-tag comparison with ExifTool - track coverage across 19 formats, updated on every parser change
+    details: Automated tag-by-tag comparison against the pinned ExifTool, regenerated when the docs deploy
     link: /reference/comparison/
     linkText: View Report
 ---
@@ -66,21 +68,19 @@ oxidex -r /path/to/photos/
 oxidex -json photo.jpg
 ```
 
-## Performance Comparison
+## Performance
 
-OxiDex delivers exceptional performance improvements over the Perl-based ExifTool:
+OxiDex is compiled, parallel Rust. The published comparison figures against
+Perl ExifTool date from 2025-12 and an unpinned ExifTool, and are recorded as
+stale in the [autogeneration plan](/AUTOGENERATION-PLAN); a refresh against the
+pinned 13.59 is in progress.
 
-- **3.7x faster** - Single file metadata extraction (31.8ms vs 116.5ms)
-- **9.7x faster** - Batch processing 1000 files (197ms vs 1911ms)
-- **8.7x faster** - Write operations (23ms vs 200ms)
-- **6.5x faster** - Format detection (10ms vs 67ms)
-
-[View detailed benchmarks →](/performance/benchmarks)
+[Benchmark status and how to reproduce →](/performance/)
 
 ## Why OxiDex?
 
 **For Photographers & Archivists:**
-- Process large image libraries in seconds, not minutes
+- Process large image libraries in parallel
 - Reliable metadata preservation with memory-safe operations
 - Support for 40+ camera RAW formats
 
@@ -93,7 +93,7 @@ OxiDex delivers exceptional performance improvements over the Perl-based ExifToo
 **For AI & Automation:**
 - Natural language metadata operations via MCP
 - Works with Claude, Cline, and other MCP clients
-- 9 specialized tools for extraction, search, and analysis
+- Five tools: extract, write, search, analyze and copy metadata ([oxidex-mcp](https://github.com/swack-tools/oxidex-mcp))
 
 **For DevOps:**
 - Static binaries with no dependencies

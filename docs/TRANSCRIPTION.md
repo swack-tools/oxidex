@@ -6,6 +6,10 @@
 > below are snapshots, not the current implementation status or upgrade forecast.
 > IFD generation and its first runtime migrations have landed. This September 10
 > reconciliation corrects obsolete scope claims without rewriting past results.
+> The template translators described here (`exprs.py`, `conds.py`) are the pre-v2
+> mechanism; the [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) (2026-09-18) replaces
+> them with a grammar, a session and a helper library, and replaces table-level
+> Gate A with per-field mixed mode. Read this page for the method and its history.
 
 OxiDex is a Rust reimplementation of ExifTool. This document describes the
 **transcription methodology** — a way of closing the compatibility gap by

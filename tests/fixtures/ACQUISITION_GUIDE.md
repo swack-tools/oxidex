@@ -26,7 +26,7 @@ git clone --depth 1 --filter=blob:none --sparse https://github.com/Exiv2/exiv2.g
 cd exiv2
 git sparse-checkout set test/data
 
-# Copy relevant images to ExifTool-RS fixtures
+# Copy relevant images to OxiDex fixtures
 cp test/data/*.jpg ../exiftools/tests/fixtures/jpeg/complex/
 cp test/data/*.tif ../exiftools/tests/fixtures/tiff/complex/
 cp test/data/*.png ../exiftools/tests/fixtures/png/complex/
@@ -339,4 +339,4 @@ All test images MUST be:
 ---
 
 **Last Updated**: 2025-10-30
-**Maintainer**: ExifTool-RS Integration Test Team
+**Maintainer**: OxiDex integration tests (project formerly named ExifTool-RS)

@@ -3,7 +3,8 @@
 > **Design record.** This preserves the original decision and its then-current
 > measurements. Approval of this design is not evidence of complete implementation.
 > See [Tag machinery status](docs/TAG_MACHINERY_STATUS.md) for landed work,
-> remaining limits and the current backlog.
+> remaining limits and the current backlog. The mechanism going forward is the
+> [autogeneration v2 design](docs/AUTOGENERATION-V2-DESIGN.md) (2026-09-18).
 
 **Status: DECIDED by the maintainer 2026-08-11.**
 - **Gate: PASSED at 69.5%. Option (A) — proceed with the table-driven engine as planned,

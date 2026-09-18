@@ -8,6 +8,9 @@ outline: 2
 > The IFD engine and later migrations are tracked in
 > [Tag machinery status](../TAG_MACHINERY_STATUS.md). This page does not imply
 > that every parser now uses the shared engine or has retired its hand conversions.
+> The table-level Gate A described here is replaced by per-field mixed mode in the
+> [autogeneration v2 design](../AUTOGENERATION-V2-DESIGN.md) (2026-09-18); Gate B
+> (no proven read lost) is now enforced per PR by the corpus read-regression gate.
 
 ::: info Instrument
 Everything measured here used the pinned **exiftool 13.59**

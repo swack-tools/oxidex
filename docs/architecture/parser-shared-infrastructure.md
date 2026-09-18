@@ -176,3 +176,8 @@ See `src/parsers/tiff/makernotes/shared/tests/` for complete working examples of
 - Compile-time tag ID collision detection
 - Perfect hashing for O(1) tag lookups
 - Cross-domain pattern extraction (PNG, PDF, etc.)
+
+## See also
+
+- `src/parsers/tiff/makernotes/shared/USAGE_EXAMPLES.md` - worked examples of the shared makernote helpers, kept next to the code
+- [Autogeneration v2 design](/AUTOGENERATION-V2-DESIGN) - the direction that retires hand parsers onto generated decoders, field by field

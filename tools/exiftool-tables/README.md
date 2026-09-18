@@ -4,7 +4,11 @@ For completed work, known gaps and priorities, start with
 [Tag machinery status](../../docs/TAG_MACHINERY_STATUS.md). This file describes
 the tooling based on [PR #740](https://github.com/swack-tools/oxidex/pull/740)
 at [`2cea1e41`](https://github.com/swack-tools/oxidex/commit/2cea1e4194ce7fc1aeed4b110d77ad436ccd7837);
-the pin remains 13.59.
+the pin remains 13.59. The mechanism going forward is the
+[autogeneration v2 design](../../docs/AUTOGENERATION-V2-DESIGN.md): the template
+translators here (`exprs.py`, `conds.py`) and the table-level Gate A remain what
+the tip runs today, and are what v2 replaces; the
+[autogeneration plan](../../docs/AUTOGENERATION-PLAN.md) owns the order of work.
 
 Conservative IFD-aware upgrade classification, one generated-output inventory,
 verified Canon CODE references and isolated upgrade orchestration are implemented.
@@ -17,6 +21,21 @@ passed at `4fb705da` on 2026-09-11: both variants regenerated all 28 outputs and
 built fresh binaries, with no source-edit intervention and unchanged caller
 source/index/pin. Its 193-file A/B uses current handwritten runtime on both
 sides; classifier AUTO/HAND percentages do not measure upgrade coding effort.
+
+## Contract notes in this directory
+
+Each `*.md` beside the scripts documents one script's contract and names the
+script it belongs to:
+
+- `CONFORMANCE.md` - `conformance.py`, the gap-by-kind measurement (Gate B)
+- `GROUP_QUALIFIED_DELTA.md` - historical bare-name vs group-qualified matching comparison
+- `GARMIN_FIT_READER.md` - `garmin_fit_specs.py` and the FIT executor
+- `QUICKTIME_USERDATA_READER.md` - the generated `moov/udta` reader
+- `CIFF_OPAQUE_SCALAR_CONTRACT.md` - the CanonRaw opaque-scalar probe
+- `NATIVE_WRITE_MATRIX.md`, `NATIVE_WRITE_FORMAT_REGISTRY.md`, `NATIVE_SCALAR_WRITE_FINAL_STAGE_AUDIT.md`, `FINAL_SCALAR_WRITEEXIF_PROFILES.md` - native write acceptance and the final scalar stage
+- `WRITE_DESCRIPTOR_API.md`, `WRITEVALUE_RECIPE_API.md`, `CHECKVALUE_RECIPE_API.md`, `CHECKEXIF_RECIPE_API.md`, `SETNEWVALUE_ADDRESSING_API.md`, `SETNEWVALUE_CONVINV_RECIPE_API.md`, `NUMERIC_PUBLIC_WRITE_DRAFT.md`, `WRITE_READBACK_EVIDENCE.md` - the source-derived writer recipe compilers
+- `FRESH_JPEG_BYTE_ORDER_HISTORICAL_PROFILES.md`, `RAW_JFIF_VERSION_GRAMMAR.md` - fresh-JPEG byte-order and JFIF version profiles across releases
+- `VERSION_REHEARSAL_EXECUTOR_API.md`, `VERSION_REHEARSAL_STAGE_ADAPTER_API.md` - the release-pair rehearsal executor and its adapter
 
 ## Commands and scope
 

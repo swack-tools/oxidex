@@ -586,11 +586,17 @@ Planned improvements for raw format support:
 
 ## Tested Compatibility
 
-ExifTool-RS has been comprehensively tested against real-world camera files to ensure production-ready reliability and compatibility.
+> **Historical record (November 2025).** The corpus run, success rate and
+> speed ratio below were measured on the `exiftool-rs` build of that time
+> against Perl ExifTool 13.36, not the repository pin. Current extraction
+> coverage is the generated [ExifTool Coverage](/reference/tag-coverage-analysis)
+> report; the benchmark refresh is tracked on the [performance page](/performance/).
+
+The project was tested against real-world camera files in November 2025:
 
 ### Test Corpus
 
-Comprehensive testing was performed on 4,026 real-world RAW files from the exiftool-rs data.lfs test corpus, including files from:
+Testing was performed on 4,026 real-world RAW files from the project's data.lfs test corpus, including files from:
 - 15+ major camera manufacturers
 - 40+ distinct RAW file formats
 - Consumer cameras to professional cinema equipment
@@ -641,7 +647,7 @@ Three major parsers were added based on comprehensive testing results:
 
 Performance testing on 1,999 mixed-format files:
 
-**ExifTool-RS**:
+**OxiDex (then `exiftool-rs` 0.1.0)**:
 - Processing Time: 2.087 seconds
 - Throughput: 914 files/second
 - Files Successfully Processed: 1,907 files
@@ -649,7 +655,7 @@ Performance testing on 1,999 mixed-format files:
 **Perl ExifTool (v13.36) Comparison**:
 - Processing Time: 17.145 seconds
 - Throughput: 116 files/second
-- **ExifTool-RS is 8.21x faster**
+- **8.21x faster** in that November 2025 run
 
 **Performance Characteristics**:
 - Parallel I/O processing for batch operations
@@ -694,8 +700,8 @@ All parsers undergo rigorous testing:
 ## Support
 
 For issues, questions, or feature requests related to camera raw format support:
-- [GitHub Issues](https://github.com/oxidex/oxidex/issues)
-- [Documentation](https://oxidex.github.io/oxidex/)
+- [GitHub Issues](https://github.com/swack-tools/oxidex/issues)
+- [Documentation](https://oxidex.net/)
 
 ---
 
@@ -704,4 +710,4 @@ For issues, questions, or feature requests related to camera raw format support:
 **Supported Manufacturers**: 20+ camera brands
 **Tested Files**: 4,026 real-world samples
 **Success Rate**: 81.02%
-**Performance**: 8.21x faster than Perl ExifTool
+**Performance**: 8.21x faster than Perl ExifTool 13.36 in the November 2025 run above (historical)
