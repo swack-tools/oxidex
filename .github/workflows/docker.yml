@@ -184,14 +184,21 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Tags have already passed the main-ancestry check, so each accepted
-      # release advances :latest together with its versioned image tags.
+      # stable release advances :latest together with its versioned image
+      # tags. A SemVer pre-release (a '-' in the tag, e.g. v2.0.0-beta.1)
+      # publishes only its exact tags (v2.0.0-beta.1 and 2.0.0-beta.1) and
+      # moves no floating tag: `latest=false` stops metadata-action's own
+      # auto-latest, and the explicit :latest is enabled for stable tags only.
+      # tools/ci/test_release_workflow.py pins this.
       - name: Compute tags
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
             type=ref,event=tag
             type=semver,pattern={{version}}
 

@@ -1,6 +1,6 @@
 [package]
 name = "oxidex-tags"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 edition = "2024"
 authors = ["OxiDex Contributors"]
 description = "Tag database for OxiDex metadata extraction library"
@@ -11,10 +11,10 @@ name = "oxidex_tags"
 path = "src/lib.rs"
 
 [dependencies]
-oxidex-tags-core = { path = "../oxidex-tags-core" }
-oxidex-tags-camera = { path = "../oxidex-tags-camera" }
-oxidex-tags-media = { path = "../oxidex-tags-media" }
-oxidex-tags-image = { path = "../oxidex-tags-image" }
-oxidex-tags-document = { path = "../oxidex-tags-document" }
-oxidex-tags-specialty = { path = "../oxidex-tags-specialty" }
-oxidex-tags-shared = { path = "../oxidex-tags-shared" }
+oxidex-tags-core = { path = "../oxidex-tags-core", version = "=2.0.0-beta.1" }
+oxidex-tags-camera = { path = "../oxidex-tags-camera", version = "=2.0.0-beta.1" }
+oxidex-tags-media = { path = "../oxidex-tags-media", version = "=2.0.0-beta.1" }
+oxidex-tags-image = { path = "../oxidex-tags-image", version = "=2.0.0-beta.1" }
+oxidex-tags-document = { path = "../oxidex-tags-document", version = "=2.0.0-beta.1" }
+oxidex-tags-specialty = { path = "../oxidex-tags-specialty", version = "=2.0.0-beta.1" }
+oxidex-tags-shared = { path = "../oxidex-tags-shared", version = "0.1.0" }

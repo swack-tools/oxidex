@@ -1,6 +1,6 @@
 [package]
 name = "oxidex-tags-specialty"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 edition = "2024"
 authors = ["OxiDex Contributors"]
 description = "Specialty format tag definitions for OxiDex"
@@ -12,10 +12,10 @@ path = "src/lib.rs"
 
 [dependencies]
 bincode = { version = "2.0", features = ["serde"] }
-oxidex-tags-core = { path = "../oxidex-tags-core" }
-oxidex-tags-shared = { path = "../oxidex-tags-shared" }
+oxidex-tags-core = { path = "../oxidex-tags-core", version = "=2.0.0-beta.1" }
+oxidex-tags-shared = { path = "../oxidex-tags-shared", version = "0.1.0" }
 
 [build-dependencies]
 bincode = { version = "2.0", features = ["serde"] }
 serde_yaml = "0.9"
-oxidex-tags-shared = { path = "../oxidex-tags-shared" }
+oxidex-tags-shared = { path = "../oxidex-tags-shared", version = "0.1.0" }

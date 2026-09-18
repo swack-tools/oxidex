@@ -1,0 +1,139 @@
+# Release readiness: v2.0.0-beta.1
+
+The first pre-release of the `refactor/tag-machinery` line. This page lists
+what must be true **before** the tag is pushed, and then exactly what the
+maintainer runs and what the workflows do in response. Nothing here has been
+tagged or published; publishing is the maintainer's decision.
+
+`2.0.0-beta.1` is a SemVer pre-release: the dot before the number is what
+makes `beta.10` sort after `beta.2`. Python tooling would spell it `2.0.0b1`
+(PEP 440), but nothing in this repository ships a Python package version (see
+"Versions" below).
+
+## Before the tag
+
+Every box needs its evidence (a link or a named instrument's output), not a
+recollection.
+
+- [ ] **Docs overhaul merged.** The `staging/docs-overhaul` PR is merged into
+      `refactor/tag-machinery`, and it set the site's version label in
+      `docs/.vitepress/config.mts`.
+- [ ] **CHANGELOG entry present.** `CHANGELOG.md` has an "Unreleased (2.0.0)"
+      entry covering this line (written on `staging/docs-overhaul`).
+- [ ] **Migration guide present.** The 1.x to 2.0 migration page exists and is
+      linked from the docs site (written on `staging/docs-overhaul`).
+- [ ] **Tag SHA chosen and frozen.** Record it: `SHA=$(git rev-parse origin/refactor/tag-machinery)`
+      after the last merge you intend to ship. Every box below is about
+      *this* SHA, not "the tip" at some other moment.
+- [ ] **Push CI green on that SHA.** The `CI` workflow's `push` run for `$SHA`
+      concluded `success` (not `cancelled`; a newer push cancels the older
+      run, so a cancelled run is no evidence either way):
+      `gh run list --workflow CI --branch refactor/tag-machinery --event push --commit "$SHA" --json conclusion,url`
+- [ ] **Corpus read regression gate passing on that SHA.** Within that same
+      run, the `Corpus Read Regression Gate` job concluded `success` with a
+      `verdict: PASS` line in its log. Exit 1 is a code regression (read the
+      `LOST` lines); exit 2 is a refused *measurement*: re-run it, don't
+      count it as a pass.
+- [ ] **Benchmarks current.** The committed figures
+      (`benches/benchmark_results.md`, `docs/performance/`) were measured at
+      `$SHA`, or at a commit where `git diff --stat <measured>..$SHA -- src oxidex-tags* Cargo.lock`
+      is empty. Today they name `8f04e288` (oxidex 1.2.1); if they are older
+      than `$SHA` by any reader change, re-run `benches/exiftool_comparison.sh`
+      against the pinned ExifTool 13.59 and commit the result first. The
+      `Benchmarks (indicative)` push run for `$SHA` concluded `success`.
+- [ ] **Known limitations stated.** The release notes or the CHANGELOG entry
+      say plainly: extraction parity with ExifTool is partial and measured
+      (link the conformance score, not the tag-definition count); which
+      formats are detected but not parsed (identity tags only); write
+      support varies per format; this is a beta and its API may change
+      before 2.0.0.
+- [ ] **Version agrees with the tag.** `Cargo.toml` `[package] version` is
+      `2.0.0-beta.1` at `$SHA`. (The release workflow now refuses a mismatch
+      in its first job, but finding out there costs a failed release run.)
+
+## Tag and publish
+
+Run from a checkout with the swackhamer key (the tag must be signed):
+
+```bash
+SSH='ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer'
+GIT_SSH_COMMAND="$SSH" git fetch origin --tags
+SHA=<the frozen SHA from the checklist>
+git show -s --format='%H %s' "$SHA"
+git show "$SHA":Cargo.toml | grep -m1 '^version = "2.0.0-beta.1"$'   # must print the line
+git tag -s v2.0.0-beta.1 -m "OxiDex v2.0.0-beta.1" "$SHA"
+git tag -v v2.0.0-beta.1
+GIT_SSH_COMMAND="$SSH" git push origin "refs/tags/v2.0.0-beta.1"
+```
+
+Don't use `just tag`/`just release`: that recipe makes an unsigned tag of
+`HEAD` and pushes it at once.
+
+### What the push triggers
+
+**`release.yml` (GitHub Release).**
+
+1. `verify-version` runs `tools/ci/release_version.py`. It fails the whole
+   run if the tag and `Cargo.toml` disagree, and emits `prerelease=true`
+   because the tag contains `-`.
+2. Builds Linux x86_64/arm64 (musl), Windows x86_64, and a signed, notarized
+   macOS arm64 binary and DMG (`oxidex-v2.0.0-beta.1.dmg`).
+3. `create-release` publishes GitHub release "Release v2.0.0-beta.1" as a
+   **pre-release** with `make_latest: false`, so `/releases/latest` stays on
+   v1.2.1.
+4. `update-docs` is **skipped** for a pre-release: the stable gh-pages
+   changelog and version dropdown are left alone.
+
+**`docker.yml` (Docker Hub `swackhamer/oxidex`).** Its first job only
+publishes a tag reachable from `origin/main`. `refactor/tag-machinery` is
+not merged into `main`, so for this tag it logs *"not reachable from
+origin/main; Docker image publication is skipped"* and publishes **no image**.
+That is the existing policy and this release doesn't change it. If a beta
+image is wanted, that is a separate maintainer decision about the gate.
+When a pre-release tag is on `main`, it now publishes only
+`:v2.0.0-beta.1` and `:2.0.0-beta.1` and never moves `:latest`.
+
+**crates.io.** No workflow publishes to crates.io, and a tag push doesn't
+publish crates. Two blockers stop the root crate `oxidex` from being
+published at all, whatever the version:
+
+- the name `oxidex` on crates.io belongs to another account (a 0.0.1
+  "reserved name stub" pointing at `oxidex-rs/oxidex`);
+- the packaged crate is 288.7 MiB (25.7 MiB compressed), and crates.io's
+  limit is 10 MiB.
+
+The tag crates are free names, small, and pass `cargo publish --dry-run`. If
+the maintainer decides to publish them, do it by hand, in dependency order
+(cargo does the ordering for you):
+
+```bash
+cargo publish --workspace --exclude oxidex --dry-run   # rehearse
+cargo publish --workspace --exclude oxidex             # publishes in this order:
+# oxidex-tags-shared 0.1.0, oxidex-tags-core, -camera, -document, -image,
+# -media, -specialty, then oxidex-tags (all 2.0.0-beta.1)
+```
+
+A published pre-release is only selected by a requirement that names a
+pre-release (`=2.0.0-beta.1` or `^2.0.0-beta.1`). `^2` will not pick it,
+and that is intended.
+
+**Homebrew.** `packaging/homebrew/oxidex.rb` is a template that doesn't
+track releases. A tag doesn't change it.
+
+## Versions
+
+| Crate | v1.2.1 | now | Why |
+|---|---|---|---|
+| `oxidex` | 1.2.1 | 2.0.0-beta.1 | Maintainer's decision for this line. |
+| `oxidex-tags-core` | 1.0.4 | 2.0.0-beta.1 | Public API broke: `types::{Tag, TagTable, TagDatabase}` moved to `oxidex-tags-shared`. They're re-exported at the crate root, but the `oxidex_tags_core::types::` paths are gone. Its data broke too: 11 of 118 tables were removed and tag definitions fell from 4,166 to 1,455, so `get_tag_table` returns `None` for names that used to resolve. |
+| `oxidex-tags-camera`, `-media`, `-image`, `-document`, `-specialty` | 1.0.4 | 2.0.0-beta.1 | Each one publicly re-exports `oxidex_tags_core::types::*` and now exposes `oxidex_tags_shared` types, so a major bump of core is a major bump of each. Each one also lost tables that `get_tag_table` used to find: camera 19 of 599, media 12 of 125, document 5 of 55, image 1 of 64, specialty 1 of 18. |
+| `oxidex-tags` | 1.0.4 | 2.0.0-beta.1 | Facade: re-exports `core` as a module (so `oxidex_tags::core::types::Tag` is gone) and every domain crate above. |
+| `oxidex-tags-shared` | (did not exist) | 0.1.0 | New since v1.2.1 and never released, so there's no earlier interface to break. It gained the `description`/`license` metadata a publish needs. |
+
+Inter-crate requirements pin the tag crates exactly (`=2.0.0-beta.1`), so
+a later beta of one tag crate can't be mixed with this beta of another.
+`oxidex-tags-shared` is required as `0.1.0`.
+
+Python: `bindings/python` is a ctypes wrapper (`oxidex.py`) with no
+`pyproject.toml`, `setup.py` or `__version__`, so it carries no version to
+bump. If it is ever packaged, this release is `2.0.0b1` in PEP 440.
