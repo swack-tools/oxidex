@@ -18,10 +18,12 @@
 #    false explanation downstream, so every refusal aborts and names the exact
 #    construct.
 #  * Qualcomm::Main is unusual: it declares VARS => { ID_FMT => 'none',
-#    NO_LOOKUP => 1 } and every one of its entries is an EMPTY hash in the
-#    source. The Name and Description are not written by a human at all -- they
-#    are generated at module load by Qualcomm::MakeNameAndDesc. So there is no
-#    static table worth transcribing: the content is the ALGORITHM. This script
+#    NO_LOOKUP => 1 } (NO_ID => 1 in place of ID_FMT before 13.x; both are
+#    documentation-only, see the VARS check) and every one of its entries is
+#    an EMPTY hash in the source. The Name and Description are not written by
+#    a human at all -- they are generated at module load by
+#    Qualcomm::MakeNameAndDesc. So there is no static table worth
+#    transcribing: the content is the ALGORITHM. This script
 #    therefore emits the algorithm's inputs (signature, directory offset,
 #    format codes) plus a fixture of all 1188 key/Name/Description triples that
 #    the Rust port of MakeNameAndDesc must reproduce exactly. That fixture is
@@ -96,11 +98,46 @@ die "REFUSING: unexpected GROUPS in Qualcomm::Main: "
        and ($g->{2} // '') eq 'Camera'
        and !exists $g->{1};
 
-# VARS: ID_FMT 'none' + NO_LOOKUP is what makes the string tag IDs legal.
+# VARS. Every key admitted here is one whose ExifTool consumers were read and
+# found to affect only the tag-name DOCUMENTATION or the TagLookup.pm lookup
+# table that BuildTagLookup generates -- never what ProcessQualcomm reads,
+# names or converts. Nothing in ExifTool.pm or Qualcomm.pm reads any of them
+# (11.78, 12.64 and 13.59 all checked); ExifTool.pm consults only
+# LOADED_USERDEFINED and ALLOW_REPROCESS out of any table's VARS. Any other
+# key -- or an admitted key with an unexpected value -- still refuses, because
+# a VARS entry is exactly where a table would declare changed read semantics.
+#
+#  * NO_LOOKUP: BuildTagLookup::new skips the table's tags when building
+#    TagLookup.pm ("next if $$vars{NO_LOOKUP}"). Unchanged in all three
+#    releases.
+#  * ID_FMT => 'none' (13.x) and NO_ID => 1 (11.78, 12.64) are two spellings
+#    of ONE documentation switch: drop the "Tag ID" column from the tag-name
+#    docs and sort the doc rows by Name (BuildTagLookup's $noID and
+#    SortedTagTableKeys). 13.x renamed NO_ID to ID_FMT => 'none'; the only
+#    other ID_FMT readers (TagInfoXML's language-XML import, Writer.pl's
+#    VerboseInfo) act only on 'hex'/'dec', never on 'none'. Qualcomm.pm's
+#    %Main body is otherwise byte-identical across the three releases.
+my %DOC_ONLY_VARS = (
+    NO_LOOKUP => sub { ($_[0] // 0) ? 1 : 0 },
+    ID_FMT    => sub { ($_[0] // '') eq 'none' },
+    NO_ID     => sub { ($_[0] // 0) ? 1 : 0 },
+);
 my $vars = $TABLE->{VARS} or die "REFUSING: Qualcomm::Main has no VARS\n";
-die "REFUSING: unexpected VARS in Qualcomm::Main: "
-  . join(',', map { "$_=$$vars{$_}" } sort keys %$vars) . "\n"
-    unless ($vars->{ID_FMT} // '') eq 'none' and ($vars->{NO_LOOKUP} // 0);
+my $vars_desc = join(',', map { "$_=" . ($$vars{$_} // 'undef') } sort keys %$vars);
+for my $k (sort keys %$vars) {
+    die "REFUSING: unexpected VARS in Qualcomm::Main: $vars_desc "
+      . "('$k' is not a proven documentation-only VARS key)\n"
+        unless $DOC_ONLY_VARS{$k};
+    die "REFUSING: unexpected VARS in Qualcomm::Main: $vars_desc "
+      . "('$k' has a value this generator has not proven documentation-only)\n"
+        unless $DOC_ONLY_VARS{$k}->($$vars{$k});
+}
+# The declared shape must still be the one every known release carries:
+# NO_LOOKUP plus exactly one spelling of the Tag-ID-column switch.
+die "REFUSING: unexpected VARS in Qualcomm::Main: $vars_desc "
+  . "(expected NO_LOOKUP plus exactly one of ID_FMT='none' / NO_ID)\n"
+    unless exists $vars->{NO_LOOKUP}
+       and (exists $vars->{ID_FMT}) + (exists $vars->{NO_ID}) == 1;
 
 # ---------------------------------------------------------------------------
 # Format codes. Qualcomm.pm's @qualcommFormat is lexical (`my`), so it cannot be
