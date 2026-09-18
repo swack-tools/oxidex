@@ -94,7 +94,7 @@ COND_DICT = {
     # attributes the tag to exactly the cameras that release does. The bodies
     # use only anchors, literals, `-`, `|` and groups, where Perl and the
     # `regex` crate agree by construction; `capture_sony_main_conditions.pl`
-    # proves it empirically (fixtures/sony_main_model_conditions.json).
+    # proves it empirically (testdata/sony_main_model_conditions.json).
     # 0x201d FlexibleSpotPosition, 11.78's text:
     '$$self{Model} =~ /^(NEX-|ILCE-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX99|RX0M2))/':
         'MCond::ModelRe(false, r"^(NEX-|ILCE-|DSC-(RX10M4|RX100M6|RX100M7|RX100M5A|HX99|RX0M2))")',

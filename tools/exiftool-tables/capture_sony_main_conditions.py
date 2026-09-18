@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record which Sony models each release's `Sony::Main` model Conditions select.
 
-Writes `fixtures/sony_main_model_conditions.json`: for every release lib given,
+Writes `testdata/sony_main_model_conditions.json`: for every release lib given,
 every `$$self{Model} =~ /RE/` (or `!~`) Condition on a MANIFEST tag of
 `gen_sony_main_extra_tables.py`, the models that release's own Perl selects
 (evaluated by `capture_sony_main_conditions.pl`) next to the `MCond` text the
@@ -19,7 +19,7 @@ recorded for the reader; nothing here admits or refuses on it.
 
 usage:
   capture_sony_main_conditions.py --perl PERL --models-lib LIB13.59 \\
-      --lib LIB [--lib LIB ...] -o fixtures/sony_main_model_conditions.json
+      --lib LIB [--lib LIB ...] -o testdata/sony_main_model_conditions.json
 """
 from __future__ import annotations
 

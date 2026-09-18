@@ -276,7 +276,7 @@ mod tests {
     fn model_conditions_select_what_each_releases_perl_selects() {
         use std::collections::BTreeSet;
         const FIXTURE: &str = include_str!(
-            "../../../../../tools/exiftool-tables/fixtures/sony_main_model_conditions.json"
+            "../../../../../tools/exiftool-tables/testdata/sony_main_model_conditions.json"
         );
         #[derive(serde::Deserialize)]
         struct Models {

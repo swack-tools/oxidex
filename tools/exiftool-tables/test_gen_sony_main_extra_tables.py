@@ -17,7 +17,7 @@ import unittest
 import gen_sony_main_extra_tables as generator
 
 HERE = Path(__file__).resolve().parent
-FIXTURE = HERE / "fixtures" / "sony_main_model_conditions.json"
+FIXTURE = HERE / "testdata" / "sony_main_model_conditions.json"
 PIN = (HERE.parents[1] / ".exiftool-version").read_text().strip()
 
 FLEX = {
