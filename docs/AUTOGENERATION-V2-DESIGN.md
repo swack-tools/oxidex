@@ -3,9 +3,11 @@
 Decided 2026-09-18 (maintainer, after two external architecture reviews).
 Supersedes the *mechanism* in `AUTOGENERATION-PLAN.md`; that document's goal
 (a change to ExifTool flows in by regeneration, with no retyping) is unchanged.
-Numbers below name their instrument; slots marked **TBD(spike)** are filled by
-`tools/exiftool-tables/spike/COVERAGE.md` when the expression-coverage spike
-lands, so the build order comes from measurement, not preference.
+Numbers below name their instrument. The expression-coverage spike
+(`tools/exiftool-tables/spike/run_spike.py`, draft PR #817) landed 2026-09-18
+and its numbers are filled in; they reproduce byte-for-byte on a clean tree
+at `ed404074` against the 13.59 dump (sha256 `536386691b0d…`). The build order
+below is read off its curves, not chosen.
 
 ## Why the current mechanism cannot reach 100%
 
@@ -36,7 +38,8 @@ Verified at `efe8c062`:
   sites).
 - **Monoliths.** `binary_tables.rs` 6.8 MB, `ifd_tables.rs` 4.4 MB.
 
-What is *not* the problem: speed. `benches/benchmark_results.md` already shows
+What is *also* not the problem: the grammar. The spike shows it is small and
+closed (§1). What is *not* the problem: speed. `benches/benchmark_results.md` already shows
 16x (single JPEG) and 65x (1000-file batch) over Perl ExifTool, measured
 against 13.36 at an early build; the dispatch-perf spike re-measures at the
 pin. Compiling to `match` arms is chosen for coverage and idiom, not because
@@ -70,8 +73,23 @@ an AST. It replaces `exprs.py`'s templates and `conds.py`'s shapes; coverage
 grows per grammar production, shared by every expression. Anything outside the
 grammar is refused per field and counted, never approximated.
 
-**TBD(spike):** parseable share of uses; residue size and character (bounded
-vs long tail).
+**Measured (spike, 13.59 dump, 13,290 uses / 3,448 distinct):** the grammar
+is small (1,301 lines) and effectively closed -- **99.7% of uses parse**
+(99.9% of `expr_coverage.py`'s narrower 6,993-use frame). The residue is
+**bounded, not a long tail**: 36 uses / 11 distinct, and an independent
+cross-check (pinned perl 5.38.2 compiling every expression,
+`spike/perl_syntax_check.pl`) shows **zero grammar holes** -- every residual
+is invalid Perl in ExifTool's own source (`PrintConv => '$val m'` MXF.pm:681,
+unbalanced parens in LNK.pm/CanonCustom.pm, a stray quote in JPEG.pm:143).
+A further 32 uses / 20 distinct parse but call the engine (`ProcessBinaryPLIST`,
+`FoundTag`, `ImageInfo`) and are not conversions; 13 uses need regex
+lookahead/backreferences the `regex` crate cannot compile.
+
+The parser is therefore **not the work**. A bare interpreter with no ExifTool
+knowledge covers only 69.6% (PURE `$val` + builtins) -- *less* than today's
+`exprs.py` at 75.4% (re-measured; the old 66.6% figure was stale), because
+`exprs.py` already inlines about a dozen helpers. The coverage lives in §2
+and §3.
 
 ### 2. `Session`
 
@@ -88,7 +106,14 @@ Passed by `&mut` through every walker; the `$self` equivalent.
 `$$self{...}` slots are dynamically typed in Perl; the generator infers a type
 per key from every use site and refuses a key used inconsistently.
 
-**TBD(spike):** the session keys by use count; which get typed fields.
+**Measured (spike):** 285 distinct session keys. With the helper library in
+place, **13 / 53 / 192 keys reach 90 / 95 / 99%** of uses. By use count:
+`$$self{Model}` 734, `$self` as object 270, `FacesDetected` 166, `Make` 117,
+`BitM` 96, `$count` 71, `$format` 66. Typed fields: `model`, `make`,
+`byte_order`, `count`, `format`; module-specific members (`FacesDetected`,
+`BitM`, …) live in the map. All session keys alone (no helpers) lift Frame A
+from 69.6% to 77.5% -- the session matters, but chiefly as what helpers and
+conditions read through.
 
 ### 3. Helper library
 
@@ -99,8 +124,21 @@ label -- the mechanism already landed for `ConvertUnixTime` (#805) and the
 AF-point helpers, including per-release variants where ExifTool's own
 behaviour changed between releases.
 
-**TBD(spike):** helper count; the curve (top 10 / 25 / 50) to 90 / 95 / 99%
-of uses; how many already have ports.
+**Measured (spike):** **157 distinct helper subs** (155 resolvable in the
+pinned source): 103 pure functions of their arguments, 52 read `$self`, 16
+drive the engine; plus 41 module-level data tables. With the session model,
+**6 / 22 / 113 helper ports reach 90 / 95 / 99%** of uses; session + top 25
+helpers takes Frame A from 75.4% to **97.1%** and distinct expressions from
+53.0% to **91.8%** -- the win is the long tail of one-off expressions. oxidex
+has **10 complete + 4 partial** ports today (partial = one branch only:
+`ConvertDateTime` as identity, `Decode`/UCS2, `ConvertFileSize` default
+ByteUnit, `ToDMS` default CoordFormat). The spike caught and removed a wrong
+mapping (`Exif::ConvertFraction → print_fraction` is the inverse direction),
+which would have credited a port for the #2 helper (191 uses) that does not
+exist -- exactly the "confident wrong number" the doctrine is about.
+
+**This is the work.** The build order is: session (§2) + the top 22 helpers,
+each ported once and verified differentially against the oracle.
 
 ### 4. Backend: AST → Rust
 
@@ -150,8 +188,8 @@ walkers hand-ported and listed. The ratchet tracks both counts.
 
 ## Sequencing
 
-1. Spike lands → fill the TBD slots; the helper and session-key build order is
-   read off its curves.
+1. ~~Spike lands → fill the TBD slots.~~ Done 2026-09-18 (#817). Build
+   order: session with typed `model`/`make`, then the top 22 helpers by use.
 2. Session + grammar + backend, exercised on **`Exif::Main`** end to end. It is
    already on the generated engine, dominates output (the 38.34% generated
    share at `72eae8a5` came mostly from ExifIFD), and touches Session and the
