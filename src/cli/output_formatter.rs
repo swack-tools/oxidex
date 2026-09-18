@@ -246,12 +246,12 @@ impl JsonFormatter {
     ///
     /// [`format`]: OutputFormatter::format
     /// [`format_with_status`]: JsonFormatter::format_with_status
-    fn build_json_map(
+    pub(crate) fn build_json_map(
         &self,
         metadata: &MetadataMap,
         filter_tags: Option<&[String]>,
         no_print_conv: bool,
-    ) -> serde_json::Map<String, serde_json::Value> {
+    ) -> std::collections::BTreeMap<String, JsonNode> {
         // If filter is specified, create a new filtered metadata map
         let metadata_to_filter = if let Some(filter) = filter_tags {
             let filtered: MetadataMap = metadata
@@ -267,7 +267,7 @@ impl JsonFormatter {
         // Convert MetadataMap to a simple HashMap for Perl ExifTool-compatible JSON output
         // Unwrap TagValue enum to produce flat values like {"EXIF:Make": "Canon"}
         // instead of {"EXIF:Make": {"type": "String", "value": "Canon"}}
-        let mut json_map = serde_json::Map::new();
+        let mut json_map = std::collections::BTreeMap::new();
 
         for (tag_name, tag_value) in metadata_to_filter.iter() {
             let json_value = if no_print_conv {
@@ -318,14 +318,12 @@ impl JsonFormatter {
         {
             json_map.insert(
                 "Status".to_string(),
-                serde_json::Value::String(status.as_str().to_string()),
+                JsonNode::String(status.as_str().to_string()),
             );
         }
 
-        match serde_json::to_string_pretty(&vec![json_map]) {
-            Ok(json) => json,
-            Err(e) => format!("[{{\"error\": \"Failed to serialize metadata: {}\"}}]", e),
-        }
+        // Perl ExifTool outputs `[{...}]`: an array with one object per file.
+        JsonNode::Array(vec![JsonNode::Object(json_map)]).to_pretty_string()
     }
 }
 
@@ -340,90 +338,218 @@ impl OutputFormatter for JsonFormatter {
     }
 
     fn format(&self, metadata: &MetadataMap, filter_tags: Option<&[String]>) -> String {
-        let json_map = self.build_json_map(metadata, filter_tags, false);
+        self.format_with_status_and_mode(metadata, filter_tags, None, false)
+    }
+}
 
-        // Serialize to pretty JSON wrapped in an array for Perl ExifTool compatibility
-        // Perl ExifTool outputs: [{...}] (array with one object per file)
-        // This allows processing multiple files with consistent JSON structure
-        match serde_json::to_string_pretty(&vec![json_map]) {
-            Ok(json) => json,
-            Err(e) => {
-                // Fallback error message if serialization fails
-                format!("[{{\"error\": \"Failed to serialize metadata: {}\"}}]", e)
+/// The `exiftool` script's own bare-token test in `EscapeJSON` (exiftool
+/// 13.59, lines 3806-3810), applied to every scalar it writes with `-j`:
+///
+/// ```text
+/// return lc($str) if $str =~ /^(true|false)$/i and $json < 2;
+/// return $str if $str =~ /^-?(\d|[1-9]\d{1,14})(\.\d{1,16})?(e[-+]?\d{1,3})?$/i;
+/// ```
+///
+/// Two Perl details decide the port rather than the JSON grammar:
+///
+/// * Perl's `$` (no `/m`) matches at the end of the string *or* just before a
+///   final newline, so `"12\n"` passes and is returned -- newline included --
+///   as a bare token. Rust's `$` is end-of-text only, hence the explicit
+///   `\n?`.
+/// * ExifTool's values are byte strings, so `\d` is ASCII `0-9` only
+///   (`"\u{661}\u{662}"` stays quoted under the pinned oracle). Rust's `\d` is
+///   Unicode-aware, hence `[0-9]` with Unicode mode off.
+///
+/// The number rule is json.org's grammar tightened by ExifTool's digit caps.
+/// A leading `+`, `.5`, `5.`, `007`, `Inf`/`NaN` and anything longer than
+/// the caps all stay quoted. `-j` and `-j -n` share this one test.
+static EXIFTOOL_JSON_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i-u)\A-?(?:[0-9]|[1-9][0-9]{1,14})(?:\.[0-9]{1,16})?(?:e[-+]?[0-9]{1,3})?\n?\z")
+        .expect("static regex is valid")
+});
+
+/// The boolean half of the same test: `/^(true|false)$/i`, emitted as
+/// `lc($str)` -- again keeping a final newline Perl's `$` let through.
+static EXIFTOOL_JSON_BOOLEAN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i-u)\A(?:true|false)\n?\z").expect("static regex is valid"));
+
+/// One node of oxidex's `-j` output.
+///
+/// This exists because `serde_json::Value` cannot carry ExifTool's bare
+/// tokens. `EscapeJSON` returns a numeric-looking string *unchanged*, so
+/// ExifTool prints `2.00`, `1.000e-06` and `2.269635e+03` exactly as the tag
+/// value spells them; a `serde_json::Number` re-renders through `f64`/`i64`
+/// and prints `2.0`, `1e-6` and `2269.635`. `Literal` holds the token text
+/// verbatim and [`JsonNode::to_pretty_string`] writes it unchanged. Every
+/// other node serializes exactly as the `serde_json::Value` it replaces.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum JsonNode {
+    /// A bare token written verbatim: a number or boolean `EscapeJSON`
+    /// accepted, spelled as ExifTool spells it.
+    Literal(String),
+    /// A quoted JSON string.
+    String(String),
+    Array(Vec<JsonNode>),
+    /// Keys iterate in `BTreeMap` order, as `serde_json::Map` does in this
+    /// crate (no `preserve_order` feature).
+    Object(std::collections::BTreeMap<String, JsonNode>),
+}
+
+impl JsonNode {
+    /// A bare token for a value this crate computed as a number itself (not
+    /// a tag string), spelled as serde_json would.
+    fn number(n: impl Into<serde_json::Number>) -> Self {
+        JsonNode::Literal(n.into().to_string())
+    }
+
+    /// Indexes an object by key; `None` for a missing key or a non-object.
+    pub(crate) fn get(&self, key: &str) -> Option<&JsonNode> {
+        match self {
+            JsonNode::Object(map) => map.get(key),
+            _ => None,
+        }
+    }
+
+    /// Pretty-prints in `serde_json::to_string_pretty`'s layout (two-space
+    /// indent, `"key": value`, `[]`/`{}` when empty), with `Literal` tokens
+    /// written as-is.
+    pub(crate) fn to_pretty_string(&self) -> String {
+        let mut out = String::new();
+        self.write_pretty(&mut out, 0);
+        out
+    }
+
+    fn write_pretty(&self, out: &mut String, indent: usize) {
+        match self {
+            JsonNode::Literal(token) => out.push_str(token),
+            JsonNode::String(s) => out.push_str(&json_quote(s)),
+            JsonNode::Array(items) => {
+                if items.is_empty() {
+                    out.push_str("[]");
+                    return;
+                }
+                out.push_str("[\n");
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(",\n");
+                    }
+                    push_indent(out, indent + 2);
+                    item.write_pretty(out, indent + 2);
+                }
+                out.push('\n');
+                push_indent(out, indent);
+                out.push(']');
             }
+            JsonNode::Object(map) => {
+                Self::write_object(map.iter().map(|(k, v)| (k.as_str(), v)), out, indent)
+            }
+        }
+    }
+
+    /// Writes `entries` as a pretty object in the given order. Shared with
+    /// the batch writer, which puts `SourceFile` first.
+    pub(crate) fn write_object<'a>(
+        entries: impl Iterator<Item = (&'a str, &'a JsonNode)>,
+        out: &mut String,
+        indent: usize,
+    ) {
+        let mut entries = entries.peekable();
+        if entries.peek().is_none() {
+            out.push_str("{}");
+            return;
+        }
+        out.push_str("{\n");
+        let mut first = true;
+        for (key, value) in entries {
+            if !first {
+                out.push_str(",\n");
+            }
+            first = false;
+            push_indent(out, indent + 2);
+            out.push_str(&json_quote(key));
+            out.push_str(": ");
+            value.write_pretty(out, indent + 2);
+        }
+        out.push('\n');
+        push_indent(out, indent);
+        out.push('}');
+    }
+}
+
+/// Test convenience: a node equals a `serde_json::Value` when it would
+/// serialize to the same text (so `Literal("2.00")` is *not* `json!(2.0)`).
+impl PartialEq<serde_json::Value> for JsonNode {
+    fn eq(&self, other: &serde_json::Value) -> bool {
+        match (self, other) {
+            (
+                JsonNode::Literal(token),
+                serde_json::Value::Number(_) | serde_json::Value::Bool(_),
+            ) => *token == other.to_string(),
+            (JsonNode::String(s), serde_json::Value::String(o)) => s == o,
+            (JsonNode::Array(a), serde_json::Value::Array(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x == y)
+            }
+            (JsonNode::Object(a), serde_json::Value::Object(b)) => {
+                a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|o| v == o))
+            }
+            _ => false,
         }
     }
 }
 
-/// The `exiftool` script's own numeric-string test, `EscapeJSON` (around line
-/// 3807): a string that looks like a JSON/PHP number is emitted unquoted,
-/// regardless of which tag it came from --
-/// `^-?(\d|[1-9]\d{1,14})(\.\d{1,16})?(e[-+]?\d{1,3})?$` case-insensitively.
-/// This is json.org's numeric grammar, tightened by ExifTool (capped digit
-/// counts) so oversized numbers don't upset some JSON parsers. A leading zero
-/// on a multi-digit integer part fails the match on purpose, so zero-padded
-/// strings (serial numbers, etc.) stay quoted.
-static EXIFTOOL_JSON_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^-?(?:\d|[1-9]\d{1,14})(?:\.\d{1,16})?(?:e[-+]?\d{1,3})?$")
-        .expect("static regex is valid")
-});
-
-/// Renders a string tag value as a JSON number when ExifTool's own `-j`
-/// writer would, so a `TagValue::String` holding e.g. a Composite's rendered
-/// `"0.026"` matches the oracle's unquoted `0.026` instead of diverging by
-/// quoting.
-fn exiftool_json_number(s: &str) -> Option<serde_json::Value> {
-    if !EXIFTOOL_JSON_NUMBER.is_match(s) {
-        return None;
-    }
-    if s.contains(['.', 'e', 'E']) {
-        serde_json::Number::from_f64(s.parse::<f64>().ok()?).map(serde_json::Value::Number)
-    } else {
-        s.parse::<i64>().ok().map(|i| serde_json::json!(i))
+impl std::ops::Index<&str> for JsonNode {
+    type Output = JsonNode;
+    fn index(&self, key: &str) -> &JsonNode {
+        self.get(key).expect("JsonNode object has the key")
     }
 }
 
+fn push_indent(out: &mut String, n: usize) {
+    out.extend(std::iter::repeat_n(' ', n));
+}
+
+/// Quotes and escapes a string exactly as serde_json does (unchanged from
+/// the `serde_json::Value::String` output this type replaced).
+fn json_quote(s: &str) -> String {
+    serde_json::to_string(s).expect("serializing a str cannot fail")
+}
+
 /// The single dispatch point for turning a display-ready string into a JSON
-/// value, matching `exiftool`'s own `EscapeJSON` (:3801-3809): a bare JSON
-/// boolean for the literal strings `true`/`false`, an unquoted JSON number
-/// for anything matching [`EXIFTOOL_JSON_NUMBER`], and a quoted JSON string
-/// otherwise. ExifTool applies this test uniformly to every PrintConv'd
-/// value regardless of which tag produced it, so every caller that already
-/// has a final display string -- the plain `TagValue::String` arm below and
+/// node, porting `exiftool`'s `EscapeJSON` (13.59, :3801-3834): the
+/// lowercased token for `true`/`false`, the string itself -- verbatim, never
+/// re-rendered -- when it passes [`EXIFTOOL_JSON_NUMBER`], and a quoted JSON
+/// string otherwise. ExifTool applies this test uniformly to every value
+/// regardless of which tag produced it, so every caller that already has a
+/// final display string -- the plain `TagValue::String` arm and
 /// `friendly_enum_name`'s labels alike -- must funnel through here instead
-/// of each inventing its own typing. Before this helper existed,
-/// `friendly_enum_name`'s early return wrapped its label in
-/// `serde_json::Value::String` unconditionally, so ApertureValue (which
-/// takes that path) stayed a quoted `"14.0"` in JSON while sibling APEX tags
-/// like MaxApertureValue (which reach the plain `TagValue::String` arm)
-/// correctly went unquoted -- oxidex disagreeing with itself on two tags
-/// ExifTool renders the same way.
-fn json_string_value(s: &str) -> serde_json::Value {
-    if s.eq_ignore_ascii_case("true") {
-        serde_json::Value::Bool(true)
-    } else if s.eq_ignore_ascii_case("false") {
-        serde_json::Value::Bool(false)
-    } else if let Some(n) = exiftool_json_number(s) {
-        n
+/// of each inventing its own typing. (Before this helper existed,
+/// `friendly_enum_name`'s early return quoted its label unconditionally, so
+/// ApertureValue stayed a quoted `"14.0"` while sibling APEX tags went
+/// unquoted.)
+fn json_string_value(s: &str) -> JsonNode {
+    if EXIFTOOL_JSON_BOOLEAN.is_match(s) {
+        JsonNode::Literal(s.to_ascii_lowercase())
+    } else if EXIFTOOL_JSON_NUMBER.is_match(s) {
+        JsonNode::Literal(s.to_string())
     } else {
         // EscapeJSON (exiftool:3819) deletes NULs only after its typing
         // checks. "12\0" must stay a quoted "12", not become a number.
-        serde_json::Value::String(s.replace('\0', ""))
+        JsonNode::String(s.replace('\0', ""))
     }
 }
 
 /// Raw output stringifies actual numeric values as Perl NVs at the writer.
 /// Numeric-looking strings keep their original bytes and JSON typing. This is
 /// separate from tag_name=None, which also occurs in normal nested structures.
-fn raw_tag_value_to_json(value: &TagValue) -> serde_json::Value {
+fn raw_tag_value_to_json(value: &TagValue) -> JsonNode {
     match value {
         TagValue::Float(number) => json_string_value(
             &crate::core::formatters::numeric_precision::perl_number(*number),
         ),
         TagValue::Array(values) => {
-            serde_json::Value::Array(values.iter().map(raw_tag_value_to_json).collect())
+            JsonNode::Array(values.iter().map(raw_tag_value_to_json).collect())
         }
-        TagValue::Struct(values) => serde_json::Value::Object(
+        TagValue::Struct(values) => JsonNode::Object(
             values
                 .iter()
                 .map(|(key, value)| (key.clone(), raw_tag_value_to_json(value)))
@@ -445,7 +571,7 @@ fn raw_tag_value_to_json(value: &TagValue) -> serde_json::Value {
 /// - Binary → JSON string "(Binary data N bytes, use -b option to extract)"
 /// - DateTime → JSON string (EXIF format: "YYYY:MM:DD HH:MM:SS")
 /// - Struct → JSON object (recursive)
-fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Value {
+pub(crate) fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> JsonNode {
     if let Some(name) = tag_name
         && let Some(label) = friendly_enum_name(name, value)
     {
@@ -463,8 +589,11 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
             // JSON boolean for these two literal strings, not a quoted one.
             json_string_value(s)
         }
-        TagValue::Integer(i) => serde_json::json!(*i),
-        TagValue::Float(f) => serde_json::json!(*f),
+        TagValue::Integer(i) => JsonNode::number(*i),
+        // A non-finite f64 has no serde_json::Number; serde_json::json!
+        // rendered it as `null`, which this keeps.
+        TagValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map_or_else(|| JsonNode::Literal("null".to_string()), JsonNode::number),
         TagValue::Rational {
             numerator,
             denominator,
@@ -480,26 +609,23 @@ fn tag_value_to_json(tag_name: Option<&str>, value: &TagValue) -> serde_json::Va
             };
             json_string_value(&rendered)
         }
-        TagValue::Binary(bytes) => serde_json::Value::String(binary_placeholder(bytes.len())),
+        TagValue::Binary(bytes) => JsonNode::String(binary_placeholder(bytes.len())),
         TagValue::DateTime(dt) => {
             // Format as EXIF DateTime: "YYYY:MM:DD HH:MM:SS"
             // This matches Perl ExifTool's output format
-            serde_json::Value::String(dt.format("%Y:%m:%d %H:%M:%S").to_string())
+            JsonNode::String(dt.format("%Y:%m:%d %H:%M:%S").to_string())
         }
-        TagValue::Struct(map) => {
-            let mut obj = serde_json::Map::new();
-            for (key, val) in map.iter() {
-                obj.insert(key.clone(), tag_value_to_json(None, val));
-            }
-            serde_json::Value::Object(obj)
-        }
-        TagValue::Array(values) => {
-            let array: Vec<serde_json::Value> = values
+        TagValue::Struct(map) => JsonNode::Object(
+            map.iter()
+                .map(|(key, val)| (key.clone(), tag_value_to_json(None, val)))
+                .collect(),
+        ),
+        TagValue::Array(values) => JsonNode::Array(
+            values
                 .iter()
                 .map(|v| tag_value_to_json(tag_name, v))
-                .collect();
-            serde_json::Value::Array(array)
-        }
+                .collect(),
+        ),
     }
 }
 
@@ -1095,16 +1221,137 @@ mod tests {
             (-2147483648, -1, "2147483648"),
             (1, 2147483647, "4.656612875e-10"),
             (2147483647, 3, "715827882.3"),
-            (0, -1, "0"),
+            // Pinned 13.59 prints `-0` for an SRATIONAL 0/-1 XResolution in
+            // -j, -j -n and -s alike (re-probed 2026-09-17 on a hand-built
+            // TIFF). This row used to expect `0`: the f64 round trip in the
+            // old JSON writer dropped the sign, and the expectation followed
+            // the writer rather than the oracle.
+            (0, -1, "-0"),
             (1, -3, "-0.3333333333"),
         ] {
-            let expected: serde_json::Value = serde_json::from_str(expected_json).unwrap();
             assert_eq!(
-                tag_value_to_json(None, &TagValue::new_rational(numerator, denominator)),
-                expected,
+                tag_value_to_json(None, &TagValue::new_rational(numerator, denominator))
+                    .to_pretty_string(),
+                expected_json,
                 "{numerator}/{denominator}"
             );
         }
+    }
+
+    /// Every row is the exact token pinned ExifTool 13.59 wrote for that
+    /// string, captured from one hand-built PNG carrying each input as an
+    /// iTXt value (`exiftool -j -G1` and `-j -n -G1` agree byte for byte on
+    /// every row). It pins `EscapeJSON`'s rule: the literal is kept verbatim
+    /// (`2.00`, `1.000e-06`, `1E5`, `1e+005`, `-0e0`), the digit caps (15
+    /// integer digits, 16 fraction digits, 3 exponent digits) and the
+    /// rejected shapes (`007`, `+5`, `.5`, `5.`, `Inf`, non-ASCII digits)
+    /// hold, and Perl's `$` lets one final newline through on both numbers
+    /// and booleans (`12\n` is written bare, newline and all).
+    #[test]
+    fn json_scalar_tokens_match_pinned_exiftool_bytes() {
+        for (input, expected) in [
+            ("2.00", "2.00"),
+            ("1.000e-06", "1.000e-06"),
+            ("2.269635e+03", "2.269635e+03"),
+            ("0.3000", "0.3000"),
+            ("007", "\"007\""),
+            ("0", "0"),
+            ("-0", "-0"),
+            ("+5", "\"+5\""),
+            ("-5", "-5"),
+            (".5", "\".5\""),
+            ("5.", "\"5.\""),
+            ("1e5", "1e5"),
+            ("1E5", "1E5"),
+            ("1e+005", "1e+005"),
+            ("1e1234", "\"1e1234\""),
+            ("Inf", "\"Inf\""),
+            ("NaN", "\"NaN\""),
+            ("-Inf", "\"-Inf\""),
+            ("inf", "\"inf\""),
+            ("nan", "\"nan\""),
+            ("123456789012345", "123456789012345"),
+            ("1234567890123456", "\"1234567890123456\""),
+            ("1.1234567890123456", "1.1234567890123456"),
+            ("1.12345678901234567", "\"1.12345678901234567\""),
+            ("00", "\"00\""),
+            ("0.0", "0.0"),
+            ("-0.0", "-0.0"),
+            ("01.5", "\"01.5\""),
+            ("1.5e", "\"1.5e\""),
+            ("1.5e+", "\"1.5e+\""),
+            ("12\n", "12\n"),
+            ("true", "true"),
+            ("FALSE", "false"),
+            ("True\n", "true\n"),
+            ("  5", "\"  5\""),
+            ("5 ", "\"5 \""),
+            ("1,5", "\"1,5\""),
+            ("0x10", "\"0x10\""),
+            ("\u{661}\u{662}", "\"\u{661}\u{662}\""),
+            ("9223372036854775807", "\"9223372036854775807\""),
+            ("1e-0", "1e-0"),
+            ("5e00", "5e00"),
+            (" true", "\" true\""),
+            ("1_000", "\"1_000\""),
+            ("-", "\"-\""),
+            ("-.5", "\"-.5\""),
+            ("-0e0", "-0e0"),
+        ] {
+            assert_eq!(
+                json_string_value(input).to_pretty_string(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    /// The whole writer, not just the scalar test: a literal inside the
+    /// file object and inside a list keeps its spelling, and the layout is
+    /// otherwise serde_json's pretty layout.
+    #[test]
+    fn json_writer_keeps_numeric_literals_verbatim() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("NITF:NITFVersion", TagValue::new_string("2.00"));
+        metadata.insert("JPEG-HDR:S2n", TagValue::new_string("1.000e-06"));
+        metadata.insert(
+            "Test:List",
+            TagValue::Array(vec![
+                TagValue::new_string("2.269635e+03"),
+                TagValue::new_string("0.3000"),
+                TagValue::new_string("007"),
+            ]),
+        );
+        for raw in [false, true] {
+            assert_eq!(
+                JsonFormatter.format_with_mode(&metadata, None, raw),
+                "[\n  {\n    \"JPEG-HDR:S2n\": 1.000e-06,\n    \"NITF:NITFVersion\": 2.00,\n    \"Test:List\": [\n      2.269635e+03,\n      0.3000,\n      \"007\"\n    ]\n  }\n]",
+                "raw={raw}"
+            );
+        }
+    }
+
+    /// `JsonNode::to_pretty_string` must be byte-identical to
+    /// `serde_json::to_string_pretty` for every tree without a verbatim
+    /// literal, so the only output change is the literal spelling itself.
+    #[test]
+    fn json_writer_layout_matches_serde_json_pretty() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert(
+            "A:Str",
+            TagValue::new_string("quote\" back\\ tab\t ctl\x01 é"),
+        );
+        metadata.insert("A:Int", TagValue::new_integer(-42));
+        metadata.insert("A:Float", TagValue::Float(0.1));
+        metadata.insert("A:Empty", TagValue::Array(vec![]));
+        metadata.insert("A:EmptyStruct", TagValue::Struct(Default::default()));
+        metadata.insert(
+            "A:Nested",
+            TagValue::Array(vec![TagValue::Array(vec![TagValue::new_integer(1)])]),
+        );
+        let rendered = JsonFormatter.format(&metadata, None);
+        let reparsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(rendered, serde_json::to_string_pretty(&reparsed).unwrap());
     }
 
     #[test]

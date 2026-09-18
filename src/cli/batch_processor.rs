@@ -6,7 +6,7 @@
 
 use crate::cli::args::CliArgs;
 use crate::cli::output_formatter::{
-    CsvFormatter, HumanReadableFormatter, JsonFormatter, OutputFormatter, ShortFormatter,
+    CsvFormatter, HumanReadableFormatter, JsonFormatter, JsonNode, OutputFormatter, ShortFormatter,
 };
 use crate::cli::tag_resolution::{ResolvedFileOutput, resolve_file_output};
 use crate::cli::value_parser::parse_cli_tag_value;
@@ -15,6 +15,7 @@ use crate::core::operations::{modify_tag, read_metadata_with_detector_and_option
 use crate::error::{ExifToolError, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -562,126 +563,57 @@ fn output_short_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliAr
 /// - All metadata tags (for successful reads)
 /// - Error message (for failed reads)
 fn output_json_results(results: &[(PathBuf, Result<MetadataMap>)], args: &CliArgs) -> Result<()> {
-    use serde_json::{Value, json};
-
     let formatter = JsonFormatter;
 
-    let json_array: Vec<Value> = results
+    // Build each object as a `JsonNode` tree directly. Rendering to text and
+    // parsing it back through `serde_json::Value` (as this once did) would
+    // re-render every bare numeric token through f64 -- `2.00` back to `2.0`
+    // -- undoing the verbatim spelling `EscapeJSON` preserves.
+    let objects: Vec<BTreeMap<String, JsonNode>> = results
         .iter()
-        .map(|(path, result)| -> Result<Value> {
-            match result {
+        .map(|(path, result)| {
+            let mut map = match result {
                 Ok(metadata) => {
                     let metadata = resolved_metadata_for_structured_output(metadata, args);
-                    let formatted = formatter.format_with_status_and_mode(
-                        &metadata,
-                        None,
-                        None,
-                        !args.exiftool_compat(),
-                    );
-                    let mut values: Vec<Value> = serde_json::from_str(&formatted).map_err(|e| {
-                        ExifToolError::parse_error(format!("Failed to parse formatted JSON: {}", e))
-                    })?;
-                    let mut obj = values.pop().ok_or_else(|| {
-                        ExifToolError::parse_error("Formatted JSON contained no objects")
-                    })?;
-                    let map = obj.as_object_mut().ok_or_else(|| {
-                        ExifToolError::parse_error("Formatted JSON entry was not an object")
-                    })?;
-                    map.insert("SourceFile".to_string(), json!(path.display().to_string()));
-                    Ok(obj)
+                    formatter.build_json_map(&metadata, None, !args.exiftool_compat())
                 }
-                Err(e) => Ok(json!({
-                    "SourceFile": path.display().to_string(),
-                    "Error": e.to_string(),
-                })),
-            }
+                Err(e) => BTreeMap::from([("Error".to_string(), JsonNode::String(e.to_string()))]),
+            };
+            map.insert(
+                "SourceFile".to_string(),
+                JsonNode::String(path.display().to_string()),
+            );
+            map
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
-    // serde_json's Map is a plain BTreeMap here (this crate doesn't enable the
-    // "preserve_order" feature), so it always iterates keys alphabetically --
-    // inserting "SourceFile" cannot make it serialize first the way ExifTool's
-    // `-j` does. Render the array by hand so SourceFile leads each object.
-    print_json_array_with_source_file_first(&json_array);
+    // The object map iterates keys alphabetically, so inserting "SourceFile"
+    // cannot make it serialize first the way ExifTool's `-j` does. Render
+    // the array by hand so SourceFile leads each object.
+    println!("{}", json_array_with_source_file_first(&objects));
     Ok(())
 }
 
-/// Serializes `objects` as a pretty-printed JSON array, printing each
-/// object's `SourceFile` key first (as ExifTool's `-j` does) and every other
-/// key in its existing (alphabetical) order after it.
-fn print_json_array_with_source_file_first(objects: &[serde_json::Value]) {
+/// Renders `objects` as a pretty-printed JSON array, printing each object's
+/// `SourceFile` key first (as ExifTool's `-j` does) and every other key in
+/// its existing (alphabetical) order after it.
+fn json_array_with_source_file_first(objects: &[BTreeMap<String, JsonNode>]) -> String {
     let mut out = String::from("[\n");
-    for (i, obj) in objects.iter().enumerate() {
+    for (i, map) in objects.iter().enumerate() {
         out.push_str("  ");
-        match obj.as_object() {
-            Some(map) => out.push_str(&ordered_object_to_json(map, 2)),
-            None => out.push_str(&obj.to_string()),
-        }
+        let entries = map
+            .get_key_value("SourceFile")
+            .into_iter()
+            .chain(map.iter().filter(|(k, _)| k.as_str() != "SourceFile"))
+            .map(|(k, v)| (k.as_str(), v));
+        JsonNode::write_object(entries, &mut out, 2);
         if i + 1 < objects.len() {
             out.push(',');
         }
         out.push('\n');
     }
     out.push(']');
-    println!("{}", out);
-}
-
-/// Renders a JSON object with `SourceFile` (if present) as the first key,
-/// at the given indent level (spaces before each `"key": value` line).
-fn ordered_object_to_json(
-    map: &serde_json::Map<String, serde_json::Value>,
-    indent: usize,
-) -> String {
-    if map.is_empty() {
-        return "{}".to_string();
-    }
-
-    let inner_indent = indent + 2;
-    let inner_pad = " ".repeat(inner_indent);
-
-    let mut ordered: Vec<(&str, &serde_json::Value)> = Vec::with_capacity(map.len());
-    if let Some(v) = map.get("SourceFile") {
-        ordered.push(("SourceFile", v));
-    }
-    for (k, v) in map.iter() {
-        if k != "SourceFile" {
-            ordered.push((k.as_str(), v));
-        }
-    }
-
-    let mut out = String::from("{\n");
-    for (i, (key, value)) in ordered.iter().enumerate() {
-        out.push_str(&inner_pad);
-        out.push_str(&serde_json::to_string(key).unwrap_or_default());
-        out.push_str(": ");
-        out.push_str(&reindent_pretty_json(value, inner_indent));
-        if i + 1 < ordered.len() {
-            out.push(',');
-        }
-        out.push('\n');
-    }
-    out.push_str(&" ".repeat(indent));
-    out.push('}');
     out
-}
-
-/// Pretty-prints a JSON value, shifting every line after the first over by
-/// `indent` spaces so a multi-line value (an array or nested object) lines
-/// up under the key that introduces it.
-fn reindent_pretty_json(value: &serde_json::Value, indent: usize) -> String {
-    let rendered = serde_json::to_string_pretty(value).unwrap_or_default();
-    let mut lines = rendered.lines();
-    let Some(first) = lines.next() else {
-        return rendered;
-    };
-    let pad = " ".repeat(indent);
-    let mut result = first.to_string();
-    for line in lines {
-        result.push('\n');
-        result.push_str(&pad);
-        result.push_str(line);
-    }
-    result
 }
 
 #[cfg(test)]
@@ -689,16 +621,22 @@ mod json_ordering_tests {
     use super::*;
     use serde_json::json;
 
+    fn object(pairs: &[(&str, JsonNode)]) -> BTreeMap<String, JsonNode> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
     #[test]
     fn source_file_is_always_first_key() {
-        let objects = vec![json!({
-            "Zebra": "z",
-            "Apple": "a",
-            "SourceFile": "photo.jpg",
-        })];
+        let objects = vec![object(&[
+            ("Zebra", JsonNode::String("z".into())),
+            ("Apple", JsonNode::String("a".into())),
+            ("SourceFile", JsonNode::String("photo.jpg".into())),
+        ])];
 
-        let map = objects[0].as_object().unwrap();
-        let rendered = ordered_object_to_json(map, 2);
+        let rendered = json_array_with_source_file_first(&objects);
         let source_pos = rendered.find("\"SourceFile\"").unwrap();
         let apple_pos = rendered.find("\"Apple\"").unwrap();
         let zebra_pos = rendered.find("\"Zebra\"").unwrap();
@@ -708,18 +646,37 @@ mod json_ordering_tests {
 
     #[test]
     fn reindented_array_value_parses_back_identically() {
-        let objects = vec![json!({
-            "SourceFile": "photo.jpg",
-            "IPTC:Keywords": ["ExifTool", "Test"],
-        })];
+        let objects = vec![object(&[
+            ("SourceFile", JsonNode::String("photo.jpg".into())),
+            (
+                "IPTC:Keywords",
+                JsonNode::Array(vec![
+                    JsonNode::String("ExifTool".into()),
+                    JsonNode::String("Test".into()),
+                ]),
+            ),
+        ])];
 
-        let mut out = String::from("[\n  ");
-        out.push_str(&ordered_object_to_json(objects[0].as_object().unwrap(), 2));
-        out.push_str("\n]");
-
+        let out = json_array_with_source_file_first(&objects);
         let reparsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         assert_eq!(reparsed[0]["IPTC:Keywords"], json!(["ExifTool", "Test"]));
         assert_eq!(reparsed[0]["SourceFile"], json!("photo.jpg"));
+    }
+
+    /// The batch writer must keep ExifTool's verbatim numeric spelling; it
+    /// used to parse the formatter's text back through `serde_json::Value`,
+    /// which printed `2.00` as `2.0`.
+    #[test]
+    fn batch_writer_keeps_numeric_literal_spelling() {
+        let objects = vec![object(&[
+            ("SourceFile", JsonNode::String("a.ntf".into())),
+            ("NITF:NITFVersion", JsonNode::Literal("2.00".into())),
+            ("Test:Exp", JsonNode::Literal("1.000e-06".into())),
+        ])];
+        assert_eq!(
+            json_array_with_source_file_first(&objects),
+            "[\n  {\n    \"SourceFile\": \"a.ntf\",\n    \"NITF:NITFVersion\": 2.00,\n    \"Test:Exp\": 1.000e-06\n  }\n]"
+        );
     }
 }
 
