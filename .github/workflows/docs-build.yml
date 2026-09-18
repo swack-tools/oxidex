@@ -29,11 +29,29 @@ concurrency:
 
 jobs:
   cold-build:
-    name: Build docs from a clean checkout
+    name: Build docs from a clean checkout (${{ matrix.channel }})
     # 2x: npm ci plus a VitePress build, ~1 minute end to end and mostly I/O
     # and single-threaded bundling. No Rust is compiled here.
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The same sources build two sites (see DOCS_CHANNEL in
+    # docs/.vitepress/config.mts): stable at '/', the live oxidex.net, and the
+    # development preview under a sub-path. Only the stable one is ever built on
+    # a PR otherwise, and a root-absolute link that ignores the base is correct
+    # at '/' -- so a base break would ship silently and surface only as 404s on
+    # the preview. The preview leg builds at the preview's real base and fails
+    # on any link that escapes it.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - channel: stable
+            base: /
+          - channel: preview
+            base: /oxidex-next/
+    env:
+      DOCS_CHANNEL: ${{ matrix.channel }}
+      DOCS_BASE: ${{ matrix.base }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,3 +90,22 @@ jobs:
           test -f docs/.vitepress/dist/reference/comparison/index.html \
             || { echo "::error::The comparison placeholder page was not rendered"; exit 1; }
           echo "Cold docs build succeeded."
+
+      # Proves the channel switch actually took: the preview must carry the
+      # banner and the stable build must not. A config refactor that drops the
+      # env wiring would otherwise build two identical, green, stable sites.
+      - name: Verify the channel rendered
+        run: |
+          if [ "$DOCS_CHANNEL" = preview ]; then
+            grep -q 'oxidex-preview-banner' docs/.vitepress/dist/index.html \
+              || { echo "::error::preview build has no preview banner"; exit 1; }
+          elif grep -rq 'oxidex-preview-banner' docs/.vitepress/dist; then
+            echo "::error::stable build carries the preview banner"; exit 1
+          fi
+          echo "Channel '$DOCS_CHANNEL' rendered as expected."
+
+      # Every same-origin href/src must stay inside DOCS_BASE. Missing targets
+      # that are equally broken on both channels are warnings (see the script).
+      - name: Check no link escapes the base
+        run: npm run docs:check-links
+        working-directory: docs
