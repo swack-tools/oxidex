@@ -132,6 +132,14 @@ jobs:
       # purpose.
       - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4.2.0
       - run: uv run scripts/sync_tag_stats.py --check
+      # The docs status page (/status/) is rendered from committed measurements
+      # (the published snapshots, parity_floors.json, the coverage reports, the
+      # rehearsal record). This re-renders it and fails on any difference, so a
+      # snapshot or floor change that does not refresh the page cannot land.
+      # tools/ci/test_render_status.py (the unittest step above) checks the same
+      # thing without PyYAML; this step also recounts the tag definitions.
+      # Fix with `uv run tools/docs/render_status.py`. Buildless, ~2 s.
+      - run: uv run tools/docs/render_status.py --check
       - run: cargo clippy --all-features -- -D warnings
       - uses: rustsec/audit-check@e9159ac5f7d7d873ce074ca134da2f445c0a4a61 # v1.3.2
         with:

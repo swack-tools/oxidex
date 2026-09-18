@@ -1,0 +1,632 @@
+{
+  "catalog": {
+    "catalog_entries": 33487,
+    "hydrated_source_rows": 35886,
+    "native_writable": {
+      "not_listed": 1,
+      "not_writable": 19262,
+      "writable": 14169,
+      "writable_protected": 55
+    },
+    "native_writable_unique_names": 7068,
+    "tag_crates": 6,
+    "tag_definitions": 16684,
+    "tag_tables": 931
+  },
+  "exiftool": "13.59",
+  "floors": {
+    "measured_at": "6ada109bf5f1",
+    "metrics": [
+      {
+        "current": 33487,
+        "direction": "exact",
+        "floor": 33487,
+        "holds": true,
+        "metric": "join:counts.catalog_ordinary_entries"
+      },
+      {
+        "current": 156,
+        "direction": "at_most",
+        "floor": 156,
+        "holds": true,
+        "metric": "join:counts.implementation.blocked_generated_reader_refusal"
+      },
+      {
+        "current": 1123,
+        "direction": "at_least",
+        "floor": 1123,
+        "holds": true,
+        "metric": "join:counts.implementation.generated_reader_declaration_option_gated"
+      },
+      {
+        "current": 778,
+        "direction": "at_least",
+        "floor": 778,
+        "holds": true,
+        "metric": "join:counts.implementation.generated_reader_declaration_unobserved"
+      },
+      {
+        "current": 18562,
+        "direction": "at_most",
+        "floor": 18562,
+        "holds": true,
+        "metric": "join:counts.implementation.source_row_not_yet_consumed"
+      },
+      {
+        "current": 33487,
+        "direction": "at_most",
+        "floor": 33487,
+        "holds": true,
+        "metric": "join:counts.observed_read.not_observed_yet"
+      },
+      {
+        "current": 33487,
+        "direction": "exact",
+        "floor": 33487,
+        "holds": true,
+        "metric": "join:counts.status.source_row_joined"
+      },
+      {
+        "current": 19,
+        "direction": "at_least",
+        "floor": 19,
+        "holds": true,
+        "metric": "join:counts.write_parity.generated_writer_declarations"
+      },
+      {
+        "current": 14169,
+        "direction": "exact",
+        "floor": 14169,
+        "holds": true,
+        "metric": "join:counts.write_parity.native_writable_entries"
+      },
+      {
+        "current": 7068,
+        "direction": "exact",
+        "floor": 7068,
+        "holds": true,
+        "metric": "join:counts.write_parity.native_writable_unique_case_insensitive_names"
+      },
+      {
+        "current": 14150,
+        "direction": "at_most",
+        "floor": 14150,
+        "holds": true,
+        "metric": "join:counts.writer_implementation.writer_not_declared"
+      },
+      {
+        "current": 33487,
+        "direction": "exact",
+        "floor": 33487,
+        "holds": true,
+        "metric": "observed:counts.catalog_ordinary_entries"
+      },
+      {
+        "current": 2378,
+        "direction": "at_least",
+        "floor": 2378,
+        "holds": true,
+        "metric": "observed:counts.corpus_read_attribution.credited_catalog_entries"
+      },
+      {
+        "current": 2766,
+        "direction": "at_least",
+        "floor": 2766,
+        "holds": true,
+        "metric": "observed:counts.corpus_read_attribution.metric_c.credited_source_coordinates"
+      },
+      {
+        "current": 3089,
+        "direction": "at_least",
+        "floor": 3089,
+        "holds": true,
+        "metric": "observed:counts.corpus_read_attribution.metric_c.distinct_group1_tag_identities_matched"
+      },
+      {
+        "current": 4270,
+        "direction": "at_least",
+        "floor": 4270,
+        "holds": true,
+        "metric": "observed:counts.corpus_read_attribution.native_catalog_entries"
+      },
+      {
+        "current": 1892,
+        "direction": "at_most",
+        "floor": 1892,
+        "holds": true,
+        "metric": "observed:counts.observed_read.native_read_not_matched"
+      },
+      {
+        "current": 29217,
+        "direction": "at_most",
+        "floor": 29217,
+        "holds": true,
+        "metric": "observed:counts.observed_read.not_observed_yet"
+      },
+      {
+        "current": 2378,
+        "direction": "at_least",
+        "floor": 2378,
+        "holds": true,
+        "metric": "observed:counts.observed_read.observed_matched_read"
+      },
+      {
+        "current": 33468,
+        "direction": "at_most",
+        "floor": 33468,
+        "holds": true,
+        "metric": "observed:counts.observed_write.not_observed_yet"
+      },
+      {
+        "current": 19,
+        "direction": "at_least",
+        "floor": 19,
+        "holds": true,
+        "metric": "observed:counts.observed_write.observed_matched_write"
+      },
+      {
+        "current": 19,
+        "direction": "at_least",
+        "floor": 19,
+        "holds": true,
+        "metric": "observed:counts.write_parity.observed_matched_write"
+      },
+      {
+        "current": 604,
+        "direction": "at_least",
+        "floor": 604,
+        "holds": true,
+        "metric": "observed:counts.write_readback.catalog_matched_write_operations"
+      },
+      {
+        "current": 38,
+        "direction": "at_least",
+        "floor": 38,
+        "holds": true,
+        "metric": "observed:counts.write_readback.distinct_group1_names"
+      },
+      {
+        "current": 902,
+        "direction": "at_least",
+        "floor": 902,
+        "holds": true,
+        "metric": "observed:counts.write_readback.successful_write_operations"
+      }
+    ],
+    "note": "observed-read credit refresh: read+write evidence regenerated at 6ada109b (after #800/#801/#813); source join unchanged; 0 credited entries lost, 113 gained"
+  },
+  "generated_by": "tools/docs/render_status.py",
+  "generated_share": {
+    "commit": "72eae8a5",
+    "date": "2026-09-13",
+    "engine_alone": "33.5%",
+    "matched_values": 468086,
+    "remeasure_evidence": "A fresh generated-share figure at a named commit; the delta attributed to step 2. If the share does not move, the architecture is not yet validated and step 4 does not start.",
+    "remeasure_how": "Run the probe census on the same corpus and control method as `72eae8a5`.",
+    "remeasure_step": "3. Re-measure the generated share.",
+    "share": "38.34%",
+    "stale": true
+  },
+  "generation": {
+    "artifacts": {
+      "by_tier": {
+        "1": 232,
+        "2": 23
+      },
+      "rust": 234,
+      "total": 255
+    },
+    "expressions": {
+      "helper_subs": 157,
+      "helper_subs_pure": 103,
+      "ports": [
+        "Image::ExifTool::ConvertDateTime",
+        "Image::ExifTool::Exif::ConvertFraction",
+        "Image::ExifTool::GPS::ToDMS",
+        "Image::ExifTool::Exif::PrintExposureTime",
+        "Image::ExifTool::ConvertUnixTime",
+        "Image::ExifTool::ConvertDuration",
+        "Image::ExifTool::IsFloat",
+        "Image::ExifTool::ConvertBitrate",
+        "Image::ExifTool::Exif::PrintFraction",
+        "Image::ExifTool::GPS::ToDegrees",
+        "Image::ExifTool::Canon::CanonEv",
+        "Image::ExifTool::Canon::CanonEvInv",
+        "Image::ExifTool::GetUnixTime",
+        "Image::ExifTool::Exif::PrintFNumber",
+        "Image::ExifTool::IsInt",
+        "Image::ExifTool::XMP::ConvertXMPDate",
+        "Image::ExifTool::ConvertFileSize",
+        "Image::ExifTool::Decode",
+        "Image::ExifTool::Encode"
+      ],
+      "refused": [
+        "Image::ExifTool::InverseDateTime",
+        "Image::ExifTool::ValidateImage",
+        "Image::ExifTool::Warn",
+        "Image::ExifTool::Samsung::Crypt"
+      ],
+      "session": {
+        "commit": "f5da2325b036bc7baa6fb93ea7ae401588d6d08e",
+        "frame_a": {
+          "distinct_total": 1529,
+          "rungs": {
+            "member_after": {
+              "distinct": 1338,
+              "distinct_pct": "87.5%",
+              "uses": 6659,
+              "uses_pct": "95.2%"
+            },
+            "parseable": {
+              "distinct": 1526,
+              "distinct_pct": "99.8%",
+              "uses": 6986,
+              "uses_pct": "99.9%"
+            },
+            "today": {
+              "distinct": 591,
+              "distinct_pct": "38.7%",
+              "uses": 5291,
+              "uses_pct": "75.7%"
+            },
+            "typed_after": {
+              "distinct": 1043,
+              "distinct_pct": "68.2%",
+              "uses": 6120,
+              "uses_pct": "87.5%"
+            }
+          },
+          "uses_total": 6993
+        },
+        "frame_b": {
+          "distinct_total": 3448,
+          "rungs": {
+            "member_after": {
+              "distinct": 3109,
+              "distinct_pct": "90.2%",
+              "uses": 12513,
+              "uses_pct": "94.2%"
+            },
+            "parseable": {
+              "distinct": 3437,
+              "distinct_pct": "99.7%",
+              "uses": 13254,
+              "uses_pct": "99.7%"
+            },
+            "today": {
+              "distinct": 1828,
+              "distinct_pct": "53.0%",
+              "uses": 9068,
+              "uses_pct": "68.2%"
+            },
+            "typed_after": {
+              "distinct": 2387,
+              "distinct_pct": "69.2%",
+              "uses": 10967,
+              "uses_pct": "82.5%"
+            }
+          },
+          "uses_total": 13290
+        },
+        "frame_m": {
+          "distinct_total": 218,
+          "rungs": {
+            "member_after": {
+              "distinct": 193,
+              "distinct_pct": "88.5%",
+              "uses": 316,
+              "uses_pct": "90.5%"
+            },
+            "parseable": {
+              "distinct": 216,
+              "distinct_pct": "99.1%",
+              "uses": 344,
+              "uses_pct": "98.6%"
+            },
+            "today": {
+              "distinct": 118,
+              "distinct_pct": "54.1%",
+              "uses": 169,
+              "uses_pct": "48.4%"
+            },
+            "typed_after": {
+              "distinct": 168,
+              "distinct_pct": "77.1%",
+              "uses": 275,
+              "uses_pct": "78.8%"
+            }
+          },
+          "uses_total": 349
+        },
+        "frame_mr": {
+          "distinct_total": 173,
+          "rungs": {
+            "member_after": {
+              "distinct": 156,
+              "distinct_pct": "90.2%",
+              "uses": 237,
+              "uses_pct": "92.9%"
+            },
+            "parseable": {
+              "distinct": 173,
+              "distinct_pct": "100.0%",
+              "uses": 255,
+              "uses_pct": "100.0%"
+            },
+            "today": {
+              "distinct": 98,
+              "distinct_pct": "56.6%",
+              "uses": 130,
+              "uses_pct": "51.0%"
+            },
+            "typed_after": {
+              "distinct": 131,
+              "distinct_pct": "75.7%",
+              "uses": 196,
+              "uses_pct": "76.9%"
+            }
+          },
+          "uses_total": 255
+        },
+        "measured_with_ports": 19
+      },
+      "spike": {
+        "commit": "53d276459ddac1e1a5a380ba1846e5c32ff6f9b8",
+        "frame_a": {
+          "distinct_total": 1529,
+          "rungs": {
+            "parseable": {
+              "distinct": 1526,
+              "distinct_pct": "99.8%",
+              "uses": 6986,
+              "uses_pct": "99.9%"
+            },
+            "pure": {
+              "distinct": 930,
+              "distinct_pct": "60.8%",
+              "uses": 4865,
+              "uses_pct": "69.6%"
+            },
+            "today": {
+              "distinct": 576,
+              "distinct_pct": "37.7%",
+              "uses": 5271,
+              "uses_pct": "75.4%"
+            },
+            "top25": {
+              "distinct": 1382,
+              "distinct_pct": "90.4%",
+              "uses": 6779,
+              "uses_pct": "96.9%"
+            }
+          },
+          "uses_total": 6993
+        },
+        "frame_b": {
+          "distinct_total": 3448,
+          "rungs": {
+            "parseable": {
+              "distinct": 3437,
+              "distinct_pct": "99.7%",
+              "uses": 13254,
+              "uses_pct": "99.7%"
+            },
+            "pure": {
+              "distinct": 1791,
+              "distinct_pct": "51.9%",
+              "uses": 8431,
+              "uses_pct": "63.4%"
+            },
+            "today": {
+              "distinct": 1828,
+              "distinct_pct": "53.0%",
+              "uses": 9068,
+              "uses_pct": "68.2%"
+            },
+            "top25": {
+              "distinct": 3164,
+              "distinct_pct": "91.8%",
+              "uses": 12713,
+              "uses_pct": "95.7%"
+            }
+          },
+          "uses_total": 13290
+        }
+      }
+    },
+    "reader": {
+      "catalog_entries": 33487,
+      "loose": 5363,
+      "loose_share": "16.02%",
+      "proven_reads_by_state": {
+        "blocked_generated_reader_refusal": 3,
+        "generated_reader_declaration_option_gated": 0,
+        "generated_reader_declaration_unobserved": 130,
+        "ifd_schema_declaration_eligible_unobserved": 288,
+        "ifd_schema_declaration_omitted_unobserved": 52,
+        "ifd_schema_declaration_refused_unobserved": 393,
+        "source_row_not_yet_consumed": 1512
+      },
+      "states": {
+        "blocked_generated_reader_refusal": 156,
+        "generated_reader_declaration_option_gated": 1123,
+        "generated_reader_declaration_unobserved": 778,
+        "ifd_schema_declaration_eligible_unobserved": 2888,
+        "ifd_schema_declaration_omitted_unobserved": 418,
+        "ifd_schema_declaration_refused_unobserved": 9562,
+        "source_row_not_yet_consumed": 18562
+      },
+      "strict": 3666,
+      "strict_share": "10.95%"
+    }
+  },
+  "read": {
+    "commit": "7a9c7576dcb9d799cab79b837f3699063bc246b8",
+    "corpus_files": 194,
+    "credited_catalog_entries": 2378,
+    "credited_coordinates_outside_catalog": 388,
+    "credited_source_coordinates": 2766,
+    "dirty": false,
+    "identities_matched": 3089,
+    "identities_native": 4978,
+    "identities_print_mode_matched": 4105,
+    "instrument": "corpus_read_receipt.py",
+    "native_catalog_entries": 4270,
+    "native_read_not_matched": 1892,
+    "not_observed_yet": 29217,
+    "observed_matched_read": 2378,
+    "schema": "oxidex_corpus_read_receipt_v2",
+    "share_of_catalog": "7.10%",
+    "share_of_native_reads": "55.69%",
+    "withheld_source_coordinates": 327
+  },
+  "refresh": "uv run tools/docs/render_status.py",
+  "rehearsal": {
+    "code_interventions_per_release": 2,
+    "code_interventions_target": 0,
+    "commit": "66e48654",
+    "conformance": [
+      {
+        "build": "13.59 control vs 13.59",
+        "extra": 651,
+        "match": 10149,
+        "missing": 1400,
+        "ratio": "87.60%"
+      },
+      {
+        "build": "12.64 build vs 12.64",
+        "extra": 846,
+        "match": 9844,
+        "missing": 1302,
+        "ratio": "87.97%"
+      },
+      {
+        "build": "11.78 build vs 11.78",
+        "extra": 958,
+        "match": 9481,
+        "missing": 1401,
+        "ratio": "86.60%"
+      }
+    ],
+    "control_readback_matrix": "1,020/1,020",
+    "control_write_matrix": "1,530/1,530",
+    "date": "2026-09-18",
+    "result": "neither release passes end to end.",
+    "stages": {
+      "11.78": [
+        {
+          "note": "`-ver` 11.78, DOCX, 1,101 files hash-equal to materialization",
+          "result": "PASS",
+          "stage": "1 Source"
+        },
+        {
+          "note": "`codegen.py`: `--fit-out requested but the dump has no Garmin module in scope` (details under F1)",
+          "result": "FAIL \u2192 PASS after I1",
+          "stage": "2 Generate"
+        },
+        {
+          "note": "464/464 expressions, 12,740 probe comparisons, 14 inapplicable-to-probe Perl errors skipped",
+          "result": "PASS",
+          "stage": "3 Expressions"
+        },
+        {
+          "note": "lib test target: `E0599 no variant ExprId::ValBpm49633A` (F2)",
+          "result": "FAIL \u2192 PASS after I2",
+          "stage": "4a Adapter build"
+        },
+        {
+          "note": "Two `unused_imports` warnings in generated QuickTime keys/userdata specs (F5)",
+          "result": "PASS",
+          "stage": "4b `cargo build --release`"
+        },
+        {
+          "note": "lib: 4,838 passed, 113 failed, 4 ignored. Other targets did not run (F3)",
+          "result": "FAIL",
+          "stage": "4c `cargo test --workspace`"
+        },
+        {
+          "note": "See conformance table",
+          "result": "runs; not parity",
+          "stage": "5 Read"
+        },
+        {
+          "note": "2/1,530 matched. 1,528 rows refused: `ConvInv source is unsupported` (F4)",
+          "result": "FAIL",
+          "stage": "6a Write (rehearsal matrix)"
+        },
+        {
+          "note": "`repository pin 11.78 has no reviewed native-write acceptance baseline; the 13.59 baseline is stale` (F6)",
+          "result": "REFUSED",
+          "stage": "6b Write (`--readback-*`)"
+        }
+      ],
+      "12.64": [
+        {
+          "note": "`-ver` 12.64, DOCX, 1,179 files hash-equal to materialization",
+          "result": "PASS",
+          "stage": "1 Source"
+        },
+        {
+          "note": "Same as 11.78 (F1): 12.64 also has no `Garmin.pm`",
+          "result": "FAIL \u2192 PASS after I1",
+          "stage": "2 Generate"
+        },
+        {
+          "note": "520/520 expressions, 14,369 probe comparisons, 14 skipped",
+          "result": "PASS",
+          "stage": "3 Expressions"
+        },
+        {
+          "note": "Same as 11.78 (F2)",
+          "result": "FAIL \u2192 PASS after I2",
+          "stage": "4a Adapter build"
+        },
+        {
+          "note": "Same two warnings (F5)",
+          "result": "PASS",
+          "stage": "4b `cargo build --release`"
+        },
+        {
+          "note": "lib: 4,872 passed, 79 failed, 4 ignored (F3)",
+          "result": "FAIL",
+          "stage": "4c `cargo test --workspace`"
+        },
+        {
+          "note": "See conformance table",
+          "result": "runs; not parity",
+          "stage": "5 Read"
+        },
+        {
+          "note": "2/1,530 matched (F4)",
+          "result": "FAIL",
+          "stage": "6a Write (rehearsal matrix)"
+        },
+        {
+          "note": "Same as 11.78 (F6)",
+          "result": "REFUSED",
+          "stage": "6b Write (`--readback-*`)"
+        }
+      ]
+    }
+  },
+  "schema": "oxidex_docs_status_v1",
+  "sources": {
+    "docs/public/measurements/catalog-corpus-observed-13.59.json": "033e4094bf409c892e592ec43b09a93fce4b091744b2d5f615c3497b6924cc3e",
+    "docs/public/measurements/catalog-hydrated-join-13.59.json": "5fe7878f5c20358ade827b5ad27b395b1a97f8f4188e190a4e2a3da3b9b79f95",
+    "tools/ci/parity_floors.json": "92505e25021bfbd456109b7186089001aae6619f0b2bc77c019d6f390dbe9ca7"
+  },
+  "write": {
+    "alternate_context_write_operations": 298,
+    "catalog_matched_write_operations": 604,
+    "commit": "7a9c7576dcb9d799cab79b837f3699063bc246b8",
+    "dirty": false,
+    "distinct_group1_names": 38,
+    "generated_writer_declarations": 19,
+    "instrument": "write_readback_evidence.py",
+    "observed_matched_write": 19,
+    "schema": "oxidex_public_write_readback_evidence_v1",
+    "share_of_writable": "0.13%",
+    "successful_write_operations": 902,
+    "writable": 14169
+  }
+}

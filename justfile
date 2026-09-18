@@ -667,6 +667,14 @@ sync-tag-stats:
 check-tag-stats:
     @uv run scripts/sync_tag_stats.py --check
 
+# Re-render the docs status page (docs/status/) from committed measurements
+docs-status:
+    uv run tools/docs/render_status.py
+
+# Fail if the docs status page is stale against its sources (changes nothing)
+check-docs-status:
+    @uv run tools/docs/render_status.py --check
+
 # Tag definitions only, to stdout (no build, no ExifTool, cannot overwrite the report)
 docs-coverage-definitions:
     uv run scripts/generate_tag_coverage.py --skip-conformance
