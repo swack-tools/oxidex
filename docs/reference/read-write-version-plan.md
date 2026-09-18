@@ -246,6 +246,40 @@ sanctioned generation stage. The failed journal is retained; both-version
 build/read/write results remain outstanding. Do not select a different pair to
 avoid this failure.
 
+**Update, 2026-09-17 (re-diagnosed at `7547ec5b`).** The dirty-tree refusal
+above is fixed: `generate` now exports `OXIDEX_ALLOW_DIRTY_TREE=1`, and
+`verify_exprs.py` measures through it. It was no longer the blocker. The first
+failure at this commit was `setnewvalue_addressing.py` refusing both releases
+with "SetNewValue caller control flow is unsupported", because
+`compile_setnewvalue_convinv` accepted only the 13.59 whole-body token profile.
+
+That gate now also admits captured 11.78 and 12.64 profiles, and additionally
+requires the modeled ConvInv error-handling region verbatim. That region was
+checked on raw B::Deparse and is byte-identical in 11.78, 12.64 and 13.59 (271
+characters), so the recipe's three outcomes genuinely hold across the pair.
+Both releases now pass `compile_addressing` end to end, and 13.59's
+addressing rows and report regenerate byte-identically.
+
+Independent failures remain behind it, diagnosed by running tier 1 with
+stop-on-error disabled, so this is not yet a passing rehearsal:
+
+- `verify_exprs.py` against 11.78's Perl: 454/464 expressions agree; the 10
+  disagreements shown are `ConvertUnixTime` variants differing by one second
+  or on rounding.
+- `capture_garmin_fit_fact.pl`: `Image/ExifTool/Garmin.pm` does not exist in
+  11.78.
+- `verify_serial_directory.py`: Canon AFInfo/AFInfo2 and six Real tables are
+  wholly omitted without independent native proof.
+- Tier 2b `dump_af_points.pl`: `%afPoints105` is not present in 11.78's
+  `Nikon.pm` in the expected shape.
+
+A tokenizer note for whoever takes these on: `native_reader_facts.body_tokens`
+reads a Perl division `/` as the start of a regex literal, so it can fold
+thousands of characters into one token (7,671 characters on 12.64's
+SetNewValue). Exact whole-body comparison is still sound -- any change inside
+a folded token still changes it -- but token-level diffs and region searches
+built on it will mislead. Compare regions on whitespace-stripped raw source.
+
 
 
 ## Public API file checkpoint, September 14
