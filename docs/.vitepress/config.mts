@@ -108,6 +108,7 @@ export default defineConfig({
             { text: 'MakerNotes', link: '/reference/makernotes' },
             { text: 'Camera RAW', link: '/reference/formats/camera-raw' },
             { text: 'Executables', link: '/reference/formats/pe-executable' },
+            { text: 'Tag domains', link: '/tag-domains/' },
             { text: 'Packaging', link: '/reference/packaging/' }
           ]
         },
