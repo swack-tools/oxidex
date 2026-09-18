@@ -45,6 +45,7 @@ pub mod engine;
 pub mod exprs;
 pub mod fit_schema;
 pub mod fit_tables;
+pub mod helpers;
 pub mod ifd_engine;
 pub mod ifd_schema;
 pub mod ifd_tables;
@@ -55,6 +56,7 @@ pub mod runtime;
 pub mod serial_engine;
 pub mod serial_schema;
 pub mod serial_tables;
+pub mod session;
 pub mod subdir;
 pub mod validation;
 
