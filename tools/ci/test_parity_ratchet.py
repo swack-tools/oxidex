@@ -203,7 +203,6 @@ class CommittedFloorsTests(unittest.TestCase):
             ("join:counts.write_parity.native_writable_entries", "Entries ExifTool writes directly"),
             ("join:counts.write_parity.native_writable_unique_case_insensitive_names", "Distinct case-insensitive writable names"),
             ("join:counts.write_parity.generated_writer_declarations", "With a generated writer declaration"),
-            ("join:counts.write_parity.observed_matched_write", "Observed write matching pinned ExifTool read-back"),
         ):
             with self.subTest(metric):
                 self.assertIn(key, rows, f"{key!r} not found in the committed report")

@@ -18,9 +18,9 @@
     "            computed against it has to be re-read, not silently adopted"
   ],
   "measured_at": {
-    "commit": "0f92071b",
+    "commit": "7547ec5bcf92",
     "exiftool": "13.59",
-    "note": "initial seed from the committed catalog-hydrated-join report"
+    "note": "first authenticated public-API write observations (19 entries, 902 operations) plus refreshed read evidence, both at 7547ec5b"
   },
   "metrics": {
     "join:counts.catalog_ordinary_entries": {
@@ -69,11 +69,6 @@
       "direction": "exact",
       "floor": 7068
     },
-    "join:counts.write_parity.observed_matched_write": {
-      "direction": "at_least",
-      "floor": 0,
-      "note": "the honest zero: no write has yet been observed to match an ExifTool read-back"
-    },
     "join:counts.writer_implementation.writer_not_declared": {
       "direction": "at_most",
       "floor": 14150,
@@ -86,27 +81,56 @@
     },
     "observed:counts.corpus_read_attribution.credited_catalog_entries": {
       "direction": "at_least",
-      "floor": 1963
+      "floor": 2265
     },
     "observed:counts.corpus_read_attribution.metric_c.credited_source_coordinates": {
       "direction": "at_least",
-      "floor": 2287
+      "floor": 2642
     },
     "observed:counts.corpus_read_attribution.metric_c.distinct_group1_tag_identities_matched": {
       "direction": "at_least",
-      "floor": 2586,
+      "floor": 2969,
       "note": "Group1:TagName identities matching in BOTH print and raw modes"
     },
     "observed:counts.observed_read.not_observed_yet": {
       "direction": "at_most",
-      "floor": 31524,
+      "floor": 31222,
       "note": "the read backlog; falls as the corpus receipt credits more entries"
     },
     "observed:counts.observed_read.observed_matched_read": {
       "direction": "at_least",
-      "floor": 1963,
+      "floor": 2265,
       "note": "catalog entries proven read against pinned ExifTool on the corpus",
       "share_of": "join:counts.catalog_ordinary_entries"
+    },
+    "observed:counts.observed_write.not_observed_yet": {
+      "direction": "at_most",
+      "floor": 33468,
+      "note": "the write backlog"
+    },
+    "observed:counts.observed_write.observed_matched_write": {
+      "direction": "at_least",
+      "floor": 19,
+      "note": "catalog entries with a write proven to match a pinned ExifTool read-back",
+      "share_of": "join:counts.write_parity.native_writable_entries"
+    },
+    "observed:counts.write_parity.observed_matched_write": {
+      "direction": "at_least",
+      "floor": 19,
+      "note": "catalog entries with a write proven against a pinned ExifTool read-back. Tracked on the OBSERVED snapshot only: the evidence-free join CI regenerates never binds --writer-read-evidence, so its own copy of this count is structurally 0 and would be a metric that can never move"
+    },
+    "observed:counts.write_readback.catalog_matched_write_operations": {
+      "direction": "at_least",
+      "floor": 604
+    },
+    "observed:counts.write_readback.distinct_group1_names": {
+      "direction": "at_least",
+      "floor": 38
+    },
+    "observed:counts.write_readback.successful_write_operations": {
+      "direction": "at_least",
+      "floor": 902,
+      "note": "authenticated public-API write operations that round-tripped"
     }
   },
   "schema": 1,
