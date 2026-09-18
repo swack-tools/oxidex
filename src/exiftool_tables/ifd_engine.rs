@@ -150,7 +150,6 @@ use crate::io::ByteOrder;
 
 use super::cond::{self, MemberValue};
 use super::conv::{self, Arm};
-use super::session::{ByteOrder as SessionByteOrder, MemberVal, Session};
 use super::enabled_serial;
 use super::engine::{self, Dir, Emitted, Guard};
 use super::exprs;
@@ -158,6 +157,7 @@ use super::ifd_schema::{
     IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag, RawConvEffect,
 };
 use super::runtime::{self, DecodedValue, decode_value_of};
+use super::session::{ByteOrder as SessionByteOrder, MemberVal, Session};
 use super::subdir::BaseExpr;
 use super::{
     Fmt, SerialDir, SerialEmissionSink, SerialTable, SerialWalkResult, find_ifd_table,

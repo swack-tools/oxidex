@@ -134,10 +134,10 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
                         continue;
                     }
                     let vc = r.value.as_ref().map_or_else(|| scalar(&val), rust);
-                    let pc = r.print.as_ref().map_or_else(
-                        || r.value.as_ref().map_or_else(|| scalar(&val), rust),
-                        rust,
-                    );
+                    let pc = r
+                        .print
+                        .as_ref()
+                        .map_or_else(|| r.value.as_ref().map_or_else(|| scalar(&val), rust), rust);
                     let mut writes: BTreeMap<String, Seen> = BTreeMap::new();
                     for (k, v) in &r.writes {
                         writes.insert((*k).to_string(), scalar(v));
@@ -173,7 +173,12 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
         failures.is_empty(),
         "{} disagreement(s) with the pinned Perl:\n{}",
         failures.len(),
-        failures.iter().take(60).cloned().collect::<Vec<_>>().join("\n")
+        failures
+            .iter()
+            .take(60)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert_eq!(checked, matched + n_declined + unrepresentable);
 }
@@ -182,7 +187,10 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
 fn claimed_and_refused_are_disjoint_and_sorted() {
     assert!(exif_main::CLAIMED.windows(2).all(|w| w[0] < w[1]));
     for (id, name, why) in exif_main::REFUSED {
-        assert!(!exif_main::claims(*id), "0x{id:04x} {name} both claimed and refused");
+        assert!(
+            !exif_main::claims(*id),
+            "0x{id:04x} {name} both claimed and refused"
+        );
         assert!(!why.is_empty());
     }
 }

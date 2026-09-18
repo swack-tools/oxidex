@@ -285,8 +285,7 @@ impl MemberVal {
         match self {
             MemberVal::Str(s) => match numify_str(s) {
                 PerlNum::Int(0)
-                    if s
-                        .trim_start_matches(|c: char| c.is_ascii() && is_perl_space(c as u8))
+                    if s.trim_start_matches(|c: char| c.is_ascii() && is_perl_space(c as u8))
                         .starts_with('-') =>
                 {
                     -0.0

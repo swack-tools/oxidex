@@ -1147,19 +1147,20 @@ fn tiff_ifd0_offset(reader: &dyn FileReader, byte_order: ByteOrder) -> Option<u6
 }
 
 /// Interop ids the hand arm of [`parse_interop_subifd`] keeps producing
-/// beside the engine: withheld or not transcribed by the generated
-/// `Exif::Main`. Sorted (binary-searched). Pinned by
-/// `interop_residual_is_exactly_the_hand_remainder`.
+/// beside the engine: withheld (with no generated arm) or not transcribed by
+/// the generated `Exif::Main`. Sorted (binary-searched). Pinned by
+/// `interop_residual_is_exactly_the_hand_remainder`. 0x0002 InteropVersion
+/// left the list when its `RawConv` (`$val =~ s/\0+$//; $val`, Exif.pm:436)
+/// got a generated arm (Autogeneration v2); an entry the arm declines has no
+/// engine row, so it falls through to the hand arm below as any engine miss
+/// does.
 ///
-/// * 0x0002 InteropVersion -- `omitted.raw_conv` (`$val =~ s/\0+$//; $val`,
-///   Exif.pm:436);
 /// * 0x0103 Compression -- `omitted.raw_conv` (sets `$$self{Compression}`);
 ///   `collect_ifd1_thumbnail` still reads `InteropIFD:Compression`;
 /// * 0x0201 / 0x0202 -- absent (`IsOffset`/`OffsetPair` `_variants`, see
 ///   [`IFD1_RESIDUAL_IDS`]): OtherImageStart/Length and the derived
 ///   OtherImage.
 const INTEROP_RESIDUAL_IDS: &[u16] = &[
-    INTEROP_VERSION,
     TAG_COMPRESSION,
     TAG_OTHER_IMAGE_START,
     TAG_OTHER_IMAGE_LENGTH,
@@ -4557,7 +4558,7 @@ mod exif_subifd_tests {
     /// rather than falling back to the hand arm's `undef` / `2.971 1`
     /// (ExifTool numifies both: `1.0`, `2.8`; construct K-N).
     #[test]
-    fn aperture_values_are_the_engines_and_an_unnumifiable_one_is_absent() {
+    fn aperture_values_are_the_engines_including_the_ones_perl_numifies() {
         let at = tail_at(2);
         let data = exif_block(
             &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
@@ -4569,7 +4570,10 @@ mod exif_subifd_tests {
             Some(TagValue::Float(f)) => assert!((f - 2f64.powf(2.5)).abs() < 1e-12, "{f}"),
             other => panic!("-n ApertureValue: {other:?}"),
         }
-        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+        // The generated arm evaluates `2 ** ($val / 2)` over the `undef`
+        // string ReadValue gives a 0/0 rational, which Perl numifies to 0:
+        // `1.0`, as pinned ExifTool prints it (construct K-N, now closed).
+        assert_eq!(engine.get_string("ExifIFD:MaxApertureValue"), Some("1.0"));
         let hand = walk_exif(&data, None, None, &[]);
         assert!(
             hand.get("ExifIFD:MaxApertureValue").is_some(),
@@ -4580,10 +4584,10 @@ mod exif_subifd_tests {
             &[(0x9205, RATIONAL, 2, tail_at(1))],
             &[rational(2971, 1000), rational(1, 1)].concat(),
         );
-        assert!(
-            walk_exif(&data, None, exif_main(), &[])
-                .get("ExifIFD:MaxApertureValue")
-                .is_none()
+        // `"2.971 1" / 2` numifies the leading number: 2.8, as ExifTool.
+        assert_eq!(
+            walk_exif(&data, None, exif_main(), &[]).get_string("ExifIFD:MaxApertureValue"),
+            Some("2.8")
         );
 
         // Review finding (E-2, D-2): `2**($val/2)` of 2147483648/1
@@ -4597,18 +4601,18 @@ mod exif_subifd_tests {
             &[(0x9202, RATIONAL, 1, at), (0x9205, RATIONAL, 1, at + 8)],
             &[rational(2_147_483_648, 1), rational(7, 0)].concat(),
         );
+        // The generated arms print both infinities as Perl does (`Inf`),
+        // so they are reported by the engine; the overflow no longer needs
+        // the hand arm, and 7/0's `inf` is no longer absent.
         let engine = walk_exif(&data, None, exif_main(), &[]);
-        let hand = walk_exif(&data, None, None, &[]);
-        let aperture = engine
-            .get("ExifIFD:ApertureValue")
-            .expect("the hand arm's row");
-        assert_eq!(Some(aperture), hand.get("ExifIFD:ApertureValue"));
-        assert_eq!(
-            crate::core::exiftool_compat::format_tag_value("ExifIFD:ApertureValue", aperture)
-                .as_string(),
-            Some("Inf")
-        );
-        assert!(engine.get("ExifIFD:MaxApertureValue").is_none());
+        for name in ["ExifIFD:ApertureValue", "ExifIFD:MaxApertureValue"] {
+            let value = engine.get(name).expect("the generated arm's row");
+            assert_eq!(
+                crate::core::exiftool_compat::format_tag_value(name, value).as_string(),
+                Some("Inf"),
+                "{name}"
+            );
+        }
     }
 
     /// Review finding (E-2): AmbientTemperature as a signed 0/-1 -- the
@@ -6457,11 +6461,7 @@ mod interop_tests {
             INTEROP_RESIDUAL_IDS.windows(2).all(|w| w[0] < w[1]),
             "INTEROP_RESIDUAL_IDS is binary-searched and must stay sorted"
         );
-        assert_eq!(
-            INTEROP_RESIDUAL_IDS,
-            [0x0002, 0x0103, 0x0201, 0x0202],
-            "spec 3.2"
-        );
+        assert_eq!(INTEROP_RESIDUAL_IDS, [0x0103, 0x0201, 0x0202], "spec 3.2");
         // Each residual id is withheld (a non-empty `omitted`) or absent.
         for &id in INTEROP_RESIDUAL_IDS {
             assert!(

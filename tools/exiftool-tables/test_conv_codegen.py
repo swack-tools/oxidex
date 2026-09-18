@@ -63,7 +63,10 @@ class Literals(unittest.TestCase):
     def test_interpolation_pieces(self):
         self.assertEqual(C.interp_pieces("${val} m"), [("var", "val"), ("lit", " m")])
         self.assertEqual(C.interp_pieces("$val C"), [("var", "val"), ("lit", " C")])
-        for body in ["@a", "$val[1]", "$val{x}", "$x->y"]:
+        # `$vals[1]` is an element of a declared array (the emitter checks
+        # the array exists); a hash element or method call is refused.
+        self.assertEqual(C.interp_pieces("-$vals[1]"), [("lit", "-"), ("elem", ("vals", 1))])
+        for body in ["@a", "$val{x}", "$x->y", "$v[$i]"]:
             with self.assertRaises(C.Refuse, msg=body):
                 C.interp_pieces(body)
 

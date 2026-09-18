@@ -827,6 +827,19 @@ pub(crate) fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagVal
     // Rule 16: Unit Suffixes (FocalLength -> mm, GPSAltitude -> m)
     // ---------------------------------------------------------------------
     if is_unit_suffix_tag(base_name) {
+        // An `Exif::Main` SubjectDistance walked by the IFD engine arrives
+        // already print-converted by its generated arm (Exif.pm:2362
+        // `$val =~ /^(inf|undef)$/ ? $val : "${val} m"`, Autogeneration v2):
+        // re-suffixing it would print `undef m`. Only the directories the
+        // engine walks; IFD0 is still read by hand (a Rational, below).
+        if base_name == "SubjectDistance"
+            && matches!(value, TagValue::String(_))
+            && ["ExifIFD:", "InteropIFD:", "IFD1:"]
+                .iter()
+                .any(|group| tag_name.starts_with(group))
+        {
+            return value.clone();
+        }
         // For string values, apply unit suffix directly
         if let Some(s) = value.as_string() {
             return TagValue::String(format_with_unit(tag_name, s));

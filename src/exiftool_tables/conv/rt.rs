@@ -261,7 +261,11 @@ fn shift(x: u64, n: PerlNum, right: bool) -> R<MemberVal> {
         PerlNum::Float(f) if f.is_finite() => f.trunc() as i64,
         PerlNum::Float(_) => return Err(Decline("shift by a non-finite count")),
     };
-    let (right, n) = if n < 0 { (!right, n.unsigned_abs()) } else { (right, n as u64) };
+    let (right, n) = if n < 0 {
+        (!right, n.unsigned_abs())
+    } else {
+        (right, n as u64)
+    };
     let r = if n >= 64 {
         0
     } else if right {
@@ -707,7 +711,10 @@ pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<Member
         let int_like = {
             let b = key.as_bytes();
             let b = b.strip_suffix(b"\n").unwrap_or(b);
-            let digits = b.strip_prefix(b"+").or_else(|| b.strip_prefix(b"-")).unwrap_or(b);
+            let digits = b
+                .strip_prefix(b"+")
+                .or_else(|| b.strip_prefix(b"-"))
+                .unwrap_or(b);
             !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
         };
         if int_like {
@@ -784,5 +791,8 @@ pub fn list_conv(
     if out.is_empty() {
         return Ok(None);
     }
-    Ok(Some(join(&string(if print_conv { "; " } else { " " }), &out)))
+    Ok(Some(join(
+        &string(if print_conv { "; " } else { " " }),
+        &out,
+    )))
 }
