@@ -210,11 +210,11 @@
   "generation": {
     "artifacts": {
       "by_tier": {
-        "1": 232,
+        "1": 235,
         "2": 23
       },
-      "rust": 234,
-      "total": 255
+      "rust": 235,
+      "total": 258
     },
     "expressions": {
       "helper_subs": 157,

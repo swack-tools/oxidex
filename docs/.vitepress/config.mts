@@ -282,9 +282,6 @@ export default defineConfig({
 
   ignoreDeadLinks: [
     // Benchmark reports - deployed separately by CI
-    /^\/benchmarks\//,
-    // The generated status page arrives with #837 (tools/docs/render_status.py).
-    // Remove this entry once docs/status/index.md is on the branch.
-    /^\/status\//
+    /^\/benchmarks\//
   ]
 })
