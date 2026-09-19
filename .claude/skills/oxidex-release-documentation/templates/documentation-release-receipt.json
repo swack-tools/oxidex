@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "version": null,
+  "candidate_sha": null,
+  "candidate_tree": null,
+  "main_equivalence": {
+    "main_sha": null,
+    "main_tree": null,
+    "matches_candidate_tree": null,
+    "evidence_path": null
+  },
+  "parity_receipt": {
+    "path": null,
+    "sha256": null,
+    "measured_sha": null,
+    "status": "unverified"
+  },
+  "claims": [],
+  "pages": [],
+  "benchmarks": [],
+  "local_build": {
+    "status": "unverified",
+    "command": null,
+    "candidate_sha": null,
+    "snapshot_path": null,
+    "dist_path": null,
+    "input_manifest": null,
+    "source_inventory": null,
+    "generated_inventory": null,
+    "rendered_inventory": null,
+    "reconciliation": null,
+    "crawl_evidence": null,
+    "evidence_path": null
+  },
+  "visual_review": {
+    "status": "unverified",
+    "automation_manifest": null,
+    "samples": [],
+    "findings": [],
+    "human_review": {
+      "status": "unverified",
+      "reviewer": null,
+      "reviewed_at": null,
+      "screenshot_manifest": null,
+      "evidence_path": null
+    },
+    "evidence_path": null
+  },
+  "pages_pipeline": {
+    "status": "unverified",
+    "build_type": null,
+    "cname": null,
+    "https_enforced": null,
+    "source": null,
+    "workflow_sha": null,
+    "evidence_path": null
+  },
+  "live_deployment": {
+    "status": "not_run",
+    "required_for_documentation_verification": false,
+    "main_sha": null,
+    "run_id": null,
+    "deployment_id": null,
+    "artifact_id": null,
+    "artifact_sha256": null,
+    "url": null,
+    "fetched_at": null,
+    "content_hashes": [],
+    "crawl_evidence": null,
+    "visual_evidence": null,
+    "evidence_path": null
+  },
+  "status": "unverified",
+  "unresolved": ["Complete the exact-candidate local production audit, automated browser checks, human screenshot review and Pages pipeline audit."]
+}

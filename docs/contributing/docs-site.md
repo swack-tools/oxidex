@@ -54,6 +54,24 @@ Open the served site in a browser, not `index.html` from disk. The site uses
 clean URLs and absolute asset paths, so a `file://` URL breaks every link and
 style.
 
+## Verify release documentation locally
+
+For a release, use `oxidex-release-documentation` against the frozen full
+candidate SHA. Its production-equivalent local deploy must include the real
+comparison report and the selected benchmark artifact, then reconcile the
+committed, generated, and rendered inventories. Use browser automation to
+navigate every reconciled inventory route, including pages absent from
+navigation, and capture console, page, request, network, and HTTP failures.
+Check every referenced asset and fragment. Separately, retain responsive
+light/dark desktop/mobile screenshots for a representative screenshot matrix
+and record human visual review of those screenshots; this matrix complements
+the exhaustive browser navigation rather than replacing it.
+
+That exact-candidate local evidence can verify the documentation before it is
+published. Live Pages validation is optional operational confirmation. If the
+final `main` tree differs, rerun the same local audit against the exact merge
+commit before tag authorization.
+
 ## Checks on pull requests
 
 `docs-build.yml` runs on every PR that touches `docs/`. It does a cold
@@ -84,8 +102,14 @@ also be started manually. A newer run cancels an older one. It has two jobs:
      deploys with `actions/deploy-pages`.
 
 GitHub Pages for `swack-tools/oxidex` is set to **GitHub Actions** as the
-source (`build_type: workflow`). The custom domain **oxidex.net** is set in
-the repository's Pages settings, not by a `CNAME` file, and HTTPS is
+source (`build_type: workflow`). Release verification must recheck that API
+setting and audit workflow syntax/tests, triggers and path filters,
+permissions, generated-report and benchmark provenance, Pages artifact
+handoff, deployment environment, concurrency, custom domain, base path, and
+HTTPS. A `gh-pages` branch update is not deployment proof in workflow mode;
+the legacy branch-writing job in `release.yml` must not be credited as a Pages
+deployment without independent evidence. The custom domain **oxidex.net** is
+set in the repository's Pages settings, not by a `CNAME` file, and HTTPS is
 enforced. VitePress builds with `base: '/'`.
 
 ## Generated content

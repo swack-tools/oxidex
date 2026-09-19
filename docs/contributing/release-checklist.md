@@ -1,68 +1,60 @@
-# Release Checklist
+# Release checklist
 
-Use this checklist before tagging a new release.
+This page routes the release; the project skills contain the executable
+procedures and receipt schemas. A green `just ci` alone is not release proof.
 
-## Pre-Release Steps
+## 1. Freeze and measure the candidate
 
-### 1. Run CI Checks
+Record the full candidate SHA and tree in a durable evidence directory. Run
+the skills in this order:
 
-```bash
-just ci
-```
+1. `exiftool-parity` produces a verified parity receipt from the pinned oracle
+   and named instruments.
+2. `oxidex-release-documentation` consumes that receipt and produces a
+   verified documentation receipt for the same candidate SHA and tree.
+3. `oxidex-release-finalization` consumes both receipts, inventories every
+   version string, runs the release gates, and audits the publication
+   workflows and expected artifacts.
 
-This runs the full CI-equivalent checks:
-- Build (debug and release)
-- All tests
-- Clippy lints
-- Code formatting
+Missing, blocked, partial, stale, or SHA-mismatched receipts stop the release.
+The documentation audit must use the exact candidate's production-equivalent
+local deploy, real generated inputs, every rendered route and asset, browser
+automation, responsive light/dark screenshots, and recorded human visual
+review. That evidence plus a passing Pages pipeline/settings audit is
+sufficient for documentation verification; live Pages deployment is optional
+operational confirmation.
 
-### 2. Regenerate Tag Documentation
+## 2. Promote through `main`
 
-```bash
-just docs-generate-tags
-```
+Open and review a release PR whose base is `main`; never push directly to the
+protected branch. After merge, freeze the exact `main` commit as `MAIN_SHA` and
+require its CI and release gates to pass. If its tree differs from the audited
+candidate, regenerate the parity receipt and documentation receipt against
+`MAIN_SHA` before continuing.
 
-This updates `docs/tag-domains/*.md` with the latest tag data from the database.
-
-Review the diffs for accuracy before committing.
-
-### 3. Update CHANGELOG
-
-Edit `CHANGELOG.md`:
-- Move items from `[Unreleased]` to new version section
-- Add release date
-- Ensure all notable changes are documented
-- Follow [Keep a Changelog](https://keepachangelog.com/) format
-
-### 4. Update Version Numbers
-
-Check these locations:
-- `Cargo.toml` (main crate)
-- `oxidex-tags-*/Cargo.toml` (tag crates)
-- Homebrew formula
-- RPM/Deb packaging manifests
-
-### 5. Verify Release Automation
+Run the signed-tag dry run against that exact commit:
 
 ```bash
-just release-check
+OXIDEX_TAG_DRY_RUN=1 just tag "$VERSION" "$MAIN_SHA"
 ```
 
-This verifies release-specific automation succeeds.
+Then stop for separate explicit maintainer authorization of the exact version,
+tag, and `MAIN_SHA`. Preparing or merging the PR does not authorize the real
+signed tag. Existing remote tags are immutable; do not move, delete, or reuse
+one.
 
-## Tagging the Release
+## 3. Verify publication
 
-```bash
-# Create annotated tag
-git tag -a v1.x.x -m "Release v1.x.x"
+After the authorized signed tag is pushed, follow
+`oxidex-release-finalization` until its receipt records:
 
-# Push tag to trigger release workflow
-git push origin v1.x.x
-```
+- the tag resolving to the gated exact `main` commit;
+- successful tag-bound GitHub Actions runs;
+- the GitHub release's prerelease/latest classification, expected assets, and
+  checksums;
+- downloaded macOS artifact hashes plus the actual code signature, Gatekeeper
+  assessment, and stapled notarization ticket; and
+- any selected package or container publication results.
 
-## Post-Release
-
-1. Monitor GitHub Actions release workflow
-2. Verify artifacts on GitHub Releases page
-3. Test installation from release artifacts
-4. Announce release (if applicable)
+Workflow YAML, secret names, a dry run, or a green build do not prove that the
+GitHub release exists or that Apple accepted the downloadable artifact.

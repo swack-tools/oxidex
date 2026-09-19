@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "version": "2.0.0-beta.1",
+  "tag": "v2.0.0-beta.1",
+  "candidate_sha": "full-commit-sha",
+  "candidate_cargo_target_dir": null,
+  "version_inventory": [],
+  "main_sha": "full-main-commit-sha",
+  "gates": [],
+  "workflows": [],
+  "artifacts": [],
+  "macos_verification": {
+    "status": "unverified",
+    "release_run_id": null,
+    "run_artifact_manifest": null,
+    "raw_binary_sha256": null,
+    "dmg_sha256": null,
+    "dmg_payload_sha256": null,
+    "payload_match": false,
+    "reported_version": null,
+    "cleanup_status": "unverified",
+    "evidence": []
+  },
+  "status": "blocked",
+  "next_action": "name the next safe action"
+}
