@@ -92,6 +92,8 @@ mod l4_subdir {
     pub(super) const JPEG_QUALITY: u16 = 0x3034;
     pub(super) const WB_RGB_LEVELS: u16 = 0x3036;
     pub(super) const USER_PROFILE: u16 = 0x3038;
+    /// `int32u` with a fixed five-entry `PrintConv` (Panasonic.pm:1851-1861).
+    pub(super) const JPEG_SIZE: u16 = 0x303A;
     pub(super) const SERIAL_NUMBER: u16 = 0x3103;
     pub(super) const FIRMWARE_VERSION: u16 = 0x3109;
     pub(super) const BASE_ISO: u16 = 0x312A;
@@ -124,6 +126,15 @@ mod leica5 {
     /// ASCII.
     pub(super) const LENS_TYPE: u16 = 0x0303;
     pub(super) const SERIAL_NUMBER: u16 = 0x0305;
+    /// `0x0408 => { Name => 'OriginalDirectory', Writable => 'string' }`
+    /// (Panasonic.pm:2020), declared beside -- and independently of --
+    /// `OriginalFileName` (0x0407).
+    pub(super) const ORIGINAL_DIRECTORY: u16 = 0x0408;
+    /// `0x05ff => { Name => 'CameraIFD', Condition => ..., SubDirectory => {
+    /// TagTable => 'Image::ExifTool::PanasonicRaw::CameraIFD', Base =>
+    /// '$start', ProcessProc => ProcessTIFF } }` (Panasonic.pm:2057-2066),
+    /// written by the Leica Q3 and SL3.
+    pub(super) const CAMERA_IFD: u16 = 0x05FF;
     /// `0x040a => { Name => 'FocusInfo', SubDirectory => { TagTable =>
     /// 'Image::ExifTool::Panasonic::FocusInfo' } }` (Panasonic.pm:2021-2024).
     /// The only source of `Leica:FocusDistance` on a Leica5/Leica8 body, and
@@ -514,6 +525,224 @@ fn subdir_bytes<'a>(
         return entry_bytes.get(8..8 + len);
     }
     values?.read(entry.value_offset, len)
+}
+
+/// `%PanasonicRaw::panasonicWhiteBalance` (PanasonicRaw.pm:51-67), the
+/// `PrintConv` of CameraIFD's `WhiteBalanceSet` and `WhiteBalanceDetected`.
+fn panasonic_raw_white_balance(value: u32) -> String {
+    match value {
+        0 => "Auto",
+        1 => "Daylight",
+        2 => "Cloudy",
+        3 => "Tungsten",
+        4 | 6 | 7 => "n/a",
+        5 => "Flash",
+        8 => "Custom#1",
+        9 => "Custom#2",
+        10 => "Custom#3",
+        11 => "Custom#4",
+        12 => "Shade",
+        13 => "Kelvin",
+        16 => "AWBc",
+        other => return format!("Unknown ({other})"),
+    }
+    .to_string()
+}
+
+/// `%Image::ExifTool::Exif::orientation` (Exif.pm), CameraIFD
+/// `Orientation`'s `PrintConv`.
+fn exif_orientation(value: u32) -> String {
+    match value {
+        1 => "Horizontal (normal)",
+        2 => "Mirror horizontal",
+        3 => "Rotate 180",
+        4 => "Mirror vertical",
+        5 => "Mirror horizontal and rotate 270 CW",
+        6 => "Rotate 90 CW",
+        7 => "Mirror horizontal and rotate 90 CW",
+        8 => "Rotate 270 CW",
+        other => return format!("Unknown ({other})"),
+    }
+    .to_string()
+}
+
+/// `PrintConv => { 0 => 'No', 1 => 'Yes' }`, shared by four CameraIFD tags.
+fn no_yes(value: u32) -> String {
+    match value {
+        0 => "No".to_string(),
+        1 => "Yes".to_string(),
+        other => format!("Unknown ({other})"),
+    }
+}
+
+/// `%PanasonicRaw::CameraIFD` (PanasonicRaw.pm:500-668), reached from
+/// Leica5 0x05ff on the Q3/SL3.
+///
+/// # What is and is not read
+///
+/// The directory is a TIFF of its own (`ProcessProc => ProcessTIFF`), so its
+/// byte order is its own header's, and 0x05ff's `Condition` admits it only
+/// when that header points at an IFD at offset 8
+/// (`/^(II\x2a\0\x08\0\0\0|MM\0\x2a\0\0\0\x08)/`, Panasonic.pm:2059).
+///
+/// Every named entry here is a single scalar, and each is read with the
+/// entry's *own* format, the way `ProcessExif` reads any IFD entry -- a
+/// tag's `Writable` only governs writing. The table's `VARS => { MAP_FORMAT
+/// => { 0x101 => 4, 0x102 => 4 } }` maps the two private type codes the Q3
+/// uses onto `int32u`. An entry whose format is not a plain integer, or
+/// whose count is not 1, is left out rather than reinterpreted.
+///
+/// Emitted as `PanasonicRaw:<Name>`: family 0 `PanasonicRaw`, family 1
+/// `CameraIFD` (the table's `GROUPS`).
+///
+/// # Provenance
+///
+/// Forward-ported from `origin/main` 9b215f03 (#696), whose arms keyed on
+/// the field type each corpus file happened to use. Re-expressed against the
+/// Perl: the missing `0x1201 LensTypeMake`, `0x1305 HighISOMode` and
+/// `0x3200-0x3203 WB_CFA*_LevelDaylight` rows are included, `FocusStepNear`/
+/// `FocusStepCount` read as the entry declares them, `ShutterSpeedValue`
+/// keeps its `abs($val/256)<100` guard, and an unlisted enum value prints
+/// `Unknown (N)` as ExifTool does instead of vanishing.
+///
+/// `src/exiftool_tables/ifd/panasonicraw.rs` transcribes this same table as
+/// `IFD_PANASONICRAW_CAMERAIFD`; enabling it in `enabled_ifd.rs` and walking
+/// it with the IFD engine is the longer-term path and would subsume this.
+fn parse_camera_ifd(data: &[u8], tags: &mut HashMap<String, String>) {
+    let byte_order = match data.get(..8) {
+        Some(b"II\x2a\0\x08\0\0\0") => ByteOrder::LittleEndian,
+        Some(b"MM\0\x2a\0\0\0\x08") => ByteOrder::BigEndian,
+        _ => return,
+    };
+    let reader = EndianReader::new(data, byte_order.to_io_byte_order());
+    let ifd_offset = 8usize;
+    let Some(entry_count) = reader.u16_at(ifd_offset).map(usize::from) else {
+        return;
+    };
+    let Some(entries_end) = entry_count
+        .checked_mul(12)
+        .and_then(|len| len.checked_add(ifd_offset + 2))
+    else {
+        return;
+    };
+    if entry_count == 0 || entries_end > data.len() {
+        return;
+    }
+
+    for index in 0..entry_count {
+        let entry_offset = ifd_offset + 2 + index * 12;
+        let entry = EndianReader::new(
+            &data[entry_offset..entry_offset + 12],
+            byte_order.to_io_byte_order(),
+        );
+        let (Some(tag_id), Some(raw_format), Some(count)) =
+            (entry.u16_at(0), entry.u16_at(2), entry.u32_at(4))
+        else {
+            continue;
+        };
+        if count != 1 {
+            continue;
+        }
+        // `MAP_FORMAT` (PanasonicRaw.pm:502-504).
+        let format = match raw_format {
+            0x101 | 0x102 => 4,
+            other => other,
+        };
+        // The value as the entry's own integer format reads it: `int8u`,
+        // `int16u`, `int32u`, `int8s`, `int16s`, `int32s` (TIFF types 1, 3,
+        // 4, 6, 8, 9). A single value of these widths is always inline.
+        let value: i64 = match format {
+            1 => i64::from(entry.u8_at(8).unwrap_or_default()),
+            3 => i64::from(entry.u16_at(8).unwrap_or_default()),
+            4 => i64::from(entry.u32_at(8).unwrap_or_default()),
+            6 => i64::from(entry.u8_at(8).unwrap_or_default() as i8),
+            8 => i64::from(entry.i16_at(8).unwrap_or_default()),
+            9 => i64::from(entry.u32_at(8).unwrap_or_default() as i32),
+            _ => continue,
+        };
+        let unsigned = u32::try_from(value).unwrap_or(u32::MAX);
+        let put = |tags: &mut HashMap<String, String>, name: &str, printed: String| {
+            tags.insert(format!("PanasonicRaw:{name}"), printed);
+        };
+        match tag_id {
+            0x1001 => put(tags, "MultishotOn", no_yes(unsigned)),
+            0x1100 => put(tags, "FocusStepNear", value.to_string()),
+            0x1101 => put(tags, "FocusStepCount", value.to_string()),
+            0x1102 => put(tags, "FlashFired", no_yes(unsigned)),
+            0x1105 => put(tags, "ZoomPosition", value.to_string()),
+            0x1200 => put(tags, "LensAttached", no_yes(unsigned)),
+            // `Condition => '$format eq "int16u"'` on both lens-type rows.
+            0x1201 if format == 3 => put(tags, "LensTypeMake", value.to_string()),
+            // `RawConv => 'return undef unless $val; ...'`, then
+            // `ValueConv => '$_=sprintf("%.4x",$val); s/(..)(..)/$2 $1/; $_'`.
+            0x1202 if format == 3 && value != 0 => {
+                let hex = format!("{value:04x}");
+                put(
+                    tags,
+                    "LensTypeModel",
+                    format!("{} {}", &hex[2..4], &hex[0..2]),
+                );
+            }
+            0x1203 => put(tags, "FocalLengthIn35mmFormat", format!("{value} mm")),
+            // `ValueConv => '2 ** ($val / 512)'`, `PrintConv =>
+            // 'sprintf("%.1f",$val)'`.
+            0x1301 => put(
+                tags,
+                "ApertureValue",
+                format!("{:.1}", 2_f64.powf(value as f64 / 512.0)),
+            ),
+            // `ValueConv => 'abs($val/256)<100 ? 2**(-$val/256) : 0'`,
+            // `PrintConv => 'Image::ExifTool::Exif::PrintExposureTime($val)'`.
+            0x1302 => {
+                let apex = value as f64 / 256.0;
+                let seconds = if apex.abs() < 100.0 {
+                    2_f64.powf(-apex)
+                } else {
+                    0.0
+                };
+                put(
+                    tags,
+                    "ShutterSpeedValue",
+                    crate::exiftool_tables::exprs::print_exposure_time(seconds),
+                );
+            }
+            // `ValueConv => '$val / 256'`, no PrintConv.
+            0x1303 => put(
+                tags,
+                "SensitivityValue",
+                crate::exiftool_tables::exprs::perl_num(value as f64 / 256.0),
+            ),
+            // `RawConv => '$val || undef'`, `PrintConv => { 1 => 'On', 2 => 'Off' }`.
+            0x1305 if value != 0 => put(
+                tags,
+                "HighISOMode",
+                match value {
+                    1 => "On".to_string(),
+                    2 => "Off".to_string(),
+                    other => format!("Unknown ({other})"),
+                },
+            ),
+            0x1412 => put(tags, "FacesDetected", no_yes(unsigned)),
+            0x3200 => put(tags, "WB_CFA0_LevelDaylight", value.to_string()),
+            0x3201 => put(tags, "WB_CFA1_LevelDaylight", value.to_string()),
+            0x3202 => put(tags, "WB_CFA2_LevelDaylight", value.to_string()),
+            0x3203 => put(tags, "WB_CFA3_LevelDaylight", value.to_string()),
+            0x3300 => put(
+                tags,
+                "WhiteBalanceSet",
+                panasonic_raw_white_balance(unsigned),
+            ),
+            0x3420 => put(tags, "WB_RedLevelAuto", value.to_string()),
+            0x3421 => put(tags, "WB_BlueLevelAuto", value.to_string()),
+            0x3501 => put(tags, "Orientation", exif_orientation(unsigned)),
+            0x3600 => put(
+                tags,
+                "WhiteBalanceDetected",
+                panasonic_raw_white_balance(unsigned),
+            ),
+            _ => {}
+        }
+    }
 }
 
 /// One decoded `%Panasonic::FocusInfo` field: its ExifTool name, its ValueConv
@@ -1224,6 +1453,23 @@ impl LeicaMakerNoteParser {
                     entry.value_offset.to_string(),
                 );
             }
+            leica5::ORIGINAL_DIRECTORY if entry.field_type == 2 => {
+                if let Some(s) = values.and_then(|values| {
+                    read_leica_string(values, entry.value_offset, entry.value_count)
+                }) {
+                    tags.insert("Leica:OriginalDirectory".to_string(), s);
+                }
+            }
+            // The embedded TIFF sits wherever this layout's value base says
+            // (`values`): payload-relative for `MakerNoteLeica5`, TIFF-relative
+            // for `MakerNoteLeica8` (the Q3/SL3 that actually write it --
+            // `LeicaQ3_43.jpg`'s entry holds 0x095c, where its `II*` begins
+            // in the enclosing TIFF).
+            leica5::CAMERA_IFD => {
+                if let Some(dir) = subdir_bytes(entry, entry_bytes, values) {
+                    parse_camera_ifd(dir, tags);
+                }
+            }
             _ => {}
         }
     }
@@ -1462,6 +1708,18 @@ impl LeicaMakerNoteParser {
                         "Leica:JPEGQuality".to_string(),
                         L4_DECODE_JPEG_QUALITY.decode(value),
                     );
+                }
+                // `int32u`, one value, so inline in the entry.
+                l4_subdir::JPEG_SIZE if format == 4 && count == 1 => {
+                    let printed = match value_offset {
+                        0 => "5216x3472".to_string(),
+                        1 => "3840x2592".to_string(),
+                        2 => "2592x1728".to_string(),
+                        3 => "1728x1152".to_string(),
+                        4 => "1280x864".to_string(),
+                        other => format!("Unknown ({other})"),
+                    };
+                    tags.insert("Leica:JPEGSize".to_string(), printed);
                 }
                 l4_subdir::WB_RGB_LEVELS => {
                     // WB RGB Levels are stored as 3 rational values
@@ -1912,5 +2170,106 @@ mod tests {
             subdir_bytes(&entry, &entry_bytes, None),
             Some(&entry_bytes[8..12])
         );
+    }
+
+    /// A little-endian CameraIFD TIFF: `II*\0`, IFD at 8, then `entries` as
+    /// `(tag, type, value)` with count 1 and the value inline.
+    fn camera_ifd(entries: &[(u16, u16, u32)]) -> Vec<u8> {
+        let mut data = b"II\x2a\0\x08\0\0\0".to_vec();
+        data.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for &(tag, field_type, value) in entries {
+            data.extend_from_slice(&tag.to_le_bytes());
+            data.extend_from_slice(&field_type.to_le_bytes());
+            data.extend_from_slice(&1u32.to_le_bytes());
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data
+    }
+
+    /// `%PanasonicRaw::CameraIFD` values from `LeicaQ3.jpg`, against the
+    /// pinned 13.59 oracle's `-G1 -a -s` (`[CameraIFD] ApertureValue : 1.8`,
+    /// `ShutterSpeedValue : 1/56`, `SensitivityValue : 2.54296875`,
+    /// `LensTypeModel : 01 f0`, ...). The raw words are the inverse of those
+    /// conversions: 2**(434/512) = 1.80, 2**(-1487/256) = 1/55.9, 651/256.
+    /// 0x1001 uses the Q3's private type 0x0101 (`MAP_FORMAT` => int32u).
+    #[test]
+    fn camera_ifd_follows_panasonicraw_conversions() {
+        let data = camera_ifd(&[
+            (0x1001, 0x0101, 0),
+            (0x1100, 3, 280),
+            (0x1101, 3, 296),
+            (0x1102, 4, 0),
+            (0x1105, 4, 280),
+            (0x1200, 4, 1),
+            (0x1202, 3, 0xf001),
+            (0x1203, 3, 28),
+            (0x1301, 8, 434),
+            (0x1302, 8, 1487),
+            (0x1303, 8, 651),
+            (0x1412, 1, 0),
+            (0x3300, 1, 0),
+            (0x3420, 3, 1385),
+            (0x3421, 3, 2651),
+            (0x3501, 1, 1),
+            (0x3600, 1, 0),
+        ]);
+        let mut tags = HashMap::new();
+        parse_camera_ifd(&data, &mut tags);
+        let get = |name: &str| {
+            tags.get(&format!("PanasonicRaw:{name}"))
+                .map(String::as_str)
+        };
+        assert_eq!(get("MultishotOn"), Some("No"));
+        assert_eq!(get("FocusStepNear"), Some("280"));
+        assert_eq!(get("FocusStepCount"), Some("296"));
+        assert_eq!(get("FlashFired"), Some("No"));
+        assert_eq!(get("ZoomPosition"), Some("280"));
+        assert_eq!(get("LensAttached"), Some("Yes"));
+        assert_eq!(get("LensTypeModel"), Some("01 f0"));
+        assert_eq!(get("FocalLengthIn35mmFormat"), Some("28 mm"));
+        assert_eq!(get("ApertureValue"), Some("1.8"));
+        assert_eq!(get("ShutterSpeedValue"), Some("1/56"));
+        assert_eq!(get("SensitivityValue"), Some("2.54296875"));
+        assert_eq!(get("FacesDetected"), Some("No"));
+        assert_eq!(get("WhiteBalanceSet"), Some("Auto"));
+        assert_eq!(get("WB_RedLevelAuto"), Some("1385"));
+        assert_eq!(get("WB_BlueLevelAuto"), Some("2651"));
+        assert_eq!(get("Orientation"), Some("Horizontal (normal)"));
+        assert_eq!(get("WhiteBalanceDetected"), Some("Auto"));
+        assert_eq!(tags.len(), 17);
+    }
+
+    /// The table's conditions and `RawConv`s withhold rather than guess:
+    /// `LensTypeModel` needs `$format eq "int16u"` and a non-zero value,
+    /// `HighISOMode` is `$val || undef`, and an unlisted enum value prints
+    /// ExifTool's `Unknown (N)`.
+    #[test]
+    fn camera_ifd_conditions_and_raw_convs_withhold() {
+        let data = camera_ifd(&[
+            (0x1202, 4, 0xf001),
+            (0x1201, 4, 2),
+            (0x1305, 3, 0),
+            (0x1200, 4, 7),
+        ]);
+        let mut tags = HashMap::new();
+        parse_camera_ifd(&data, &mut tags);
+        assert_eq!(tags.get("PanasonicRaw:LensTypeModel"), None);
+        assert_eq!(tags.get("PanasonicRaw:LensTypeMake"), None);
+        assert_eq!(tags.get("PanasonicRaw:HighISOMode"), None);
+        assert_eq!(
+            tags.get("PanasonicRaw:LensAttached").map(String::as_str),
+            Some("Unknown (7)")
+        );
+    }
+
+    /// 0x05ff's `Condition` admits only a TIFF header whose IFD is at 8.
+    #[test]
+    fn camera_ifd_requires_the_conditioned_header() {
+        let mut data = camera_ifd(&[(0x1203, 3, 28)]);
+        data[4] = 0x0a;
+        let mut tags = HashMap::new();
+        parse_camera_ifd(&data, &mut tags);
+        assert!(tags.is_empty());
     }
 }

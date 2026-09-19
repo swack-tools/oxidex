@@ -6686,21 +6686,28 @@ fn parse_minolta_mrw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     Ok(metadata)
 }
 
-/// Read a little-endian `int16u` out of a CIFF structure.
+/// Read an `int16u` out of a CIFF structure in the container's byte order.
 ///
-/// CIFF is little-endian in Canon's CRW files -- `ProcessCRW` calls
-/// `SetByteOrder` on the file's first two bytes (CanonRaw.pm:820) and
-/// [`parse_canon_crw`] only accepts `II`.
-fn read_ciff_u16(data: &[u8], offset: usize) -> Option<u16> {
+/// `ProcessCRW` calls `SetByteOrder` on the container's first two bytes
+/// (CanonRaw.pm:820). Canon's CRW files are all `II`; the CIFF records early
+/// PowerShots embedded in a JPEG APP0 segment are not always
+/// (`CanonPowerShot600.jpg`'s starts `MM`).
+fn read_ciff_u16(data: &[u8], offset: usize, order: TableByteOrder) -> Option<u16> {
     let end = offset.checked_add(2)?;
     let bytes: [u8; 2] = data.get(offset..end)?.try_into().ok()?;
-    Some(u16::from_le_bytes(bytes))
+    Some(match order {
+        TableByteOrder::Little => u16::from_le_bytes(bytes),
+        TableByteOrder::Big => u16::from_be_bytes(bytes),
+    })
 }
 
-fn read_ciff_u32(data: &[u8], offset: usize) -> Option<u32> {
+fn read_ciff_u32(data: &[u8], offset: usize, order: TableByteOrder) -> Option<u32> {
     let end = offset.checked_add(4)?;
     let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
-    Some(u32::from_le_bytes(bytes))
+    Some(match order {
+        TableByteOrder::Little => u32::from_le_bytes(bytes),
+        TableByteOrder::Big => u32::from_be_bytes(bytes),
+    })
 }
 
 /// One value-bearing entry of a CIFF directory, decomposed the way
@@ -6725,6 +6732,7 @@ struct CiffEntry<'a> {
     tag_type: u16,
     dir_name: &'static str,
     value: &'a [u8],
+    order: TableByteOrder,
 }
 
 impl CiffEntry<'_> {
@@ -6747,8 +6755,8 @@ impl CiffEntry<'_> {
     fn unsigned(&self) -> Option<u64> {
         Some(match self.type_width()? {
             1 => u64::from(*self.value.first()?),
-            2 => u64::from(read_ciff_u16(self.value, 0)?),
-            _ => u64::from(read_ciff_u32(self.value, 0)?),
+            2 => u64::from(read_ciff_u16(self.value, 0, self.order)?),
+            _ => u64::from(read_ciff_u32(self.value, 0, self.order)?),
         })
     }
 
@@ -6771,8 +6779,8 @@ impl CiffEntry<'_> {
     /// The value as an IEEE `float`, for the two tags whose `Format => 'float'`
     /// overrides `%crwTagFormat` (CanonRaw.pm:242-247, :292-302).
     fn float(&self) -> Option<f64> {
-        let bytes: [u8; 4] = self.value.get(..4)?.try_into().ok()?;
-        Some(f64::from(f32::from_le_bytes(bytes)))
+        let bits = read_ciff_u32(self.value, 0, self.order)?;
+        Some(f64::from(f32::from_bits(bits)))
     }
 }
 
@@ -6806,12 +6814,13 @@ fn walk_ciff_directory<'a>(
     directory_offset: usize,
     dir_name: &'static str,
     depth: usize,
+    order: TableByteOrder,
     out: &mut Vec<CiffEntry<'a>>,
 ) {
     if depth > 16 {
         return;
     }
-    let Some(entry_count) = read_ciff_u16(data, directory_offset).map(usize::from) else {
+    let Some(entry_count) = read_ciff_u16(data, directory_offset, order).map(usize::from) else {
         return;
     };
     if entry_count > 256 {
@@ -6834,7 +6843,7 @@ fn walk_ciff_directory<'a>(
         else {
             continue;
         };
-        let Some(tag) = read_ciff_u16(data, entry_offset) else {
+        let Some(tag) = read_ciff_u16(data, entry_offset, order) else {
             continue;
         };
         // CanonRaw.pm:652 -- a set high bit is a corrupt directory, and
@@ -6846,10 +6855,12 @@ fn walk_ciff_directory<'a>(
         let tag_type = (tag >> 8) & 0x38;
         let value_in_dir = tag & 0x4000 != 0;
 
-        let Some(size) = read_ciff_u32(data, entry_offset + 2).map(|value| value as usize) else {
+        let Some(size) = read_ciff_u32(data, entry_offset + 2, order).map(|value| value as usize)
+        else {
             continue;
         };
-        let Some(relative) = read_ciff_u32(data, entry_offset + 6).map(|value| value as usize)
+        let Some(relative) =
+            read_ciff_u32(data, entry_offset + 6, order).map(|value| value as usize)
         else {
             continue;
         };
@@ -6864,7 +6875,8 @@ fn walk_ciff_directory<'a>(
             if block_end > data.len() || size < 4 {
                 continue;
             }
-            let Some(nested_relative) = read_ciff_u32(data, block_end - 4).map(|v| v as usize)
+            let Some(nested_relative) =
+                read_ciff_u32(data, block_end - 4, order).map(|v| v as usize)
             else {
                 continue;
             };
@@ -6878,6 +6890,7 @@ fn walk_ciff_directory<'a>(
                 nested_directory,
                 ciff_subdirectory_name(id),
                 depth + 1,
+                order,
                 out,
             );
             continue;
@@ -6908,6 +6921,7 @@ fn walk_ciff_directory<'a>(
             tag_type,
             dir_name,
             value,
+            order,
         });
     }
 }
@@ -6941,11 +6955,16 @@ const fn ciff_subdirectory_name(id: u16) -> &'static str {
 /// `Format` overrides and the `PrintConv` hashes come from the generator rather
 /// than from a second hand-written copy. Fields the generator refused are
 /// withheld by [`DecodedField::emit`] and handled by name at the call site.
-fn emit_canonraw_table(metadata: &mut MetadataMap, table_name: &str, record: &[u8]) {
+fn emit_canonraw_table(
+    metadata: &mut MetadataMap,
+    table_name: &str,
+    record: &[u8],
+    order: TableByteOrder,
+) {
     let Some(table) = find_table("CanonRaw", table_name) else {
         return;
     };
-    let decode = decode_binary_table(table, record, TableByteOrder::Little);
+    let decode = decode_binary_table(table, record, order);
     for field in decode.fields() {
         if let Some(value) = field.emit() {
             metadata.insert(
@@ -7036,11 +7055,11 @@ fn civil_from_unix(seconds: i64) -> (i64, u32, u32, u32, u32, u32) {
 
 /// Emit `CanonRaw::TimeStamp`, including the `DateTimeOriginal` the generated
 /// table withholds.
-fn emit_canonraw_timestamp(metadata: &mut MetadataMap, record: &[u8]) {
+fn emit_canonraw_timestamp(metadata: &mut MetadataMap, record: &[u8], order: TableByteOrder) {
     let Some(table) = find_table("CanonRaw", "TimeStamp") else {
         return;
     };
-    let decode = decode_binary_table(table, record, TableByteOrder::Little);
+    let decode = decode_binary_table(table, record, order);
     for field in decode.fields() {
         if field.field.name == "DateTimeOriginal" {
             let Some(access) = RawAccess::new(
@@ -7086,11 +7105,16 @@ fn emit_canonraw_timestamp(metadata: &mut MetadataMap, record: &[u8]) {
 /// (Canon.pm:7282-7290.) Both arms are four `int16s` at the same offset; only
 /// the name differs, on a model test this parser can answer because
 /// `CanonRawMakeModel` is read before any record is emitted.
-fn emit_canon_color_balance(metadata: &mut MetadataMap, record: &[u8], model: &str) {
+fn emit_canon_color_balance(
+    metadata: &mut MetadataMap,
+    record: &[u8],
+    model: &str,
+    order: TableByteOrder,
+) {
     let Some(table) = find_table("Canon", "ColorBalance") else {
         return;
     };
-    for field in decode_binary_table(table, record, TableByteOrder::Little).fields() {
+    for field in decode_binary_table(table, record, order).fields() {
         if let Some(value) = field.emit() {
             metadata.insert(
                 format!("{}:{}", table.group1, field.field.name),
@@ -7103,7 +7127,7 @@ fn emit_canon_color_balance(metadata: &mut MetadataMap, record: &[u8], model: &s
     // `index * increment` the generated fields use.
     let mut levels = Vec::with_capacity(4);
     for slot in 0..4usize {
-        let Some(raw) = read_ciff_u16(record, (29 + slot) * 2) else {
+        let Some(raw) = read_ciff_u16(record, (29 + slot) * 2, order) else {
             return;
         };
         levels.push((raw as i16).to_string());
@@ -7184,6 +7208,9 @@ fn emit_ciff_main_tag(metadata: &mut MetadataMap, entry: &CiffEntry<'_>, model: 
     };
 
     match entry.id {
+        // CanonRaw.pm:55-59 -- `Format => 'undef'`, `Binary => 1`: reported as
+        // a "(Binary data N bytes...)" placeholder unless `-b` is given.
+        0x0001 => put("FreeBytes", TagValue::Binary(entry.value.to_vec())),
         // CanonRaw.pm:62-71 -- one tag id, two names, chosen by the enclosing
         // directory: `Condition => '$self->{DIR_NAME} eq "ImageDescription"'`.
         0x0805 => {
@@ -7462,21 +7489,44 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     if data.get(..2) != Some(b"II") || data.get(6..14) != Some(b"HEAPCCDR") {
         return Ok(metadata);
     }
-    let Some(heap_start) = read_ciff_u32(data, 2).map(|value| value as usize) else {
-        return Ok(metadata);
+    decode_ciff_container(data, &mut metadata);
+    Ok(metadata)
+}
+
+/// Decode one little-endian CIFF container -- `II`, a 4-byte header length,
+/// an 8-byte `HEAP(CCDR|JPGM)` signature, then the heap -- into `metadata`.
+///
+/// This is `ProcessCRW`'s body after the signature test (CanonRaw.pm:811-856),
+/// shared by the two places ExifTool reaches it from: a standalone `.CRW`
+/// ([`parse_canon_crw`], `HEAPCCDR`) and a CIFF directory embedded in a JPEG
+/// APP0 segment (`jpeg::ciff_app0`, `HEAPJPGM`; ExifTool.pm:7730-7739 calls the
+/// very same `ProcessCRW`). The caller has already checked the signature it
+/// accepts. Keys come out under the groups a standalone CRW reports
+/// (`CanonRaw:` for `%CanonRaw::*`, `Canon:` for the shared `%Canon::*`
+/// records); the APP0 caller re-homes them under ExifTool's `SET_GROUP1`.
+pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
+    // CanonRaw.pm:820, `SetByteOrder($buff)` on the first two bytes.
+    let order = match data.get(..2) {
+        Some(b"II") => TableByteOrder::Little,
+        Some(b"MM") => TableByteOrder::Big,
+        _ => return,
+    };
+    let Some(heap_start) = read_ciff_u32(data, 2, order).map(|value| value as usize) else {
+        return;
     };
     if heap_start >= data.len() || data.len().saturating_sub(heap_start) < 4 {
-        return Ok(metadata);
+        return;
     }
-    let Some(root_relative) = read_ciff_u32(data, data.len() - 4).map(|value| value as usize)
+    let Some(root_relative) =
+        read_ciff_u32(data, data.len() - 4, order).map(|value| value as usize)
     else {
-        return Ok(metadata);
+        return;
     };
     let Some(root_directory) = heap_start.checked_add(root_relative) else {
-        return Ok(metadata);
+        return;
     };
     if root_directory >= data.len() {
-        return Ok(metadata);
+        return;
     }
 
     let mut entries = Vec::new();
@@ -7487,6 +7537,7 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
         root_directory,
         "CRW",
         0,
+        order,
         &mut entries,
     );
 
@@ -7496,7 +7547,7 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     let mut model = String::new();
     for entry in &entries {
         if entry.id == 0x080a
-            && let Some(resolved) = emit_canonraw_make_model(&mut metadata, entry.value)
+            && let Some(resolved) = emit_canonraw_make_model(metadata, entry.value)
         {
             model = resolved;
         }
@@ -7508,22 +7559,45 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
             0x080a => {}
             // The eight transcribed `%CanonRaw::*` binary records
             // (CanonRaw.pm:427-590), reached from Main at the cited lines.
-            0x1803 => emit_canonraw_table(&mut metadata, "ImageFormat", entry.value),
-            0x1810 => emit_canonraw_table(&mut metadata, "ImageInfo", entry.value),
-            0x1813 => emit_canonraw_table(&mut metadata, "FlashInfo", entry.value),
-            0x1818 => emit_canonraw_table(&mut metadata, "ExposureInfo", entry.value),
-            0x1835 => emit_canonraw_table(&mut metadata, "DecoderTable", entry.value),
-            0x10b5 => emit_canonraw_table(&mut metadata, "RawJpgInfo", entry.value),
-            0x1030 => emit_canonraw_table(&mut metadata, "WhiteSample", entry.value),
-            0x180e => emit_canonraw_timestamp(&mut metadata, entry.value),
-            0x10a9 => emit_canon_color_balance(&mut metadata, entry.value, &model),
+            0x1803 => emit_canonraw_table(metadata, "ImageFormat", entry.value, order),
+            0x1810 => emit_canonraw_table(metadata, "ImageInfo", entry.value, order),
+            0x1813 => emit_canonraw_table(metadata, "FlashInfo", entry.value, order),
+            0x1818 => emit_canonraw_table(metadata, "ExposureInfo", entry.value, order),
+            0x1835 => emit_canonraw_table(metadata, "DecoderTable", entry.value, order),
+            0x10b5 => emit_canonraw_table(metadata, "RawJpgInfo", entry.value, order),
+            0x1030 => emit_canonraw_table(metadata, "WhiteSample", entry.value, order),
+            0x180e => emit_canonraw_timestamp(metadata, entry.value, order),
+            0x10a9 => emit_canon_color_balance(metadata, entry.value, &model, order),
             other if canon_makernote_id_for_ciff_record(other).is_some() => {
                 canon_records.push((other, entry.value));
             }
-            _ => emit_ciff_main_tag(&mut metadata, entry, &model),
+            _ => emit_ciff_main_tag(metadata, entry, &model),
         }
     }
 
+    // `parse_canon_ciff_records` presents the records to the MakerNote
+    // decoders as a little-endian IFD. Every `%Canon::*` table reached from
+    // CIFF is an `int16` array (see that function), so a big-endian
+    // container's records become the same words by swapping each pair.
+    let swapped: Vec<(u16, Vec<u8>)> = match order {
+        TableByteOrder::Little => Vec::new(),
+        TableByteOrder::Big => canon_records
+            .iter()
+            .map(|&(id, bytes)| {
+                let mut words = bytes.to_vec();
+                for pair in words.chunks_exact_mut(2) {
+                    pair.swap(0, 1);
+                }
+                (id, words)
+            })
+            .collect(),
+    };
+    if order == TableByteOrder::Big {
+        canon_records = swapped
+            .iter()
+            .map(|(id, bytes)| (*id, bytes.as_slice()))
+            .collect();
+    }
     let model_for_canon = (!model.is_empty()).then_some(model.as_str());
     let mut canon_value_forms = std::collections::HashMap::new();
     // The records decode through the Canon MakerNote parser, whose HashMap
@@ -7554,8 +7628,6 @@ fn parse_canon_crw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
     for (name, value) in canon_value_forms {
         metadata.set_value_form(name, value);
     }
-
-    Ok(metadata)
 }
 
 /// Format the Compression tag value (0x0103) from the X3F JPEG preview's

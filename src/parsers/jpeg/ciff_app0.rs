@@ -1,387 +1,76 @@
-//! Canon CIFF (`HEAPCCDR`), embedded verbatim inside a JPEG APP0 segment.
+//! Canon CIFF (`HEAPJPGM`), embedded verbatim inside a JPEG APP0 segment.
 //!
-//! This is a different shape from a standalone `.CRW` file: `parse_canon_crw`
-//! (`src/parsers/raw/metadata.rs`) reads a whole CIFF file from byte 0. Here
-//! the same container format shows up as the payload of one APP0 marker in an
-//! otherwise-ordinary JPEG. ExifTool's own test fixture,
-//! `t/images/ExifTool.jpg`, carries exactly this -- a full CIFF directory in
-//! its third APP0 segment -- specifically to exercise cross-table `Make`/
-//! `Model` priority arbitration (`FoundTag`, `ExifTool.pm:9448`+) against the
-//! file's `IFD0` `Make`/`Model`: `-Make` resolves to the CIFF `Canon`, not
-//! the `IFD0` `FUJIFILM`, because both are ordinary (non-`Priority=>0`)
-//! occurrences and the CIFF one is recorded later in file order (Step 18/19's
-//! newest-wins tie rule, `TagSink::record`). Step 20's acceptance matrix
-//! (`OVERHAUL_STEP18_DESIGN.md`) pins this exact file and tag.
+//! This is the same container a standalone `.CRW` file is, carried as the
+//! payload of one APP0 marker in an otherwise-ordinary JPEG. ExifTool reaches
+//! both through the very same `ProcessCRW` (ExifTool.pm:7730-7739 for the APP0
+//! case, `JPEG.pm:34-35` for its table entry), so this module does not decode
+//! CIFF itself: it hands the payload to [`decode_ciff_container`], the body of
+//! the standalone-CRW path (`src/parsers/raw/metadata.rs`), and only re-homes
+//! the result under the group ExifTool gives it.
 //!
-//! Only `CanonRaw.pm`'s tag `0x080a` (`CanonRawMakeModel`, a
-//! `ProcessBinaryData` record: 6-byte NUL-padded `Make` at offset 0,
-//! NUL-terminated `Model` starting at offset 6 -- `CanonRaw.pm:410-425`) is
-//! decoded here. This is intentionally not a general embedded-CIFF parser:
-//! `raw::metadata::parse_ciff_directory` (the standalone-`.CRW` path) itself
-//! only resolves two other tags (`AEBBracketValue`, `AFInfo`) out of
-//! `CanonRaw::Main`'s ~40. Extending either path to the rest of that table is
-//! out of Step 20's scope (output projection, not new tag coverage); this
-//! exists to make a CIFF-sourced occurrence reachable by the CLI's
-//! group/priority machinery at all, using the one tag the pinned oracle's
-//! matrix exercises. Recorded under the `CIFF:` prefix -- matching this
-//! codebase's existing (if family-1-flavored, see AGENTS.md's tagmodel/1.6
-//! finding) key convention for every other legacy-shim-inserted MakerNote
-//! tag, and confirmed against the oracle's own family display
-//! (`-G0:1 -Make` -> `[MakerNotes:CIFF]`): `cli::tag_resolution::resolve_family0`
-//! maps this same `"CIFF"` group0 to family-0 `"MakerNotes"` on request.
+//! # Why every key becomes `CIFF:`
+//!
+//! Before calling `ProcessCRW`, the APP0 branch sets `$$self{SET_GROUP1} =
+//! 'CIFF'` (ExifTool.pm:7734) and clears it afterwards. That overrides family
+//! 1 for *every* tag the walk produces -- the `%CanonRaw::*` tables' own
+//! `CanonRaw` and the shared `%Canon::*` records' `Canon` alike -- which is why
+//! the pinned 13.59 oracle prints `[MakerNotes:CIFF] FocalLength`,
+//! `[MakerNotes:CIFF] ImageWidth` and `[MakerNotes:CIFF] Make` for
+//! `t/images/ExifTool.jpg` and the early PowerShot JPEGs, where the same
+//! records in a `.CRW` print as `CanonRaw:` and `Canon:`.
+//! `cli::tag_resolution::resolve_family0` maps this `"CIFF"` group back to
+//! family-0 `MakerNotes` on request.
+//!
+//! # Record order
+//!
+//! `t/images/ExifTool.jpg` also carries an `IFD0` `Make`/`Model`
+//! (`FUJIFILM`), and `-Make` resolves to the CIFF `Canon` because both are
+//! ordinary occurrences and the CIFF one is recorded later in file order
+//! (Step 18/19's newest-wins tie rule, `TagSink::record`). So this must run
+//! after `process_exif_segments`, and the re-homed occurrences are appended to
+//! the file's map in the decoder's own order.
+//!
+//! Ported from `origin/main` 9b215f03 (#696), which read CIFF-in-JPEG with a
+//! separate hand-written walker (`jpeg/app_segments/ciff.rs`). The tip already
+//! had a fuller CIFF decoder on its CRW path, so the fix is re-expressed as
+//! reuse of that decoder rather than a second copy of `%CanonRaw::Main`.
 
-use crate::core::{Instance, MetadataMap, SHIM_DEFAULT_PRIORITY, TagValue};
+use crate::core::MetadataMap;
 use crate::parsers::jpeg::segment_parser::Segment;
-use crate::parsers::tiff::makernotes::canon::parse_canon_ciff_records;
-use std::collections::HashMap;
+use crate::parsers::raw::metadata::decode_ciff_container;
 
 /// JPEG APP0 marker (0xFFE0). CIFF containers embedded this way arrive as
 /// the payload of an APP0 segment, same as JFIF/JFXX/OCAD.
 const APP0_MARKER: u16 = 0xFFE0;
 
-/// CIFF's `CanonRawMakeModel` tag (`CanonRaw.pm:74-78`).
-const CANON_RAW_MAKE_MODEL: u16 = 0x080A;
+/// ExifTool's `SET_GROUP1` for an APP0 CIFF record (ExifTool.pm:7734).
+const CIFF_GROUP: &str = "CIFF";
 
-/// CIFF's `CanonFocalLength` tag (`CanonRaw.pm:118-122`), a `SubDirectory`
-/// onto `%Image::ExifTool::Canon::FocalLength`.
-const CANON_RAW_FOCAL_LENGTH: u16 = 0x1029;
-
-/// `ProcessCanonRaw`'s own three-way split of a raw 16-bit directory-entry
-/// tag word (`CanonRaw.pm:648-655`):
+/// Scans every APP0 segment for an embedded CIFF (`II`+`HEAPJPGM`) container
+/// and records everything `ProcessCRW` would report for it, under `CIFF:`.
 ///
-/// ```perl
-/// my $tagID = $tag & 0x3fff;          # get tag ID
-/// my $tagType = ($tag >> 8) & 0x38;   # get tag type
-/// my $valueInDir = ($tag & 0x4000);   # flag for value in directory
-/// ```
-///
-/// and the subdirectory test at `:658` (`($tagType==0x28 or $tagType==0x30)
-/// and not $valueInDir`): a directory entry is a nested CIFF directory --
-/// its `size`/`ptr` fields point at another `entry_count` + entries block,
-/// not at a value -- exactly when its type nibble is `0x28` or `0x30` *and*
-/// the value isn't packed inline. `CameraObject` (tag `0x2807`, tagType
-/// `0x28`) is one such subdirectory in `t/images/ExifTool.jpg`'s embedded
-/// CIFF, and `CanonRawMakeModel` (`0x080a`) is one of its entries.
-fn ciff_tag_id(tag: u16) -> u16 {
-    tag & 0x3FFF
-}
-
-fn ciff_is_subdirectory(tag: u16) -> bool {
-    let tag_type = (tag >> 8) & 0x38;
-    (tag_type == 0x28 || tag_type == 0x30) && !ciff_value_in_dir(tag)
-}
-
-/// `CanonRaw.pm:655`'s `my $valueInDir = ($tag & 0x4000);` -- the entry's
-/// eight bytes after the tag word are the value itself rather than a
-/// size/pointer pair.
-fn ciff_value_in_dir(tag: u16) -> bool {
-    tag & 0x4000 != 0
-}
-
-fn read_ciff_u16(data: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(2)?;
-    let bytes: [u8; 2] = data.get(offset..end)?.try_into().ok()?;
-    Some(u16::from_le_bytes(bytes))
-}
-
-fn read_ciff_u32(data: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    let bytes: [u8; 4] = data.get(offset..end)?.try_into().ok()?;
-    Some(u32::from_le_bytes(bytes))
-}
-
-/// Recursively walks a CIFF directory looking only for tags `0x080a`
-/// (`CanonRawMakeModel`, decoded inline) and `0x1029` (`CanonFocalLength`,
-/// whose bytes are handed back to the caller). Mirrors
-/// `raw::metadata::parse_ciff_directory`'s traversal (bounds checks, depth
-/// guard, entry layout) but calls back only for the tags this module cares
-/// about, rather than every tag `parse_ciff_record` recognizes.
-///
-/// `focal_length_record` is an out-parameter rather than an inline decode
-/// because `%Canon::FocalLength`'s own `Condition` reads the `Model`
-/// DataMember, and a CIFF directory does not guarantee `0x080a` is walked
-/// before `0x1029`. The caller decodes once the whole walk is done and the
-/// Model is known.
-fn walk_ciff_directory<'a>(
-    data: &'a [u8],
-    container_start: usize,
-    container_end: usize,
-    directory_offset: usize,
-    metadata: &mut MetadataMap,
-    focal_length_record: &mut Option<&'a [u8]>,
-    depth: usize,
-) {
-    if depth > 16 {
-        return;
-    }
-    let Some(entry_count) = read_ciff_u16(data, directory_offset).map(usize::from) else {
-        return;
-    };
-    if entry_count > 256 {
-        return;
-    }
-    let Some(directory_end) = entry_count
-        .checked_mul(10)
-        .and_then(|size| directory_offset.checked_add(2 + size + 4))
-    else {
-        return;
-    };
-    if directory_end > container_end || directory_end > data.len() {
-        return;
-    }
-
-    for index in 0..entry_count {
-        let Some(entry_offset) = index
-            .checked_mul(10)
-            .and_then(|offset| directory_offset.checked_add(2 + offset))
-        else {
-            continue;
-        };
-        let Some(tag) = read_ciff_u16(data, entry_offset) else {
-            continue;
-        };
-        let Some(size) = read_ciff_u32(data, entry_offset + 2).map(|value| value as usize) else {
-            continue;
-        };
-        let Some(relative) = read_ciff_u32(data, entry_offset + 6).map(|value| value as usize)
-        else {
-            continue;
-        };
-        // `CanonRaw.pm:693-695`: "this type of tag stores the value in the
-        // 'size' and 'ptr' fields" -- when `valueInDir` is set the eight bytes
-        // that would otherwise be a size and a pointer *are* the value, and
-        // `size`/`relative` above are not offsets at all.
-        //
-        // Missing this silently dropped every inline-value entry in the whole
-        // container, because the misread pointer almost always lands out of
-        // bounds and the entry falls out through one of the `continue`s above:
-        // `t/images/ExifTool.jpg`'s CIFF walked 21 entries where the pinned
-        // oracle's `-v3` dump lists 26, and `CanonFocalLength` (`0x5029`, i.e.
-        // `0x1029 | 0x4000`) was one of the five lost. `parse_ciff_directory`
-        // in `raw::metadata` -- the standalone-`.CRW` twin of this walker --
-        // has always had this branch; only the APP0 path lacked it.
-        let value = if ciff_value_in_dir(tag) {
-            let Some(bytes) = data.get(entry_offset + 2..entry_offset + 10) else {
-                continue;
-            };
-            bytes
-        } else {
-            let Some(value_start) = container_start.checked_add(relative) else {
-                continue;
-            };
-            let Some(value_end) = value_start.checked_add(size) else {
-                continue;
-            };
-            let Some(bytes) = data.get(value_start..value_end) else {
-                continue;
-            };
-            bytes
-        };
-
-        if ciff_is_subdirectory(tag) {
-            if value.len() < 4 {
-                continue;
-            }
-            // Only reachable when `valueInDir` is clear (`ciff_is_subdirectory`
-            // requires it), so the value block really is at `relative`.
-            let value_start = container_start + relative;
-            let value_end = value_start + size;
-            let Some(relative_directory) =
-                read_ciff_u32(value, value.len() - 4).map(|value| value as usize)
-            else {
-                continue;
-            };
-            let Some(nested_directory) = value_start.checked_add(relative_directory) else {
-                continue;
-            };
-            walk_ciff_directory(
-                data,
-                value_start,
-                value_end,
-                nested_directory,
-                metadata,
-                focal_length_record,
-                depth + 1,
-            );
-            continue;
-        }
-
-        match ciff_tag_id(tag) {
-            CANON_RAW_MAKE_MODEL => insert_make_model(value, metadata),
-            CANON_RAW_FOCAL_LENGTH => *focal_length_record = Some(value),
-            _ => {}
-        }
-    }
-}
-
-/// Decodes `%Canon::MakeModel` (`CanonRaw.pm:410-425`): `Make` is a 6-byte
-/// NUL-padded string at offset 0 (`"Canon\0"`), `Model` is a NUL-terminated
-/// string starting at offset 6 running to the end of the record.
-fn insert_make_model(record: &[u8], metadata: &mut MetadataMap) {
-    let Some(make_bytes) = record.get(0..6) else {
-        return;
-    };
-    let make_len = make_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(make_bytes.len());
-    let make = String::from_utf8_lossy(&make_bytes[..make_len]);
-    if !make.is_empty() {
-        metadata.insert(
-            "CIFF:Make".to_string(),
-            TagValue::new_string(make.into_owned()),
-        );
-    }
-
-    if let Some(model_bytes) = record.get(6..) {
-        let model_len = model_bytes
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(model_bytes.len());
-        let model = String::from_utf8_lossy(&model_bytes[..model_len]);
-        if !model.is_empty() {
-            metadata.insert(
-                "CIFF:Model".to_string(),
-                TagValue::new_string(model.into_owned()),
-            );
-        }
-    }
-}
-
-/// Decodes `%Canon::FocalLength`'s `FocalPlaneXSize`/`FocalPlaneYSize`
-/// (`Canon.pm:2726-2770`, keys 2 and 3) out of CIFF record `0x1029`
-/// (`CanonRaw.pm:118-122`).
-///
-/// # Why these two and not the whole record
-///
-/// The same record's key 1 `FocalLength` has
-/// `ValueConv => '$val / ($$self{FocalUnits} || 1)'`, and `FocalUnits` is a
-/// DataMember of `%Canon::CameraSettings` -- a record this APP0 path does not
-/// parse. Emitting a focal length divided by an assumed unit would be a
-/// plausible-but-wrong value under a real ExifTool tag name, which AGENTS.md's
-/// "never approximate a conversion" rule forbids; it is omitted instead. Key 0
-/// `FocalType` is omitted for scope, not correctness. The two sizes have no
-/// such dependency: `$val * 25.4 / 1000` from the record alone, gated by the
-/// `Model` condition and the `$val < 40 ? undef : $val` plausibility guard,
-/// both of which [`parse_canon_ciff_records`] already applies.
-///
-/// # Why it goes through the MakerNote decoder
-///
-/// Same reason `raw::metadata::parse_canon_crw` does (see
-/// [`parse_canon_ciff_records`]' own doc comment): there is one transcription
-/// of `%Canon::FocalLength`, and a second copy written against CIFF bytes
-/// would be a second chance to get the conversion -- and the unrounded
-/// `ValueConv` form the Composite chain consumes -- subtly wrong. The decoder
-/// keys its output `Canon:`; the embedded-CIFF-in-JPEG case is family-1
-/// `CIFF` (confirmed against the pinned 13.59 oracle: `-a -G1 -s` on
-/// `t/images/ExifTool.jpg` prints `[CIFF] FocalPlaneXSize : 5.05 mm`), and
-/// `cli::tag_resolution::resolve_family0` maps that `CIFF` label back to
-/// family-0 `MakerNotes` on request, exactly as it already does for
-/// `CIFF:Make`.
-///
-/// # What this unblocks
-///
-/// `CalcScaleFactor35efl` (Exif.pm) takes the FocalPlaneX/YSize branch
-/// whenever the aspect ratio looks like 4:3 or 3:2, ahead of the
-/// resolution-derived fallback. Without these two, ExifTool.jpg's chain fell
-/// through to that fallback, derived a 0.42 mm sensor diagonal from
-/// ExifImageWidth/Height and the focal-plane resolutions, rejected it as
-/// implausible and produced no `Composite:ScaleFactor35efl` at all -- so
-/// `Composite:FocalLength35efl` was stuck at the un-refined `6.0 mm` where
-/// the oracle says `6.0 mm (35 mm equivalent: 41.4 mm)`.
-fn insert_focal_plane_sizes(record: &[u8], metadata: &mut MetadataMap) {
-    let model = metadata.get_string("CIFF:Model").map(str::to_string);
-    let mut value_forms: HashMap<String, String> = HashMap::new();
-    let decoded = parse_canon_ciff_records(
-        &[(CANON_RAW_FOCAL_LENGTH, record)],
-        model.as_deref(),
-        &mut value_forms,
-    );
-
-    for name in ["FocalPlaneXSize", "FocalPlaneYSize"] {
-        let makernote_key = format!("Canon:{name}");
-        let Some(display) = decoded.get(&makernote_key) else {
-            continue;
-        };
-        let ciff_key = format!("CIFF:{name}");
-        // The unrounded `$val * 25.4 / 1000` form rides along the same channel
-        // the CRW route uses, because `CalcScaleFactor35efl` squares these
-        // numbers and the "%.2f" print (5.05 for 5.0546) is a different number
-        // than the one ExifTool's arithmetic sees.
-        match value_forms.get(&makernote_key) {
-            Some(value_form) => {
-                metadata.insert_occurrence_with_raw(
-                    ciff_key,
-                    TagValue::new_string(display.clone()),
-                    TagValue::new_string(value_form.clone()),
-                    SHIM_DEFAULT_PRIORITY,
-                    "",
-                    Instance::default(),
-                );
-            }
-            None => {
-                metadata.insert(ciff_key, TagValue::new_string(display.clone()));
-            }
-        }
-    }
-}
-
-/// Scans every APP0 segment for an embedded CIFF (`II`+`HEAPCCDR`)
-/// container and, when found, records its `Make`/`Model`.
-///
-/// Must run after `process_exif_segments`: Step 18/19's tie rule gives the
-/// win to the *later*-recorded occurrence on an equal-priority tie
-/// (`TagSink::record`), and the oracle's cross-group arbitration for this
-/// fixture depends on CIFF's `Make` being recorded after `IFD0`'s.
+/// Must run after `process_exif_segments` (see the module note on record
+/// order).
 pub(crate) fn process_ciff_app0_segments(segments: &[Segment<'_>], metadata: &mut MetadataMap) {
     for segment in segments {
         if segment.marker != APP0_MARKER {
             continue;
         }
         let data = segment.data;
-        // `ExifTool.pm:943`: `CRW => '(II|MM).{4}HEAP(CCDR|JPGM)'`. Standalone
-        // `.CRW` files carry `HEAPCCDR`; a CIFF directory embedded in a
-        // JPEG's APP0 segment (this module's whole reason to exist) carries
-        // `HEAPJPGM` instead (`JPEG.pm:35`, `ExifTool.pm:7730`) -- confirmed
-        // against `t/images/ExifTool.jpg`'s actual third APP0 segment, which
-        // starts `49 49 1A 00 00 00 48 45 41 50 4A 50 47 4D` (`II`, heap
-        // offset 0x1A, `HEAPJPGM`). Only little-endian (`II`) is handled:
-        // every embedded-CIFF fixture in the pinned corpus is `II`, and
-        // `raw::metadata::parse_canon_crw` (the standalone-file path this
-        // mirrors) is little-endian-only for the same reason.
-        if data.get(..2) != Some(b"II")
-            || !matches!(data.get(6..14), Some(b"HEAPCCDR") | Some(b"HEAPJPGM"))
+        // `ExifTool.pm:7730`: `$$segDataPt =~ /^(II|MM).{4}HEAPJPGM/s` --
+        // only the `JPGM` form; a `HEAPCCDR` payload in APP0 is not a CIFF
+        // record to ExifTool. Both byte orders occur: `ExifTool.jpg` and the
+        // A5/Pro70 samples are `II`, `CanonPowerShot600.jpg` is `MM`.
+        if !matches!(data.get(..2), Some(b"II") | Some(b"MM"))
+            || data.get(6..14) != Some(b"HEAPJPGM")
         {
             continue;
         }
-        let Some(heap_start) = read_ciff_u32(data, 2).map(|value| value as usize) else {
-            continue;
-        };
-        if heap_start >= data.len() || data.len().saturating_sub(heap_start) < 4 {
-            continue;
-        }
-        let Some(root_relative) = read_ciff_u32(data, data.len() - 4).map(|value| value as usize)
-        else {
-            continue;
-        };
-        let Some(root_directory) = heap_start.checked_add(root_relative) else {
-            continue;
-        };
-        if root_directory >= data.len() {
-            continue;
-        }
-        let mut focal_length_record = None;
-        walk_ciff_directory(
-            data,
-            heap_start,
-            data.len(),
-            root_directory,
-            metadata,
-            &mut focal_length_record,
-            0,
-        );
-        if let Some(record) = focal_length_record {
-            insert_focal_plane_sizes(record, metadata);
+        let mut decoded = MetadataMap::new();
+        decode_ciff_container(data, &mut decoded);
+        for (key, occurrence) in decoded.all_occurrences() {
+            let name = key.split_once(':').map_or(key.as_str(), |(_, name)| name);
+            metadata.insert_renamed_occurrence(format!("{CIFF_GROUP}:{name}"), occurrence);
         }
     }
 }
@@ -389,6 +78,15 @@ pub(crate) fn process_ciff_app0_segments(segments: &[Segment<'_>], metadata: &mu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `%CanonRaw::Main` 0x080a `CanonRawMakeModel` (CanonRaw.pm:74-78).
+    const CANON_RAW_MAKE_MODEL: u16 = 0x080A;
+    /// `%CanonRaw::Main` 0x1029 `CanonFocalLength` (CanonRaw.pm:118-122), a
+    /// `SubDirectory` onto `%Canon::FocalLength`.
+    const CANON_RAW_FOCAL_LENGTH: u16 = 0x1029;
+    /// `%CanonRaw::Main` 0x1817 `FileNumber` (CanonRaw.pm:303-309), `int32u`
+    /// by its `0x18` type bits.
+    const CANON_RAW_FILE_NUMBER: u16 = 0x1817;
 
     /// Verbatim payload shape (offsets are relative within the CIFF
     /// container, not this test's byte array): a root directory with one
@@ -399,11 +97,11 @@ mod tests {
     /// PowerShot A5\0`).
     fn build_minimal_ciff_app0() -> Vec<u8> {
         let mut data = Vec::new();
-        // Header: "II" + heap_start (u32 LE) + "HEAPCCDR".
+        // Header: "II" + heap_start (u32 LE) + "HEAPJPGM".
         data.extend_from_slice(b"II");
         let heap_start_pos = data.len();
         data.extend_from_slice(&0u32.to_le_bytes()); // patched below
-        data.extend_from_slice(b"HEAPCCDR");
+        data.extend_from_slice(b"HEAPJPGM");
         let heap_start = data.len() as u32;
         data[heap_start_pos..heap_start_pos + 4].copy_from_slice(&heap_start.to_le_bytes());
 
@@ -456,7 +154,7 @@ mod tests {
         data.extend_from_slice(b"II");
         let heap_start_pos = data.len();
         data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(b"HEAPCCDR");
+        data.extend_from_slice(b"HEAPJPGM");
         let heap_start = data.len() as u32;
         data[heap_start_pos..heap_start_pos + 4].copy_from_slice(&heap_start.to_le_bytes());
 
@@ -520,18 +218,56 @@ mod tests {
         assert!((x - 199.0 * 25.4 / 1000.0).abs() < 1e-12);
     }
 
-    /// `FocalLength` (key 1) is deliberately absent: its ValueConv divides by
-    /// the `FocalUnits` DataMember of `%Canon::CameraSettings`, a record this
-    /// path does not parse, so emitting one would be a guess.
+    /// `FocalLength` (key 1) is `$val / ($$self{FocalUnits} || 1)`
+    /// (Canon.pm:2735-2741). `FocalUnits` comes from `%Canon::CameraSettings`,
+    /// which this container does not carry -- exactly the early-PowerShot
+    /// shape -- so ExifTool divides by 1: the pinned 13.59 oracle prints
+    /// `[CIFF] FocalLength : 5 mm` for `t/images/ExifTool.jpg`, whose record
+    /// these bytes are. (The previous APP0-only walker omitted it, believing
+    /// the divisor unknowable; the shared CRW decoder applies the same `|| 1`.)
     #[test]
-    fn focal_length_itself_is_omitted_rather_than_guessed() {
+    fn focal_length_divides_by_one_without_camera_settings() {
         let payload = build_ciff_app0_with_focal_length();
         let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
         let mut metadata = MetadataMap::new();
 
         process_ciff_app0_segments(&segments, &mut metadata);
 
-        assert!(metadata.get_string("CIFF:FocalLength").is_none());
+        assert_eq!(metadata.get_string("CIFF:FocalLength"), Some("5 mm"));
+    }
+
+    /// A plain `%CanonRaw::Main` scalar, and the group every key lands in.
+    ///
+    /// `ExifTool.jpg`'s `FileNumber` record is `int32u` 45 (`-v3`: `FileNumber
+    /// = 45`); with fewer than five digits `s/(\d+)(\d{4})/$1-$2/` does not
+    /// fire. Nothing may come out under the standalone-CRW groups: ExifTool's
+    /// `SET_GROUP1 = 'CIFF'` re-homes `CanonRaw` and `Canon` alike.
+    #[test]
+    fn canonraw_main_scalars_are_rehomed_under_ciff() {
+        let mut payload = build_ciff_app0_with_focal_length();
+        // Splice a third, `valueInDir` entry in front of the footer word:
+        // bump the count, then insert ten bytes before the last four.
+        let footer = payload.split_off(payload.len() - 4);
+        let directory = u32::from_le_bytes(footer[..4].try_into().unwrap()) as usize + 14;
+        payload[directory..directory + 2].copy_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&(CANON_RAW_FILE_NUMBER | 0x4000).to_le_bytes());
+        payload.extend_from_slice(&[45, 0, 0, 0, 0, 0, 0, 0]);
+        payload.extend_from_slice(&footer);
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
+
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        assert_eq!(metadata.get_string("CIFF:FileNumber"), Some("45"));
+        assert_eq!(
+            metadata.get_string("CIFF:Model"),
+            Some("Canon PowerShot A5")
+        );
+        let stray: Vec<_> = metadata
+            .keys()
+            .filter(|key| !key.starts_with("CIFF:"))
+            .collect();
+        assert!(stray.is_empty(), "keys outside CIFF: {stray:?}");
     }
 
     #[test]
@@ -539,6 +275,20 @@ mod tests {
         let mut metadata = MetadataMap::new();
         let jfif = b"JFIF\0\x01\x02\x00\x00\x01\x00\x01\x00\x00";
         let segments = vec![Segment::new(APP0_MARKER, 0, jfif)];
+
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        assert!(metadata.get_string("CIFF:Make").is_none());
+    }
+
+    /// ExifTool.pm:7730 tests for `HEAPJPGM` only; the standalone-file
+    /// `HEAPCCDR` signature in an APP0 payload is not a CIFF record there.
+    #[test]
+    fn ignores_the_standalone_crw_signature_in_app0() {
+        let mut payload = build_minimal_ciff_app0();
+        payload[6..14].copy_from_slice(b"HEAPCCDR");
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
 
         process_ciff_app0_segments(&segments, &mut metadata);
 
