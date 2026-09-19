@@ -1126,6 +1126,44 @@ mod tests {
     }
 
     #[test]
+    fn generated_exif_replay_projects_its_display_and_value_conv_forms() {
+        use crate::core::tag_occurrence::ValueChannel;
+
+        let tiff = le_tiff(&[(
+            0x829a,
+            5,
+            1,
+            [1u32.to_le_bytes(), 80u32.to_le_bytes()].concat(),
+        )]);
+        let mut rows = walk(
+            &IFD_EXIF_MAIN,
+            &tiff,
+            8,
+            ByteOrder::LittleEndian,
+            "ExifIFD",
+            &MetadataMap::new(),
+        )
+        .with_stored_forms();
+        let mut metadata = MetadataMap::new();
+        assert!(rows.replay(
+            0x829a,
+            &mut metadata,
+            |name| format!("ExifIFD:{name}"),
+            |_, _| true,
+        ));
+
+        let occurrence = metadata.occurrences_for("ExifIFD:ExposureTime")[0];
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("1/80")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(0.0125)
+        );
+    }
+
+    #[test]
     fn a_dropped_row_is_consumed_and_never_drained() {
         let tiff = le_tiff(&[short(0x0128, 2)]);
         let mut rows = interop_walk(&tiff);
