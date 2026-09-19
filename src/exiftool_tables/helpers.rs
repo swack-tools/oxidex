@@ -30,7 +30,8 @@
 //!
 //! Helpers not ported, with the reason, are [`REFUSED_HELPERS`].
 //!
-//! Not yet wired into any reader: this module adds no output.
+//! Called by the generated conversion arms (`conv`), which the IFD walk runs
+//! per field in mixed mode.
 
 use std::sync::LazyLock;
 
@@ -180,6 +181,99 @@ pub const PORTS: &[HelperPort] = &[
         source_sha256: "c0d7e605eaf26f64da3c2a81f9a95e876498264b9a48c142c1532f7a526f5fdc",
         rust: "encode",
     },
+    // The helpers Exif::Main's remaining conversions call (#838's refusals).
+    HelperPort {
+        perl: "Image::ExifTool::Exif::ConvertExifText",
+        module: "Image/ExifTool/Exif.pm",
+        source_sha256: "b2f1c8b9ddd47be014021186d9631a1e423d69111b4ac11790e3fae74e3c4a47",
+        rust: "convert_exif_text",
+    },
+    HelperPort {
+        perl: "Image::ExifTool::Exif::DecodeCFAPattern",
+        module: "Image/ExifTool/Exif.pm",
+        source_sha256: "dad638b4ece00df6621095396005f079a4c67aed865fb9773c382a8b4ca00c3a",
+        rust: "decode_cfa_pattern",
+    },
+    HelperPort {
+        perl: "Image::ExifTool::Exif::PrintCFAPattern",
+        module: "Image/ExifTool/Exif.pm",
+        source_sha256: "b06783693c00220de5e26849c7f92e39a938708f16a4577ac4d8319fb89d4ca1",
+        rust: "print_cfa_pattern",
+    },
+    HelperPort {
+        perl: "Image::ExifTool::Exif::PrintSFR",
+        module: "Image/ExifTool/Exif.pm",
+        source_sha256: "d7138eca99e4d776cfd859bcca19a25159643df4bd9d0714a2745a76628cc81b",
+        rust: "print_sfr",
+    },
+    HelperPort {
+        perl: "Image::ExifTool::ASF::GetGUID",
+        module: "Image/ExifTool/ASF.pm",
+        source_sha256: "c425526f5a3a74cf975e8f4b22d4f6574d3d1533d5c4aaa7392cddfa752e8264",
+        rust: "asf_get_guid",
+    },
+    HelperPort {
+        perl: "Image::ExifTool::Printable",
+        module: "Image/ExifTool.pm",
+        source_sha256: "6caee76604604fbae0e661f43770b5dc29ddb8e060298cefce244fbfa10a979d",
+        rust: "printable",
+    },
+];
+
+/// The engine subs a port above reproduces inline rather than calls, by
+/// folded-source sha256 in the pinned tree: `(port, module, sub, digest)`.
+/// A port is proven only for a tree where these match too; the helper
+/// oracle records them beside the port and
+/// `tests::port_dependencies_match_the_capture` holds this list to it.
+pub const PORT_DEPENDENCIES: &[(&str, &str, &str, &str)] = &[
+    (
+        "Image::ExifTool::Exif::ConvertExifText",
+        "Image/ExifTool.pm",
+        "Options",
+        "80bb02af485fb9245d080e679e0caeaa994c4e2e23192f346c5ffae8fac5cdbf",
+    ),
+    (
+        "Image::ExifTool::Exif::ConvertExifText",
+        "Image/ExifTool.pm",
+        "Decode",
+        "e2a3b6777541f21a4a61f655c84a1f5443337e085453018565a04e43aa33e6f3",
+    ),
+    (
+        "Image::ExifTool::Exif::DecodeCFAPattern",
+        "Image/ExifTool.pm",
+        "GetByteOrder",
+        "c783f08627e820902d577934f2373415f8254d60155f254c36cadb1c487947c8",
+    ),
+    (
+        "Image::ExifTool::Exif::PrintSFR",
+        "Image/ExifTool.pm",
+        "Get16u",
+        "8559bff49b577fe8d266dbfce4ba379a917873aec92dc73c7271f32b55c103e0",
+    ),
+    (
+        "Image::ExifTool::Exif::PrintSFR",
+        "Image/ExifTool.pm",
+        "Get32u",
+        "75c842dfc8732163515232c472d3bd07b6c8c0299dfbfe27510ca8c5ab211de0",
+    ),
+    (
+        "Image::ExifTool::Exif::PrintSFR",
+        "Image/ExifTool.pm",
+        "DoUnpackStd",
+        "acfb8926e3e0780079171119d0bd7eda852801d46d677569157c474c3f280424",
+    ),
+    (
+        "Image::ExifTool::Exif::PrintSFR",
+        "Image/ExifTool.pm",
+        "GetRational64u",
+        "7e5fdb0e775ecb4103fa6bfba1cc4136468eb95004f3173bdb1abb18e58a3520",
+    ),
+    (
+        "Image::ExifTool::Exif::PrintSFR",
+        "Image/ExifTool.pm",
+        "RoundFloat",
+        "d36661b4c4a37646cbbbf3bf81a763b52b0e1d8fd55996e205d904954561a418",
+    ),
 ];
 
 /// The subs `Decode` reaches beyond its own body, by folded-source sha256 in
@@ -1222,6 +1316,486 @@ pub fn encode(
     )
 }
 
+// ---------------------------------------------------------------------------
+// Exif.pm / ASF.pm / ExifTool.pm helpers the Exif::Main arms call
+// ---------------------------------------------------------------------------
+
+/// `GetByteOrder()` of the session: `'II'`/`'MM'`, or a refusal when the
+/// caller did not supply one (Perl's module default is never guessed).
+fn session_order(session: &Session) -> Result<super::session::ByteOrder, HelperError> {
+    session.byte_order.ok_or(HelperError::Refused(
+        "GetByteOrder() with no Session byte order",
+    ))
+}
+
+/// Whether Perl's `$` (no `/m`) holds at `p` in `s`: the end, or just
+/// before a final newline.
+fn dollar_at(s: &[u8], p: usize) -> bool {
+    p == s.len() || (p + 1 == s.len() && s[p] == b'\n')
+}
+
+/// `$s =~ /[\0 ]+$/` anchored at the start of `s` (the rest of an id).
+fn nul_space_run_to_dollar(s: &[u8]) -> bool {
+    let k = s.iter().take_while(|&&b| b == 0 || b == b' ').count();
+    // `[\0 ]+` may stop at any p in 1..=k; `$` holds there only at the
+    // end or before a final newline, which the run itself cannot contain.
+    (1..=k).any(|p| dollar_at(s, p))
+}
+
+/// `$str =~ s/ +$//` (Perl's `$`: a run of spaces at the end, or just
+/// before a final newline, which stays).
+fn trim_spaces_before_dollar(s: &[u8]) -> Vec<u8> {
+    let (body, nl) = match s.strip_suffix(b"\n") {
+        Some(body) => (body, true),
+        None => (s, false),
+    };
+    let kept = body.len() - body.iter().rev().take_while(|&&b| b == b' ').count();
+    if kept == body.len() {
+        return s.to_vec();
+    }
+    let mut out = body[..kept].to_vec();
+    if nl {
+        out.push(b'\n');
+    }
+    out
+}
+
+/// `Image::ExifTool::Exif::ConvertExifText($et, $val, $asciiFlex, $tag)`
+/// (Exif.pm:5554-5601, pinned 13.59): the 8-byte character-code header
+/// (`ASCII\0\0\0`, `UNICODE\0`, `JIS\0\0\0\0\0`, or nulls/spaces) selects
+/// the decode; the result has trailing blanks removed.
+///
+/// ```perl
+/// return $val if length($val) < 8;
+/// my $id = substr($val, 0, 8);
+/// my $str = substr($val, 8);
+/// my $type;
+/// delete $$et{WrongByteOrder};
+/// if ($$et{OPTIONS}{Validate} and $id =~ /^(ASCII|UNICODE|JIS)?\0* \0*$/) { ...Warn }
+/// if ($id =~ /^(ASCII)?(\0|[\0 ]+$)/) {
+///     $str =~ s/\0.*//s;
+///     if ($asciiFlex and $asciiFlex eq '1') {
+///         my $enc = $et->Options('CharsetEXIF');
+///         $str = $et->Decode($str, $enc) if $enc;
+///     }
+/// } elsif ($id =~ /^(UNICODE)[\0 ]$/) {
+///     $type = $1;
+///     $str = $et->Decode($str, 'UTF16', 'Unknown');
+/// } elsif ($id =~ /^(JIS)[\0 ]{5}$/) {
+///     $type = $1;
+///     $str = $et->Decode($str, 'JIS', 'Unknown');
+/// } else {
+///     $tag = $asciiFlex if $asciiFlex and $asciiFlex ne '1';
+///     $et->Warn('Invalid EXIF text encoding' . ($tag ? " for $tag" : ''));
+///     $str = $id . $str;
+/// }
+/// if ($$et{WrongByteOrder} and $$et{OPTIONS}{Validate}) { ...Warn }
+/// $str =~ s/ +$//;
+/// return $str;
+/// ```
+///
+/// Refused: a Perl-true `Validate` option (its two extra warnings are not
+/// modelled); whatever [`decode`] refuses.
+pub fn convert_exif_text(
+    session: &mut Session,
+    val: &MemberVal,
+    ascii_flex: &MemberVal,
+    tag: &MemberVal,
+) -> HelperResult {
+    if val.perl_length().unwrap_or(0) < 8 {
+        return Ok(val.clone());
+    }
+    if session.option("Validate").is_truthy() {
+        return Err(HelperError::Refused("the Validate option's extra warnings"));
+    }
+    let bytes = val.perl_bytes();
+    let (id, rest) = bytes.split_at(8);
+    session.remove_member("WrongByteOrder");
+    let ascii = (id.starts_with(b"ASCII") && {
+        let r = &id[5..];
+        r.first() == Some(&0) || nul_space_run_to_dollar(r)
+    }) || id[0] == 0
+        || nul_space_run_to_dollar(id);
+    let str_val = if ascii {
+        let cut = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+        let s = MemberVal::from_bytes(rest[..cut].to_vec());
+        if ascii_flex.is_truthy() && ascii_flex.perl_bytes().as_ref() == b"1" {
+            let enc = session.option("CharsetEXIF");
+            if enc.is_truthy() {
+                decode(
+                    session,
+                    &s,
+                    &enc,
+                    &MemberVal::Undef,
+                    &MemberVal::Undef,
+                    &MemberVal::Undef,
+                )?
+            } else {
+                s
+            }
+        } else {
+            s
+        }
+    } else if &id[..7] == b"UNICODE" && matches!(id[7], 0 | b' ') {
+        let s = MemberVal::from_bytes(rest.to_vec());
+        decode(
+            session,
+            &s,
+            &MemberVal::Str("UTF16".into()),
+            &MemberVal::Str("Unknown".into()),
+            &MemberVal::Undef,
+            &MemberVal::Undef,
+        )?
+    } else if &id[..3] == b"JIS" && id[3..].iter().all(|&b| b == 0 || b == b' ') {
+        let s = MemberVal::from_bytes(rest.to_vec());
+        decode(
+            session,
+            &s,
+            &MemberVal::Str("JIS".into()),
+            &MemberVal::Str("Unknown".into()),
+            &MemberVal::Undef,
+            &MemberVal::Undef,
+        )?
+    } else {
+        let tag = if ascii_flex.is_truthy() && ascii_flex.perl_bytes().as_ref() != b"1" {
+            ascii_flex
+        } else {
+            tag
+        };
+        let mut msg = b"Invalid EXIF text encoding".to_vec();
+        if tag.is_truthy() {
+            msg.extend_from_slice(b" for ");
+            msg.extend_from_slice(&tag.perl_bytes());
+        }
+        session.warn(MemberVal::from_bytes(msg));
+        MemberVal::from_bytes(bytes.to_vec())
+    };
+    Ok(MemberVal::from_bytes(trim_spaces_before_dollar(
+        &str_val.perl_bytes(),
+    )))
+}
+
+/// `Image::ExifTool::Exif::DecodeCFAPattern($self, $val)` (Exif.pm:5729-5751):
+///
+/// ```perl
+/// if ($val =~ /^[0-6]+$/) {
+///     $self->Warn('Incorrectly formatted CFAPattern', 1);
+///     $val =~ tr/0-6/\x00-\x06/;
+/// }
+/// return $val unless length($val) >= 4;
+/// my @a = unpack(GetByteOrder() eq 'II' ? 'v2C*' : 'n2C*', $val);
+/// my $end = 2 + $a[0] * $a[1];
+/// if ($end > @a) {
+///     my ($x, $y) = unpack('n2',pack('v2',$a[0],$a[1]));
+///     if (@a < 2 + $x * $y) {
+///         $self->Warn('Invalid CFAPattern', 1);
+///     } else {
+///         ($a[0], $a[1]) = ($x, $y);
+///     }
+/// }
+/// return "@a";
+/// ```
+pub fn decode_cfa_pattern(session: &mut Session, val: &MemberVal) -> HelperResult {
+    let mut b = val.perl_bytes().into_owned();
+    let digits = b.strip_suffix(b"\n").unwrap_or(&b);
+    // `/^[0-6]+$/`: Perl's `$` also holds before a final newline.
+    let ascii = !digits.is_empty() && digits.iter().all(|c| (b'0'..=b'6').contains(c));
+    if ascii {
+        session.warn_ignorable(MemberVal::Str("Incorrectly formatted CFAPattern".into()), 1);
+        for c in &mut b {
+            if (b'0'..=b'6').contains(c) {
+                *c -= b'0';
+            }
+        }
+    }
+    if val.perl_length().unwrap_or(0) < 4 {
+        // `$val` itself when `tr` did not touch it (an undef, or a number,
+        // stays what it was).
+        return Ok(if ascii {
+            MemberVal::from_bytes(b)
+        } else {
+            val.clone()
+        });
+    }
+    let order = session_order(session)?;
+    let u16_at = |i: usize| match order {
+        super::session::ByteOrder::LittleEndian => u16::from_le_bytes([b[i], b[i + 1]]),
+        super::session::ByteOrder::BigEndian => u16::from_be_bytes([b[i], b[i + 1]]),
+    };
+    let mut a: Vec<i64> = vec![i64::from(u16_at(0)), i64::from(u16_at(2))];
+    a.extend(b[4..].iter().map(|&c| i64::from(c)));
+    let n = a.len() as i64;
+    if 2 + a[0] * a[1] > n {
+        let (x, y) = (
+            i64::from((a[0] as u16).swap_bytes()),
+            i64::from((a[1] as u16).swap_bytes()),
+        );
+        if n < 2 + x * y {
+            session.warn_ignorable(MemberVal::Str("Invalid CFAPattern".into()), 1);
+        } else {
+            a[0] = x;
+            a[1] = y;
+        }
+    }
+    Ok(MemberVal::Str(
+        a.iter().map(i64::to_string).collect::<Vec<_>>().join(" "),
+    ))
+}
+
+/// `Image::ExifTool::Exif::PrintCFAPattern($val)` (Exif.pm:5756-5774):
+///
+/// ```perl
+/// my @a = split ' ', $val;
+/// return '<truncated data>' unless @a >= 2;
+/// return '<zero pattern size>' unless $a[0] and $a[1];
+/// my $end = 2 + $a[0] * $a[1];
+/// return '<invalid pattern size>' if $end > @a;
+/// my @cfaColor = qw(Red Green Blue Cyan Magenta Yellow White);
+/// my ($pos, $rtnVal) = (2, '[');
+/// for (;;) {
+///     $rtnVal .= $cfaColor[$a[$pos]] || 'Unknown';
+///     last if ++$pos >= $end;
+///     ($pos - 2) % $a[1] and $rtnVal .= ',', next;
+///     $rtnVal .= '][';
+/// }
+/// return $rtnVal . ']';
+/// ```
+///
+/// Refused: a field that is not a canonical integer (`DecodeCFAPattern`,
+/// the only producer of this `$val`, prints integers or returns a string
+/// shorter than 4 bytes, which splits into single characters -- also
+/// refused unless they are digits).
+pub fn print_cfa_pattern(val: &MemberVal) -> HelperResult {
+    let fields: Vec<Vec<u8>> = val
+        .perl_bytes()
+        .split(|&c| super::session::is_perl_space(c))
+        .filter(|f| !f.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect();
+    if fields.len() < 2 {
+        return Ok(MemberVal::Str("<truncated data>".into()));
+    }
+    let mut a = Vec::with_capacity(fields.len());
+    for f in &fields {
+        let s = std::str::from_utf8(f)
+            .map_err(|_| HelperError::Refused("CFA field that is not an integer"))?;
+        match s.parse::<i64>() {
+            Ok(v) if v.to_string() == s => a.push(i128::from(v)),
+            _ => return Err(HelperError::Refused("CFA field that is not an integer")),
+        }
+    }
+    if a[0] == 0 || a[1] == 0 {
+        return Ok(MemberVal::Str("<zero pattern size>".into()));
+    }
+    let end = 2 + a[0] * a[1];
+    if end > a.len() as i128 {
+        return Ok(MemberVal::Str("<invalid pattern size>".into()));
+    }
+    const COLORS: [&str; 7] = ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow", "White"];
+    let color = |pos: usize| -> &'static str {
+        // `$a[$pos]` past the end is undef, whose index is 0.
+        let i = a.get(pos).copied().unwrap_or(0);
+        let k = if i < 0 { 7 + i } else { i };
+        if (0..7).contains(&k) {
+            COLORS[k as usize]
+        } else {
+            "Unknown"
+        }
+    };
+    let mut out = String::from("[");
+    let mut pos = 2usize;
+    loop {
+        out.push_str(color(pos));
+        pos += 1;
+        if pos as i128 >= end {
+            break;
+        }
+        if (pos as i128 - 2) % a[1] != 0 {
+            out.push(',');
+            continue;
+        }
+        out.push_str("][");
+    }
+    out.push(']');
+    Ok(MemberVal::Str(out))
+}
+
+/// `Image::ExifTool::Exif::PrintSFR($val)` (Exif.pm:5605-5623):
+///
+/// ```perl
+/// return $val unless length $val > 4;
+/// my ($n, $m) = (Get16u(\$val, 0), Get16u(\$val, 2));
+/// my @cols = split /\0/, substr($val, 4), $n+1;
+/// my $pos = length($val) - 8 * $n * $m;
+/// return $val unless @cols == $n+1 and $pos >= 4;
+/// pop @cols;
+/// my ($i, $j);
+/// for ($i=0; $i<$n; ++$i) {
+///     my @rows;
+///     for ($j=0; $j<$m; ++$j) {
+///         push @rows, Image::ExifTool::GetRational64u(\$val, $pos + 8*($i+$j*$n));
+///     }
+///     $cols[$i] .= '=' . join(',',@rows) . '';
+/// }
+/// return join '; ', @cols;
+/// ```
+///
+/// `Get16u`/`GetRational64u` read in `GetByteOrder()`, the session's.
+pub fn print_sfr(session: &Session, val: &MemberVal) -> HelperResult {
+    if val.perl_length().unwrap_or(0) <= 4 {
+        return Ok(val.clone());
+    }
+    let order = session_order(session)?;
+    let b = val.perl_bytes();
+    let u16_at = |i: usize| match order {
+        super::session::ByteOrder::LittleEndian => u16::from_le_bytes([b[i], b[i + 1]]),
+        super::session::ByteOrder::BigEndian => u16::from_be_bytes([b[i], b[i + 1]]),
+    };
+    let u32_at = |i: usize| {
+        let w = [b[i], b[i + 1], b[i + 2], b[i + 3]];
+        match order {
+            super::session::ByteOrder::LittleEndian => u32::from_le_bytes(w),
+            super::session::ByteOrder::BigEndian => u32::from_be_bytes(w),
+        }
+    };
+    let (n, m) = (usize::from(u16_at(0)), usize::from(u16_at(2)));
+    // `split /\0/, $s, $n+1`: at most n+1 fields, trailing empties kept.
+    let tail = &b[4..];
+    let mut cols: Vec<Vec<u8>> = Vec::new();
+    let mut at = 0;
+    while cols.len() + 1 < n + 1 {
+        match tail[at..].iter().position(|&c| c == 0) {
+            Some(k) => {
+                cols.push(tail[at..at + k].to_vec());
+                at += k + 1;
+            }
+            None => break,
+        }
+    }
+    cols.push(tail[at..].to_vec());
+    let span = 8 * n * m;
+    if cols.len() != n + 1 || span > b.len() || b.len() - span < 4 {
+        return Ok(val.clone());
+    }
+    let pos = b.len() - span;
+    cols.pop();
+    for (i, col) in cols.iter_mut().enumerate() {
+        let rows: Vec<String> = (0..m)
+            .map(|j| {
+                let p = pos + 8 * (i + j * n);
+                super::runtime::perl_rational64(f64::from(u32_at(p)), f64::from(u32_at(p + 4)))
+            })
+            .collect();
+        col.push(b'=');
+        col.extend_from_slice(rows.join(",").as_bytes());
+    }
+    Ok(MemberVal::from_bytes(cols.join(&b"; "[..])))
+}
+
+/// `Image::ExifTool::ASF::GetGUID($val)` (ASF.pm, pinned 13.59):
+///
+/// ```perl
+/// return $val unless length($val) == 16;
+/// my $buff = unpack('H*',pack('NnnNN',unpack('VvvNN',$val)));
+/// $buff =~ s/(.{8})(.{4})(.{4})(.{4})/$1-$2-$3-$4-/;
+/// return uc($buff);
+/// ```
+#[must_use]
+pub fn asf_get_guid(val: &MemberVal) -> MemberVal {
+    if val.perl_length() != Some(16) {
+        return val.clone();
+    }
+    let b = val.perl_bytes();
+    let mut swapped = Vec::with_capacity(16);
+    swapped.extend(b[0..4].iter().rev());
+    swapped.extend(b[4..6].iter().rev());
+    swapped.extend(b[6..8].iter().rev());
+    swapped.extend_from_slice(&b[8..16]);
+    let hex: String = swapped.iter().map(|c| format!("{c:02X}")).collect();
+    MemberVal::Str(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// `$self->Printable($outStr [, $maxLen])` (ExifTool.pm, pinned 13.59) for
+/// a plain scalar:
+///
+/// ```perl
+/// return '(undef)' unless defined $outStr;
+/// $outStr =~ tr/\x01-\x1f\x7f-\xff/./;
+/// $outStr =~ s/\x00//g;
+/// my $verbose = $$self{OPTIONS}{Verbose};
+/// if ($verbose < 4) {
+///     if ($maxLen) {
+///         $maxLen = 20 if $maxLen < 20;   # minimum length is 20
+///     } elsif (defined $maxLen) {
+///         $maxLen = length $outStr;       # 0 is unlimited
+///     } else {
+///         $maxLen = 60;                   # default maximum is 60
+///     }
+/// } else {
+///     $maxLen = length $outStr;
+///     $maxLen = 2048 if $maxLen > 2048 and $verbose < 5;
+/// }
+/// $outStr = substr($outStr,0,$maxLen-6) . '[snip]' if length($outStr) > $maxLen;
+/// return $outStr;
+/// ```
+///
+/// (The SCALAR-reference branch is never reached by a conversion's
+/// `$val`.) Refused: a `Verbose` option or `$maxLen` that is not an integer
+/// in numeric context.
+pub fn printable(session: &Session, val: &MemberVal, max_len: &MemberVal) -> HelperResult {
+    if !val.is_defined() {
+        return Ok(MemberVal::Str("(undef)".into()));
+    }
+    let s: Vec<u8> = val
+        .perl_bytes()
+        .iter()
+        .map(|&c| {
+            if (1..=0x1f).contains(&c) || c >= 0x7f {
+                b'.'
+            } else {
+                c
+            }
+        })
+        .filter(|&c| c != 0)
+        .collect();
+    let int = |v: &MemberVal| match v.perl_num() {
+        PerlNum::Int(i) => Ok(i),
+        PerlNum::Float(_) => Err(HelperError::Refused(
+            "Printable: a non-integer length or Verbose",
+        )),
+    };
+    let verbose = int(&session.option("Verbose"))?;
+    let len = s.len() as i64;
+    let max = if verbose < 4 {
+        if max_len.is_truthy() {
+            int(max_len)?.max(20)
+        } else if max_len.is_defined() {
+            len
+        } else {
+            60
+        }
+    } else if len > 2048 && verbose < 5 {
+        2048
+    } else {
+        len
+    };
+    if len > max {
+        let keep = usize::try_from(max - 6)
+            .map_err(|_| HelperError::Refused("Printable: negative substr"))?;
+        let mut out = s[..keep.min(s.len())].to_vec();
+        out.extend_from_slice(b"[snip]");
+        return Ok(MemberVal::from_bytes(out));
+    }
+    Ok(MemberVal::from_bytes(s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1262,19 +1836,29 @@ mod tests {
     }
 
     /// What a port did to the Session besides returning: the members it
-    /// created or changed and the `Warn` requests it made, in the harness's
-    /// shape (`set_members` sorted by key, `warnings` in order).
-    type SideEffects = (BTreeMap<String, Option<Vec<u8>>>, Vec<Option<Vec<u8>>>);
+    /// created, changed or deleted (`Some(None)` for `undef`, `None` for
+    /// deleted) and the `Warn` requests it made with their `$ignorable`, in
+    /// the harness's shape (`set_members` sorted by key, `warnings` in
+    /// order).
+    type SideEffects = (
+        BTreeMap<String, Option<Option<Vec<u8>>>>,
+        Vec<(Option<Vec<u8>>, i64)>,
+    );
 
     fn side_effects(before: &Session, after: &Session) -> SideEffects {
-        let set = after
+        let mut set: BTreeMap<String, Option<Option<Vec<u8>>>> = after
             .member_names()
-            .filter(|k| before.member(k) != after.member(k))
-            .map(|k| (k.to_string(), out_bytes(&after.member(k))))
+            .filter(|k| !before.has_member(k) || before.member(k) != after.member(k))
+            .map(|k| (k.to_string(), Some(out_bytes(&after.member(k)))))
             .collect();
+        for k in before.member_names() {
+            if !after.has_member(k) {
+                set.insert(k.to_string(), None);
+            }
+        }
         let warned = after.warnings()[before.warnings().len()..]
             .iter()
-            .map(out_bytes)
+            .map(|w| (out_bytes(&w.message), w.ignorable))
             .collect();
         (set, warned)
     }
@@ -1283,12 +1867,30 @@ mod tests {
         let set = case
             .get("set_members")
             .and_then(Value::as_object)
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), expected(v))).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| {
+                        let v = (v.get("t").and_then(Value::as_str) != Some("deleted"))
+                            .then(|| expected(v));
+                        (k.clone(), v)
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let warned = case
             .get("warnings")
             .and_then(Value::as_array)
-            .map(|w| w.iter().map(expected).collect())
+            .map(|w| {
+                w.iter()
+                    .map(|w| {
+                        let ign = w
+                            .get("ignorable")
+                            .and_then(Value::as_str)
+                            .map_or(0, |v| v.parse().expect("ignorable"));
+                        (expected(w), ign)
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         (set, warned)
     }
@@ -1333,6 +1935,14 @@ mod tests {
                 let r = encode(&mut mutating, &a(0), &a(1), &a(2));
                 return effects(r, &mutating);
             }
+            "Image::ExifTool::Exif::ConvertExifText" => {
+                let r = convert_exif_text(&mut mutating, &a(0), &a(1), &a(2));
+                return effects(r, &mutating);
+            }
+            "Image::ExifTool::Exif::DecodeCFAPattern" => {
+                let r = decode_cfa_pattern(&mut mutating, &a(0));
+                return effects(r, &mutating);
+            }
             _ => {}
         }
         let none = || side_effects(&before, &before);
@@ -1364,6 +1974,14 @@ mod tests {
             "Image::ExifTool::ConvertFileSize" => {
                 let with = case.get("with_session").is_some();
                 one(convert_file_size(&a(0), with.then_some(&session)))
+            }
+            "Image::ExifTool::Exif::PrintCFAPattern" => one(print_cfa_pattern(&a(0))),
+            "Image::ExifTool::Exif::PrintSFR" => one(print_sfr(&session, &a(0))),
+            "Image::ExifTool::ASF::GetGUID" => Ok((vec![asf_get_guid(&a(0))], none())),
+            "Image::ExifTool::Printable" => {
+                // `$self->Printable($str)` and `$self->Printable($str, $max)`:
+                // an absent second argument is `undef` either way.
+                one(printable(&session, &a(0), &a(1)))
             }
             other => panic!("no dispatch for {other}"),
         }
@@ -1534,6 +2152,21 @@ mod tests {
         let session = Session::new();
         for (name, want) in cap["option_defaults"].as_object().expect("option_defaults") {
             assert_eq!(out_bytes(&session.option(name)), expected(want), "{name}");
+        }
+    }
+
+    /// Every inline-reproduced engine sub a port names has the digest the
+    /// capture recorded from the pinned tree.
+    #[test]
+    fn port_dependencies_match_the_capture() {
+        let cap = capture();
+        for (port, module, sub, digest) in PORT_DEPENDENCIES {
+            assert!(PORTS.iter().any(|p| p.perl == *port), "{port} not in PORTS");
+            assert_eq!(
+                cap["helpers"][*port]["dependencies"][&format!("{module}::{sub}")].as_str(),
+                Some(*digest),
+                "{port}: {module}::{sub}"
+            );
         }
     }
 

@@ -47,7 +47,7 @@ use super::ifd_schema::{IfdTable, IfdTag};
 use super::session::{MemberVal, Session};
 
 /// A generated table's entry point: `decode(session, id, $val)`.
-pub type Decode = fn(&Session, u16, &MemberVal) -> Arm;
+pub type Decode = fn(&mut Session, u16, &MemberVal) -> Arm;
 
 /// The generated decoder for `table`, if one was generated. Keyed by the
 /// table's ExifTool identity, never by a caller's name for it.
