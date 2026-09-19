@@ -83,11 +83,15 @@ The functional program is complete when all of the following are true:
 - Task worktrees use `/Users/allen/git/oxidex-beta1-<task-slug>` and branches
   `staging/beta1/<task-slug>`.
 - Task target directories use
-  `/Users/allen/git/oxidex-beta1-targets/<task-slug>-<base-sha>`.
+  `/Users/allen/git/oxidex-beta1-targets/<task-slug>`; the controller ledger
+  binds that stable path to the task's resolved base SHA and refuses reuse by
+  another live task.
 - The implementation plan assigns every task a literal slug and all three
   literal paths. Agents do not invent or reuse names.
-- Every task starts with `tools/preflight.sh --upstream`, verifies its frozen
-  base SHA, and stops if its tree is dirty before task work begins.
+- Every task first passes `tools/preflight.sh`, then records
+  `tools/preflight.sh --upstream` and verifies its frozen base SHA explicitly.
+  The known `origin/main` divergence is evidence for later reconciliation, not
+  a false stale-base verdict for work based on `refactor/tag-machinery`.
 
 ### 4.3 Fleet capacity and speed
 

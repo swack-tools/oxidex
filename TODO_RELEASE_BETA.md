@@ -88,6 +88,9 @@ Notes:
 Implementation design:
 [`docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md`](docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md).
 
+Execution plan:
+[`docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md`](docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md).
+
 Already landed on `refactor/tag-machinery`:
 
 - [x] DJI float forward-port (`#844`).
