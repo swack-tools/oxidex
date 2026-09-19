@@ -107,6 +107,15 @@ EXPORTED_UTILS = {"IsFloat", "IsInt", "GetByteOrder"}
 # holds to `Image::ExifTool->new`.
 OPTION_READS = {"CharsetEXIF"}
 
+# Fields whose arm compiles and is proven but whose ownership cannot move in
+# this backend alone: another producer reads the same id, and handing it to
+# the engine means changing that producer in the same commit
+# (`core::tiff_helpers::ifd1_tests::ifd1_residual_is_exactly_the_remainder`).
+HAND_OWNED = {
+    0x8298: "hand-owned: the IFD1 residual (core::tiff_helpers IFD1_RESIDUAL_IDS) also reads "
+            "Copyright; generating it would insert it twice until that list moves with it",
+}
+
 # Why each field that stays refused stays refused, beyond the generator's
 # first-hit reason: what it would take, checked against the pinned 13.59
 # source and the static IFD table (`src/exiftool_tables/ifd/exif.rs`).
@@ -116,6 +125,9 @@ REFUSAL_NOTES = {
     0x00FE: "RawConv calls $self->SetPriorityDir() (writes PRIORITY_DIR, the duplicate-tag "
             "priority directory, ExifTool.pm:9636) and reads/writes PageCount and MultiPage, "
             "per-file members no IFD walk carries across directories",
+    0x8298: "its arm (Options('CharsetEXIF'), Decode, s/ *\\0/\\n/, s/\\n$//) compiles and "
+            "matched the pinned Perl on every probe before it was withheld; it moves with "
+            "the IFD1 residual list, IFD0-on-the-engine work",
     0x00FF: "same as SubfileType: SetPriorityDir, PageCount, MultiPage",
     0x0103: "RawConv calls Exif::IdentifyRawFile, which reads FILE_TYPE and IdentifiedRawFile "
             "and, for a TIFF file, calls OverrideFileType($$et{TIFF_TYPE} = ...): a file-type "
@@ -1449,6 +1461,10 @@ def generate(dump_path, table_name):
             continue
         if truthy_key(tag, "Unknown"):
             skipped.append(dict(id=tid, name=name, reason="Unknown => 1: reported only under -u"))
+            continue
+        if tid in HAND_OWNED:
+            refused.append(dict(id=tid, name=name, reason=HAND_OWNED[tid],
+                                slots=sorted(s for s in READ_SLOTS if tag.get(s) is not None)))
             continue
         try:
             src, slots, binary = compile_field(mod, tid, tag)

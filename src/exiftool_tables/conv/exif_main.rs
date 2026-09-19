@@ -3,7 +3,7 @@
 //! source (ExifTool 13.59, table sha256 `7e46afd009047f15...`). Do not edit by
 //! hand. See `super` (conv/mod.rs) for what an arm is and how it is proven.
 //!
-//! 552 fields generated, 16 refused (`REFUSED`, with reasons), 29 not conversion fields
+//! 551 fields generated, 17 refused (`REFUSED`, with reasons), 29 not conversion fields
 //! (SubDirectory edges / `Unknown`).
 #![allow(
     clippy::all,
@@ -45,36 +45,36 @@ pub static CLAIMED: &[u16] = &[
     0x5102, 0x5103, 0x5104, 0x5110, 0x5111, 0x5112, 0x5113, 0x7000, 0x7010, 0x7031, 0x7032, 0x7034,
     0x7035, 0x7036, 0x7037, 0x7038, 0x7310, 0x7313, 0x74c7, 0x74c8, 0x800d, 0x80a3, 0x80a4, 0x80a5,
     0x80a6, 0x80b9, 0x80ba, 0x80bb, 0x80bc, 0x80e3, 0x80e4, 0x80e5, 0x80e6, 0x8214, 0x8215, 0x8216,
-    0x8217, 0x8218, 0x8219, 0x821a, 0x827d, 0x828d, 0x828e, 0x828f, 0x8298, 0x829a, 0x829d, 0x82a5,
-    0x82a6, 0x82a7, 0x82a8, 0x82a9, 0x82aa, 0x82ab, 0x82ac, 0x830e, 0x8335, 0x8336, 0x835c, 0x835d,
-    0x835e, 0x835f, 0x847e, 0x847f, 0x8480, 0x8481, 0x8482, 0x84e0, 0x84e1, 0x84e2, 0x84e3, 0x84e4,
-    0x84e5, 0x84e6, 0x84e7, 0x84e8, 0x84e9, 0x84ea, 0x84eb, 0x84ec, 0x84ed, 0x84ee, 0x84ef, 0x84f0,
-    0x8546, 0x85b8, 0x85d7, 0x85d8, 0x8602, 0x877f, 0x8780, 0x8781, 0x8782, 0x87ac, 0x87af, 0x87b0,
-    0x87b1, 0x87be, 0x8822, 0x8824, 0x8827, 0x8828, 0x8829, 0x882a, 0x882b, 0x8830, 0x8831, 0x8832,
-    0x8833, 0x8834, 0x8835, 0x885c, 0x885d, 0x885e, 0x8871, 0x9000, 0x9003, 0x9004, 0x9009, 0x9010,
-    0x9011, 0x9012, 0x9101, 0x9102, 0x9201, 0x9202, 0x9203, 0x9204, 0x9205, 0x9206, 0x9207, 0x9208,
-    0x9209, 0x920a, 0x920b, 0x920c, 0x920d, 0x920e, 0x920f, 0x9210, 0x9211, 0x9212, 0x9213, 0x9214,
-    0x9215, 0x9216, 0x9217, 0x923a, 0x923b, 0x923c, 0x923f, 0x9286, 0x9290, 0x9291, 0x9292, 0x932f,
-    0x9330, 0x9331, 0x9400, 0x9401, 0x9402, 0x9403, 0x9404, 0x9405, 0x9a00, 0x9c9b, 0x9c9c, 0x9c9d,
-    0x9c9e, 0x9c9f, 0xa000, 0xa001, 0xa002, 0xa003, 0xa004, 0xa010, 0xa011, 0xa101, 0xa20b, 0xa20c,
-    0xa20d, 0xa20e, 0xa20f, 0xa210, 0xa211, 0xa212, 0xa213, 0xa214, 0xa215, 0xa216, 0xa217, 0xa300,
-    0xa301, 0xa302, 0xa401, 0xa402, 0xa403, 0xa404, 0xa405, 0xa406, 0xa407, 0xa408, 0xa409, 0xa40a,
-    0xa40b, 0xa40c, 0xa40d, 0xa40e, 0xa40f, 0xa410, 0xa411, 0xa412, 0xa420, 0xa430, 0xa431, 0xa432,
-    0xa433, 0xa434, 0xa435, 0xa436, 0xa437, 0xa438, 0xa439, 0xa43a, 0xa43b, 0xa43c, 0xa460, 0xa461,
-    0xa480, 0xa481, 0xa500, 0xafc0, 0xafc1, 0xafc2, 0xafc3, 0xafc4, 0xafc5, 0xb4c3, 0xbc01, 0xbc02,
-    0xbc03, 0xbc04, 0xbc80, 0xbc81, 0xbc82, 0xbc83, 0xbcc0, 0xbcc1, 0xbcc2, 0xbcc3, 0xbcc4, 0xbcc5,
-    0xc427, 0xc428, 0xc429, 0xc42a, 0xc44f, 0xc573, 0xc580, 0xc5e0, 0xc612, 0xc613, 0xc614, 0xc615,
-    0xc616, 0xc617, 0xc618, 0xc619, 0xc61a, 0xc61b, 0xc61c, 0xc61d, 0xc61e, 0xc61f, 0xc620, 0xc621,
-    0xc622, 0xc623, 0xc624, 0xc625, 0xc626, 0xc627, 0xc628, 0xc629, 0xc62a, 0xc62b, 0xc62c, 0xc62d,
-    0xc62e, 0xc62f, 0xc630, 0xc631, 0xc632, 0xc633, 0xc635, 0xc640, 0xc65a, 0xc65b, 0xc65c, 0xc65d,
-    0xc660, 0xc68b, 0xc68d, 0xc68e, 0xc690, 0xc692, 0xc6bf, 0xc6c5, 0xc6d2, 0xc6d3, 0xc6f3, 0xc6f4,
-    0xc6f6, 0xc6f7, 0xc6f8, 0xc6f9, 0xc6fa, 0xc6fb, 0xc6fc, 0xc6fd, 0xc6fe, 0xc714, 0xc715, 0xc716,
-    0xc717, 0xc718, 0xc719, 0xc71a, 0xc71b, 0xc71c, 0xc71d, 0xc71e, 0xc71f, 0xc725, 0xc726, 0xc761,
-    0xc764, 0xc772, 0xc789, 0xc791, 0xc792, 0xc793, 0xc7a1, 0xc7a3, 0xc7a4, 0xc7a5, 0xc7a6, 0xc7a7,
-    0xc7a8, 0xc7aa, 0xc7b5, 0xc7d7, 0xc7d8, 0xc7e9, 0xc7ea, 0xc7eb, 0xc7ec, 0xc7ed, 0xc7ee, 0xcd2d,
-    0xcd2e, 0xcd30, 0xcd31, 0xcd32, 0xcd33, 0xcd34, 0xcd35, 0xcd36, 0xcd37, 0xcd38, 0xcd39, 0xcd3a,
-    0xcd3f, 0xcd40, 0xcd43, 0xcd46, 0xcd48, 0xcd49, 0xcd4a, 0xcd4b, 0xea1c, 0xea1d, 0xfde8, 0xfde9,
-    0xfdea, 0xfe4c, 0xfe4d, 0xfe4e, 0xfe51, 0xfe52, 0xfe53, 0xfe54, 0xfe55, 0xfe56, 0xfe57, 0xfe58,
+    0x8217, 0x8218, 0x8219, 0x821a, 0x827d, 0x828d, 0x828e, 0x828f, 0x829a, 0x829d, 0x82a5, 0x82a6,
+    0x82a7, 0x82a8, 0x82a9, 0x82aa, 0x82ab, 0x82ac, 0x830e, 0x8335, 0x8336, 0x835c, 0x835d, 0x835e,
+    0x835f, 0x847e, 0x847f, 0x8480, 0x8481, 0x8482, 0x84e0, 0x84e1, 0x84e2, 0x84e3, 0x84e4, 0x84e5,
+    0x84e6, 0x84e7, 0x84e8, 0x84e9, 0x84ea, 0x84eb, 0x84ec, 0x84ed, 0x84ee, 0x84ef, 0x84f0, 0x8546,
+    0x85b8, 0x85d7, 0x85d8, 0x8602, 0x877f, 0x8780, 0x8781, 0x8782, 0x87ac, 0x87af, 0x87b0, 0x87b1,
+    0x87be, 0x8822, 0x8824, 0x8827, 0x8828, 0x8829, 0x882a, 0x882b, 0x8830, 0x8831, 0x8832, 0x8833,
+    0x8834, 0x8835, 0x885c, 0x885d, 0x885e, 0x8871, 0x9000, 0x9003, 0x9004, 0x9009, 0x9010, 0x9011,
+    0x9012, 0x9101, 0x9102, 0x9201, 0x9202, 0x9203, 0x9204, 0x9205, 0x9206, 0x9207, 0x9208, 0x9209,
+    0x920a, 0x920b, 0x920c, 0x920d, 0x920e, 0x920f, 0x9210, 0x9211, 0x9212, 0x9213, 0x9214, 0x9215,
+    0x9216, 0x9217, 0x923a, 0x923b, 0x923c, 0x923f, 0x9286, 0x9290, 0x9291, 0x9292, 0x932f, 0x9330,
+    0x9331, 0x9400, 0x9401, 0x9402, 0x9403, 0x9404, 0x9405, 0x9a00, 0x9c9b, 0x9c9c, 0x9c9d, 0x9c9e,
+    0x9c9f, 0xa000, 0xa001, 0xa002, 0xa003, 0xa004, 0xa010, 0xa011, 0xa101, 0xa20b, 0xa20c, 0xa20d,
+    0xa20e, 0xa20f, 0xa210, 0xa211, 0xa212, 0xa213, 0xa214, 0xa215, 0xa216, 0xa217, 0xa300, 0xa301,
+    0xa302, 0xa401, 0xa402, 0xa403, 0xa404, 0xa405, 0xa406, 0xa407, 0xa408, 0xa409, 0xa40a, 0xa40b,
+    0xa40c, 0xa40d, 0xa40e, 0xa40f, 0xa410, 0xa411, 0xa412, 0xa420, 0xa430, 0xa431, 0xa432, 0xa433,
+    0xa434, 0xa435, 0xa436, 0xa437, 0xa438, 0xa439, 0xa43a, 0xa43b, 0xa43c, 0xa460, 0xa461, 0xa480,
+    0xa481, 0xa500, 0xafc0, 0xafc1, 0xafc2, 0xafc3, 0xafc4, 0xafc5, 0xb4c3, 0xbc01, 0xbc02, 0xbc03,
+    0xbc04, 0xbc80, 0xbc81, 0xbc82, 0xbc83, 0xbcc0, 0xbcc1, 0xbcc2, 0xbcc3, 0xbcc4, 0xbcc5, 0xc427,
+    0xc428, 0xc429, 0xc42a, 0xc44f, 0xc573, 0xc580, 0xc5e0, 0xc612, 0xc613, 0xc614, 0xc615, 0xc616,
+    0xc617, 0xc618, 0xc619, 0xc61a, 0xc61b, 0xc61c, 0xc61d, 0xc61e, 0xc61f, 0xc620, 0xc621, 0xc622,
+    0xc623, 0xc624, 0xc625, 0xc626, 0xc627, 0xc628, 0xc629, 0xc62a, 0xc62b, 0xc62c, 0xc62d, 0xc62e,
+    0xc62f, 0xc630, 0xc631, 0xc632, 0xc633, 0xc635, 0xc640, 0xc65a, 0xc65b, 0xc65c, 0xc65d, 0xc660,
+    0xc68b, 0xc68d, 0xc68e, 0xc690, 0xc692, 0xc6bf, 0xc6c5, 0xc6d2, 0xc6d3, 0xc6f3, 0xc6f4, 0xc6f6,
+    0xc6f7, 0xc6f8, 0xc6f9, 0xc6fa, 0xc6fb, 0xc6fc, 0xc6fd, 0xc6fe, 0xc714, 0xc715, 0xc716, 0xc717,
+    0xc718, 0xc719, 0xc71a, 0xc71b, 0xc71c, 0xc71d, 0xc71e, 0xc71f, 0xc725, 0xc726, 0xc761, 0xc764,
+    0xc772, 0xc789, 0xc791, 0xc792, 0xc793, 0xc7a1, 0xc7a3, 0xc7a4, 0xc7a5, 0xc7a6, 0xc7a7, 0xc7a8,
+    0xc7aa, 0xc7b5, 0xc7d7, 0xc7d8, 0xc7e9, 0xc7ea, 0xc7eb, 0xc7ec, 0xc7ed, 0xc7ee, 0xcd2d, 0xcd2e,
+    0xcd30, 0xcd31, 0xcd32, 0xcd33, 0xcd34, 0xcd35, 0xcd36, 0xcd37, 0xcd38, 0xcd39, 0xcd3a, 0xcd3f,
+    0xcd40, 0xcd43, 0xcd46, 0xcd48, 0xcd49, 0xcd4a, 0xcd4b, 0xea1c, 0xea1d, 0xfde8, 0xfde9, 0xfdea,
+    0xfe4c, 0xfe4d, 0xfe4e, 0xfe51, 0xfe52, 0xfe53, 0xfe54, 0xfe55, 0xfe56, 0xfe57, 0xfe58,
 ];
 
 /// Fields refused by the backend: `(id, name, reason)`. The existing path
@@ -119,6 +119,11 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
         0x0202,
         "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
         "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm",
+    ),
+    (
+        0x8298,
+        "Copyright",
+        "hand-owned: the IFD1 residual (core::tiff_helpers IFD1_RESIDUAL_IDS) also reads Copyright; generating it would insert it twice until that list moves with it",
     ),
     (
         0x927c,
@@ -358,7 +363,6 @@ pub fn decode(s: &mut Session, id: u16, val: &MemberVal) -> Arm {
         0x828d => arm_828d(s, val),
         0x828e => arm_828e(s, val),
         0x828f => arm_828f(s, val),
-        0x8298 => arm_8298(s, val),
         0x829a => arm_829a(s, val),
         0x829d => arm_829d(s, val),
         0x82a5 => arm_82a5(s, val),
@@ -1137,12 +1141,6 @@ static PC_7036: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_2: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?-u) *\\x00").expect("generated regex compiles"));
-static RE_3: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?s-u) *\\x00.*").expect("generated regex compiles"));
-static RE_4: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?-u)\\n(?P<eol>\\n?)\\z").expect("generated regex compiles"));
 static PC_84E3_MAP: &[(&str, &str)] = &[
     ("0", "Byte"),
     ("1", "Word"),
@@ -1242,7 +1240,7 @@ static PC_8822: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_5: LazyLock<Regex> =
+static RE_2: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u)\\s+").expect("generated regex compiles"));
 static PC_8830_MAP: &[(&str, &str)] = &[
     ("0", "Unknown"),
@@ -1267,7 +1265,7 @@ static PC_8830: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_6: LazyLock<Regex> =
+static RE_3: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u),?\\s+").expect("generated regex compiles"));
 static PC_9101_MAP: &[(&str, &str)] = &[
     ("0", "-"),
@@ -1285,7 +1283,7 @@ static PC_9101: rt::HashConv = rt::HashConv {
     other: Some(pc_9101_other_ref),
     print_hex: false,
 };
-static RE_7: LazyLock<Regex> = LazyLock::new(|| {
+static RE_4: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("(?-u)^(inf|undef)(?P<eol>\\n?)\\z").expect("generated regex compiles")
 });
 static PC_9207_MAP: &[(&str, &str)] = &[
@@ -1346,7 +1344,7 @@ static PC_9208: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_8: LazyLock<Regex> = LazyLock::new(|| {
+static RE_5: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("(?i-u)^(off|on)(?P<eol>\\n?)\\z").expect("generated regex compiles")
 });
 static PC_9209_MAP: &[(&str, &str)] = &[
@@ -1430,7 +1428,7 @@ static PC_9217: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_9: LazyLock<Regex> =
+static RE_6: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u) +(?P<eol>\\n?)\\z").expect("generated regex compiles"));
 static PC_A001_MAP: &[(&str, &str)] = &[
     ("1", "sRGB"),
@@ -1664,7 +1662,7 @@ static PC_A460: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_10: LazyLock<Regex> = LazyLock::new(|| {
+static RE_7: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("(?i-u)^6fddc324-4e03-4bfe-b185-3d77768dc9").expect("generated regex compiles")
 });
 static PC_BC01_MAP: &[(&str, &str)] = &[
@@ -2078,7 +2076,7 @@ static PC_CD31: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_11: LazyLock<Regex> =
+static RE_8: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u)^.*: ").expect("generated regex compiles"));
 
 // 0x0001 InteropIndex
@@ -5481,27 +5479,6 @@ fn arm_828f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let print = None;
     Ok(Arm::Report(Report {
         value: None,
-        print,
-        writes: w,
-    }))
-}
-
-// 0x8298 Copyright
-fn arm_8298(s: &mut Session, raw: &MemberVal) -> R<Arm> {
-    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
-    let val = raw.clone();
-    let val = match raw_8298(s, val, &mut w)? {
-        Out::Scalar(MemberVal::Undef) => return Ok(Arm::Suppress),
-        Out::Scalar(v) => v,
-        Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
-    };
-    let value = Out::Scalar(val);
-    if value == Out::Scalar(MemberVal::Undef) {
-        return Ok(Arm::Suppress);
-    }
-    let print = None;
-    Ok(Arm::Report(Report {
-        value: Some(value),
         print,
         writes: w,
     }))
@@ -11958,37 +11935,6 @@ fn pc_80a6(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberV
     )
 }
 
-fn raw_8298(
-    s: &mut Session,
-    mut val: MemberVal,
-    _w: &mut Vec<(&'static str, MemberVal)>,
-) -> R<Out> {
-    val = rt::subst(&RE_2, false, &val, "\n", false)?.0;
-    val = rt::subst(&RE_3, false, &val, "", false)?.0;
-    val = rt::subst(&RE_4, false, &val, "", false)?.0;
-    let mut v_enc = s.option("CharsetEXIF");
-    let _ = {
-        let t1 = v_enc.clone();
-        if t1.is_truthy() {
-            {
-                let t2 = {
-                    let t3 = val.clone();
-                    let t4 = v_enc.clone();
-                    let t5 = MemberVal::Undef;
-                    let t6 = MemberVal::Undef;
-                    let t7 = MemberVal::Undef;
-                    h(helpers::decode(s, &t3, &t4, &t5, &t6, &t7))?
-                };
-                val = t2.clone();
-                t2
-            }
-        } else {
-            t1
-        }
-    };
-    return Ok(Out::Scalar(val.clone()));
-}
-
 fn pc_829a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::print_exposure_time(&val.clone()))?))
 }
@@ -12038,7 +11984,7 @@ fn pc_8827(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_5, false, &val, ", ", true)?.0;
+    val = rt::subst(&RE_2, false, &val, ", ", true)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -12064,7 +12010,7 @@ fn pc_9004(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVa
 }
 
 fn pc_9101_other(val: MemberVal) -> R<MemberVal> {
-    let mut l_a: Vec<MemberVal> = rt::split_re(&RE_6, &val.clone())?;
+    let mut l_a: Vec<MemberVal> = rt::split_re(&RE_3, &val.clone())?;
     for t1 in 0..l_a.len() {
         let _ = {
             let t2 = {
@@ -12167,7 +12113,7 @@ fn pc_9205(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberV
 }
 
 fn pc_9206(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    Ok(if rt::truthy(&rt::re_match(&RE_7, false, &val.clone())?) {
+    Ok(if rt::truthy(&rt::re_match(&RE_4, false, &val.clone())?) {
         Out::Scalar(val.clone())
     } else {
         Out::Scalar(rt::concat(&val.clone(), &rt::string(" m")))
@@ -12187,7 +12133,7 @@ fn pc_9209_other(val: MemberVal) -> R<MemberVal> {
         let t1 = {
             let t2 = MemberVal::Undef;
             if t2.is_truthy() {
-                rt::re_match(&RE_8, false, &val.clone())?
+                rt::re_match(&RE_5, false, &val.clone())?
             } else {
                 t2
             }
@@ -12268,7 +12214,7 @@ fn vc_9290(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_9, false, &val, "", false)?.0;
+    val = rt::subst(&RE_6, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -12277,7 +12223,7 @@ fn vc_9291(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_9, false, &val, "", false)?.0;
+    val = rt::subst(&RE_6, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -12286,7 +12232,7 @@ fn vc_9292(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_9, false, &val, "", false)?.0;
+    val = rt::subst(&RE_6, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -12671,7 +12617,7 @@ fn vc_bc01(
     };
     let _ = {
         let t2 = {
-            let (t3, t4) = rt::subst(&RE_10, false, &val, "", false)?;
+            let (t3, t4) = rt::subst(&RE_7, false, &val, "", false)?;
             val = t3;
             rt::subst_count(t4)
         };
@@ -13319,7 +13265,7 @@ fn vc_fde8(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13328,7 +13274,7 @@ fn vc_fde9(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13337,7 +13283,7 @@ fn vc_fdea(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13346,7 +13292,7 @@ fn vc_fe4c(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13355,7 +13301,7 @@ fn vc_fe4d(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13364,7 +13310,7 @@ fn vc_fe4e(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13373,7 +13319,7 @@ fn vc_fe51(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13382,7 +13328,7 @@ fn vc_fe52(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13391,7 +13337,7 @@ fn vc_fe53(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13400,7 +13346,7 @@ fn vc_fe54(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13409,7 +13355,7 @@ fn vc_fe55(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13418,7 +13364,7 @@ fn vc_fe56(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13427,7 +13373,7 @@ fn vc_fe57(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
@@ -13436,6 +13382,6 @@ fn vc_fe58(
     mut val: MemberVal,
     _w: &mut Vec<(&'static str, MemberVal)>,
 ) -> R<Out> {
-    val = rt::subst(&RE_11, false, &val, "", false)?.0;
+    val = rt::subst(&RE_8, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }

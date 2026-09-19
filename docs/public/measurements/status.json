@@ -274,7 +274,13 @@
         "Image::ExifTool::XMP::ConvertXMPDate",
         "Image::ExifTool::ConvertFileSize",
         "Image::ExifTool::Decode",
-        "Image::ExifTool::Encode"
+        "Image::ExifTool::Encode",
+        "Image::ExifTool::Exif::ConvertExifText",
+        "Image::ExifTool::Exif::DecodeCFAPattern",
+        "Image::ExifTool::Exif::PrintCFAPattern",
+        "Image::ExifTool::Exif::PrintSFR",
+        "Image::ExifTool::ASF::GetGUID",
+        "Image::ExifTool::Printable"
       ],
       "refused": [
         "Image::ExifTool::InverseDateTime",

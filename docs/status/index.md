@@ -25,7 +25,7 @@ Where these numbers are going, and the rules for what counts as progress: [Autog
 <StatusMeter label="Catalog entries with a generated reader (strict)" :value="3666" :total="33487" note="unconditional generated declarations / catalog entries" />
 <StatusMeter label="Expression uses today's translators accept" :value="9068" :total="13290" note="exprs.py and conds.py, every expression in the dump" />
 <StatusMeter label="Reachable with Session + ported helpers" :value="12513" :total="13290" note="with the 19 v2 helper ports, same denominator" />
-<StatusMeter label="Helper subs ported" :value="19" :total="157" note="helpers.rs PORTS / distinct helper subs the tables call" />
+<StatusMeter label="Helper subs ported" :value="25" :total="157" note="helpers.rs PORTS / distinct helper subs the tables call" />
 <StatusMeter label="Generated share of correct output (a floor)" :value="43.43" :total="100" note="probe census at 2d8ff775 on 2026-09-18; engine alone 38.64%" />
 </div>
 
@@ -113,9 +113,13 @@ From the coverage spike (`run_spike.py` at [`53d27645`](https://github.com/swack
 
 ### Helper ports
 
-**19** of the **157** distinct helper subs the tables call (103 of them pure functions of their arguments) are ported and proven byte-identical against the pinned Perl. Source: [`helpers.rs`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/src/exiftool_tables/helpers.rs) `PORTS`.
+**25** of the **157** distinct helper subs the tables call (103 of them pure functions of their arguments) are ported and proven byte-identical against the pinned Perl. Source: [`helpers.rs`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/src/exiftool_tables/helpers.rs) `PORTS`.
 
-<details><summary>Ported helpers (19)</summary>
+::: warning Coverage is behind the ports
+`PORTS` now lists 25 helpers, but the coverage above was measured with 19. Re-run `session_helper_coverage.py` to refresh it.
+:::
+
+<details><summary>Ported helpers (25)</summary>
 
 - `ConvertDateTime`
 - `Exif::ConvertFraction`
@@ -136,6 +140,12 @@ From the coverage spike (`run_spike.py` at [`53d27645`](https://github.com/swack
 - `ConvertFileSize`
 - `Decode`
 - `Encode`
+- `Exif::ConvertExifText`
+- `Exif::DecodeCFAPattern`
+- `Exif::PrintCFAPattern`
+- `Exif::PrintSFR`
+- `ASF::GetGUID`
+- `Printable`
 
 </details>
 

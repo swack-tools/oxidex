@@ -1,8 +1,8 @@
 {
  "counts": {
-  "generated": 552,
+  "generated": 551,
   "not_conversion_fields": 29,
-  "refused": 16
+  "refused": 17
  },
  "exiftool_version": "13.59",
  "generated": [
@@ -1844,16 +1844,6 @@
    "name": "BatteryLevel",
    "slots": {},
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
-  },
-  {
-   "flags": [],
-   "hash_keys": [],
-   "id": "0x8298",
-   "name": "Copyright",
-   "slots": {
-    "RawConv": "code"
-   },
-   "source_sha256": "6ef33fd82d0255f897aa87a4014f51f29a6a523c39d647cb4c9fd9c785d9092d"
   },
   {
    "flags": [],
@@ -5664,6 +5654,12 @@
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
   },
   {
+   "id": "0x8298",
+   "name": "Copyright",
+   "note": "its arm (Options('CharsetEXIF'), Decode, s/ *\\0/\\n/, s/\\n$//) compiles and matched the pinned Perl on every probe before it was withheld; it moves with the IFD1 residual list, IFD0-on-the-engine work",
+   "reason": "hand-owned: the IFD1 residual (core::tiff_helpers IFD1_RESIDUAL_IDS) also reads Copyright; generating it would insert it twice until that list moves with it"
+  },
+  {
    "id": "0x927c",
    "name": "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteGoogle/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyxHyperFire/MakerNoteReconyxUltraFire/MakerNoteReconyxHyperFire2/MakerNoteReconyxMicroFire/MakerNoteReconyxHyperFire4K/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
    "note": "no IFD entry: the MakerNotes dispatch array (SubDirectory alternatives chosen by $$valPt/Make/Model; MakerNotePhaseOne's Condition calls OverrideFileType)",
@@ -5712,7 +5708,7 @@
    "reason": "AST node decl not modelled"
   }
  ],
- "rust_sha256": "accbb2fe370ec32f4ffbc584d9ddb155e5a78fa182830c84dd261092caca13f7",
+ "rust_sha256": "f2ec811627e3f97d17a0852bcae61f44b5c3bd7caae696029527d8e9f974c4d1",
  "schema": "oxidex_conv_ledger_v1",
  "table": "Exif::Main",
  "table_sha256": "7e46afd009047f158b5460b4d7cc4014d58eed686e1962b2fca922c5cb048ff1",
