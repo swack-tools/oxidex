@@ -236,6 +236,37 @@ mod tests {
         assert_eq!(metadata.get_string("CIFF:FocalLength"), Some("5 mm"));
     }
 
+    /// Canon::FocalLength is declared `Priority => 0` in ExifTool (Canon.pm),
+    /// so the CIFF occurrence carries priority 0 and never displaces an earlier
+    /// standard ExifIFD:FocalLength (priority 1) during tag resolution.
+    #[test]
+    fn focal_length_has_priority_zero_so_exif_wins_arbitration() {
+        let payload = build_ciff_app0_with_focal_length();
+        let segments = vec![Segment::new(APP0_MARKER, 0, &payload)];
+        let mut metadata = MetadataMap::new();
+
+        // Simulate earlier EXIF IFD occurrence (priority 1)
+        metadata.insert_occurrence(
+            "ExifIFD:FocalLength",
+            crate::core::TagValue::new_string("6.0 mm"),
+            crate::core::SHIM_DEFAULT_PRIORITY,
+            "ExifIFD",
+            crate::core::Instance::default(),
+        );
+
+        process_ciff_app0_segments(&segments, &mut metadata);
+
+        // Under -a, both exist
+        assert_eq!(metadata.get_string("CIFF:FocalLength"), Some("5 mm"));
+        assert_eq!(metadata.get_string("ExifIFD:FocalLength"), Some("6.0 mm"));
+
+        // In arbitration (default -s / composite), ExifIFD wins
+        let resolved = crate::cli::tag_resolution::resolve_requested_tag(&metadata, "FocalLength")
+            .expect("resolved FocalLength");
+        assert_eq!(resolved.lookup_key(), "ExifIFD:FocalLength");
+        assert_eq!(resolved.raw, crate::core::TagValue::new_string("6.0 mm"));
+    }
+
     /// A plain `%CanonRaw::Main` scalar, and the group every key lands in.
     ///
     /// `ExifTool.jpg`'s `FileNumber` record is `int32u` 45 (`-v3`: `FileNumber

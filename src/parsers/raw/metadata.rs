@@ -7605,19 +7605,19 @@ pub(crate) fn decode_ciff_container(data: &[u8], metadata: &mut MetadataMap) {
     for (name, value) in crate::parsers::tiff::makernotes::shared::tag_priority::in_record_order(
         parse_canon_ciff_records(&canon_records, model_for_canon, &mut canon_value_forms),
     ) {
-        if name.starts_with("Canon:")
-            && let Some(raw) = canon_value_forms.remove(&name)
-        {
-            metadata.insert_occurrence_with_raw(
+        if let Some(raw) = canon_value_forms.remove(&name) {
+            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag_with_value(
+                metadata,
                 name,
                 TagValue::new_string(value),
                 TagValue::new_string(raw),
-                crate::core::SHIM_DEFAULT_PRIORITY,
-                "",
-                crate::core::Instance::default(),
             );
         } else {
-            metadata.insert(name, TagValue::new_string(value));
+            crate::parsers::tiff::makernotes::shared::tag_priority::record_makernote_tag(
+                metadata,
+                name,
+                TagValue::new_string(value),
+            );
         }
     }
     // The unrounded ValueConv forms ride the same channel the JPEG MakerNote
