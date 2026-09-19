@@ -85,6 +85,9 @@ Notes:
 
 ## 2. Finish functional and ExifTool-parity work
 
+Implementation design:
+[`docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md`](docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md).
+
 Already landed on `refactor/tag-machinery`:
 
 - [x] DJI float forward-port (`#844`).
