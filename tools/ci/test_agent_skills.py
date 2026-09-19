@@ -343,7 +343,6 @@ class SkillMirrorTests(unittest.TestCase):
     def test_release_routing_names_all_three_skills(self):
         for relative in (
             "AGENTS.md",
-            "CLAUDE.md",
             "docs/contributing/release-checklist.md",
         ):
             text = (REPO / relative).read_text(encoding="utf-8")
@@ -356,14 +355,20 @@ class SkillMirrorTests(unittest.TestCase):
                     self.assertIn(skill, text)
 
     def test_claude_routes_only_authorized_release_promotion_to_main(self):
-        text = " ".join((REPO / "CLAUDE.md").read_text(encoding="utf-8").split())
+        text = " ".join((REPO / "AGENTS.md").read_text(encoding="utf-8").split())
         for phrase in (
-            "ordinary development",
+            "Ordinary development",
             "reviewed PR whose base is `main`",
-            "exact `main` commit",
-            "separate explicit authorization",
+            "`main` commit",
+            "separate explicit maintainer authorization",
         ):
             self.assertIn(phrase, text)
+
+    def test_claude_is_an_import_only_not_a_duplicate_policy_store(self):
+        self.assertEqual(
+            (REPO / "CLAUDE.md").read_text(encoding="utf-8").strip(),
+            "@AGENTS.md",
+        )
 
     def test_release_checklist_requires_receipts_signed_tag_and_artifact_proof(self):
         text = (REPO / "docs/contributing/release-checklist.md").read_text(
