@@ -197,15 +197,51 @@
   },
   "generated_by": "tools/docs/render_status.py",
   "generated_share": {
-    "commit": "72eae8a5",
-    "date": "2026-09-13",
-    "engine_alone": "33.5%",
-    "matched_values": 468086,
-    "remeasure_evidence": "A fresh generated-share figure at a named commit; the delta attributed to step 2. If the share does not move, the architecture is not yet validated and step 4 does not start.",
-    "remeasure_how": "Run the probe census on the same corpus and control method as `72eae8a5`.",
-    "remeasure_step": "3. Re-measure the generated share.",
-    "share": "38.34%",
-    "stale": true
+    "bound": "floor",
+    "commit": "2d8ff7750507e15445e46c74114fb8e6b0b04424",
+    "composite_cascade": "5.65%",
+    "corpus_files": 4238,
+    "date": "2026-09-18",
+    "delta_from": "72eae8a5906fcbea7d825c39db55c636dec0d0ef",
+    "delta_pts": 5.1,
+    "direct": "37.52%",
+    "engine_alone": "38.64%",
+    "engine_delta_pts": 5.1,
+    "matched_values": 468294,
+    "method_version": "genshare-probe/1",
+    "other_cascade": "0.27%",
+    "points": [
+      {
+        "commit": "72eae8a5906fcbea7d825c39db55c636dec0d0ef",
+        "composite_cascade": "5.51%",
+        "control_matched": 468086,
+        "direct": "32.56%",
+        "engine_alone": "33.54%",
+        "label": "previous figure, reproduced",
+        "share": "38.34%"
+      },
+      {
+        "commit": "8cceb4a7e2d598b670a5b895d34c6bc8b27ab705",
+        "composite_cascade": "5.51%",
+        "control_matched": 468172,
+        "direct": "32.56%",
+        "engine_alone": "33.54%",
+        "label": "parent of #838",
+        "share": "38.33%"
+      },
+      {
+        "commit": "2d8ff7750507e15445e46c74114fb8e6b0b04424",
+        "composite_cascade": "5.65%",
+        "control_matched": 468294,
+        "direct": "37.52%",
+        "engine_alone": "38.64%",
+        "label": "#838: Exif::Main v2 conversions",
+        "share": "43.43%"
+      }
+    ],
+    "rows": 203394,
+    "share": "43.43%",
+    "stale": false
   },
   "generation": {
     "artifacts": {
@@ -613,6 +649,7 @@
   "sources": {
     "docs/public/measurements/catalog-corpus-observed-13.59.json": "033e4094bf409c892e592ec43b09a93fce4b091744b2d5f615c3497b6924cc3e",
     "docs/public/measurements/catalog-hydrated-join-13.59.json": "5fe7878f5c20358ade827b5ad27b395b1a97f8f4188e190a4e2a3da3b9b79f95",
+    "docs/public/measurements/generated-share-13.59.json": "81e3168524d85cd103c615e0fa479050ad677d3a9025f020f9b9760683e9df97",
     "tools/ci/parity_floors.json": "92505e25021bfbd456109b7186089001aae6619f0b2bc77c019d6f390dbe9ca7"
   },
   "write": {

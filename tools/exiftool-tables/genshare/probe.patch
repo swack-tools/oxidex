@@ -1,0 +1,892 @@
+From 4fd54c21864290ec14f7d38253e982efe74ca3fa Mon Sep 17 00:00:00 2001
+From: swackhamer <swackhamer@users.noreply.github.com>
+Date: Fri, 11 Sep 2026 15:08:46 -0500
+Subject: [PATCH 1/4] PROBE (never land): OXIDEX_PROBE_SILENCE drops rows per
+ generated-data class
+
+A measurement probe for the OBSERVED axis of "how much of oxidex's matched
+output comes from generated tables". Not a feature; this branch is never
+merged anywhere.
+
+OXIDEX_PROBE_SILENCE (read once per process, comma-separated) drops rows at
+each class's outward boundary as scout.md mapped it, leaving internal walk
+state (SetMember/DataMember, cipher ctx, value_form, descents) intact:
+
+  engine              engine.rs / ifd_engine.rs Emitted pushes
+  legacy-l1           runtime::DecodedField::emit -> None (RawAccess rows kept)
+  legacy-l2           binary_subdir, canon custom_functions2, infiray,
+                      sony main_extra, sony walker over minolta_a100 TABLES
+  legacy-l3           sony walker over plain/enciphered, nikon encrypted
+                      (value_form kept), nikon settings, canon binary_tables,
+                      camera_info, filter_info, color_data, canon_vrd VER1
+  producers-identity  generated File:FileType/FileTypeExtension/MIMEType writes
+  producers-composite the 3 generated_compute Composite arms
+  producers-dicom / -geotiff / -fits   rows named by the generated tables
+  composite-declared  every Composite::apply row (hybrid bound, not in producers)
+  legacy = l1+l2+l3; producers = the five producers-* tokens
+
+conv is refused (exit 2): no clean choke point, a silenced PrintConv lookup
+yields a wrong value rather than an absent row. Unknown tokens exit 2.
+
+Unset or empty: byte-identical `oxidex -j` output to afd3a628's release
+binary on the 82-file bounded subset (only File:FileAccessDate differs, which
+also differs between two runs of the tip binary itself).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/composite/compute.rs                      |  12 ++
+ src/composite/mod.rs                          |   9 ++
+ src/core/file_metadata.rs                     |   4 +
+ src/core/operations.rs                        |   8 +-
+ src/exiftool_tables/engine.rs                 |   4 +
+ src/exiftool_tables/ifd_engine.rs             |   4 +
+ src/exiftool_tables/runtime.rs                |   4 +
+ src/lib.rs                                    |   2 +
+ src/parsers/canon_vrd/mod.rs                  |   9 +-
+ src/parsers/elf/metadata_extractor.rs         |   5 +-
+ src/parsers/flir_fpf.rs                       |   5 +-
+ src/parsers/jpeg/app_segments/infiray.rs      |   4 +
+ src/parsers/specialized/fits.rs               |  36 +++--
+ src/parsers/tiff/geotiff_parser.rs            |   4 +
+ .../tiff/makernotes/canon/binary_tables.rs    |   5 +-
+ .../tiff/makernotes/canon/camera_info.rs      |   5 +-
+ .../tiff/makernotes/canon/color_data.rs       |   5 +-
+ .../makernotes/canon/custom_functions2.rs     |   1 +
+ .../tiff/makernotes/canon/filter_info.rs      |   5 +-
+ .../tiff/makernotes/nikon/binary_data.rs      |  14 +-
+ src/parsers/tiff/makernotes/nikon/settings.rs |   5 +-
+ .../tiff/makernotes/shared/binary_subdir.rs   |   4 +
+ src/parsers/tiff/makernotes/sony.rs           |   2 +
+ .../tiff/makernotes/sony/binary_data.rs       |  13 ++
+ src/probe_silence.rs                          | 148 ++++++++++++++++++
+ 25 files changed, 295 insertions(+), 22 deletions(-)
+ create mode 100644 src/probe_silence.rs
+
+diff --git a/src/composite/compute.rs b/src/composite/compute.rs
+index c18a4ecc..9c69af23 100644
+--- a/src/composite/compute.rs
++++ b/src/composite/compute.rs
+@@ -1209,6 +1209,18 @@ fn panasonic_advanced_scene_mode(model: &str, scene: &str, advanced: &str) -> Op
+ /// The returned string is the print-formatted value, matching what ExifTool
+ /// prints by default, because that is what the comparison harness diffs.
+ #[must_use]
++/// PROBE (never land): true when `compute` would reach a
++/// `generated_compute` arm for this pair, i.e. `compute`'s own match has no
++/// hand arm for it and the generated file does.
++pub(super) fn is_generated_compute(module: &str, name: &str) -> bool {
++    matches!(
++        (module, name),
++        ("FLIR", "PeakSpectralSensitivity")
++            | ("PanasonicRaw", "ImageHeight")
++            | ("PanasonicRaw", "ImageWidth")
++    )
++}
++
+ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
+     match (module, name) {
+         ("Panasonic", "AdvancedSceneMode") => {
+diff --git a/src/composite/mod.rs b/src/composite/mod.rs
+index be211f53..ad71d93f 100644
+--- a/src/composite/mod.rs
++++ b/src/composite/mod.rs
+@@ -527,6 +527,15 @@ pub fn apply(map: &mut MetadataMap) -> usize {
+             } else {
+                 compute::compute(comp.module, comp.name, &inputs, make.as_deref())
+             };
++            // PROBE (never land): `producers-composite` drops only the rows a
++            // generated_compute arm produced; `composite-declared` drops every
++            // row of this loop. Dropping here is "not computed", so downstream
++            // composites see the same absence the output does (a cascade).
++            let computed = computed.filter(|_| {
++                !(crate::probe_silence::silenced(crate::probe_silence::Class::CompositeDeclared)
++                    || (crate::probe_silence::silenced(crate::probe_silence::Class::Composite)
++                        && compute::is_generated_compute(comp.module, comp.name)))
++            });
+             if let Some(c) = computed {
+                 // Count only genuine changes, so the fixpoint still terminates.
+                 let changed = map.get_string(key) != Some(c.print.as_str());
+diff --git a/src/core/file_metadata.rs b/src/core/file_metadata.rs
+index 082f6529..db6e65ab 100644
+--- a/src/core/file_metadata.rs
++++ b/src/core/file_metadata.rs
+@@ -266,6 +266,10 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
+         // `operations::add_identity_tags`, which sees the same bytes.
+         let header = read_header(path);
+         let (file_type, file_type_ext, mime_type) = identify_extension(&ext_lower, &header);
++        // PROBE (never land): the generated identity rows are not written.
++        if crate::probe_silence::silenced(crate::probe_silence::Class::Identity) {
++            return Ok(metadata);
++        }
+ 
+         // File type extension. ExifTool reports the format's canonical
+         // extension rather than echoing the filename, so `clip.m2ts` reports
+diff --git a/src/core/operations.rs b/src/core/operations.rs
+index 187f5a55..153c40b0 100644
+--- a/src/core/operations.rs
++++ b/src/core/operations.rs
+@@ -197,14 +197,17 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path:
+ 
+     let reported = metadata.get_string("File:FileType");
+     let ours_is_authoritative = is_placeholder(reported) || reported == Some(id.file_type.as_ref());
+-    if is_placeholder(reported) {
++    // PROBE (never land): generated identity writes are skipped; the hand
++    // MIE/RealMedia MIME overrides below still run.
++    let probe_drop = crate::probe_silence::silenced(crate::probe_silence::Class::Identity);
++    if is_placeholder(reported) && !probe_drop {
+         metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
+     }
+ 
+     // The on-disk extension is a placeholder whenever it disagrees with
+     // ExifTool's canonical one (`aif` where ExifTool says `aiff`), which is
+     // exactly when it should be corrected.
+-    if ours_is_authoritative {
++    if ours_is_authoritative && !probe_drop {
+         let current = metadata.get_string("File:FileTypeExtension");
+         if is_placeholder(current) || current != Some(id.extension.as_ref()) {
+             metadata.insert(
+@@ -216,6 +219,7 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path:
+ 
+     if let Some(mime) = id.mime_type
+         && ours_is_authoritative
++        && !probe_drop
+         && is_placeholder(metadata.get_string("File:MIMEType"))
+     {
+         metadata.insert("File:MIMEType", TagValue::new_string(mime));
+diff --git a/src/exiftool_tables/engine.rs b/src/exiftool_tables/engine.rs
+index 5d39cecd..400e700c 100644
+--- a/src/exiftool_tables/engine.rs
++++ b/src/exiftool_tables/engine.rs
+@@ -687,6 +687,10 @@ fn walk_with_policy(
+             ),
+             None => (super::runtime::to_exiftool_value(&converted), None),
+         };
++        // PROBE (never land): drop the row, keep every walk side effect above.
++        if crate::probe_silence::silenced(crate::probe_silence::Class::Engine) {
++            continue;
++        }
+         out.push(Emitted {
+             module: table.module,
+             table: table.table,
+diff --git a/src/exiftool_tables/ifd_engine.rs b/src/exiftool_tables/ifd_engine.rs
+index 3181cfd0..52d4a877 100644
+--- a/src/exiftool_tables/ifd_engine.rs
++++ b/src/exiftool_tables/ifd_engine.rs
+@@ -1117,6 +1117,10 @@ fn walk(
+         let Some(group1) = group1_of(table, tag, &dir) else {
+             continue;
+         };
++        // PROBE (never land): drop the row, keep every walk side effect above.
++        if crate::probe_silence::silenced(crate::probe_silence::Class::Engine) {
++            continue;
++        }
+         out.push(Emitted {
+             module: table.module,
+             table: table.table,
+diff --git a/src/exiftool_tables/runtime.rs b/src/exiftool_tables/runtime.rs
+index a4a793d3..fc436c9d 100644
+--- a/src/exiftool_tables/runtime.rs
++++ b/src/exiftool_tables/runtime.rs
+@@ -211,6 +211,10 @@ impl DecodedField {
+     /// (AGENTS.md, "never approximate a conversion").
+     #[must_use]
+     pub fn emit(&self) -> Option<TagValue> {
++        // PROBE (never land): legacy L1 rows vanish at the decode API boundary.
++        if crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL1) {
++            return None;
++        }
+         if self.field.omitted.any() {
+             return None;
+         }
+diff --git a/src/lib.rs b/src/lib.rs
+index 16f274a4..0b2d2e18 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -40,6 +40,8 @@ pub mod core;
+ // Infrastructure Layer
+ pub mod io;
+ pub mod parsers;
++/// PROBE (never land): row-silencing switch, see the module docs.
++pub mod probe_silence;
+ pub mod writers;
+ 
+ // Supporting Modules
+diff --git a/src/parsers/canon_vrd/mod.rs b/src/parsers/canon_vrd/mod.rs
+index ab04f7dd..0fbb8144 100644
+--- a/src/parsers/canon_vrd/mod.rs
++++ b/src/parsers/canon_vrd/mod.rs
+@@ -220,6 +220,10 @@ fn set_identity(metadata: &mut MetadataMap, ext: &str) {
+     let Some(id) = crate::filetype::identify_by_extension(ext) else {
+         return;
+     };
++    // PROBE (never land)
++    if crate::probe_silence::silenced(crate::probe_silence::Class::Identity) {
++        return;
++    }
+     metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
+     metadata.insert(
+         "File:FileTypeExtension",
+@@ -339,7 +343,10 @@ fn parse_ver1(record: &[u8], metadata: &mut MetadataMap) {
+             .chunks_exact(width)
+             .map(|chunk| read_scalar(chunk, entry.format))
+             .collect();
+-        if let Some(value) = convert(entry, &values) {
++        if let Some(value) = convert(entry, &values)
++            // PROBE (never land)
++            && !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3)
++        {
+             metadata.insert(format!("CanonVRD:{}", entry.name), value);
+         }
+     }
+diff --git a/src/parsers/elf/metadata_extractor.rs b/src/parsers/elf/metadata_extractor.rs
+index f6797e32..12e50bab 100644
+--- a/src/parsers/elf/metadata_extractor.rs
++++ b/src/parsers/elf/metadata_extractor.rs
+@@ -311,7 +311,10 @@ fn set_elf_file_type(header: &ElfHeader, metadata: &mut MetadataMap) {
+     // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
+     // the base type `%fileTypeLookup` routes this family to. Without it the
+     // file falls through to `application/unknown`.
+-    if let Some(mime) = crate::filetype::mime_for_type("EXE") {
++    if let Some(mime) = crate::filetype::mime_for_type("EXE")
++        // PROBE (never land)
++        && !crate::probe_silence::silenced(crate::probe_silence::Class::Identity)
++    {
+         metadata.insert(
+             "File:MIMEType".to_string(),
+             TagValue::String(mime.to_string()),
+diff --git a/src/parsers/flir_fpf.rs b/src/parsers/flir_fpf.rs
+index c57a0fa8..3ebf56e5 100644
+--- a/src/parsers/flir_fpf.rs
++++ b/src/parsers/flir_fpf.rs
+@@ -281,7 +281,10 @@ pub fn parse_fpf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+         return Err(ExifToolError::parse_error("No FPF tags decoded"));
+     }
+ 
+-    if let Some(id) = crate::filetype::identify_by_extension("fpf") {
++    if let Some(id) = crate::filetype::identify_by_extension("fpf")
++        // PROBE (never land)
++        && !crate::probe_silence::silenced(crate::probe_silence::Class::Identity)
++    {
+         metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
+         metadata.insert(
+             "File:FileTypeExtension",
+diff --git a/src/parsers/jpeg/app_segments/infiray.rs b/src/parsers/jpeg/app_segments/infiray.rs
+index f2099756..b23c593e 100644
+--- a/src/parsers/jpeg/app_segments/infiray.rs
++++ b/src/parsers/jpeg/app_segments/infiray.rs
+@@ -207,6 +207,10 @@ pub(crate) fn read_record(group: &str, data: &[u8], fields: &[Field]) -> Metadat
+         let Some(raw) = read_value(data, field.offset, field.format, field.count, more) else {
+             continue;
+         };
++        // PROBE (never land)
++        if crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL2) {
++            continue;
++        }
+         metadata.insert_with_group1(
+             format!("{}:{}", group, field.name),
+             print_conv(field.conv, &raw),
+diff --git a/src/parsers/specialized/fits.rs b/src/parsers/specialized/fits.rs
+index 02bab8fb..9fca6e3f 100644
+--- a/src/parsers/specialized/fits.rs
++++ b/src/parsers/specialized/fits.rs
+@@ -128,6 +128,15 @@ impl FITSParser {
+     /// Standard names are generated from `Image::ExifTool::FITS::Main`. Any
+     /// other valid keyword is lowercased, title-cased, and has underscores
+     /// removed while capitalizing the following character.
++    /// PROBE (never land): true when the row for `keyword` is named by the
++    /// generated `FITS_TAG_NAMES` and `producers-fits` is silenced.
++    fn probe_drop(keyword: &str) -> bool {
++        crate::probe_silence::silenced(crate::probe_silence::Class::Fits)
++            && FITS_TAG_NAMES
++                .iter()
++                .any(|(candidate, _)| *candidate == keyword)
++    }
++
+     fn tag_name(keyword: &str) -> String {
+         if let Some((_, name)) = FITS_TAG_NAMES
+             .iter()
+@@ -201,21 +210,25 @@ impl FITSParser {
+                             // already retains every occurrence (`TagSink::record`
+                             // pushes each one); only the missing group prefix
+                             // needed fixing here, not the retention mechanism.
+-                            metadata.insert(
+-                                format!("FITS:{}", Self::tag_name(&keyword)),
+-                                TagValue::String(value),
+-                            );
+-                        }
+-                        k if k.starts_with("NAXIS") && k.len() > 5 => {
+-                            if let Ok(axis_val) = value.parse::<i64>() {
++                            if !Self::probe_drop(&keyword) {
+                                 metadata.insert(
+                                     format!("FITS:{}", Self::tag_name(&keyword)),
+-                                    TagValue::Integer(axis_val),
++                                    TagValue::String(value),
+                                 );
+                             }
+                         }
++                        k if k.starts_with("NAXIS") && k.len() > 5 => {
++                            if let Ok(axis_val) = value.parse::<i64>() {
++                                if !Self::probe_drop(&keyword) {
++                                    metadata.insert(
++                                        format!("FITS:{}", Self::tag_name(&keyword)),
++                                        TagValue::Integer(axis_val),
++                                    );
++                                }
++                            }
++                        }
+                         _ => {
+-                            if !value.is_empty() {
++                            if !value.is_empty() && !Self::probe_drop(&keyword) {
+                                 // Same table and family-1 group as the
+                                 // COMMENT/HISTORY arm above: `FITS`.
+                                 // ProcessFITS hands HandleTag the card's text
+@@ -845,7 +858,10 @@ pub fn parse_dicom_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+         }
+ 
+         if let Some(entry) = dicom_dict_entry(element.group, element.element) {
+-            if let Some(value) = dicom_value(&element, encoding, entry) {
++            if let Some(value) = dicom_value(&element, encoding, entry)
++                // PROBE (never land)
++                && !crate::probe_silence::silenced(crate::probe_silence::Class::Dicom)
++            {
+                 metadata.insert(format!("DICOM:{}", entry.name), value);
+             }
+         }
+diff --git a/src/parsers/tiff/geotiff_parser.rs b/src/parsers/tiff/geotiff_parser.rs
+index 279229af..8fe55389 100644
+--- a/src/parsers/tiff/geotiff_parser.rs
++++ b/src/parsers/tiff/geotiff_parser.rs
+@@ -104,6 +104,10 @@ pub fn parse_geotiff_keys(
+         let Some(raw) = raw else {
+             continue;
+         };
++        // PROBE (never land)
++        if crate::probe_silence::silenced(crate::probe_silence::Class::GeoTiff) {
++            continue;
++        }
+ 
+         result.insert(
+             format!("GeoTiff:{}", tag_name),
+diff --git a/src/parsers/tiff/makernotes/canon/binary_tables.rs b/src/parsers/tiff/makernotes/canon/binary_tables.rs
+index 7015ea6e..3e4c2310 100644
+--- a/src/parsers/tiff/makernotes/canon/binary_tables.rs
++++ b/src/parsers/tiff/makernotes/canon/binary_tables.rs
+@@ -1517,7 +1517,10 @@ pub(crate) fn parse_binary_table(
+             .map(|&value| render_value(field.conv, value))
+             .collect::<Vec<_>>()
+             .join(" ");
+-        tags.insert(format!("Canon:{}", field.name), rendered);
++        // PROBE (never land)
++        if !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3) {
++            tags.insert(format!("Canon:{}", field.name), rendered);
++        }
+     }
+     if tag_id == 0x4013
+         && let Some(value) = read_af_micro_adj_value(record, byte_order)
+diff --git a/src/parsers/tiff/makernotes/canon/camera_info.rs b/src/parsers/tiff/makernotes/canon/camera_info.rs
+index 3ed21c4b..7efb1c38 100644
+--- a/src/parsers/tiff/makernotes/canon/camera_info.rs
++++ b/src/parsers/tiff/makernotes/canon/camera_info.rs
+@@ -243,7 +243,10 @@ fn walk(
+         }
+         let converted = value_conv(field.vc, converted);
+         let printed = print_conv(field.pc, converted);
+-        out.insert(format!("Canon:{}", field.name), printed);
++        // PROBE (never land)
++        if !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3) {
++            out.insert(format!("Canon:{}", field.name), printed);
++        }
+     }
+ }
+ 
+diff --git a/src/parsers/tiff/makernotes/canon/color_data.rs b/src/parsers/tiff/makernotes/canon/color_data.rs
+index b049c220..68ecd3c1 100644
+--- a/src/parsers/tiff/makernotes/canon/color_data.rs
++++ b/src/parsers/tiff/makernotes/canon/color_data.rs
+@@ -3126,7 +3126,10 @@ pub(crate) fn parse_color_data(
+         let Some(values) = read_field(record, field, byte_order) else {
+             continue;
+         };
+-        if let Some(rendered) = render_field(field, &values) {
++        if let Some(rendered) = render_field(field, &values)
++            // PROBE (never land)
++            && !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3)
++        {
+             tags.insert(format!("Canon:{}", field.name), rendered);
+         }
+     }
+diff --git a/src/parsers/tiff/makernotes/canon/custom_functions2.rs b/src/parsers/tiff/makernotes/canon/custom_functions2.rs
+index ddff185a..a6e8256f 100644
+--- a/src/parsers/tiff/makernotes/canon/custom_functions2.rs
++++ b/src/parsers/tiff/makernotes/canon/custom_functions2.rs
+@@ -494,6 +494,7 @@ pub(super) fn parse_custom_functions2(
+                     .collect();
+                 if values.len() == count
+                     && let Some((name, rendered)) = render_entry(entry, model, &values)
++                    && !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL2)
+                 {
+                     tags.insert(format!("CanonCustom:{}", name), rendered);
+                 }
+diff --git a/src/parsers/tiff/makernotes/canon/filter_info.rs b/src/parsers/tiff/makernotes/canon/filter_info.rs
+index 89991481..c00c46e5 100644
+--- a/src/parsers/tiff/makernotes/canon/filter_info.rs
++++ b/src/parsers/tiff/makernotes/canon/filter_info.rs
+@@ -117,7 +117,10 @@ pub(crate) fn parse_filter_info(
+                     } else {
+                         Conv::Str(joined)
+                     };
+-                    tags.insert(format!("Canon:{}", field.name), print_conv(field.pc, conv));
++                    // PROBE (never land)
++                    if !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3) {
++                        tags.insert(format!("Canon:{}", field.name), print_conv(field.pc, conv));
++                    }
+                 }
+             }
+             pos += value_len;
+diff --git a/src/parsers/tiff/makernotes/nikon/binary_data.rs b/src/parsers/tiff/makernotes/nikon/binary_data.rs
+index e8cae464..3e8e17b5 100644
+--- a/src/parsers/tiff/makernotes/nikon/binary_data.rs
++++ b/src/parsers/tiff/makernotes/nikon/binary_data.rs
+@@ -1195,15 +1195,25 @@ pub fn process(
+         // `CLModeShootingSpeed`, `PreviewButton` and friends displace
+         // `NikonSettings`'. `Priority => 0` never displaces anything.
+         let key = format!("Nikon:{}", tag.name);
++        // PROBE (never land): L3 row dropped; the value_form side channel is
++        // still recorded exactly when the normal path would record it.
++        let probe_drop = crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3);
+         if tag.low_priority {
+-            if let std::collections::hash_map::Entry::Vacant(entry) = out.entry(key.clone()) {
++            if probe_drop {
++                if !out.contains_key(&key) && tag.name == "FocusDistance" {
++                    ctx.set_value_form(key, converted.text());
++                }
++            } else if let std::collections::hash_map::Entry::Vacant(entry) = out.entry(key.clone())
++            {
+                 entry.insert(printed);
+                 if tag.name == "FocusDistance" {
+                     ctx.set_value_form(key, converted.text());
+                 }
+             }
+         } else {
+-            out.insert(key.clone(), printed);
++            if !probe_drop {
++                out.insert(key.clone(), printed);
++            }
+             if tag.name == "FocusDistance" {
+                 ctx.set_value_form(key, converted.text());
+             }
+diff --git a/src/parsers/tiff/makernotes/nikon/settings.rs b/src/parsers/tiff/makernotes/nikon/settings.rs
+index 315356c9..06fb4bce 100644
+--- a/src/parsers/tiff/makernotes/nikon/settings.rs
++++ b/src/parsers/tiff/makernotes/nikon/settings.rs
+@@ -297,7 +297,10 @@ pub fn parse_nikon_settings(
+         } else {
+             value
+         };
+-        tags.insert(format!("Nikon:{}", tag.name), apply_conv(tag.conv, masked));
++        // PROBE (never land): dm.set above is kept.
++        if !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3) {
++            tags.insert(format!("Nikon:{}", tag.name), apply_conv(tag.conv, masked));
++        }
+     }
+ }
+ 
+diff --git a/src/parsers/tiff/makernotes/shared/binary_subdir.rs b/src/parsers/tiff/makernotes/shared/binary_subdir.rs
+index eb958513..4fc316a3 100644
+--- a/src/parsers/tiff/makernotes/shared/binary_subdir.rs
++++ b/src/parsers/tiff/makernotes/shared/binary_subdir.rs
+@@ -537,6 +537,10 @@ pub(crate) fn decode_binary_subdir_with(
+         }
+         let key = format!("{prefix}:{}", field.name);
+         let value = parts.join(" ");
++        // PROBE (never land): members above are kept; only the row is dropped.
++        if crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL2) {
++            continue;
++        }
+         if field.low_priority {
+             // ExifTool's `Priority => 0`: a sub-directory copy of a tag the
+             // `Main` table also reports must not overwrite it.
+diff --git a/src/parsers/tiff/makernotes/sony.rs b/src/parsers/tiff/makernotes/sony.rs
+index 857401db..17f2a15c 100644
+--- a/src/parsers/tiff/makernotes/sony.rs
++++ b/src/parsers/tiff/makernotes/sony.rs
+@@ -579,6 +579,8 @@ fn parse_sony_makernote_impl(
+                 if main_tag(entry.tag_id).is_none() && main_extra::has(entry.tag_id) {
+                     if let Some((name, printed, low)) =
+                         main_extra::render(entry.tag_id, &value, byte_order, &mut cipher_ctx)
++                        // PROBE (never land): render (and its cipher ctx) still runs.
++                        && !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL2)
+                     {
+                         found.push(Found::new(
+                             format!("Sony:{}", name),
+diff --git a/src/parsers/tiff/makernotes/sony/binary_data.rs b/src/parsers/tiff/makernotes/sony/binary_data.rs
+index b88a961a..c5ac1869 100644
+--- a/src/parsers/tiff/makernotes/sony/binary_data.rs
++++ b/src/parsers/tiff/makernotes/sony/binary_data.rs
+@@ -1268,6 +1268,19 @@ fn process_depth(
+         let vc_text = val.text();
+         let printed = apply_pc(tag.pc, val, tag.print_hex);
+         let value_form = (printed != vc_text).then_some(vc_text);
++        // PROBE (never land): the A100 tables are manifest-generated (L2);
++        // Sony plain/enciphered tables have no committed generator (L3).
++        let probe_class = if std::ptr::eq(
++            tables.as_ptr(),
++            super::super::minolta_a100_tables::TABLES.as_ptr(),
++        ) {
++            crate::probe_silence::Class::LegacyL2
++        } else {
++            crate::probe_silence::Class::LegacyL3
++        };
++        if crate::probe_silence::silenced(probe_class) {
++            continue;
++        }
+         out.push(Found {
+             name: tag.name,
+             value: printed,
+diff --git a/src/probe_silence.rs b/src/probe_silence.rs
+new file mode 100644
+index 00000000..e8f5e0fa
+--- /dev/null
++++ b/src/probe_silence.rs
+@@ -0,0 +1,148 @@
++//! PROBE (never land): `OXIDEX_PROBE_SILENCE` drops output rows at the outward
++//! boundary of a class of generated-data producers, so a census with and
++//! without the switch measures how many *observed* rows each class supplies.
++//!
++//! Read once per process from the environment (comma-separated tokens).
++//! Unset or empty is normal behaviour: every gate below is a no-op and the
++//! output is byte-identical to the unmodified tree.
++//!
++//! Tokens (a class token is the union of its sub-tokens):
++//!
++//! * `engine` -- the two `Emitted` pushes of the generic engines
++//!   (`engine.rs` binary walk, `ifd_engine.rs` IFD walk). Walk state
++//!   (SetMember, guards, descents) runs before the push and is kept.
++//! * `legacy` = `legacy-l1` + `legacy-l2` + `legacy-l3`
++//!   * `legacy-l1` -- `runtime::DecodedField::emit` returns `None` (generated
++//!     layout + generated conversion, including the hybrid consumers that feed
++//!     `emit()`'s value into hand formatting). `RawAccess` rows are NOT
++//!     silenced (layout generated, conversion acknowledged/hand); see probe.md.
++//!   * `legacy-l2` -- manifest vendor walkers: `binary_subdir.rs`,
++//!     `canon/custom_functions2.rs`, `app_segments/infiray.rs`,
++//!     `sony.rs` main_extra, and the shared Sony walker when it walks
++//!     `minolta_a100_tables::TABLES`.
++//!   * `legacy-l3` -- generated-origin tables with no committed generator:
++//!     the shared Sony walker over `sony/plain_tables` / `sony/enciphered_tables`,
++//!     `nikon/binary_data.rs` (encrypted), `nikon/settings.rs`,
++//!     `canon/binary_tables.rs`, `canon/camera_info.rs`, `canon/filter_info.rs`,
++//!     `canon/color_data.rs`, `canon_vrd/mod.rs` VER1.
++//! * `producers` = `producers-identity` + `producers-composite` +
++//!   `producers-dicom` + `producers-geotiff` + `producers-fits`
++//!   * `producers-identity` -- the generated `filetype` writes of
++//!     `File:FileType`/`FileTypeExtension`/`MIMEType`
++//!     (`file_metadata.rs`, `operations.rs::add_identity_tags`,
++//!     `flir_fpf.rs`, `canon_vrd::set_identity`, `elf` MIMEType). Hand
++//!     writers and `normalize_identity_tags`' hand fallback still run.
++//!   * `producers-composite` -- the three `generated_compute` arms only
++//!     (the only Composite rows with a generated computation).
++//!   * `producers-dicom`, `producers-geotiff` -- rows named by the generated
++//!     DICOM dictionary / GeoKey table.
++//!   * `producers-fits` -- FITS rows whose name came from `FITS_TAG_NAMES`.
++//! * `composite-declared` -- NOT part of `producers`: every Composite row the
++//!   `composite::apply` loop emits (generated declaration, mostly hand
++//!   computation). A hybrid bound, reported separately.
++//! * `conv` -- refused: there is no clean choke point (silencing a generated
++//!   PrintConv lookup makes a value wrong, not absent). Exits 2.
++//!
++//! Any unknown token also exits 2: a typo must never measure as "no change".
++
++use std::sync::OnceLock;
++
++/// One silenceable boundary.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[repr(u32)]
++pub enum Class {
++    Engine = 0,
++    LegacyL1 = 1,
++    LegacyL2 = 2,
++    LegacyL3 = 3,
++    Identity = 4,
++    Composite = 5,
++    Dicom = 6,
++    GeoTiff = 7,
++    Fits = 8,
++    CompositeDeclared = 9,
++}
++
++const fn bit(c: Class) -> u32 {
++    1 << (c as u32)
++}
++
++const LEGACY: u32 = bit(Class::LegacyL1) | bit(Class::LegacyL2) | bit(Class::LegacyL3);
++const PRODUCERS: u32 = bit(Class::Identity)
++    | bit(Class::Composite)
++    | bit(Class::Dicom)
++    | bit(Class::GeoTiff)
++    | bit(Class::Fits);
++
++static MASK: OnceLock<u32> = OnceLock::new();
++
++fn parse(spec: &str) -> Result<u32, String> {
++    let mut mask = 0;
++    for token in spec.split(',').map(str::trim).filter(|t| !t.is_empty()) {
++        mask |= match token {
++            "engine" => bit(Class::Engine),
++            "legacy" => LEGACY,
++            "legacy-l1" => bit(Class::LegacyL1),
++            "legacy-l2" => bit(Class::LegacyL2),
++            "legacy-l3" => bit(Class::LegacyL3),
++            "producers" => PRODUCERS,
++            "producers-identity" => bit(Class::Identity),
++            "producers-composite" => bit(Class::Composite),
++            "producers-dicom" => bit(Class::Dicom),
++            "producers-geotiff" => bit(Class::GeoTiff),
++            "producers-fits" => bit(Class::Fits),
++            "composite-declared" => bit(Class::CompositeDeclared),
++            "conv" => {
++                return Err("OXIDEX_PROBE_SILENCE=conv is not implemented: generated \
++                            PrintConv lookups have no clean choke point (a silenced \
++                            lookup yields a wrong value, not an absent row)"
++                    .to_string());
++            }
++            other => return Err(format!("OXIDEX_PROBE_SILENCE: unknown token {other:?}")),
++        };
++    }
++    Ok(mask)
++}
++
++fn mask() -> u32 {
++    *MASK.get_or_init(|| match std::env::var("OXIDEX_PROBE_SILENCE") {
++        Err(_) => 0,
++        Ok(spec) => match parse(&spec) {
++            Ok(mask) => mask,
++            Err(message) => {
++                eprintln!("{message}");
++                std::process::exit(2);
++            }
++        },
++    })
++}
++
++/// True when rows of class `c` must be dropped at their outward boundary.
++#[inline]
++#[must_use]
++pub fn silenced(c: Class) -> bool {
++    mask() & bit(c) != 0
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn tokens_parse_to_the_documented_unions() {
++        assert_eq!(parse("").unwrap(), 0);
++        assert_eq!(parse(" , ").unwrap(), 0);
++        assert_eq!(parse("legacy").unwrap(), LEGACY);
++        assert_eq!(
++            parse("legacy-l1,legacy-l2,legacy-l3").unwrap(),
++            parse("legacy").unwrap()
++        );
++        assert_eq!(
++            parse("producers").unwrap() & bit(Class::CompositeDeclared),
++            0
++        );
++        assert_eq!(parse("engine").unwrap(), bit(Class::Engine));
++        assert!(parse("conv").is_err());
++        assert!(parse("enigne").is_err());
++    }
++}
+-- 
+2.54.0 (Apple Git-157)
+
+
+From f799ec1b15c4777118cff8f25b193c946a8c8485 Mon Sep 17 00:00:00 2001
+From: swackhamer <swackhamer@users.noreply.github.com>
+Date: Sat, 12 Sep 2026 06:42:45 -0500
+Subject: [PATCH 2/4] PROBE (never land): Nikon settings -> legacy-l2; gate
+ Mach-O/ar MIMEType
+
+From the adversarial audit of the probe at eadb5884 (wf_c1a96d6b-566):
+nikon/settings.rs walks settings_tables.rs, a managed tier-2 generated
+artifact since #744 (tools/exiftool-tables/artifacts.py 'nikon-settings'),
+so it belongs with the other manifest walkers in legacy-l2, which the
+headline union silences; the audit measured ~975 matched rows it adds
+(20 carriers, conformance.py, pinned 13.59). The Mach-O and ar parsers
+write File:MIMEType from the generated filetype table like ELF does, now
+under producers-identity (3 rows). RawAccess stays unsilenced by design.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/parsers/archive/ar.rs                     | 5 ++++-
+ src/parsers/macho/metadata_extractor.rs       | 5 ++++-
+ src/parsers/tiff/makernotes/nikon/settings.rs | 6 ++++--
+ src/probe_silence.rs                          | 9 +++++----
+ 4 files changed, 17 insertions(+), 8 deletions(-)
+
+diff --git a/src/parsers/archive/ar.rs b/src/parsers/archive/ar.rs
+index d7fe884b..b7d79414 100644
+--- a/src/parsers/archive/ar.rs
++++ b/src/parsers/archive/ar.rs
+@@ -172,7 +172,10 @@ impl FormatParser for ARParser {
+         // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
+         // the base type `%fileTypeLookup` routes this family to. Without it the
+         // file falls through to `application/unknown`.
+-        if let Some(mime) = crate::filetype::mime_for_type("EXE") {
++        if let Some(mime) = crate::filetype::mime_for_type("EXE")
++        // PROBE (never land)
++        && !crate::probe_silence::silenced(crate::probe_silence::Class::Identity)
++        {
+             metadata.insert(
+                 "File:MIMEType".to_string(),
+                 TagValue::String(mime.to_string()),
+diff --git a/src/parsers/macho/metadata_extractor.rs b/src/parsers/macho/metadata_extractor.rs
+index 3639709a..8f3d1cc8 100644
+--- a/src/parsers/macho/metadata_extractor.rs
++++ b/src/parsers/macho/metadata_extractor.rs
+@@ -144,7 +144,10 @@ fn set_macho_file_type(header: &MachHeader, is_fat: bool, metadata: &mut Metadat
+     // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
+     // the base type `%fileTypeLookup` routes this family to. Without it the
+     // file falls through to `application/unknown`.
+-    if let Some(mime) = crate::filetype::mime_for_type("EXE") {
++    if let Some(mime) = crate::filetype::mime_for_type("EXE")
++        // PROBE (never land)
++        && !crate::probe_silence::silenced(crate::probe_silence::Class::Identity)
++    {
+         metadata.insert(
+             "File:MIMEType".to_string(),
+             TagValue::String(mime.to_string()),
+diff --git a/src/parsers/tiff/makernotes/nikon/settings.rs b/src/parsers/tiff/makernotes/nikon/settings.rs
+index 06fb4bce..bf3d841c 100644
+--- a/src/parsers/tiff/makernotes/nikon/settings.rs
++++ b/src/parsers/tiff/makernotes/nikon/settings.rs
+@@ -297,8 +297,10 @@ pub fn parse_nikon_settings(
+         } else {
+             value
+         };
+-        // PROBE (never land): dm.set above is kept.
+-        if !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL3) {
++        // PROBE (never land): dm.set above is kept. LegacyL2 since #744
++        // (33ce1896): settings_tables.rs has a committed generator
++        // (tools/exiftool-tables/artifacts.py 'nikon-settings', tier 2).
++        if !crate::probe_silence::silenced(crate::probe_silence::Class::LegacyL2) {
+             tags.insert(format!("Nikon:{}", tag.name), apply_conv(tag.conv, masked));
+         }
+     }
+diff --git a/src/probe_silence.rs b/src/probe_silence.rs
+index e8f5e0fa..fd3e040b 100644
+--- a/src/probe_silence.rs
++++ b/src/probe_silence.rs
+@@ -18,11 +18,12 @@
+ //!     silenced (layout generated, conversion acknowledged/hand); see probe.md.
+ //!   * `legacy-l2` -- manifest vendor walkers: `binary_subdir.rs`,
+ //!     `canon/custom_functions2.rs`, `app_segments/infiray.rs`,
+-//!     `sony.rs` main_extra, and the shared Sony walker when it walks
+-//!     `minolta_a100_tables::TABLES`.
++//!     `sony.rs` main_extra, the shared Sony walker when it walks
++//!     `minolta_a100_tables::TABLES`, and `nikon/settings.rs` (a managed
++//!     generated artifact since #744).
+ //!   * `legacy-l3` -- generated-origin tables with no committed generator:
+ //!     the shared Sony walker over `sony/plain_tables` / `sony/enciphered_tables`,
+-//!     `nikon/binary_data.rs` (encrypted), `nikon/settings.rs`,
++//!     `nikon/binary_data.rs` (encrypted),
+ //!     `canon/binary_tables.rs`, `canon/camera_info.rs`, `canon/filter_info.rs`,
+ //!     `canon/color_data.rs`, `canon_vrd/mod.rs` VER1.
+ //! * `producers` = `producers-identity` + `producers-composite` +
+@@ -30,7 +31,7 @@
+ //!   * `producers-identity` -- the generated `filetype` writes of
+ //!     `File:FileType`/`FileTypeExtension`/`MIMEType`
+ //!     (`file_metadata.rs`, `operations.rs::add_identity_tags`,
+-//!     `flir_fpf.rs`, `canon_vrd::set_identity`, `elf` MIMEType). Hand
++//!     `flir_fpf.rs`, `canon_vrd::set_identity`, `elf`/`macho`/`ar` MIMEType). Hand
+ //!     writers and `normalize_identity_tags`' hand fallback still run.
+ //!   * `producers-composite` -- the three `generated_compute` arms only
+ //!     (the only Composite rows with a generated computation).
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 59a299ad813c15aa9943891e73d84dbec9a4492d Mon Sep 17 00:00:00 2001
+From: swackhamer <swackhamer@users.noreply.github.com>
+Date: Sun, 13 Sep 2026 03:36:19 -0500
+Subject: [PATCH 3/4] PROBE (never land): Sony plain walker -> legacy-l2
+ (generator recovered in #745)
+
+tools/exiftool-tables/artifacts.py registers 'sony-plain' (tier 2,
+gen_sony_plain_tables) since #745, so the shared Sony walker over
+plain_tables::TABLES joins the A100 walk in legacy-l2, which the headline
+union silences; the enciphered tables stay legacy-l3.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../tiff/makernotes/sony/binary_data.rs       | 23 +++++++++++--------
+ 1 file changed, 13 insertions(+), 10 deletions(-)
+
+diff --git a/src/parsers/tiff/makernotes/sony/binary_data.rs b/src/parsers/tiff/makernotes/sony/binary_data.rs
+index c5ac1869..7c8b4b54 100644
+--- a/src/parsers/tiff/makernotes/sony/binary_data.rs
++++ b/src/parsers/tiff/makernotes/sony/binary_data.rs
+@@ -1268,16 +1268,19 @@ fn process_depth(
+         let vc_text = val.text();
+         let printed = apply_pc(tag.pc, val, tag.print_hex);
+         let value_form = (printed != vc_text).then_some(vc_text);
+-        // PROBE (never land): the A100 tables are manifest-generated (L2);
+-        // Sony plain/enciphered tables have no committed generator (L3).
+-        let probe_class = if std::ptr::eq(
+-            tables.as_ptr(),
+-            super::super::minolta_a100_tables::TABLES.as_ptr(),
+-        ) {
+-            crate::probe_silence::Class::LegacyL2
+-        } else {
+-            crate::probe_silence::Class::LegacyL3
+-        };
++        // PROBE (never land): the A100 tables and, since #745, the Sony plain
++        // tables are manifest-generated (L2: artifacts.py 'minolta-a100',
++        // 'sony-plain'); the enciphered tables have no committed generator (L3).
++        let probe_class =
++            if std::ptr::eq(
++                tables.as_ptr(),
++                super::super::minolta_a100_tables::TABLES.as_ptr(),
++            ) || std::ptr::eq(tables.as_ptr(), super::plain_tables::TABLES.as_ptr())
++            {
++                crate::probe_silence::Class::LegacyL2
++            } else {
++                crate::probe_silence::Class::LegacyL3
++            };
+         if crate::probe_silence::silenced(probe_class) {
+             continue;
+         }
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 3b4e00cca9f0810ab2dedcb3c041df3fd730671d Mon Sep 17 00:00:00 2001
+From: swackhamer <swackhamer@users.noreply.github.com>
+Date: Fri, 18 Sep 2026 16:43:28 -0700
+Subject: [PATCH 4/4] PROBE (never land): silence the v2 generated-arm row
+ (#838) under engine
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/exiftool_tables/ifd_engine.rs | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/exiftool_tables/ifd_engine.rs b/src/exiftool_tables/ifd_engine.rs
+index 52d4a877..659c1046 100644
+--- a/src/exiftool_tables/ifd_engine.rs
++++ b/src/exiftool_tables/ifd_engine.rs
+@@ -1044,6 +1044,12 @@ fn walk(
+                     let Some(group1) = group1_of(table, tag, &dir) else {
+                         continue;
+                     };
++                    // PROBE (never land): the v2 generated-arm row is the same
++                    // engine boundary as the static push below (#838 moved
++                    // claimed fields here); drop it, keep the member writes.
++                    if crate::probe_silence::silenced(crate::probe_silence::Class::Engine) {
++                        continue;
++                    }
+                     out.push(generated_row(table, tag, group1, &raw, fraction, report));
+                     if let Some(reads) = decoded.as_deref_mut() {
+                         reads.rows.push((out.len() - 1, index));
+-- 
+2.54.0 (Apple Git-157)
+
