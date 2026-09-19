@@ -21,6 +21,8 @@ import stat
 import subprocess
 import sys
 
+import conv_codegen
+
 
 @dataclass(frozen=True)
 class Artifact:
@@ -183,13 +185,40 @@ STATIC_ARTIFACTS = (
 )
 
 
+def conversion_artifacts(root=REPO_ROOT):
+    """Per-table outputs beyond the historical Exif::Main manifest rows."""
+    hub = Path(root) / "src/exiftool_tables/conv/mod.rs"
+    if not hub.is_file() or conv_codegen.REGISTRY_BEGIN not in hub.read_text(encoding="utf-8"):
+        # Older-release rehearsal fixtures have no generated registry yet.
+        return ()
+    extra = tuple(
+        entry for entry in conv_codegen.discover_registry(root)
+        if entry.identity != conv_codegen.DEFAULT_TABLE
+    )
+    if not extra:
+        return ()
+    return (Artifact("conv-registry", 1, "conv_codegen",
+                     "src/exiftool_tables/conv/mod.rs"),) + tuple(
+        artifact
+        for entry in extra
+        for artifact in (
+            Artifact(f"conv-{entry.stem}", 1, "conv_codegen",
+                     f"src/exiftool_tables/conv/{entry.stem}.rs"),
+            Artifact(f"conv-{entry.stem}-ledger", 1, "conv_codegen",
+                     f"tools/exiftool-tables/conv_{entry.stem}_ledger.json"),
+            Artifact(f"conv-{entry.stem}-oracle", 1, "conv_oracle",
+                     f"tools/exiftool-tables/testdata/conv_{entry.stem}_outputs.json"),
+        )
+    )
+
+
 def inventory(root=REPO_ROOT):
     """Every declared output under `root`: the static entries, then each split
     table artifact's module files in its hub's order."""
     members = ()
     for kind in MODULE_FAMILIES:
         members += _module_artifacts(kind, module_stems(kind, root))
-    return STATIC_ARTIFACTS + members
+    return STATIC_ARTIFACTS + conversion_artifacts(root) + members
 
 
 def __getattr__(name):
