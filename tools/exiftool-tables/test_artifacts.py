@@ -67,7 +67,7 @@ class ManifestTests(unittest.TestCase):
     def test_missing_hub_declares_nothing_and_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(artifacts.module_stems("binary", tmp), ())
-            self.assertEqual(len(artifacts.inventory(tmp)), 66)
+            self.assertEqual(len(artifacts.inventory(tmp)), len(artifacts.STATIC_ARTIFACTS))
             self.assertIn("missing split table hub src/exiftool_tables/binary/mod.rs",
                           artifacts.family_errors(tmp))
 
