@@ -15,13 +15,13 @@ makes `beta.10` sort after `beta.2`. Python tooling would spell it `2.0.0b1`
 Every box needs its evidence (a link or a named instrument's output), not a
 recollection.
 
-- [ ] **Docs overhaul merged.** The `staging/docs-overhaul` PR is merged into
-      `refactor/tag-machinery`, and it set the site's version label in
-      `docs/.vitepress/config.mts`.
-- [ ] **CHANGELOG entry present.** `CHANGELOG.md` has an "Unreleased (2.0.0)"
-      entry covering this line (written on `staging/docs-overhaul`).
-- [ ] **Migration guide present.** The 1.x to 2.0 migration page exists and is
-      linked from the docs site (written on `staging/docs-overhaul`).
+- [x] **Docs overhaul merged.** Merged as #839 (`93143151`), with follow-up
+      #840. The site's version label and banner name v2.0.0-beta.1.
+- [x] **CHANGELOG entry present.** `CHANGELOG.md` has
+      `## [2.0.0-beta.1] - Unreleased` (from #839). Before tagging, replace
+      `Unreleased` with the release date.
+- [x] **Migration guide present.** `docs/guide/migrating-from-1x.md` (from
+      #839).
 - [ ] **crates.io decision recorded.** One of options (a), (b) or (c) under
       "crates.io" below is chosen, and the install instructions match it.
 - [ ] **Tag SHA chosen and frozen.** Record it: `SHA=$(git rev-parse origin/refactor/tag-machinery)`
@@ -134,18 +134,21 @@ The name is the maintainer's decision. The options:
       `benches/spike/Cargo.toml` (`oxidex = { path = ... }` becomes
       `oxidex = { package = "<new>", path = ... }`); every `-p oxidex` in
       docs and `CLAUDE.md`; the install instructions (`cargo install <new>`
-      in `docs/guide/getting-started.md` and the CHANGELOG); and the
-      snippet in `src/parsers/magika_detector.rs` docs. The tag crates keep
-      their names.
+      in `docs/guide/getting-started.md`, and the "not on crates.io" notes
+      in `docs/guide/library-api.md`, `troubleshooting.md`,
+      `migrating-from-1x.md` and `docs/reference/api-reference.md`); the
+      crates.io badge in `README.md`; and the snippet in the
+      `src/parsers/magika_detector.rs` docs. The tag crates keep their
+      names.
 - [ ] **(c) No crates.io for the beta.** Ship the GitHub pre-release
       binaries only. Rust users take a git dependency on the signed tag:
       `oxidex = { git = "https://github.com/swack-tools/oxidex", tag = "v2.0.0-beta.1" }`.
       This needs nothing else from this PR, and it is what happens by
       default if no box above is ticked.
 
-Whichever is chosen, `docs/guide/getting-started.md` currently tells users
-to `cargo install oxidex`, and today that installs the other account's
-stub. It needs correcting before anyone is pointed at the beta.
+The docs already tell users not to run `cargo install oxidex` and to depend
+on Git, which matches (c). One leftover: the `README.md` crates.io badge
+points at `crates.io/crates/oxidex`, which is the other account's stub.
 
 If the tag crates are published (under (a) or (b)), do it by hand. Cargo
 orders the crates by dependency, and `publish = false` keeps the root crate
