@@ -63,6 +63,9 @@ jobs finish.
 - [ ] Refresh `origin/main` and `origin/refactor/tag-machinery`; record both
       full SHAs before starting each release wave.
 - [ ] Use one dedicated worktree, branch, and `CARGO_TARGET_DIR` per task.
+- [ ] Keep every worktree, target, source cache, corpus, toolchain, log,
+      receipt, and recovery file under `/Users/allen/git` or
+      `/Users/allen/oxidex-ops`; reject ephemeral temporary-directory paths.
 - [ ] Run `tools/preflight.sh --upstream` before the first edit and before
       remote operations.
 - [ ] Preserve unrelated dirty files and worktrees; never rewrite the protected
@@ -78,6 +81,15 @@ jobs finish.
       metric floors.
 - [ ] Update `HANDOFF.md` at each meaningful milestone with the exact next
       command and current PR/CI state.
+- [ ] Create signed local checkpoint commits at meaningful milestones. The
+      controller—not workers—pushes each task branch and opens or updates its
+      draft PR against `refactor/tag-machinery` so recovery exists both locally
+      and remotely.
+- [ ] Require fresh review and all required CI checks before squash-merging
+      each task PR. Fetch and fast-forward the controller mirror to the remote
+      merge before releasing dependent tasks.
+- [ ] Retain task worktrees and remote branches until the wave's post-merge
+      gates pass and the PR, merge SHA, and resulting target SHA are recorded.
 
 Notes:
 

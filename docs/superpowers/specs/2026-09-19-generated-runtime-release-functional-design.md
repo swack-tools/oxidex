@@ -43,6 +43,11 @@ The functional program is complete when all of the following are true:
 12. The frozen release candidate passes the full functional evidence suite
     with receipts naming the exact source SHA, binary, oracle, runtime, corpus,
     command, and measurement floors.
+13. Every implementation task is preserved as local signed checkpoint commits
+    and a remote draft PR, then lands through reviewed, green, squash-merged CI
+    into `refactor/tag-machinery`.
+14. No release worktree, target, source cache, corpus, toolchain, receipt, log,
+    ledger, or recovery artifact depends on an ephemeral temporary directory.
 
 ## 3. Non-goals
 
@@ -53,8 +58,9 @@ The functional program is complete when all of the following are true:
   writes, or conformance as interchangeable coverage metrics.
 - Approximating unsupported ExifTool conversions.
 - Editing `main` or `refactor/tag-machinery` directly.
-- Publishing, tagging, merging to `main`, or pushing shared history as part of
-  this functional program.
+- Publishing a release, tagging, merging to `main`, or rewriting shared
+  history as part of this functional program. Reviewed task PRs into
+  `refactor/tag-machinery` are part of the program.
 - Running several agents against one worktree or one Cargo target directory.
 
 ## 4. Binding operating constraints
@@ -62,14 +68,18 @@ The functional program is complete when all of the following are true:
 ### 4.1 Oracle and evidence
 
 - `.exiftool-version` is the source of truth for the active release.
-- ExifTool 13.59 is invoked with Perl 5.38.2 at the pinned paths documented by
-  the repository and release ledger. A bare `exiftool` invocation invalidates
-  the result.
+- ExifTool 13.59 is invoked from
+  `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool` with Perl 5.38.2 at
+  `/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2`.
+  A bare `exiftool` invocation invalidates the result.
 - Every oracle run must pass both the version probe and
   `OOXML.docx -> FileType: DOCX` capability probe.
 - Values are derived from the pinned ExifTool source or refused explicitly;
   they are never approximated.
 - Measurements state their instrument and preserve machine-readable receipts.
+- Worktrees, targets, source caches, corpora, toolchains, logs, receipts,
+  ledgers, and recovery state live only under `/Users/allen/git` or
+  `/Users/allen/oxidex-ops`; ephemeral temporary-directory storage is refused.
 - Shared build/test jobs use the shared lock. Corpus, read-regression,
   transition, and other heavyweight evidence jobs use the exclusive lock.
 
@@ -131,7 +141,8 @@ codex --yolo exec --enable fast_mode --model gpt-5.6-terra - \
 
 `--yolo` is user-authorized so CLI workers do not stop for edit approvals. The
 PRD supplies the task goal, file lease, tests, progress updates, commit/report
-contract, and prohibitions on remote pushes and destructive actions. The plan
+contract, and prohibitions on worker remote pushes and destructive actions.
+Only the controller performs authenticated pushes and PR operations. The plan
 uses the literal model and PRD path for each task.
 
 CLI workers are first-class task workers: they receive the same task review,
@@ -360,10 +371,18 @@ compatible, review and integration may proceed immediately. If they overlap,
 the task is queued, rebased onto the integration head in its own worktree, its
 covering tests are rerun, and its review package is regenerated.
 
-Task branches may contain several implementation commits. After task review is
-clean, the controller integrates them as one signed, coherent commit on the
-integration branch and records both the task head and integrated commit in the
-ledger. The task worktree remains available until its wave is accepted.
+Task branches may contain several signed checkpoint commits. After the first
+meaningful clean checkpoint, the controller pushes the branch and opens a
+draft PR against `refactor/tag-machinery`. It pushes later checkpoints and
+updates the PR evidence summary so local and remote recovery state advance
+together.
+
+After task review is clean, the controller rebases the task onto the current
+remote target when required, reruns affected gates, marks the PR ready, waits
+for required CI, and squash-merges it. The controller fetches and fast-forwards
+its integration worktree to the resulting remote target before releasing
+dependent tasks. The task worktree remains available until the remote merge
+SHA and post-merge target SHA are recorded.
 
 Generated outputs, central registries, artifact manifests, workspace manifests,
 lockfiles, `.exiftool-version`, and the integration ledger have one owner at a
@@ -409,9 +428,10 @@ The integration worktree contains:
 - `TODO_RELEASE_BETA.md` for release-level milestones and durable evidence.
 
 The controller updates its state after every dispatch, worker message, worker
-completion, review verdict, fix round, integration commit, gate result,
-blocker, and model escalation. During a long wait it records live agents and
-the exact next integration action before waiting.
+completion, review verdict, fix round, local checkpoint, remote push, PR/CI
+transition, squash merge, gate result, blocker, and model escalation. During a
+long wait it records live agents and the exact next integration action before
+waiting.
 
 The controller ledger maps every task to:
 
@@ -419,14 +439,18 @@ The controller ledger maps every task to:
 - worker kind (`desktop` or `cli`) and agent/process identity;
 - worktree/branch/target paths;
 - base and task-head commits;
-- current state: queued, running, review, fix, ready, integrated, or blocked;
+- current state: queued, running, review, fix, pushed, CI, merged, or blocked;
 - review package and report paths;
-- integrated commit;
-- evidence receipts; and
+- local checkpoint and remote merge commits;
+- evidence receipts;
+- remote branch, PR number/URL, latest pushed SHA, CI state, merge SHA, and
+  post-merge `origin/refactor/tag-machinery` SHA; and
 - dependencies released by integration.
 
-Git commits and durable receipts are authoritative after a restart. An agent
-panel is never treated as proof of progress.
+Local commits and durable receipts are authoritative for detailed recovery.
+The pushed task branch, draft PR, PR comments/checks, and merged target SHA are
+the remote recovery layer. An agent panel is never treated as proof of
+progress, and a local-only task is not considered safely checkpointed.
 
 ## 10. Model-selection policy
 
@@ -464,7 +488,7 @@ Each implementation task receives a fresh review after the worker commits:
    unresolved defect stops dependent integration.
 
 Reviews run concurrently with unrelated implementation tasks when a slot is
-available. A task is not integrated merely because its tests pass.
+available. A task is not merged merely because its tests pass.
 
 ## 12. Evidence gates
 
@@ -511,6 +535,7 @@ After writers stop and the candidate SHA is frozen:
 An affected task or measurement stops when:
 
 - preflight, source identity, version, Perl identity, or capability probe fails;
+- any release path resolves beneath an ephemeral temporary-directory root;
 - the worktree is protected, dirty before work, stale against its declared
   base, or shares its target directory;
 - a bare or incorrect ExifTool is invoked;
@@ -525,8 +550,9 @@ An affected task or measurement stops when:
   semantics regress;
 - an upgrade stage needs a manual code or fixture intervention;
 - an important review finding remains unresolved; or
-- work requires a push, shared-branch rewrite, publication, destructive
-  action, merge to `main`, or other external side effect not yet authorized.
+- a worker attempts a push; work requires shared-history rewriting,
+  publication, a destructive action, merge to `main`, or another external side
+  effect beyond the controller's authorized task-branch PR workflow.
 
 ## 14. Implementation-plan requirements
 
@@ -543,11 +569,13 @@ The implementation plan derived from this specification must:
 - include actual test names, commands, expected failing conditions, minimal
   implementation steps, and commit messages;
 - designate the controller-owned regeneration and integration tasks;
-- specify when a returned commit may be integrated immediately and when it
-  must be rebased;
+- specify when a returned commit may proceed directly to final PR review and
+  when it must be rebased;
 - include the per-task `HANDOFF.md` contract in every worker brief;
 - provide controller ledger entries for dispatch, review, integration, and
-  recovery; and
+  recovery;
+- specify local checkpoint, remote draft-PR, CI, squash-merge, and post-merge
+  synchronization steps for every task; and
 - end with the frozen-candidate evidence sequence and release-TODO update.
 
 The plan is executed with Superpowers subagent-driven development plus parallel

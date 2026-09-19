@@ -9,11 +9,12 @@
 manual code, and prove repeatable ExifTool version transitions before
 `v2.0.0-beta.1` promotion work begins.
 
-**Architecture:** One controller integrates reviewed task commits into a named
-integration worktree. Up to three Desktop subagents and six `codex --yolo exec`
-workers operate concurrently in named task worktrees when their declared file
-leases do not overlap. Contract and engine work is serialized; vendor and
-container adapters fan out after those interfaces are frozen.
+**Architecture:** One controller preserves each task in a local named worktree
+and a remote draft PR, then squash-merges reviewed, green PRs into
+`refactor/tag-machinery` and fast-forwards its integration mirror. Up to three
+Desktop subagents and six `codex --yolo exec` workers operate concurrently when
+their file leases do not overlap. Contract and engine work is serialized;
+vendor and container adapters fan out after those interfaces are frozen.
 
 **Tech Stack:** Rust, Python 3, Perl 5.38.2, ExifTool 13.59 and fixed rehearsal
 releases 11.78/12.64, Cargo, `uv`, `just`, Git worktrees, Codex Desktop
@@ -27,8 +28,14 @@ subagents, Codex CLI fast mode.
 - Never edit `main` or `refactor/tag-machinery` directly.
 - One task owns one branch, one named worktree, one absolute
   `CARGO_TARGET_DIR`, one file lease, and one root `HANDOFF.md`.
-- Use `/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2` and
-  `/tmp/oxidex-exiftool-cache/exiftool`; never invoke bare `exiftool`.
+- Use
+  `/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2` and
+  `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool`; never invoke bare
+  `exiftool`.
+- Never place worktrees, Cargo targets, source caches, corpora, toolchains,
+  receipts, logs, handoffs, or recovery state under an ephemeral temporary
+  directory. Release paths must be descendants of `/Users/allen/git` or
+  `/Users/allen/oxidex-ops`.
 - Before any oracle measurement, require `-ver == 13.59` and
   `OOXML.docx -> FileType: DOCX`.
 - Never approximate a conversion. Derive it from the selected ExifTool source
@@ -39,14 +46,16 @@ subagents, Codex CLI fast mode.
   for corpus, read/write, transition, and timing gates.
 - Every agent and CLI worker uses fast mode. When two models are adequate,
   choose the cheaper model.
-- CLI launches use `codex --yolo exec`; the task PRD still prohibits remote
+- CLI launches use `codex --yolo exec`; the task PRD still prohibits worker
   pushes, destructive actions, shared-branch edits, and edits outside its
-  lease.
+  lease. Only the controller performs authenticated remote operations.
 - Workers update their worktree `HANDOFF.md` after every state transition and
   at least every 15 minutes. The controller updates the integration handoff and
   fleet ledger after every dispatch, result, review, fix, merge, gate, or
   blocker.
-- Only the controller integrates reviewed commits. Workers never merge or push.
+- Workers create frequent local checkpoint commits but never merge or push.
+  The controller pushes checkpoint branches, maintains draft PRs, and
+  squash-merges only reviewed, green tasks.
 - Generated outputs, central registries, `.exiftool-version`, workspace
   manifests, lockfiles, and shared ledgers have one owner at a time.
 - Generated declarations, generated accepted/refused rows, runtime-reachable
@@ -69,25 +78,25 @@ subagents, Codex CLI fast mode.
 
 ## Controller Workspace and Recovery Contract
 
-Before dispatching Task 1, run from
-`/Users/allen/git/claude-release-beta-todo-20260919`:
+This plan/specification branch must first be pushed, reviewed, and
+squash-merged into `refactor/tag-machinery`. No implementation task starts
+from an unmerged local-only copy of the plan.
+
+After that PR lands, create the controller worktree from the remote target:
 
 ```bash
 git fetch origin refactor/tag-machinery main
 tools/preflight.sh
 tools/preflight.sh --upstream || true
-test "$(git rev-list --count HEAD..origin/refactor/tag-machinery)" = "0"
 git worktree add -b staging/beta1-functional-integration \
   /Users/allen/git/oxidex-beta1-functional-integration \
-  staging/release-beta-todo
+  origin/refactor/tag-machinery
 ```
 
 The preflight output is retained even when it returns nonzero for the known,
-intentional `origin/main` divergence. The explicit test must report zero
-commits behind `origin/refactor/tag-machinery`; any protected-branch, dirty-
-tree, fetch, or tag-machinery freshness failure still blocks setup. Otherwise
-rebase the documentation branch in its existing worktree, revalidate this
-plan, and only then create the integration worktree.
+intentional `origin/main` divergence. The new integration HEAD must equal
+`origin/refactor/tag-machinery`; any protected-branch, dirty-tree, fetch, or
+target freshness failure blocks setup.
 
 In the integration worktree, initialize the Superpowers workspace and controller
 handoff:
@@ -155,12 +164,13 @@ codex --yolo exec --enable fast_mode --model gpt-5.6-terra - \
 
 | Task | Slug | Worker/model | Depends on | May run with |
 |---:|---|---|---|---|
-| 1 | `ownership-inventory` | Desktop / Terra | controller setup | 2, 4, 5 |
-| 2 | `typed-occurrence-core` | Desktop / Sol | controller setup | 1, 4, 5 |
+| 0 | `durable-oracle-bootstrap` | CLI / Terra | controller setup | none |
+| 1 | `ownership-inventory` | Desktop / Terra | 0 | 2, 4, 5 |
+| 2 | `typed-occurrence-core` | Desktop / Sol | 0 | 1, 4, 5 |
 | 3 | `typed-consumers` | CLI / Terra | 2 | 4, 5, 6 |
-| 4 | `conv-registry` | Desktop / Sol | controller setup | 1, 2, 5 |
-| 5 | `upgrade-transaction` | CLI / Terra | controller setup | 1, 2, 4 |
-| 6 | `conformance-receipts` | CLI / Luna | controller setup | any non-conformance task |
+| 4 | `conv-registry` | Desktop / Sol | 0 | 1, 2, 5 |
+| 5 | `upgrade-transaction` | CLI / Terra | 0 | 1, 2, 4 |
+| 6 | `conformance-receipts` | CLI / Luna | 0 | any non-conformance task |
 | 7 | `file-session` | Desktop / Sol | 2, 4 | 3, 5, 6 |
 | 8 | `generated-attribution` | CLI / Terra | 1, 3, 4, 7 | 5, 6 |
 | 9 | `exif-shared-pipeline` | Desktop / Sol | 2, 4, 7, 8 | 5, 6 |
@@ -178,45 +188,89 @@ codex --yolo exec --enable fast_mode --model gpt-5.6-terra - \
 
 Initial dispatch:
 
-- Desktop slots: Tasks 1, 2, and 4.
-- CLI pool: Tasks 5 and 6.
+- Dispatch and remotely merge Task 0 by itself.
+- After Task 0's durable storage verification passes and its PR is merged,
+  Desktop slots take Tasks 1, 2, and 4 while the CLI pool takes Tasks 5 and 6.
 - Task 3 launches as soon as Task 2 integrates.
 - Task 7 launches after Tasks 2 and 4 integrate.
 - Unused CLI capacity remains idle until a dependency-ready task exists; do
   not manufacture speculative work to fill it.
 
-## Integration Procedure for Every Task
+## Local Checkpoint, Remote PR, and Integration Procedure
 
-For each task, load `task_worktree`, `task_base`, and `task_head` from the
-controller ledger:
+Every task is preserved twice: signed commits and `HANDOFF.md` in its local
+worktree, plus a pushed task branch and draft PR on GitHub. Workers never use
+GitHub credentials; the controller alone performs the remote steps with:
 
-1. Read the task `HANDOFF.md` and report.
-2. Verify `git -C "$task_worktree" status --short` is empty.
+```bash
+export GIT_SSH_COMMAND="ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer"
+```
+
+At each meaningful clean milestone, the worker creates a signed local
+checkpoint commit and updates `HANDOFF.md`. The controller verifies the commit,
+pushes the task branch, and opens a draft PR if none exists:
+
+```bash
+test -z "$(git -C "$task_worktree" status --short)"
+git -C "$task_worktree" cat-file -p HEAD | rg '^gpgsig '
+GIT_SSH_COMMAND="$GIT_SSH_COMMAND" git -C "$task_worktree" push -u origin "$task_branch"
+gh pr create --repo swack-tools/oxidex --draft \
+  --base refactor/tag-machinery --head "$task_branch" \
+  --title "$task_pr_title" --body-file "$task_pr_body"
+```
+
+The controller stores the returned PR number/URL. Later milestone commits are
+pushed normally and followed by one concise PR comment containing the pushed
+SHA, completed plan step, exact tests, receipt hashes, blocker state, and next
+step. No raw secrets, host credentials, or machine-only binary artifacts are
+posted.
+
+For final integration, load `task_worktree`, `task_base`, `task_head`,
+`task_branch`, and `task_pr` from the controller ledger:
+
+1. Read the task `HANDOFF.md`, local commits, draft PR, and current checks.
+2. Verify `git -C "$task_worktree" status --short` is empty and local HEAD
+   equals the latest pushed branch SHA.
 3. Create a review package from `$task_base..$task_head` using the Superpowers
    `review-package` script.
 4. Dispatch a fresh reviewer at the task's stated reviewer model.
-5. Complete the Superpowers fix loop before integration.
-6. Compare paths:
+5. Complete the Superpowers fix loop and push every signed fix checkpoint.
+6. Fetch `origin/refactor/tag-machinery` and compare paths:
 
 ```bash
 git -C "$task_worktree" diff --name-only "$task_base..$task_head" | sort -u
 git -C /Users/allen/git/oxidex-beta1-functional-integration \
-  diff --name-only "$task_base..HEAD" | sort -u
+  diff --name-only "$task_base..origin/refactor/tag-machinery" | sort -u
 ```
 
-7. If the sets overlap, rebase the task in its own worktree onto the current
-   integration HEAD, rerun covering tests, and re-review the rebased diff.
-8. If disjoint and interfaces remain compatible, integrate as one signed
-   commit:
+7. If the target advanced or path sets overlap, rebase the task in its own
+   worktree onto `origin/refactor/tag-machinery`, rerun covering tests,
+   regenerate the review package, and push with `--force-with-lease` against
+   the recorded prior task-branch SHA. Never rewrite the protected target.
+8. Update the PR body with final receipts, mark it ready, wait for every
+   required check, and squash-merge it:
 
 ```bash
-git -C /Users/allen/git/oxidex-beta1-functional-integration merge --squash "$task_head"
-git -C /Users/allen/git/oxidex-beta1-functional-integration commit -S \
-  -m "$task_commit_message"
+gh pr ready "$task_pr" --repo swack-tools/oxidex
+gh pr checks "$task_pr" --repo swack-tools/oxidex --watch --fail-fast
+gh pr merge "$task_pr" --repo swack-tools/oxidex --squash
 ```
 
-9. Record task base/head, review verdict, integrated commit, receipts, and
-   released dependencies in the controller ledger and integration `HANDOFF.md`.
+9. Fetch the target, read the PR merge SHA, and fast-forward the controller
+   mirror:
+
+```bash
+git -C /Users/allen/git/oxidex-beta1-functional-integration fetch origin refactor/tag-machinery
+git -C /Users/allen/git/oxidex-beta1-functional-integration merge --ff-only origin/refactor/tag-machinery
+gh pr view "$task_pr" --repo swack-tools/oxidex \
+  --json state,mergeCommit,headRefOid,url
+```
+
+10. Record task base/head, latest pushed SHA, review verdict, CI checks, PR URL,
+    merge SHA, post-merge target SHA, and receipts in the local controller
+    ledger and integration `HANDOFF.md`. Release dependencies only after the
+    remote merge is verified. Keep the local worktree and remote task branch
+    until its wave and post-merge gates are accepted.
 
 ## Standard Candidate Acceptance Commands
 
@@ -233,6 +287,8 @@ commit.
 task_slug=nikon-port
 task_target=/Users/allen/git/oxidex-beta1-targets/nikon-port
 task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/nikon-port
+export EXIFTOOL_CACHE_DIR=/Users/allen/oxidex-ops/cache/exiftool/13.59
+export EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2
 mkdir -p "$task_target" "$task_evidence"
 
 cargo fmt --check
@@ -257,9 +313,9 @@ the combined-corpus receipt under the exclusive lock:
 python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/conformance.log" -- \
   python3 tools/exiftool-tables/conformance.py \
-    /tmp/oxidex-exiftool-cache/combined-samples \
+    /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
     --recursive --min-files 4000 --min-tags 400000 \
-    --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool \
+    --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
     --oxidex "$task_target/release/oxidex" \
     --json-out "$task_evidence/conformance.json"
 ```
@@ -278,9 +334,9 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/read-observe.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py observe \
     --build-proof "$task_evidence/read-build/build-proof.json" \
-    --perl /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
-    --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool \
-    --corpus /tmp/oxidex-exiftool-cache/exiftool/t/images \
+    --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+    --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
+    --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/t/images \
     --output "$task_evidence/read-observe"
 python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/read-verify.log" -- \
@@ -297,6 +353,111 @@ its task section. The full conformance JSON must reconcile, and parser tasks
 require zero previously matched occurrences lost, zero new VALUE rows, and
 read-regression `lost 0`. Targeted gains are asserted by the task's named
 carrier tests, not by grepping formatted conformance output.
+
+---
+
+### Task 0: Durable Oracle and Corpus Bootstrap
+
+**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/00-durable-oracle-bootstrap.md`
+
+**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
+**Reviewer:** `gpt-5.6-sol`, fast mode
+**Branch:** `staging/beta1/durable-oracle-bootstrap`
+**Worktree:** `/Users/allen/git/oxidex-beta1-durable-oracle-bootstrap`
+**Target:** `/Users/allen/git/oxidex-beta1-targets/durable-oracle-bootstrap`
+**Commit:** `build: make release oracle storage durable`
+
+**Launch:**
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/00-durable-oracle-bootstrap.md`
+
+**Files:**
+
+- Create: `tools/release/bootstrap_oracle.py`
+- Create: `tools/release/oracle-lock.json`
+- Create: `tools/release/test_bootstrap_oracle.py`
+- Create: `docs/reference/durable-release-storage.md`
+- Modify: `scripts/exiftool_oracle.py`
+- Modify: relevant ExifTool cache/corpus defaults in `justfile`
+- Modify: `.agents/skills/exiftool-parity/SKILL.md`
+- Do not commit downloaded sources, corpora, Perl installations, or secrets
+
+**Interfaces:**
+
+- `bootstrap_oracle.py provision --root /Users/allen/oxidex-ops` installs only
+  beneath the durable root and writes an authenticated storage manifest.
+- `bootstrap_oracle.py verify --root /Users/allen/oxidex-ops --pin 13.59`
+  refuses symlinks or resolved paths outside `/Users/allen/oxidex-ops`, checks
+  locked source identities, and performs the version and DOCX probes.
+- `oracle-lock.json` pins Perl 5.38.2 source SHA-256
+  `a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e`,
+  Archive-Zip 1.68 SHA-256
+  `65089896661884077a90a17515153a2108a6a86ba6d69b02632cc201345a277e`,
+  and ExifTool tag object `2200871d9cef988051d2a99d67df3bda6cbb30a8`.
+
+- [ ] **Step 1: Write failing durable-path and identity tests**
+
+Test that the resolver rejects `tempfile.gettempdir()`, a symlink escaping the
+durable root, missing hashes, wrong Perl/Archive-Zip versions, the wrong
+ExifTool tag object, a corpus below 4,000 files, and a DOCX probe other than
+`DOCX`. Assert the exact durable paths used by the remainder of this plan.
+
+- [ ] **Step 2: Run the focused tests red**
+
+```bash
+uv run python -m unittest tools/release/test_bootstrap_oracle.py -v
+```
+
+Expected: import failure because `bootstrap_oracle.py` does not exist.
+
+- [ ] **Step 3: Implement idempotent durable provisioning**
+
+Download archives into `/Users/allen/oxidex-ops/cache/downloads`, verify the
+locked hashes before extraction, build Perl into
+`/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix`, install the locked
+Archive-Zip distribution into that prefix, materialize ExifTool and the
+combined corpus under `/Users/allen/oxidex-ops/cache/exiftool/13.59`, and use
+atomic rename within the same durable filesystem. An interrupted run leaves
+the last verified installation intact and a journal naming the failed stage.
+
+- [ ] **Step 4: Change repository defaults and add refusal fences**
+
+Set `scripts/exiftool_oracle.py` and relevant `justfile` recipes to the durable
+cache root. Explicit environment overrides remain supported only when their
+resolved paths are under `/Users/allen/oxidex-ops`. Add a repository test that
+fails if release tooling introduces a system temporary-directory default.
+
+- [ ] **Step 5: Provision and verify the durable installation**
+
+```bash
+python3 tools/release/bootstrap_oracle.py provision \
+  --root /Users/allen/oxidex-ops
+python3 tools/release/bootstrap_oracle.py verify \
+  --root /Users/allen/oxidex-ops --pin 13.59 \
+  --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-oracle-bootstrap/storage-manifest.json
+```
+
+Require Perl `v5.38.2`, Archive::Zip `1.68`, ExifTool `13.59`, DOCX detection,
+at least 4,000 combined-corpus files, and recorded hashes for every archive,
+source tree, corpus manifest, and executable.
+
+- [ ] **Step 6: Run tests, documentation checks, and commit locally**
+
+```bash
+uv run python -m unittest tools/release/test_bootstrap_oracle.py -v
+EXIFTOOL_CACHE_DIR=/Users/allen/oxidex-ops/cache/exiftool/13.59 \
+EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+  python3 scripts/exiftool_oracle.py
+typos tools/release scripts/exiftool_oracle.py \
+  docs/reference/durable-release-storage.md .agents/skills/exiftool-parity/SKILL.md
+git add tools/release scripts/exiftool_oracle.py justfile \
+  docs/reference/durable-release-storage.md .agents/skills/exiftool-parity/SKILL.md
+git commit -S -m "build: make release oracle storage durable"
+```
+
+- [ ] **Step 7: Update handoff and return for controller PR integration**
+
+The controller pushes the checkpoint, opens the draft PR, runs review/CI, and
+squash-merges Task 0 before creating any other task worktree.
 
 ---
 
@@ -646,8 +807,8 @@ paths after the second run. Use:
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_conv_codegen.py -v
 uv run python tools/exiftool-tables/conv_oracle.py --check --all \
-  --perl /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
-  --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool
+  --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
 python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/regen-1.log -- \
@@ -907,9 +1068,9 @@ tools/exiftool-tables/genshare/census.sh \
   --repository /Users/allen/git/oxidex-beta1-generated-attribution \
   --target-dir /Users/allen/git/oxidex-beta1-targets/generated-attribution \
   --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/generated-attribution/census \
-  --corpus /tmp/oxidex-exiftool-cache/combined-samples \
-  --perl /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
-  --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool \
+  --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
+  --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
   --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
@@ -1112,8 +1273,8 @@ replaces it. Run:
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_exif_main_refusal_closure.py -v
 uv run python tools/exiftool-tables/conv_oracle.py --check --all \
-  --perl /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
-  --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool
+  --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool
 uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/refusal-closure \
 python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
@@ -1820,8 +1981,8 @@ The source tree must end at its original pin and clean state.
 
 **PRD:** Controller-owned; no implementation worker
 **Reviewer:** `gpt-6-astra`, fast mode
-**Branch/worktree:** `staging/beta1-functional-integration` at
-`/Users/allen/git/oxidex-beta1-functional-integration`
+**Branch:** `staging/beta1/frozen-candidate-evidence`
+**Worktree:** `/Users/allen/git/oxidex-beta1-frozen-candidate-evidence`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/final`
 **Commit:** `docs: record beta functional qualification evidence`
 
@@ -1836,9 +1997,11 @@ The source tree must end at its original pin and clean state.
 
 - [ ] **Step 1: Freeze and record the candidate**
 
-Record full SHA, clean state, branch, binary path/hash, pin, pinned source hash,
+After Task 19 is remotely merged, fetch `origin/refactor/tag-machinery` and
+create the named Task 20 worktree and branch from that exact remote SHA. Record
+the full SHA, clean state, branch, binary path/hash, pin, pinned source hash,
 Perl hash/version, corpus roots/counts, and lock status. Stop all implementation
-workers.
+workers. Do not run these gates in the controller integration mirror.
 
 - [ ] **Step 2: Run clean full regeneration twice**
 
@@ -1921,12 +2084,12 @@ above, then:
 python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/genshare.log -- \
   tools/exiftool-tables/genshare/census.sh \
-    --repository /Users/allen/git/oxidex-beta1-functional-integration \
+    --repository /Users/allen/git/oxidex-beta1-frozen-candidate-evidence \
     --target-dir /Users/allen/git/oxidex-beta1-targets/final \
     --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/genshare \
-    --corpus /tmp/oxidex-exiftool-cache/combined-samples \
-    --perl /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
-    --exiftool-dir /tmp/oxidex-exiftool-cache/exiftool \
+    --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
+    --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+    --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
     --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
@@ -1964,13 +2127,24 @@ git commit -S -m "docs: record beta functional qualification evidence"
 
 - [ ] **Step 11: Dispatch final whole-branch review**
 
-Build a review package from the integration merge base through the committed
-candidate HEAD. Give the Astra reviewer the spec, plan, controller ledger,
+Build a review package from the Task 20 base through the committed candidate
+HEAD. Give the Astra reviewer the spec, plan, controller ledger,
 deferred minors, parked rulings, receipts index, documentation updates, and
 full diff. One consolidated fix worker and one scoped re-review are allowed if
 findings remain. Any runtime fix invalidates Steps 1-8 and requires a complete
 rerun; a documentation-only fix reruns formatting, typos, links, and the
 scoped review.
+
+- [ ] **Step 12: Land the frozen-candidate evidence through its remote PR**
+
+Apply the Local Checkpoint, Remote PR, and Integration Procedure to
+`staging/beta1/frozen-candidate-evidence`. Push the signed checkpoint, open the
+draft PR against `refactor/tag-machinery`, attach the authenticated receipt
+index, resolve the final Astra review, wait for every required CI check, and
+squash-merge. Fetch the merge and fast-forward the controller integration
+mirror before recording the functional program complete. Preserve the task
+worktree and remote branch until the post-merge evidence links and target SHA
+are recorded.
 
 The result is ready for the separate `main` reconciliation, packaging, CI/CD,
 signing, notarization, and tagging portions of `TODO_RELEASE_BETA.md`. This plan
@@ -1980,14 +2154,24 @@ does not authorize those actions.
 
 Use the controller model described in the spec:
 
-1. Create the integration worktree and ledger.
-2. Dispatch the initial five tasks exactly as listed.
-3. Keep at most three Desktop and six CLI workers active.
-4. Integrate each reviewed non-overlapping task as it returns.
-5. Rebase and re-review overlapping returns.
-6. Persist every state transition in the task handoffs and controller ledger.
-7. Continue without asking between tasks unless an operation is destructive,
-   security-sensitive, externally mutating, or the plan is structurally broken.
+1. Push this plan branch, review it, and squash-merge its PR into
+   `refactor/tag-machinery`.
+2. Create the integration worktree and controller ledger from the verified
+   remote target.
+3. Execute, review, push, and remotely merge Task 0; require its durable oracle
+   verification before creating any other task worktree.
+4. Dispatch the initial five implementation tasks exactly as listed, keeping
+   at most three Desktop and six CLI workers active.
+5. Preserve every meaningful clean checkpoint locally, then have the
+   controller push it and update the task's draft PR.
+6. Rebase and re-review overlapping returns; require fresh review and all CI
+   before each squash merge into `refactor/tag-machinery`.
+7. Fetch and fast-forward the controller mirror after every verified remote
+   merge, then release dependent tasks.
+8. Persist every local and remote state transition in task handoffs, the
+   controller ledger, and durable evidence storage.
+9. Do not merge to `main`, publish, or tag until the separate release phase is
+   authorized and all remaining `TODO_RELEASE_BETA.md` gates are satisfied.
 
 The chosen execution method is the user-requested hybrid: Superpowers-reviewed
 Desktop subagents plus parallel `codex --yolo exec` workers, with the main
