@@ -75,7 +75,60 @@ valid route. Save machine-readable per-URL outcomes, final redirects, broken
 links, asset failures and unresolved external links. Check base-path handling,
 navigation, search, and benchmark links. Run the whole crawl again after fixes.
 
-## Responsive visual evidence
+## Reproducible local browser automation and human review
+
+Use Playwright when already available; equivalent browser automation is valid
+if it produces the same evidence. Do not add a dependency merely to enforce a
+tool preference. A missing browser, failed automation or incomplete human
+review is unverified/blocked, never a pass. An HTTP-only crawler cannot prove
+hydration, client navigation or responsive rendering.
+
+Save an `automation_manifest` before the run with candidate SHA/tree, dist and
+input hashes, localhost base URL, complete route list, representative route
+list, browser/tool versions, script or replayable tool-call transcript path,
+exact launch command/settings, UTC time and evidence directory. Resolve routes
+from the rendered census, not links discovered from the home page. Record a
+reproducible browser contract as follows:
+
+1. Start the helper's HTTP preview and confirm its served content matches the
+   recorded dist. Use isolated browser contexts with no inherited storage or
+   extensions. In Playwright this is `browser.newContext(...)`; record browser
+   engine/version, viewport, device scale factor and locale.
+2. Before navigation attach `page.on('console', ...)` (error level),
+   `page.on('pageerror', ...)`, `page.on('requestfailed', ...)`, and
+   `page.on('response', ...)` for HTTP status >= 400. Save URL, resource type,
+   failure/status and associated route. A 404 response does not necessarily
+   produce `requestfailed`, so both checks are required.
+3. For every inventory route, use `page.goto(url, {waitUntil: 'networkidle',
+   timeout: 30000})` or the equivalent bounded settled-page wait. Verify the
+   response, final URL, expected heading/content, hydrated navigation and
+   absence of a fallback error page. Audit all referenced local assets and
+   fragments, including ones not requested at this viewport. A timeout or
+   failed request is recorded and investigated, not ignored to finish a run.
+4. For each representative below, use contexts at 1440x1000 and 390x844 with
+   `colorScheme: 'light'` and `'dark'`. Exercise the site's theme switch if
+   needed and assert the actual root/computed theme, not just the emulation
+   setting. Wait for fonts/images and layout to settle with a bounded wait;
+   do not use arbitrary sleep as proof. Exercise mobile menu, search, a normal
+   internal navigation, code blocks, and horizontal scrolling of wide tables.
+5. Save a full-page screenshot for every route/viewport/theme combination via
+   `page.screenshot({path, fullPage: true})` or equivalent; capture additional
+   screenshots for opened navigation/search and any clipped/overflow state.
+   Use deterministic filenames keyed by route, width and theme. Record a
+   per-sample result containing route, viewport, theme, screenshot path/hash,
+   interaction results and console/network failure arrays (explicitly empty
+   when observed). Every missing matrix cell is an unresolved requirement.
+6. Preserve machine-readable crawl/sample results and tool logs. The run must
+   exit nonzero or report failed status for missing routes/assets, unexpected
+   errors, timeouts or failed assertions. Document any benign exception with
+   its cause and evidence; silently filtering an error is not a pass.
+7. Present the complete screenshot manifest/contact sheet and full-resolution
+   images for human screenshot review. Record reviewer, UTC review time,
+   reviewed manifest hash, findings and disposition in `visual_review.human_review`.
+   Automated image capture or an agent claiming the page looks fine does not
+   substitute for this human review. If not yet reviewed, keep it unverified.
+8. Fix findings, rebuild at the new frozen SHA, rerun the exhaustive crawl and
+   affected browser matrix, and obtain review of the updated screenshots.
 
 Browser review must cover home, guide, install, migration, changelog,
 reference, parity, status, performance, and at least one wide-table page.
@@ -85,12 +138,10 @@ For each route/width/theme, save screenshot paths, viewport dimensions, page
 load/interaction result, console errors, failed network requests and findings
 in `visual_review.samples`; record zero errors explicitly when observed.
 
-Inspect overflow/table scrolling, readable text/contrast, navigation menus,
-search, code blocks, headings, badges and benchmark charts. Capture and inspect
-screenshots; merely generating screenshots is not a visual pass. Fix findings,
-rebuild and repeat affected samples. The representative matrix complements the
-exhaustive route crawl; neither substitutes for the other. If the browser is
-unavailable, keep visual review `unverified` and report that blocker.
+Human review checks overflow/table scrolling, readable text/contrast, navigation
+menus, search, code blocks, headings, badges and benchmark charts. The
+representative matrix complements the exhaustive browser route/asset crawl;
+neither substitutes for the other.
 
 ## Pages configuration and pipeline
 
@@ -99,31 +150,54 @@ These are read-only checks, not deployment operations:
 ```bash
 gh api repos/swack-tools/oxidex/pages \
   --jq '{status,cname,https_enforced,build_type,source}'
-gh run list --workflow deploy-docs.yml --branch main \
-  --json databaseId,headSha,status,conclusion,url
+actionlint -config-file .github/actionlint.yaml \
+  .github/workflows/deploy-docs.yml .github/workflows/release.yml
+python3 -m unittest tools.ci.test_release_workflow -v
 ```
 
 Persist the API responses with timestamps. Require actual `build_type` to be
 `workflow`; record `cname`, HTTPS and source settings. Inspect candidate YAML
-for the comparison artifact, build/copy steps, upload/deploy-pages actions,
-permissions, `github-pages` environment and path filters. A source-branch
+for triggers/path filters, concurrency, generated comparison and benchmark
+handoff/provenance, build/copy steps, upload/deploy-pages actions, permissions,
+`github-pages` environment and custom domain/base/HTTPS agreement. Record syntax
+and repository-test results; existing tests do not replace inspection of
+untested handoffs. A source-branch
 setting or legacy `gh-pages` commit does not establish workflow-mode publishing.
 `release.yml` has a stable-only `update-docs` job that mutates `gh-pages`; a
 prerelease skips that job, and even a completed job does not prove this site's
 active Pages deployment. Record the discrepancy instead of changing settings
 under audit authority.
 
-Separate `local_build`, `visual_review`, `pages_pipeline`, and
-`live_deployment` statuses. The Pages API proves current configuration; YAML
-proves wiring; run-list output identifies candidates, not successful delivery.
-If workflow path filters prevented a run for the release SHA, record missing
-evidence; a manual dispatch is an external action needing existing task scope.
+Separate `local_build`, `visual_review`, `pages_pipeline`, and optional
+`live_deployment` statuses. The Pages API proves current configuration; syntax,
+tests and static inspection prove the audited pipeline contract. A pipeline
+defect blocks documentation verification. The absence of an actual run for an
+unmerged candidate is not a defect. Check whether triggers/path filters cover
+the intended release changes, rather than requiring a run as a prerequisite.
+A manual dispatch is an external action needing existing task scope.
 
-## Verify the exact-commit live deployment
+## Optional post-merge live deployment confirmation
 
-After an authorized merge, freeze the full `MAIN_SHA` from the merged PR and
-compare candidate/main trees. A changed tree invalidates affected receipts;
-even identical trees need commit-bound run and generated-input revalidation.
+The exact-candidate production-equivalent local build, complete local browser
+audit, human screenshot review and successful Pages pipeline/settings audit
+are sufficient for overall documentation `status: verified`. An actual
+deployment URL or run is not required. Keep
+`required_for_documentation_verification: false` in `live_deployment`; use
+`not_run` when not attempted or `unverified` for incomplete optional evidence.
+Do not put the absence of optional live evidence into required `unresolved`.
+
+After merge, freeze `MAIN_SHA` and compare its tree with `candidate_tree`. If
+different, rerun the same local production audit against that exact commit
+before tag authorization. For an identical tree, retain original candidate
+provenance and record SHA/tree equivalence in `main_equivalence`.
+
+When post-merge operational confirmation is in scope, inspect candidate runs:
+
+```bash
+gh run list --workflow deploy-docs.yml --branch main \
+  --json databaseId,headSha,status,conclusion,url
+```
+
 Select a `deploy-docs.yml` run on `main` whose `headSha == MAIN_SHA`, then save
 its final record and completed publish-job logs:
 
@@ -155,12 +229,9 @@ Check the final served version and release content, and repeat the representativ
 desktop/mobile light/dark browser matrix against the live site, recording console,
 network and screenshot evidence separately from local review. Do not equate a
 200 home page, DNS/TLS success or a green run with exact-commit content. Bound
-cache-propagation retries; preserve mismatches as blocked. If deployment/API
-identity or artifact evidence is unavailable, mark it unverified, not passed.
-
-Before merge, report `status: ready_for_promotion` only when all candidate-local
-checks and Pages pipeline checks pass; set `live_deployment.status: pending`.
-After merge, rerun/confirm against the exact `MAIN_SHA`. Only after this live
-proof may `live_deployment.status` and the same receipt's overall `status`
-become `verified`, with `phase: main_live` and no unresolved requirements.
-Tag authorization requires the fully verified receipt, not local readiness.
+cache-propagation retries; preserve mismatches as operational findings. If
+deployment/API identity or artifact evidence is unavailable, mark the optional
+section unverified, not passed. This does not invalidate proven local quality.
+If these checks expose a real documentation/pipeline defect, move the overall
+receipt to blocked until that defect is resolved. Completing optional checks
+may verify `live_deployment.status`; it is not the gate for overall verification.

@@ -96,18 +96,24 @@ class SkillMirrorTests(unittest.TestCase):
         self.assertIsInstance(receipt["pages"], list)
         self.assertIsInstance(receipt["claims"], list)
         self.assertEqual(receipt["status"], "unverified")
-        self.assertEqual(receipt["live_deployment"]["status"], "unverified")
+        self.assertEqual(receipt["live_deployment"]["status"], "not_run")
 
-    def test_release_documentation_has_two_phase_approval(self):
+    def test_release_documentation_verifies_local_candidate_without_deployment(self):
         receipt = json.loads(canonical(
             "oxidex-release-documentation", "templates/documentation-release-receipt.json"
         ))
-        self.assertIn("promotion_readiness", receipt)
-        self.assertEqual(receipt["promotion_readiness"]["status"], "unverified")
-        self.assertIsNone(receipt["promotion_readiness"]["candidate_sha"])
+        self.assertIs(receipt["live_deployment"].get("required_for_documentation_verification"), False)
+        self.assertNotIn("promotion_readiness", receipt)
+        self.assertNotIn("phase", receipt)
+        self.assertIsNone(receipt["candidate_tree"])
+        self.assertEqual(receipt["visual_review"]["human_review"]["status"], "unverified")
+        self.assertIn("automation_manifest", receipt["visual_review"])
         skill = canonical("oxidex-release-documentation", "SKILL.md")
-        for phrase in ("ready_for_promotion", "pending", "before tag authorization"):
+        for phrase in ("status: verified", "optional", "before tag authorization", "human screenshot review"):
             self.assertIn(phrase, skill)
+        audit = canonical("oxidex-release-documentation", "references/github-pages-audit.md")
+        for phrase in ("Playwright", "requestfailed", "pageerror", "1440", "390", "actionlint"):
+            self.assertIn(phrase, audit)
 
     def test_release_finalization_pipeline_snippets_enable_pipefail(self):
         for relative in ("references/gates.md", "references/github-release-and-macos.md"):

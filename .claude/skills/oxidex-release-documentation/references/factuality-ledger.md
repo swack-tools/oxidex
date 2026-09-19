@@ -56,13 +56,15 @@ source correction invalidates the build and screenshots for that content;
 record the new commit and repeat affected checks plus the whole-site crawl.
 
 Receipt states: `unverified` means required evidence has not been collected;
-`blocked` means a known unmet requirement. `ready_for_promotion` means the
-candidate-bound local audit and pipeline checks all pass, with live deployment
-explicitly `pending`; it permits the documentation gate for a PR to `main`,
-not tagging or release approval. `verified` means both phases, including
-exact-main live deployment, pass. Preserve `promotion_readiness.candidate_sha`
-and its evidence as the receipt advances from `candidate_local` to `main_live`;
-record the merged SHA separately in `live_deployment.main_sha`. Empty arrays,
-null identities and unreviewed exclusions
+`blocked` means a known unmet requirement. Overall `verified` means the exact
+candidate's production-equivalent local audit, automated browser checks, human
+screenshot review and Pages pipeline/settings audit all pass. Bind the receipt
+to `candidate_sha`, `candidate_tree` and the local build/input hashes. Optional
+live deployment may remain `not_run` or `unverified`; it is explicitly not
+required for documentation verification. If the final `MAIN_SHA` tree differs,
+rerun the same local audit against it before tag authorization. If identical,
+record both commits and the matching tree in `main_equivalence`, retaining the
+original measured SHA rather than rewriting provenance. Empty arrays,
+null required identities and unreviewed exclusions
 cannot establish completeness. The receipt starts empty intentionally: expand
 it with all observed rows and evidence, never count example rows as coverage.

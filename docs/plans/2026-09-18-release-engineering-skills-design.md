@@ -115,8 +115,8 @@ truthful for a particular OxiDex release.
    platforms, artifact names, and beta/stability language with the actual
    workflows and packaging decision.
 4. Accept benchmark numbers only from the named benchmark instrument on the
-   candidate commit, or from a commit proven equivalent by a relevant-path
-   diff. Separate shipped-profile CLI timings, indicative CI timings, and
+   exact candidate commit; older results must be visibly historical and
+   excluded from candidate claims. Separate shipped-profile CLI timings, indicative CI timings, and
    Criterion microbenchmarks; never combine or compare them as one metric.
 5. Consume the ExifTool parity receipt. Clearly separate observed extraction
    matches, missing/value/rename/extra differences, authenticated source-row
@@ -132,8 +132,10 @@ truthful for a particular OxiDex release.
    generated comparison report and the selected benchmark artifact. Crawl the
    rendered output, require every internal route and asset to resolve, and
    compare the rendered route inventory with the source-page inventory.
-8. Review the rendered site visually at desktop and mobile widths, in light
-   and dark themes, with representative screenshots. Check the home page,
+8. Use browser automation (Playwright preferred where available, equivalent
+   tooling acceptable) at 1440px desktop and 390px mobile widths in light
+   and dark themes, retaining screenshots and console/network failures. Require
+   human screenshot review and its recorded result. Check the home page,
    guide, reference, parity report, status, performance, changelog, migration,
    and installation pages for navigation, overflow, unreadable tables/code,
    missing assets, console errors, and misleading banners/version labels.
@@ -142,10 +144,13 @@ truthful for a particular OxiDex release.
    deployment environment, custom domain/base path, and concurrency. Validate
    workflow syntax and repository tests, and inspect the live Pages settings
    without exposing credentials.
-10. After the release promotion reaches `main`, require a successful
-    `deploy-docs.yml` run for the exact commit and crawl the deployed site.
-    Confirm that the live pages expose the expected release/version marker and
-    that the deployed route/content hashes correspond to the reviewed build.
+10. Issue overall `status: verified` when the exact-candidate local production
+    audit, exhaustive route/asset crawl, automated browser checks, human
+    screenshot review and Pages pipeline/settings audit pass. A pipeline defect
+    blocks verification; an actual deployment/run/URL is not required. After
+    merge, compare `MAIN_SHA`'s tree and rerun the same local audit if it differs
+    before tag authorization. Live run/artifact/content checks are optional
+    post-merge operational confirmation, not a documentation-quality gate.
 11. Produce a concise human release summary plus a machine-readable receipt.
 
 ### Output
@@ -153,9 +158,14 @@ truthful for a particular OxiDex release.
 A documentation receipt keyed to the candidate commit, with a claim ledger,
 per-page classification and evidence, benchmark provenance, parity artifact
 identity, changelog status, local production-build/crawl/visual results,
-GitHub Pages workflow and settings results, exact-commit deployment URL, live
-site crawl, and unresolved claims. Release finalization refuses a stale or
-partial receipt.
+GitHub Pages workflow and settings results, and unresolved required claims.
+Bind verification to `candidate_sha`, `candidate_tree` and the audited local
+build/input hashes. `live_deployment` explicitly has
+`required_for_documentation_verification: false` and may remain `not_run` or
+`unverified`. There is no intermediate promotion status or mandatory live
+phase. Release finalization refuses a stale or partial required audit, but does
+not reject a verified local receipt merely because optional deployment proof
+is absent. Preserve SHA/tree equivalence when the final main tree is identical.
 
 ### GitHub Pages facts the implementation must reconcile
 
@@ -302,7 +312,8 @@ Skills are tested one at a time.
    - pressure to copy stale benchmarks or parity totals into release notes;
    - pressure to approve the site after checking only navigation-linked pages;
    - pressure to treat a green cold build, a `gh-pages` push, or workflow YAML
-     as proof that the production Pages deployment is correct and attractive;
+     as sufficient documentation-quality proof without the production-equivalent
+     local browser audit and Pages pipeline/settings audit;
    - pressure to use bare ExifTool or a degraded Perl after the pinned oracle
      refuses to run.
 5. Add deterministic repository tests for mirror equality, forbidden bare
@@ -326,9 +337,11 @@ Docker publication, or secret mutation is part of implementing these skills.
 - The documentation receipt accounts for every rendered Pages route, and
   current pages are tied to evidence from the candidate commit while older
   pages are visibly historical or removed from publication.
-- The production-shaped local site passes route/asset crawling and responsive
-  visual review, and the live Pages deployment is verified at the exact
-  `main` commit rather than inferred from workflow configuration.
+- The exact-candidate production-shaped local site passes exhaustive automated
+  route/asset crawling, desktop/mobile light/dark checks and human screenshot
+  review. Pages syntax/tests/settings and pipeline inspection pass. These are
+  sufficient for verified documentation before deployment; live deployment
+  checks remain optional operational confirmation.
 - The skill detects and resolves any mismatch between the repository's live
   GitHub Actions Pages source and legacy `gh-pages` branch updates.
 - The parity skill never invokes bare ExifTool and emits release-consumable,

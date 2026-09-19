@@ -23,7 +23,7 @@
 
 ## Review Focus
 
-- GitHub Pages reports `build_type: workflow` while `release.yml` edits `gh-pages`: tests must force the documentation skill to verify the live deployment path instead of crediting a branch push.
+- GitHub Pages reports `build_type: workflow` while `release.yml` edits `gh-pages`: tests must require the Pages pipeline/settings audit, not credit a branch push. Actual deployment is optional; exact-candidate local production/browser evidence can verify documentation quality.
 - `deploy-docs.yml` may use an older benchmark artifact: tests must require exact-candidate numbers or prominent historical labeling and exclusion from release claims.
 - A pinned Perl that prints the right ExifTool version but cannot load `strict.pm` or `Archive::Zip`: tests must produce `blocked/refused`, never fallback evidence.
 - A candidate SHA that differs from the final `main` merge SHA: tests must invalidate commit-bound receipts and require reruns.
@@ -262,8 +262,9 @@ opening the site at mobile width.
 
 Fail the baseline if it approves without a rendered-route census, current vs
 historical classification, exact-candidate benchmark disposition, production-
-shaped local build, responsive visual inspection, or live workflow-mode Pages
-verification. Record the failure.
+shaped local build, automated responsive inspection with human screenshot
+review, or workflow-mode Pages pipeline/settings verification. Actual live
+deployment is not a prerequisite. Record the failure.
 
 - [ ] **Step 2: Add failing contract assertions**
 
@@ -274,11 +275,14 @@ references:
 required = (
     "every rendered route", "current", "historical", "mobile", "dark theme",
     "build_type", "workflow", "gh-pages", "exact candidate commit",
-    "tools/docs-local-deploy.sh", "live deployment"
+    "tools/docs-local-deploy.sh", "Playwright", "human screenshot review"
 )
 ```
 
-Also parse the receipt template with `json.loads` and require a `pages` array.
+Also parse the receipt template with `json.loads`, require a `pages` array,
+candidate SHA/tree binding, human-review status and automation manifest, and
+`live_deployment.required_for_documentation_verification: false`. The initial
+optional live status is `not_run`; overall status starts `unverified`.
 Run the test and expect failure because the skill is absent.
 
 - [ ] **Step 3: Scaffold and write the documentation skill**
@@ -288,9 +292,12 @@ freeze SHA; ingest parity evidence; build a factuality ledger; inventory every
 committed/generated/rendered page; classify current/historical/excluded;
 resolve stale content; validate changelog/version/install/platform statements;
 validate exact-candidate benchmark provenance; reproduce the deployment build;
-crawl every route and asset; visually inspect representative pages at desktop
-and mobile in light/dark modes; inspect Pages API/workflow settings; then verify
-the exact-commit live deployment after merge.
+crawl every route and asset with browser automation; inspect representative
+pages at desktop and mobile in light/dark modes and record human screenshot
+review; inspect Pages syntax/tests and API/workflow settings. That complete
+local candidate audit is sufficient for overall `verified`. If the final main
+tree differs, rerun it before tag authorization. Preserve live checks as
+optional post-merge confirmation, not a documentation-quality prerequisite.
 
 - [ ] **Step 4: Write the Pages audit reference with real repository commands**
 
@@ -311,6 +318,12 @@ every `docs/.vitepress/dist/**/*.html`, then reconciling the sets. Browser
 review covers home, guide, install, migration, changelog, reference, parity,
 status, performance, and at least one wide-table page at 1440px and 390px,
 light/dark, with screenshots and console/network errors recorded.
+Use Playwright when available or equivalent browser automation with a saved
+reproducible manifest/transcript. Missing browser automation or human review
+cannot pass. Validate workflow syntax/tests, triggers/path filters, permissions,
+report/benchmark handoff, Pages actions and domain/base/HTTPS settings; any
+pipeline defect blocks verification. The run-list command is for optional
+operational confirmation, not a required deployment gate.
 
 - [ ] **Step 5: Write the factuality and benchmark references and receipt**
 
@@ -325,7 +338,9 @@ attribute it to the candidate.
 
 Run the two quick validators, mirror check, JSON parsing tests, and the same
 pressure prompt with the skill loaded. The answer must refuse approval until
-the exhaustive page and live deployment evidence exists.
+the exhaustive local page/browser/human-review and pipeline evidence exists,
+but may issue `verified` without actual live deployment. Mark earlier pressure
+results requiring a live gate superseded and obtain a fresh GREEN run.
 
 - [ ] **Step 7: Commit**
 
@@ -456,14 +471,16 @@ the skill checklist into CLAUDE.md.
 Remove the unsigned `git tag -a` path and the vague `just ci` completion claim.
 Link the three skills, require receipts tied to the candidate/main commit,
 require `just tag <version> <main-sha>` dry run and signed tag, and require the
-GitHub release/macOS/Pages post-tag evidence.
+GitHub release/macOS post-tag evidence. Pages operational confirmation is
+optional; documentation verification is bound to the local production audit.
 
 - [ ] **Step 5: Update the docs-site page with whole-site release verification**
 
-Add a concise release section covering production-shaped local preview, all-
-route inventory/crawl, responsive visual review, `build_type: workflow`, exact-
-commit `deploy-docs.yml`, and live-site validation. Clarify that a `gh-pages`
-branch update is not deployment proof in workflow mode.
+Add a concise release section covering exact-candidate production-shaped local
+preview, all-route inventory/browser crawl, responsive screenshots with human
+review, and Pages workflow syntax/tests/settings including `build_type: workflow`.
+Live-site validation is optional post-merge confirmation. Clarify that a
+`gh-pages` branch update is not deployment proof in workflow mode.
 
 - [ ] **Step 6: Run tests and docs build**
 
@@ -531,9 +548,10 @@ test -f docs/.vitepress/dist/index.html
 test -f docs/.vitepress/dist/reference/comparison/index.html
 ```
 
-Do not claim full production Pages verification here: the full comparison,
-candidate benchmark artifact, live deployment, and browser crawl belong to an
-actual release run using the new skill.
+Do not claim full production-equivalent documentation verification here: the
+full comparison, candidate benchmark artifact, browser crawl/screenshots and
+human review belong to an actual release audit using the new skill. Actual
+live deployment remains optional operational confirmation.
 
 - [ ] **Step 4: Dispatch independent whole-branch reviewers**
 

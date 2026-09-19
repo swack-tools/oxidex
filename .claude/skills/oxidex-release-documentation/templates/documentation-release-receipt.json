@@ -2,10 +2,11 @@
   "schema_version": 1,
   "version": null,
   "candidate_sha": null,
-  "phase": "candidate_local",
-  "promotion_readiness": {
-    "status": "unverified",
-    "candidate_sha": null,
+  "candidate_tree": null,
+  "main_equivalence": {
+    "main_sha": null,
+    "main_tree": null,
+    "matches_candidate_tree": null,
     "evidence_path": null
   },
   "parity_receipt": {
@@ -33,8 +34,16 @@
   },
   "visual_review": {
     "status": "unverified",
+    "automation_manifest": null,
     "samples": [],
     "findings": [],
+    "human_review": {
+      "status": "unverified",
+      "reviewer": null,
+      "reviewed_at": null,
+      "screenshot_manifest": null,
+      "evidence_path": null
+    },
     "evidence_path": null
   },
   "pages_pipeline": {
@@ -47,7 +56,8 @@
     "evidence_path": null
   },
   "live_deployment": {
-    "status": "unverified",
+    "status": "not_run",
+    "required_for_documentation_verification": false,
     "main_sha": null,
     "run_id": null,
     "deployment_id": null,
@@ -61,5 +71,5 @@
     "evidence_path": null
   },
   "status": "unverified",
-  "unresolved": ["Complete the candidate-bound documentation audit and exact-main-SHA live deployment verification."]
+  "unresolved": ["Complete the exact-candidate local production audit, automated browser checks, human screenshot review and Pages pipeline audit."]
 }

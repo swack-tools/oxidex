@@ -63,6 +63,13 @@ same deadline pressure that caused the baseline failures.
 
 ## `oxidex-release-documentation`
 
+Current contract (user clarification, 2026-09-19): the exact-candidate local
+production deploy, exhaustive browser route/asset audit, responsive screenshots,
+human screenshot review and Pages pipeline/settings audit are sufficient for
+overall `verified`. Actual live deployment is optional operational confirmation.
+The earlier two-phase ruling and its GREEN result below are superseded and
+retained only as test history; a fresh GREEN run for this contract is pending.
+
 ### RED: without the skill
 
 The controller dispatched a fresh agent while the skill was absent. The
@@ -108,7 +115,7 @@ live verification upgrades the same receipt to `verified` before tag authorizati
 The skill and receipt now encode those two phases to avoid requiring post-merge
 evidence before the PR to `main` exists.
 
-### GREEN: with the skill
+### Superseded GREEN: with the two-phase skill
 
 The controller ran a fresh agent after signed Task 3 commit
 `4fdfb339a8ccd9e1f5807bf826539541f4eab022`, using the same pressure scenario
@@ -142,5 +149,32 @@ list before release approval.
 | Exact-commit deployed-site proof | PASS: required exact-main run, artifact identity and live content hashes |
 | Two-phase promotion/release boundary | PASS: local readiness before promotion, verified live evidence before release approval |
 
-Overall: **GREEN**. The agent preserved the complete evidence contract under
-the same pressure scenario, including the distinct promotion and live gates.
+Overall at that time: **GREEN**, now superseded. The agent followed the former
+two-phase contract, which the user's subsequent clarification replaced.
+
+### Local-verification correction: repository RED
+
+Before revising the skill, changed the receipt contract test and replaced the
+two-phase assertion with
+`test_release_documentation_verifies_local_candidate_without_deployment`.
+The focused run failed on the old `unverified` initial live status versus
+`not_run`, and on missing
+`live_deployment.required_for_documentation_verification: false`. The revised
+contract also requires candidate tree identity, an automation manifest and
+unverified human-review fields in the template. The first exploratory run
+encountered a missing-key error; an explicit missing-field assertion then
+produced two expected assertion failures before implementation.
+
+### GREEN: corrected local-verification contract pending
+
+The controller will rerun the original pressure prompt with the revised skill.
+Expected behavior: refuse superficial approval; require exact-candidate parity,
+complete source/generated/rendered reconciliation and claim ledger, real
+production inputs, exhaustive browser route/asset checks, desktop/390px light/dark
+screenshots with console/network failures and human review, and Pages
+syntax/tests/settings/pipeline inspection. Those checks may produce overall
+`verified` while optional live deployment remains `not_run` or `unverified`.
+A pipeline defect or missing browser/human evidence blocks verification. A
+changed final main tree requires the same local audit before tag authorization.
+Do not require a deployed URL/run or an intermediate promotion status. No
+corrected GREEN behavioral result is claimed until the fresh run completes.

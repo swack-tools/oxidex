@@ -40,33 +40,35 @@ evidence. Record command, exit status, UTC time, full SHA, and evidence path.
    fallback may remain only as visibly historical, never as candidate results.
 5. Read [github-pages-audit.md](references/github-pages-audit.md). Reproduce the
    production build using `tools/docs-local-deploy.sh`, real comparison output
-   and explicit benchmark inputs. Crawl every rendered route and referenced
-   asset; inspect representative pages at desktop and mobile widths in light
-   and dark theme, saving screenshots and console/network findings.
+   and candidate benchmark inputs. Crawl every rendered route and referenced
+   asset with browser automation (Playwright preferred, equivalent tooling
+   acceptable); inspect representative pages at desktop and mobile widths in
+   light and dark theme. Save screenshots and console/network findings, then
+   obtain human screenshot review of the complete representative matrix.
 6. Inspect Pages API `build_type`, `deploy-docs.yml`, and `release.yml`.
-   Require live `workflow` mode verification; a `gh-pages` update is not proof
-   of deployment. Record pipeline evidence separately from local validation.
-7. After an authorized merge, freeze the exact `main` SHA and verify that
-   commit's successful Pages run, artifact, deployment identity, and live
-   content hashes. Revalidate commit-bound evidence after any change. A
-   pre-merge audit can finish locally while live deployment remains unverified.
+   Validate syntax/tests, triggers/path filters, permissions, generated-report
+   and benchmark handoff, artifact/deploy actions, domain/base/HTTPS and current
+   `workflow` mode settings. A pipeline defect blocks verification; a `gh-pages`
+   update is not proof of deployment.
+7. Bind the verified local audit to the exact candidate SHA and tree. After an
+   authorized merge, compare the final `MAIN_SHA` tree: if it differs, rerun the
+   same local audit against it before tag authorization. For an identical tree,
+   preserve candidate evidence and record the SHA/tree equivalence explicitly.
 
 ## Approval contract
 
-Use two phases of the same receipt:
+Set overall `status: verified` after the exact candidate's production-equivalent
+local deploy, exhaustive factuality/route/asset audit, automated responsive
+browser checks, human screenshot review and Pages pipeline audit all pass,
+with no unresolved required checks. This is sufficient to approve documentation
+quality before deployment. It does not authorize a merge, tag or publication.
 
-- Before the PR to `main`, set `phase: candidate_local` and
-  `status: ready_for_promotion` only after the exhaustive candidate-bound
-  claims/pages/benchmark audit, production build, crawl, responsive visuals and
-  Pages pipeline checks pass. Set `promotion_readiness.status: verified`, bind
-  it to the candidate SHA, and leave `live_deployment.status: pending` with
-  exact-main verification in `unresolved`. This is local readiness, not release
-  approval, and does not authorize a merge.
-- After merge, set `phase: main_live`, rerun/confirm against exact `MAIN_SHA`,
-  and require successful `deploy-docs.yml`, live crawl, responsive visual checks
-  and artifact/content identity. Upgrade the same receipt to `status: verified`
-  only when all required checks pass and `unresolved` is empty. Require this
-  full verification before tag authorization.
+Actual live deployment is optional post-merge operational confirmation, not a
+documentation-quality prerequisite. `live_deployment` may be `not_run` or
+`unverified` with `required_for_documentation_verification: false`. Do not put
+an unrequested live confirmation into required `unresolved` items. If optional
+checks discover a real documentation or pipeline defect, record that defect
+and block verification until resolved.
 
 A known unmet requirement is `blocked`; evidence not yet collected is
 `unverified`. Preserve completed evidence and name the remaining work.
@@ -76,4 +78,4 @@ A known unmet requirement is `blocked`; evidence not yet collected is
 | Sidebar pages look fine | Reconciled source/generated/rendered census |
 | Cold build is green | Production inputs, route/asset crawl, responsive screenshots |
 | Older benchmark fallback succeeded | Historical label and actual measured commit |
-| Release workflow updates `gh-pages` | Workflow-mode Pages API and exact-commit live proof |
+| Release workflow updates `gh-pages` | Workflow-mode Pages API and pipeline audit |
