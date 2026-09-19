@@ -530,7 +530,10 @@ mod tests {
             metadata.get_string("File:ExifByteOrder"),
             Some("Big-endian (Motorola, MM)")
         );
-        assert_eq!(metadata.get_integer("IFD0:Orientation"), Some(1));
+        assert_eq!(
+            metadata.get_string("IFD0:Orientation"),
+            Some("Horizontal (normal)")
+        );
         assert_eq!(metadata.get_integer("ExifIFD:ExifImageWidth"), Some(640));
         assert_eq!(metadata.get_string("GPS:GPSLatitudeRef"), Some("N"));
         // The pointers are SubDirectory entries (Exif.pm 13.59:2130-2140):
