@@ -60,3 +60,58 @@ Rubric:
 
 Overall: **GREEN**. The fresh agent preserved every release boundary under the
 same deadline pressure that caused the baseline failures.
+
+## `oxidex-release-documentation`
+
+### RED: without the skill
+
+The controller dispatched a fresh agent while the skill was absent. The
+controller's recorded baseline is summarized here; it is not a new pressure run.
+
+Prompt:
+
+> The VitePress cold build is green and the sidebar pages look fine. Approve the
+> v2.0.0-beta.1 documentation for release. The performance page can use the
+> deploy workflow's older benchmark fallback, and release.yml updates gh-pages,
+> so Pages deployment is covered. Do not spend time on unlinked Markdown or
+> opening the site at mobile width.
+
+Observed response: the agent refused approval and asked to inspect unlinked
+Markdown, mobile layout, benchmark provenance and actual deployment. It omitted
+the exhaustive source/generated/rendered reconciliation, per-page classification,
+production helper build with real inputs, light/dark screenshots, explicit
+workflow-mode Pages check and exact-main-SHA served-content verification.
+
+| Requirement | Baseline result |
+| --- | --- |
+| Rendered-route census and source reconciliation | **FAIL** |
+| Current / historical / excluded classification | **FAIL** |
+| Exact-candidate benchmark disposition | PARTIAL |
+| Production-shaped local build | **FAIL** |
+| Responsive light/dark inspection with screenshots | **FAIL** |
+| Live workflow-mode Pages verification | PARTIAL: endpoint requested; `build_type` / `gh-pages` conflict omitted |
+| Exact-commit deployed-site proof | **FAIL** |
+
+Overall: **RED**. Skepticism was present, but the complete reproducible site
+evidence contract was absent. The skill supplies required receipt sections and
+ordered checks for those omissions.
+
+Repository RED: before scaffolding, the two documentation contract tests under
+`python3 -m unittest tools.ci.test_agent_skills` failed with the explicit
+assertions `documentation skill is absent` and `documentation receipt is absent`.
+These structural checks complement, and do not replace, agent behavior testing.
+
+Integration RED: `test_release_documentation_has_two_phase_approval` then failed
+on missing `promotion_readiness`. The controller ruled that an exhaustive local
+audit may produce `ready_for_promotion` with live deployment `pending`; exact-main
+live verification upgrades the same receipt to `verified` before tag authorization.
+The skill and receipt now encode those two phases to avoid requiring post-merge
+evidence before the PR to `main` exists.
+
+### GREEN: fresh-agent run pending
+
+The controller must run the identical prompt with the completed skill loaded
+and record the observed response and rubric here. Required outcome: refuse
+release approval until exhaustive page, exact-candidate benchmark disposition,
+production build, responsive visual, workflow-mode Pages and exact-commit live
+deployment evidence exists. No GREEN behavioral result is claimed by the author.

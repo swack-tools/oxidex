@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import shutil
@@ -61,6 +62,52 @@ class SkillMirrorTests(unittest.TestCase):
             "do not move",
         ):
             self.assertIn(phrase, text)
+
+    def test_release_documentation_contract(self):
+        skill = REPO / ".claude/skills/oxidex-release-documentation"
+        self.assertTrue((skill / "SKILL.md").is_file(), "documentation skill is absent")
+        text = "\n".join(
+            canonical("oxidex-release-documentation", relative)
+            for relative in (
+                "SKILL.md",
+                "references/factuality-ledger.md",
+                "references/github-pages-audit.md",
+                "references/benchmark-policy.md",
+            )
+        )
+        for phrase in (
+            "every rendered route", "current", "historical", "mobile", "dark theme",
+            "build_type", "workflow", "gh-pages", "exact candidate commit",
+            "tools/docs-local-deploy.sh", "live deployment",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_release_documentation_receipt_contract(self):
+        path = REPO / ".claude/skills/oxidex-release-documentation/templates/documentation-release-receipt.json"
+        self.assertTrue(path.is_file(), "documentation receipt is absent")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["schema_version"], 1)
+        for field in (
+            "version", "candidate_sha", "parity_receipt", "claims", "pages", "benchmarks",
+            "local_build", "visual_review", "pages_pipeline", "live_deployment", "status", "unresolved",
+        ):
+            self.assertIn(field, receipt)
+        self.assertIsInstance(receipt["pages"], list)
+        self.assertIsInstance(receipt["claims"], list)
+        self.assertEqual(receipt["status"], "unverified")
+        self.assertEqual(receipt["live_deployment"]["status"], "unverified")
+
+    def test_release_documentation_has_two_phase_approval(self):
+        receipt = json.loads(canonical(
+            "oxidex-release-documentation", "templates/documentation-release-receipt.json"
+        ))
+        self.assertIn("promotion_readiness", receipt)
+        self.assertEqual(receipt["promotion_readiness"]["status"], "unverified")
+        self.assertIsNone(receipt["promotion_readiness"]["candidate_sha"])
+        skill = canonical("oxidex-release-documentation", "SKILL.md")
+        for phrase in ("ready_for_promotion", "pending", "before tag authorization"):
+            self.assertIn(phrase, skill)
 
     def test_release_finalization_pipeline_snippets_enable_pipefail(self):
         for relative in ("references/gates.md", "references/github-release-and-macos.md"):

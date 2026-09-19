@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "version": null,
+  "candidate_sha": null,
+  "phase": "candidate_local",
+  "promotion_readiness": {
+    "status": "unverified",
+    "candidate_sha": null,
+    "evidence_path": null
+  },
+  "parity_receipt": {
+    "path": null,
+    "sha256": null,
+    "measured_sha": null,
+    "status": "unverified"
+  },
+  "claims": [],
+  "pages": [],
+  "benchmarks": [],
+  "local_build": {
+    "status": "unverified",
+    "command": null,
+    "candidate_sha": null,
+    "snapshot_path": null,
+    "dist_path": null,
+    "input_manifest": null,
+    "source_inventory": null,
+    "generated_inventory": null,
+    "rendered_inventory": null,
+    "reconciliation": null,
+    "crawl_evidence": null,
+    "evidence_path": null
+  },
+  "visual_review": {
+    "status": "unverified",
+    "samples": [],
+    "findings": [],
+    "evidence_path": null
+  },
+  "pages_pipeline": {
+    "status": "unverified",
+    "build_type": null,
+    "cname": null,
+    "https_enforced": null,
+    "source": null,
+    "workflow_sha": null,
+    "evidence_path": null
+  },
+  "live_deployment": {
+    "status": "unverified",
+    "main_sha": null,
+    "run_id": null,
+    "deployment_id": null,
+    "artifact_id": null,
+    "artifact_sha256": null,
+    "url": null,
+    "fetched_at": null,
+    "content_hashes": [],
+    "crawl_evidence": null,
+    "visual_evidence": null,
+    "evidence_path": null
+  },
+  "status": "unverified",
+  "unresolved": ["Complete the candidate-bound documentation audit and exact-main-SHA live deployment verification."]
+}
