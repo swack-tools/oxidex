@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "perl": {"version": "5.38.2", "sha256": "a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e"},
+  "archive_zip": {"version": "1.68", "sha256": "984e185d785baf6129c6e75f8eb44411745ac00bf6122fb1c8e822a3861ec650"},
+  "exiftool": {
+    "version": "13.59",
+    "repo": "https://github.com/exiftool/exiftool.git",
+    "tag_object": "2200871d9cef988051d2a99d67df3bda6cbb30a8"
+  },
+  "corpus_tree_sha256": "238c66689819c3018cdd296f01d483482530d05469a7eb5cea8b58af8d59babc",
+  "archives": {
+    "perl": {
+      "filename": "perl-5.38.2.tar.gz",
+      "url": "https://www.cpan.org/src/5.0/perl-5.38.2.tar.gz",
+      "sha256": "a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e"
+    },
+    "archive_zip": {
+      "filename": "Archive-Zip-1.68.tar.gz",
+      "url": "https://cpan.metacpan.org/authors/id/P/PH/PHRED/Archive-Zip-1.68.tar.gz",
+      "sha256": "984e185d785baf6129c6e75f8eb44411745ac00bf6122fb1c8e822a3861ec650"
+    },
+    "samples_apple": {"filename": "samples-Apple.tar.gz", "url": "https://exiftool.org/Apple.tar.gz", "sha256": "289b342ace0c89f2d04fe7aab9721640804d61a1e392700087870d96186c3546"},
+    "samples_canon": {"filename": "samples-Canon.tar.gz", "url": "https://exiftool.org/Canon.tar.gz", "sha256": "84613fb271461e670427cbd0445eff23e2469edf5287837fc58632720d068363"},
+    "samples_dji": {"filename": "samples-DJI.tar.gz", "url": "https://exiftool.org/DJI.tar.gz", "sha256": "e7562ada7bdd4d70e7bd0fe740e245846f77bb1957b24dea4dbba37bf8db594c"},
+    "samples_fujifilm": {"filename": "samples-FujiFilm.tar.gz", "url": "https://exiftool.org/FujiFilm.tar.gz", "sha256": "9fc6ca00927d76ce410a2e52ae7e5fb343bc0256f067c54051ea4ec6cf056246"},
+    "samples_gopro": {"filename": "samples-GoPro.tar.gz", "url": "https://exiftool.org/GoPro.tar.gz", "sha256": "89b1a9a25a758bb756dd4746c7b920fea2bfdb603cc99cb85327a93bb64f2a83"},
+    "samples_google": {"filename": "samples-Google.tar.gz", "url": "https://exiftool.org/Google.tar.gz", "sha256": "5b2a0dad42710d6f51aba413c96df6e4527bf8b9c2c3fb60df9554a0ddab9489"},
+    "samples_leica": {"filename": "samples-Leica.tar.gz", "url": "https://exiftool.org/Leica.tar.gz", "sha256": "e9476efe11bcd0068a65b679c324ac1d45a92017bdb9e9a0fd16484d756fc134"},
+    "samples_nikon": {"filename": "samples-Nikon.tar.gz", "url": "https://exiftool.org/Nikon.tar.gz", "sha256": "ff10bf399b5819d970bf28bb4dcdd65683203c42d9c5d4bcb582f5880e854971"},
+    "samples_olympus": {"filename": "samples-Olympus.tar.gz", "url": "https://exiftool.org/Olympus.tar.gz", "sha256": "8d007adabce87dfd48971abc8d4b553090ee048164e93456ecab355f4bb1ae0e"},
+    "samples_panasonic": {"filename": "samples-Panasonic.tar.gz", "url": "https://exiftool.org/Panasonic.tar.gz", "sha256": "63b5fb85247de9b3b6f3c37549800939ee7c0ecafdbba90e5994e0d5428bd8d5"},
+    "samples_pentax": {"filename": "samples-Pentax.tar.gz", "url": "https://exiftool.org/Pentax.tar.gz", "sha256": "d50bff20b8f272467e936733db5eaa9e0b615e40bec9e37dd77a29de0cc5409b"},
+    "samples_samsung": {"filename": "samples-Samsung.tar.gz", "url": "https://exiftool.org/Samsung.tar.gz", "sha256": "1a3c3a5d5f9cdeac203755c7f6e25a5a43ab14d3a3a526eb8bc3aa11bcd89bc7"},
+    "samples_sony": {"filename": "samples-Sony.tar.gz", "url": "https://exiftool.org/Sony.tar.gz", "sha256": "81ce5e20889e9780ed8fe14b3ba0a570ba15648386e6c43439e3dc3584c28405"}
+  }
+}
