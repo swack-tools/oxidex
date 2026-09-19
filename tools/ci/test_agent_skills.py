@@ -94,6 +94,36 @@ class SkillMirrorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
 
+    def test_claude_adapter_is_exact_and_rejects_adversarial_policy_variants(self):
+        expected = """# Claude adapter
+
+## Shared policy
+
+Read `AGENTS.md` for shared repository policy. It is authoritative; this
+adapter does not import or duplicate those rules and may not override them.
+
+## Skills
+
+Use project-specific Claude skills from `.claude/skills`.
+
+## Model routing
+
+Use Opus for architecture, release-promotion judgment, security-sensitive work,
+and final broad reviews. Use Sonnet for bounded implementation and routine
+review. Use Haiku only for low-risk, read-only inventory or summarization.
+
+Prefer fast mode for delegated Claude work when it is available.
+"""
+        actual = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertEqual(actual, expected)
+        for adversarial in (
+            expected.replace("Use Opus", "Do not use Opus"),
+            expected.replace("Use Sonnet", "Use Opus"),
+            expected + "\nRun `git status` before every release build.\n",
+        ):
+            with self.subTest(adversarial=adversarial):
+                self.assertNotEqual(adversarial, expected)
+
     def test_release_checklist_requires_receipts_signed_tag_and_artifact_proof(self):
         text = (REPO / "docs/contributing/release-checklist.md").read_text(
             encoding="utf-8"
