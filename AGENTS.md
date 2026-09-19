@@ -220,6 +220,17 @@ in which case the header says so. See `scripts/instrument.py`'s module
 docstring for the full rationale; `src/bin/jpeg-tag-matrix/instrument.rs`
 mirrors it for the one harness that isn't Python.
 
+## Release engineering
+
+Release work has three ordered, receipt-producing owners: use
+`exiftool-parity` first, `oxidex-release-documentation` second, and
+`oxidex-release-finalization` last. Ordinary development never touches
+`main`; only an explicitly maintainer-authorized release promotion may use a
+reviewed PR whose base is `main`. Authorization to prepare or merge that PR
+does not authorize the real release tag: pushing the signed tag requires
+separate explicit maintainer authorization for the exact version, tag, and
+`main` commit.
+
 ## Before the first edit, and before the first remote command
 
 The rules above are about trusting a *measurement*. These are about trusting the

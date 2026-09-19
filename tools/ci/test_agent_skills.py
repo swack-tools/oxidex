@@ -45,6 +45,78 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
 
 
 class SkillMirrorTests(unittest.TestCase):
+    def test_release_routing_names_all_three_skills(self):
+        for relative in (
+            "AGENTS.md",
+            "CLAUDE.md",
+            "docs/contributing/release-checklist.md",
+        ):
+            text = (REPO / relative).read_text(encoding="utf-8")
+            for skill in (
+                "exiftool-parity",
+                "oxidex-release-documentation",
+                "oxidex-release-finalization",
+            ):
+                with self.subTest(path=relative, skill=skill):
+                    self.assertIn(skill, text)
+
+    def test_claude_routes_only_authorized_release_promotion_to_main(self):
+        text = " ".join((REPO / "CLAUDE.md").read_text(encoding="utf-8").split())
+        for phrase in (
+            "ordinary development",
+            "reviewed PR whose base is `main`",
+            "exact `main` commit",
+            "separate explicit authorization",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_release_checklist_requires_receipts_signed_tag_and_artifact_proof(self):
+        text = (REPO / "docs/contributing/release-checklist.md").read_text(
+            encoding="utf-8"
+        )
+        for phrase in (
+            "parity receipt",
+            "documentation receipt",
+            "exact `main` commit",
+            "signed tag",
+            "GitHub release",
+            "code signature",
+            "Gatekeeper",
+            "stapled notarization",
+        ):
+            self.assertIn(phrase, text)
+        self.assertNotIn("git tag -a", text)
+
+    def test_release_docs_route_to_local_audit_and_workflow_pages_proof(self):
+        checklist = " ".join(
+            (REPO / "docs/contributing/release-checklist.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        docs_site = " ".join(
+            (REPO / "docs/contributing/docs-site.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        for phrase in (
+            "production-equivalent local",
+            "browser automation",
+            "human visual review",
+            "live Pages deployment is optional",
+        ):
+            with self.subTest(path="release-checklist.md", phrase=phrase):
+                self.assertIn(phrase, checklist)
+        for phrase in (
+            "production-equivalent local",
+            "every rendered route",
+            "browser automation",
+            "human visual review",
+            "`build_type: workflow`",
+            "not deployment proof",
+        ):
+            with self.subTest(path="docs-site.md", phrase=phrase):
+                self.assertIn(phrase, docs_site)
+
     def test_parity_markdown_has_no_bare_oracle_command(self):
         skill = REPO / ".claude/skills/exiftool-parity"
         # Command tokens, including inline examples, must use the pinned argv.

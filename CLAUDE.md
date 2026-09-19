@@ -6,7 +6,8 @@ only the workflow rules that sit on top of it.
 
 ## How work lands
 
-Work does **not** reach `main` through PRs from this tree. The flow is:
+Ordinary development does **not** reach `main` through PRs from this tree. The
+normal flow is:
 
 1. One agent, one worktree, one `staging/<slug>` branch off the current tip.
    Run `tools/preflight.sh --upstream` first.
@@ -26,10 +27,19 @@ cannot run without the fleet's verdict hub. Heavy local jobs take the shared
 measurement lock instead — see `docs/AUTOGENERATION-PLAN.md`, "How the work
 is run".)
 
-**`main` is the maintainer's decision alone.** Never push to it, merge into it,
-or rebase onto it. `refactor/tag-machinery` is where refactor work lives and is
-currently far ahead of `main`; both carry active rulesets (`main`, `tip-guard`,
-`rescued-guard`, `proof-guard`) that will reject a force-push or deletion.
+**`main` is the maintainer's decision alone.** During ordinary development,
+never push to it, merge into it, or rebase onto it. `refactor/tag-machinery` is
+where refactor work lives and is currently far ahead of `main`; both carry
+active rulesets (`main`, `tip-guard`, `rescued-guard`, `proof-guard`) that will
+reject a force-push or deletion.
+
+Release work is the narrow exception. Run `exiftool-parity`, then
+`oxidex-release-documentation`, then `oxidex-release-finalization` and pass the
+commit-bound receipt from each stage to the next. The finalization skill owns
+the explicitly maintainer-authorized promotion through a reviewed PR whose
+base is `main`, gates on the exact `main` commit, and stops for separate
+explicit authorization before pushing the real signed tag. Do not copy the
+release procedure here; follow those project skills.
 
 `just ci-standard` (justfile) runs the same checks CI does. Locally, at minimum:
 `cargo fmt --all --check && cargo clippy --release --all-features -- -D warnings
