@@ -36,7 +36,29 @@ jq -e --arg tag "$TAG" --arg sha "$MAIN_SHA" --arg workflow "Docker" '
 RELEASE_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-release-run.json")
 DOCKER_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-docker-run.json")
 gh run watch "$RELEASE_RUN_ID" --exit-status
+gh run view "$RELEASE_RUN_ID" --json \
+  databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
+  > "$EVIDENCE_DIR/final-release-run.json"
+jq -e --argjson id "$RELEASE_RUN_ID" --arg tag "$TAG" \
+  --arg sha "$MAIN_SHA" --arg workflow "Release" '
+  select(
+    .databaseId == $id and .headBranch == $tag and .headSha == $sha and
+    .workflowName == $workflow and .event == "push" and
+    .status == "completed" and .conclusion == "success"
+  )
+' "$EVIDENCE_DIR/final-release-run.json" > /dev/null
 gh run watch "$DOCKER_RUN_ID" --exit-status
+gh run view "$DOCKER_RUN_ID" --json \
+  databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
+  > "$EVIDENCE_DIR/final-docker-run.json"
+jq -e --argjson id "$DOCKER_RUN_ID" --arg tag "$TAG" \
+  --arg sha "$MAIN_SHA" --arg workflow "Docker" '
+  select(
+    .databaseId == $id and .headBranch == $tag and .headSha == $sha and
+    .workflowName == $workflow and .event == "push" and
+    .status == "completed" and .conclusion == "success"
+  )
+' "$EVIDENCE_DIR/final-docker-run.json" > /dev/null
 ```
 
 The `jq -e` filters refuse zero or multiple matches; never select "latest"
@@ -44,10 +66,14 @@ silently. If a rerun creates multiple matching workflow runs, stop and record
 an explicit unambiguous selection rule (for example a maintainer-named run ID)
 before replacing the selected-run JSON. Require each selected run to name
 `TAG`, `MAIN_SHA`, the expected workflow name, and the tag-push event. Record
-its run ID, URL, status, conclusion, and expected skips. For a SemVer pre-release,
-the GitHub release must be a prerelease, must not become Latest, stable docs
-must not be relabelled, and Docker must publish only exact version tags (not
-`:latest`). For a stable release, verify the stable behaviors separately.
+its run ID, URL, status, conclusion, and expected skips. The pre-watch selection
+record identifies the run but does not prove its outcome: only the fresh
+`final-*-run.json` records may support a receipt, and both must pass the complete
+identity plus `completed`/`success` assertions above before the receipt can
+become `verified`. For a SemVer pre-release, the GitHub release must be a
+prerelease, must not become Latest, stable docs must not be relabelled, and
+Docker must publish only exact version tags (not `:latest`). For a stable
+release, verify the stable behaviors separately.
 
 ```bash
 set -euo pipefail

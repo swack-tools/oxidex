@@ -101,6 +101,39 @@ class SkillMirrorTests(unittest.TestCase):
         ):
             self.assertIn(phrase, text)
 
+    def test_release_finalization_persists_successful_final_workflow_runs(self):
+        text = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        for run_id, workflow, evidence, next_marker in (
+            (
+                "RELEASE_RUN_ID",
+                "Release",
+                "final-release-run.json",
+                'gh run watch "$DOCKER_RUN_ID"',
+            ),
+            ("DOCKER_RUN_ID", "Docker", "final-docker-run.json", "```"),
+        ):
+            watch = f'gh run watch "${run_id}" --exit-status'
+            view = f'gh run view "${run_id}" --json'
+            with self.subTest(workflow=workflow):
+                self.assertIn(view, text)
+                self.assertIn(f'> "$EVIDENCE_DIR/{evidence}"', text)
+                self.assertLess(text.index(watch), text.index(view))
+                view_index = text.index(view)
+                final_record = text[view_index : text.index(next_marker, view_index)]
+                for phrase in (
+                    ".status == \"completed\"",
+                    ".conclusion == \"success\"",
+                    ".headBranch == $tag",
+                    ".headSha == $sha",
+                    ".workflowName == $workflow",
+                    ".event == \"push\"",
+                    f'--arg workflow "{workflow}"',
+                    f'"$EVIDENCE_DIR/{evidence}"',
+                ):
+                    self.assertIn(phrase, final_record)
+
     def test_release_finalization_captures_created_pr(self):
         text = canonical("oxidex-release-finalization", "references/gates.md")
         for phrase in (
