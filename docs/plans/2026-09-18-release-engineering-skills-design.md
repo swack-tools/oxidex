@@ -121,14 +121,88 @@ truthful for a particular OxiDex release.
 5. Consume the ExifTool parity receipt. Clearly separate observed extraction
    matches, missing/value/rename/extra differences, authenticated source-row
    credit, generated declarations, detected-only formats, and write coverage.
-6. Build the documentation site and run link/version/stale-claim checks.
-7. Produce a concise human release summary plus a machine-readable receipt.
+6. Audit every page that VitePress will publish, including pages omitted from
+   the navigation and pages generated only during deployment. Classify each as
+   current release documentation, explicitly historical/reference material,
+   or not suitable for publication. Every current page must be verified
+   against the candidate commit; historical pages must be visibly labelled so
+   an old number or plan cannot be mistaken for current release behavior.
+7. Reproduce the production Pages build with
+   `tools/docs-local-deploy.sh` from the frozen candidate, including the real
+   generated comparison report and the selected benchmark artifact. Crawl the
+   rendered output, require every internal route and asset to resolve, and
+   compare the rendered route inventory with the source-page inventory.
+8. Review the rendered site visually at desktop and mobile widths, in light
+   and dark themes, with representative screenshots. Check the home page,
+   guide, reference, parity report, status, performance, changelog, migration,
+   and installation pages for navigation, overflow, unreadable tables/code,
+   missing assets, console errors, and misleading banners/version labels.
+9. Audit the GitHub Pages CI/CD path itself: triggers, path filters, generated
+   report handoff, benchmark provenance, permissions, Pages artifact upload,
+   deployment environment, custom domain/base path, and concurrency. Validate
+   workflow syntax and repository tests, and inspect the live Pages settings
+   without exposing credentials.
+10. After the release promotion reaches `main`, require a successful
+    `deploy-docs.yml` run for the exact commit and crawl the deployed site.
+    Confirm that the live pages expose the expected release/version marker and
+    that the deployed route/content hashes correspond to the reviewed build.
+11. Produce a concise human release summary plus a machine-readable receipt.
 
 ### Output
 
 A documentation receipt keyed to the candidate commit, with a claim ledger,
-benchmark provenance, parity artifact identity, changelog status, docs-build
-result, and unresolved claims. Release finalization refuses a stale receipt.
+per-page classification and evidence, benchmark provenance, parity artifact
+identity, changelog status, local production-build/crawl/visual results,
+GitHub Pages workflow and settings results, exact-commit deployment URL, live
+site crawl, and unresolved claims. Release finalization refuses a stale or
+partial receipt.
+
+### GitHub Pages facts the implementation must reconcile
+
+The present repository has two different documentation mechanisms that must
+not be assumed equivalent:
+
+- `.github/workflows/deploy-docs.yml` is the live Pages pipeline. It runs from
+  `main`, generates the ExifTool comparison report, optionally imports a
+  Criterion artifact, builds VitePress, uploads a Pages artifact, and deploys
+  it with `actions/deploy-pages`.
+- `.github/workflows/release.yml` still contains a stable-release job that
+  edits and pushes the `gh-pages` branch. Repository documentation says Pages
+  uses GitHub Actions as its source. A live API check on 2026-09-18 confirmed
+  `build_type: workflow`, `cname: oxidex.net`, and HTTPS enforcement (the API
+  also retains `source.branch: gh-pages`, which is not proof that branch pushes
+  deploy in workflow mode). The release job may therefore be obsolete or
+  ineffective. The documentation skill must verify the setting again and
+  either repair/remove the dead path or document why it remains. It may not
+  call the release workflow's `gh-pages` push a successful documentation
+  deployment without proof.
+
+The deploy workflow is also allowed to fall back to an older successful
+benchmark artifact and stamp the commit that actually produced it. That is
+honest provenance, but it is not automatically current release evidence. For
+a release, require a benchmark artifact for the candidate commit or label the
+published performance numbers prominently as historical and exclude them from
+claims about the new tag.
+
+### Whole-site factuality model
+
+The site audit is exhaustive over the rendered Pages artifact, not just the
+sidebar. Its inventory includes committed Markdown, included files, generated
+comparison pages, status pages, and copied Criterion reports. Each route gets:
+
+- source or generator;
+- current / historical / excluded classification;
+- release version and commit applicability;
+- material factual claims and their evidence;
+- generated-data commit and oracle provenance, where applicable;
+- link/crawl result and visual-review status;
+- disposition for stale content: update, label/archive, or remove from the
+  published artifact.
+
+Plans, old checkpoints, previous-release measurements, and migration history
+may remain available when they are useful, but the rendered page must identify
+their date/version and must not present them as the state of the tag being
+released.
 
 ## Skill 3: `exiftool-parity` revision
 
@@ -226,6 +300,9 @@ Skills are tested one at a time.
    - pressure to tag the integration branch before it reaches `main`;
    - pressure to call workflow wiring proof of Apple notarization;
    - pressure to copy stale benchmarks or parity totals into release notes;
+   - pressure to approve the site after checking only navigation-linked pages;
+   - pressure to treat a green cold build, a `gh-pages` push, or workflow YAML
+     as proof that the production Pages deployment is correct and attractive;
    - pressure to use bare ExifTool or a degraded Perl after the pinned oracle
      refuses to run.
 5. Add deterministic repository tests for mirror equality, forbidden bare
@@ -246,6 +323,14 @@ Docker publication, or secret mutation is part of implementing these skills.
 - Pre-tag checks cannot be misreported as Apple notarization proof.
 - The documentation skill rejects stale or unsupported benchmark/parity
   claims.
+- The documentation receipt accounts for every rendered Pages route, and
+  current pages are tied to evidence from the candidate commit while older
+  pages are visibly historical or removed from publication.
+- The production-shaped local site passes route/asset crawling and responsive
+  visual review, and the live Pages deployment is verified at the exact
+  `main` commit rather than inferred from workflow configuration.
+- The skill detects and resolves any mismatch between the repository's live
+  GitHub Actions Pages source and legacy `gh-pages` branch updates.
 - The parity skill never invokes bare ExifTool and emits release-consumable,
   provenance-rich metrics.
 - `AGENTS.md` and `CLAUDE.md` route work without duplicating long procedures.
