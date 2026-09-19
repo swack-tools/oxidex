@@ -759,8 +759,16 @@ pub(crate) fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagVal
     // ExifTool decodes this int16u array to its space-separated textual form
     // before applying the Binary flag, so its reported byte count is the UTF-8
     // length of that rendered payload rather than the raw TIFF value length.
+    //
+    // An IFD-engine row (the IFD0, ExifIFD and IFD1 walks) already IS that
+    // placeholder -- its generated arm counts the rendered payload itself --
+    // and measuring the placeholder's own 50 characters instead printed
+    // `(Binary data 50 bytes, ...)` for FujiFilmDS-10.jpg's 1368-byte IFD0
+    // TransferFunction. A rendered int16u list is digits and spaces, so it
+    // can never look like the placeholder.
     if matches!(base_name, "TransferFunction" | "LinearizationTable")
         && let Some(payload) = value.as_string()
+        && !is_binary_placeholder(payload)
     {
         return TagValue::String(format!(
             "(Binary data {} bytes, use -b option to extract)",
@@ -831,10 +839,11 @@ pub(crate) fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagVal
         // already print-converted by its generated arm (Exif.pm:2362
         // `$val =~ /^(inf|undef)$/ ? $val : "${val} m"`, Autogeneration v2):
         // re-suffixing it would print `undef m`. Only the directories the
-        // engine walks; IFD0 is still read by hand (a Rational, below).
+        // engine walks (IFD0 since slice v2-ifd0); a hand arm's value is a
+        // Rational, below.
         if base_name == "SubjectDistance"
             && matches!(value, TagValue::String(_))
-            && ["ExifIFD:", "InteropIFD:", "IFD1:"]
+            && ["IFD0:", "ExifIFD:", "InteropIFD:", "IFD1:"]
                 .iter()
                 .any(|group| tag_name.starts_with(group))
         {
@@ -1145,6 +1154,14 @@ pub(crate) fn format_tag_value_rules(tag_name: &str, value: &TagValue) -> TagVal
     // Rule 21: Default - Return original value unchanged
     // ---------------------------------------------------------------------
     value.clone()
+}
+
+/// Whether `text` is already ExifTool's `Binary` placeholder, `(Binary data N
+/// bytes, use -b option to extract)` (exiftool:3983-3988).
+fn is_binary_placeholder(text: &str) -> bool {
+    text.strip_prefix("(Binary data ")
+        .and_then(|rest| rest.strip_suffix(" bytes, use -b option to extract)"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Applies ValueConv for an APEX-stored rational without applying PrintConv.
@@ -1930,6 +1947,45 @@ fn format_icc_string_values(value: &str, base_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rendered int16u TransferFunction is wrapped with its own length; an
+    /// IFD-engine row that is already the placeholder is left alone (slice
+    /// v2-ifd0: FujiFilmDS-10.jpg's IFD0 TransferFunction printed 50 bytes,
+    /// the placeholder's own length, where ExifTool prints 1368).
+    #[test]
+    fn transfer_function_placeholder_is_not_rewrapped() {
+        let placeholder = "(Binary data 1368 bytes, use -b option to extract)";
+        for key in ["IFD0:TransferFunction", "ExifIFD:LinearizationTable"] {
+            assert_eq!(
+                format_tag_value_rules(key, &TagValue::new_string(placeholder)),
+                TagValue::new_string(placeholder)
+            );
+        }
+        assert_eq!(
+            format_tag_value_rules("IFD1:TransferFunction", &TagValue::new_string("0 65535 12")),
+            TagValue::new_string("(Binary data 10 bytes, use -b option to extract)")
+        );
+        assert!(!is_binary_placeholder(
+            "(Binary data  bytes, use -b option to extract)"
+        ));
+        assert!(!is_binary_placeholder("0 1 2"));
+    }
+
+    /// An IFD0 SubjectDistance the engine printed (`undef`, `inf`, `5 m`)
+    /// is not re-suffixed (slice v2-ifd0); a hand Rational still is.
+    #[test]
+    fn engine_ifd0_subject_distance_is_not_resuffixed() {
+        for shown in ["undef", "inf", "5 m"] {
+            assert_eq!(
+                format_tag_value_rules("IFD0:SubjectDistance", &TagValue::new_string(shown)),
+                TagValue::new_string(shown)
+            );
+        }
+        assert_eq!(
+            format_tag_value_rules("IFD0:SubjectDistance", &TagValue::new_rational(5, 1)),
+            TagValue::new_string("5 m")
+        );
+    }
 
     /// Preserve this compatibility helper's existing string behavior.
     /// Final CLI JSON and text escaping is tested separately: the helper

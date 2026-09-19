@@ -301,9 +301,24 @@ pub fn parse_ifd_chain(
         // Parse this IFD
         let tags = parse_ifd(reader, ifd_offset, byte_order)?;
 
+        // Slice v2-ifd0: IFD0 (only; IFD1 and later pages stay hand) is
+        // produced by the generated `Exif::Main` for every ordinary entry it
+        // reports, over the whole file -- the TIFF block of a standalone
+        // TIFF, whose header is byte 0.
+        let tiff = (ifd_index == 0)
+            .then(|| usize::try_from(reader.size()).ok())
+            .flatten()
+            .and_then(|len| reader.read(0, len).ok());
+        let mut engine = tiff.as_deref().and_then(|tiff| {
+            crate::core::exif_dir_engine::ifd0_walk(tiff, ifd_offset, byte_order, metadata)
+        });
+
         // Process IFD tags and get sub-IFD information
         let (exif_offset, gps_offset, makernote_data) =
-            process_tiff_ifd_tags(&tags, ifd_name, byte_order, metadata);
+            process_tiff_ifd_tags(&tags, ifd_name, byte_order, engine.as_mut(), metadata);
+        if let Some(engine) = engine {
+            engine.drain_ifd0(metadata);
+        }
 
         // Parse EXIF Sub-IFD if present. A standalone TIFF's structure starts
         // at file offset 0, so the TIFF base ExifTool adds to stored offsets
@@ -476,6 +491,9 @@ pub(crate) fn get_ifd_name(index: usize) -> &'static str {
 /// * `tags` - Parsed IFD tags
 /// * `ifd_name` - Name of the IFD (e.g., "IFD0")
 /// * `byte_order` - Byte order for interpreting multi-byte values
+/// * `engine` - For IFD0, the generated `Exif::Main` walk of it
+///   (`exif_dir_engine::ifd0_walk`), asked first for every ordinary entry;
+///   `None` = the hand arm alone
 /// * `metadata` - MetadataMap to populate
 ///
 /// # Returns
@@ -485,6 +503,7 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
     tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
     ifd_name: &str,
     byte_order: ByteOrder,
+    mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     let mut exif_ifd_offset = None;
@@ -646,6 +665,14 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
             continue;
         }
 
+        // Slice v2-ifd0: the engine's row for this entry, at this entry's
+        // position, or the hand arm below when the engine leaves it.
+        if let Some(engine) = engine.as_deref_mut()
+            && engine.take_ifd0(*tag_id, metadata)
+        {
+            continue;
+        }
+
         // An Exif::Main RawConv that returns undef creates no tag at all
         // (PanasonicTitle / PanasonicTitle2 when Panasonic's fixed-size field
         // is all NUL, Exif.pm 13.59:3849-3873).
@@ -741,7 +768,7 @@ mod strip_byte_counts_tests {
         let tags = vec![(0x0117, 4, 50, Cow::Owned(raw))];
         let mut metadata = MetadataMap::new();
 
-        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, &mut metadata);
+        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, None, &mut metadata);
 
         let expected = std::iter::repeat_n("1961", 50)
             .collect::<Vec<_>>()
@@ -770,7 +797,7 @@ mod color_map_tests {
         let tags = vec![(0x0140, 3, 6, Cow::Borrowed(raw.as_slice()))];
         let mut metadata = MetadataMap::new();
 
-        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, &mut metadata);
+        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, None, &mut metadata);
 
         assert_eq!(metadata.get("IFD0:ColorMap"), Some(&TagValue::Binary(raw)));
     }
@@ -789,7 +816,7 @@ mod document_name_tests {
         let tags = vec![(0x010d, 2, 11, Cow::Borrowed(b"Plan Scan \0".as_slice()))];
         let mut metadata = MetadataMap::new();
 
-        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, &mut metadata);
+        process_tiff_ifd_tags(&tags, "IFD0", ByteOrder::LittleEndian, None, &mut metadata);
 
         assert_eq!(
             metadata
