@@ -10,8 +10,28 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Gates every other job. Refuses a tag that disagrees with the crate version
+  # in Cargo.toml, and classifies the tag: a SemVer pre-release (any '-' suffix,
+  # e.g. v2.0.0-beta.1) publishes as a GitHub pre-release that is never marked
+  # Latest and does not touch the stable docs site. tools/ci/release_version.py
+  # holds the logic; tools/ci/test_release_workflow.py pins the wiring below.
+  verify-version:
+    name: Verify tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.classify.outputs.version }}
+      prerelease: ${{ steps.classify.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Classify tag
+        id: classify
+        run: python3 tools/ci/release_version.py --tag "$GITHUB_REF_NAME" --cargo-toml Cargo.toml
+
   build-linux:
     name: Build Linux (${{ matrix.target }})
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -71,6 +91,7 @@ jobs:
 
   build-windows:
     name: Build Windows (x86_64)
+    needs: verify-version
     # 8x: same profile as the Linux x64 build -- a cold cross-compile of the
     # whole workspace via mingw.
     runs-on: ubuntu-latest
@@ -114,6 +135,7 @@ jobs:
 
   build-macos:
     name: Build and Sign macOS (aarch64)
+    needs: verify-version
     runs-on: macos-15
     permissions:
       contents: write
@@ -276,7 +298,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-linux, build-windows, build-macos]
+    needs: [verify-version, build-linux, build-windows, build-macos]
     # 2x: downloads artifacts, copies files and calls the releases API.
     # Nothing is compiled here.
     runs-on: ubuntu-latest
@@ -360,7 +382,12 @@ jobs:
           name: Release v${{ steps.version.outputs.version }}
           body_path: release-notes.md
           draft: false
-          prerelease: false
+          # A '-' in the tag (v2.0.0-beta.1) is a SemVer pre-release: publish it
+          # as a GitHub pre-release and never let it take the Latest badge, so
+          # /releases/latest and anything that follows it stay on the last
+          # stable release.
+          prerelease: ${{ needs.verify-version.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.verify-version.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: |
             release-assets/*
         env:
@@ -368,7 +395,12 @@ jobs:
 
   update-docs:
     name: Update GitHub Pages
-    needs: create-release
+    needs: [verify-version, create-release]
+    # Stable releases only. A pre-release must not relabel the stable docs
+    # site's version dropdown, and the dropdown's sed pattern below
+    # (v[0-9.]*) cannot match a pre-release label, so once written a beta
+    # label would silently survive every later stable release.
+    if: needs.verify-version.outputs.prerelease != 'true'
     # 2x: git operations, awk and sed against the gh-pages branch.
     runs-on: ubuntu-latest
     permissions:

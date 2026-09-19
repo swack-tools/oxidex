@@ -2,6 +2,10 @@
 name = "oxidex-tags-shared"
 version = "0.1.0"
 edition = "2024"
+authors = ["OxiDex Contributors"]
+description = "Shared tag-database types, lookup and validation for the OxiDex tag crates"
+license = "GPL-3.0"
+repository = "https://github.com/swack-tools/oxidex"
 
 [dependencies]
 once_cell = { version = "1", features = ["parking_lot"] }

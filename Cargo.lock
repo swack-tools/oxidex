@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex"
-version = "1.2.1"
+version = "2.0.0-beta.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "oxidex-tags-camera",
  "oxidex-tags-core",
@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags-camera"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "bincode",
  "oxidex-tags-core",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags-core"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "bincode",
  "oxidex-tags-shared",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags-document"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "bincode",
  "oxidex-tags-core",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags-image"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "bincode",
  "oxidex-tags-core",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags-media"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "bincode",
  "oxidex-tags-core",
@@ -1258,7 +1258,7 @@ dependencies = [
 
 [[package]]
 name = "oxidex-tags-specialty"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 dependencies = [
  "bincode",
  "oxidex-tags-core",

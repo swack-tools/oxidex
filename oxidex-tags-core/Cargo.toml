@@ -1,6 +1,6 @@
 [package]
 name = "oxidex-tags-core"
-version = "1.0.4"
+version = "2.0.0-beta.1"
 edition = "2024"
 authors = ["OxiDex Contributors"]
 description = "Core tag definitions for OxiDex metadata extraction"
@@ -11,11 +11,11 @@ name = "oxidex_tags_core"
 path = "src/lib.rs"
 
 [dependencies]
-oxidex-tags-shared = { path = "../oxidex-tags-shared" }
+oxidex-tags-shared = { path = "../oxidex-tags-shared", version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 bincode = { version = "2.0", features = ["serde"] }
 
 [build-dependencies]
 bincode = { version = "2.0", features = ["serde"] }
 serde_yaml = "0.9"
-oxidex-tags-shared = { path = "../oxidex-tags-shared" }
+oxidex-tags-shared = { path = "../oxidex-tags-shared", version = "0.1.0" }
