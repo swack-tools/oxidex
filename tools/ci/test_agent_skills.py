@@ -452,6 +452,7 @@ class SkillMirrorTests(unittest.TestCase):
         self.assertNotIn("/tmp/oxidex-perl538-build-", text)
         for phrase in (
             "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples",
             "/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
