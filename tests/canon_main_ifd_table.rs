@@ -241,15 +241,19 @@ fn corpus_main_tags_match_the_pinned_oracle() {
         );
     }
     // residual, decision D3: 0x0096 on /EOS 5D/ bodies is the SerialInfo
-    // edge, so no Main `InternalSerialNumber` (the oracle's `E005986` on the
-    // 5D is SerialInfo's own row, which has no producer yet; the 5D Mark II
-    // carries none at all).
-    for file in ["CanonEOS5D.jpg", "CanonEOS5D_MarkII.jpg"] {
+    // edge, so no Main `InternalSerialNumber`. The oracle's `E005986` on the
+    // 5D is SerialInfo's own key-9 row, now decoded through the generated
+    // `%Canon::SerialInfo` (`canon/generated_subtables.rs`); the 5D Mark II
+    // carries none at all (its key 9 fails the `/^\w{6}/` RawConv).
+    for (file, want) in [
+        ("CanonEOS5D.jpg", Some("E005986")),
+        ("CanonEOS5D_MarkII.jpg", None),
+    ] {
         if let Some(metadata) = carrier(CORPUS, file) {
             assert_eq!(
-                shown(&metadata, "Canon:InternalSerialNumber"),
-                None,
-                "{file}: the Main 0x0096 value is not ExifTool's on a /EOS 5D/ body"
+                shown(&metadata, "Canon:InternalSerialNumber").as_deref(),
+                want,
+                "{file}: 0x0096 on a /EOS 5D/ body is SerialInfo's row, never the Main value"
             );
         }
     }
