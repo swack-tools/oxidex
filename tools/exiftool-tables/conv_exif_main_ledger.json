@@ -1,8 +1,8 @@
 {
  "counts": {
-  "generated": 528,
+  "generated": 552,
   "not_conversion_fields": 29,
-  "refused": 40
+  "refused": 16
  },
  "exiftool_version": "13.59",
  "generated": [
@@ -963,6 +963,16 @@
   {
    "flags": [],
    "hash_keys": [],
+   "id": "0x4747",
+   "name": "XP_DIP_XML",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "bdc71e6d02c6b866f1e21d1e4cec41810dcb7e6f7a6cd04cb15032566847c6b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
    "id": "0x4749",
    "name": "RatingPercent",
    "slots": {},
@@ -1834,6 +1844,16 @@
    "name": "BatteryLevel",
    "slots": {},
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x8298",
+   "name": "Copyright",
+   "slots": {
+    "RawConv": "code"
+   },
+   "source_sha256": "6ef33fd82d0255f897aa87a4014f51f29a6a523c39d647cb4c9fd9c785d9092d"
   },
   {
    "flags": [],
@@ -2894,6 +2914,16 @@
   {
    "flags": [],
    "hash_keys": [],
+   "id": "0x9286",
+   "name": "UserComment",
+   "slots": {
+    "RawConv": "str"
+   },
+   "source_sha256": "407a2ddf89d226d9d877a4fb9e50359fddc332ffb56dc5c43a3ef0322753e642"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
    "id": "0x9290",
    "name": "SubSecTime",
    "slots": {
@@ -3010,6 +3040,56 @@
   {
    "flags": [],
    "hash_keys": [],
+   "id": "0x9c9b",
+   "name": "XPTitle",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "bdc71e6d02c6b866f1e21d1e4cec41810dcb7e6f7a6cd04cb15032566847c6b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9c9c",
+   "name": "XPComment",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "bdc71e6d02c6b866f1e21d1e4cec41810dcb7e6f7a6cd04cb15032566847c6b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9c9d",
+   "name": "XPAuthor",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "bdc71e6d02c6b866f1e21d1e4cec41810dcb7e6f7a6cd04cb15032566847c6b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9c9e",
+   "name": "XPKeywords",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "bdc71e6d02c6b866f1e21d1e4cec41810dcb7e6f7a6cd04cb15032566847c6b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0x9c9f",
+   "name": "XPSubject",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "bdc71e6d02c6b866f1e21d1e4cec41810dcb7e6f7a6cd04cb15032566847c6b7"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
    "id": "0xa000",
    "name": "FlashpixVersion",
    "slots": {
@@ -3090,6 +3170,16 @@
    "name": "FlashEnergy",
    "slots": {},
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa20c",
+   "name": "SpatialFrequencyResponse",
+   "slots": {
+    "PrintConv": "str"
+   },
+   "source_sha256": "15a70d8fd98a2bf919b4a9bbb45cfa0243e3c5424fc78a72b1b191aa6d5f307a"
   },
   {
    "flags": [],
@@ -3225,6 +3315,17 @@
     "PrintConv": "hash"
    },
    "source_sha256": "3a358dc41c30c242d06aaf82c02f2253b4a1d07205115e41389b596eeafaba4c"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa302",
+   "name": "CFAPattern",
+   "slots": {
+    "PrintConv": "str",
+    "RawConv": "str"
+   },
+   "source_sha256": "6520d1dc92382d6edada898b72d3cfc33ab576ca3a30407fc16fa46670a6a431"
   },
   {
    "flags": [],
@@ -3403,6 +3504,16 @@
     "ValueConv": "str"
    },
    "source_sha256": "5dcb9954f58d7e9b5d4b181ac2f6e9420101600c9acbbf0bfb5987a0175cad66"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xa40e",
+   "name": "DevelopmentTypeDescription",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
   },
   {
    "flags": [],
@@ -3676,6 +3787,75 @@
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
   },
   {
+   "flags": [
+    "PrintHex"
+   ],
+   "hash_keys": [
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "26",
+    "27",
+    "28",
+    "29",
+    "30",
+    "31",
+    "32",
+    "33",
+    "34",
+    "35",
+    "36",
+    "37",
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "5",
+    "50",
+    "51",
+    "52",
+    "53",
+    "54",
+    "55",
+    "56",
+    "57",
+    "58",
+    "59",
+    "61",
+    "62",
+    "63",
+    "8",
+    "9"
+   ],
+   "id": "0xbc01",
+   "name": "PixelFormat",
+   "slots": {
+    "PrintConv": "hash",
+    "ValueConv": "str"
+   },
+   "source_sha256": "0d581fe35ce7f0e4461eca847dfafbbac9e5f4b69f86a080fa793f768c7f49d8"
+  },
+  {
    "flags": [],
    "hash_keys": [
     "0",
@@ -3923,6 +4103,17 @@
    "name": "UniqueCameraModel",
    "slots": {},
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc615",
+   "name": "LocalizedCameraModel",
+   "slots": {
+    "PrintConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "ae5328000616d56d4d3e575210e17b9eb801839aacb8f8b4a6550036d859b9ce"
   },
   {
    "flags": [],
@@ -4322,6 +4513,16 @@
   {
    "flags": [],
    "hash_keys": [],
+   "id": "0xc68b",
+   "name": "OriginalRawFileName",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
    "id": "0xc68d",
    "name": "ActiveArea",
    "slots": {},
@@ -4376,10 +4577,72 @@
   {
    "flags": [],
    "hash_keys": [],
+   "id": "0xc6d2",
+   "name": "PanasonicTitle",
+   "slots": {
+    "RawConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "6b6d36e668cb8402b51926c0ab82e2179c293b749af0c6fb5c55b18ee5ce790a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6d3",
+   "name": "PanasonicTitle2",
+   "slots": {
+    "RawConv": "str",
+    "ValueConv": "str"
+   },
+   "source_sha256": "6b6d36e668cb8402b51926c0ab82e2179c293b749af0c6fb5c55b18ee5ce790a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6f3",
+   "name": "CameraCalibrationSig",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6f4",
+   "name": "ProfileCalibrationSig",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6f6",
+   "name": "AsShotProfileName",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
    "id": "0xc6f7",
    "name": "NoiseReductionApplied",
    "slots": {},
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc6f8",
+   "name": "ProfileName",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
   },
   {
    "flags": [],
@@ -4437,6 +4700,16 @@
   {
    "flags": [],
    "hash_keys": [],
+   "id": "0xc6fe",
+   "name": "ProfileCopyright",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
    "id": "0xc714",
    "name": "ForwardMatrix1",
    "slots": {},
@@ -4449,6 +4722,36 @@
    "name": "ForwardMatrix2",
    "slots": {},
    "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc716",
+   "name": "PreviewApplicationName",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc717",
+   "name": "PreviewApplicationVersion",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
+  },
+  {
+   "flags": [],
+   "hash_keys": [],
+   "id": "0xc718",
+   "name": "PreviewSettingsName",
+   "slots": {
+    "ValueConv": "str"
+   },
+   "source_sha256": "0df588b39bcefd5699d41e01470b978311fe370e30e33fe93e1901b3d777b49d"
   },
   {
    "flags": [],
@@ -5150,11 +5453,18 @@
   }
  ],
  "helpers_called": [
+  "Image::ExifTool::ASF::GetGUID",
   "Image::ExifTool::ConvertDateTime",
+  "Image::ExifTool::Decode",
+  "Image::ExifTool::Exif::ConvertExifText",
+  "Image::ExifTool::Exif::DecodeCFAPattern",
+  "Image::ExifTool::Exif::PrintCFAPattern",
   "Image::ExifTool::Exif::PrintExposureTime",
   "Image::ExifTool::Exif::PrintFNumber",
   "Image::ExifTool::Exif::PrintFraction",
+  "Image::ExifTool::Exif::PrintSFR",
   "Image::ExifTool::IsFloat",
+  "Image::ExifTool::Printable",
   "Image::ExifTool::XMP::ConvertXMPDate"
  ],
  "not_conversion_fields": [
@@ -5308,205 +5618,101 @@
   {
    "id": "0x00fe",
    "name": "SubfileType",
+   "note": "RawConv calls $self->SetPriorityDir() (writes PRIORITY_DIR, the duplicate-tag priority directory, ExifTool.pm:9636) and reads/writes PageCount and MultiPage, per-file members no IFD walk carries across directories",
    "reason": "Image::ExifTool::SetPriorityDir has no proven port"
   },
   {
    "id": "0x00ff",
    "name": "OldSubfileType",
+   "note": "same as SubfileType: SetPriorityDir, PageCount, MultiPage",
    "reason": "Image::ExifTool::SetPriorityDir has no proven port"
   },
   {
    "id": "0x0103",
    "name": "Compression",
+   "note": "RawConv calls Exif::IdentifyRawFile, which reads FILE_TYPE and IdentifiedRawFile and, for a TIFF file, calls OverrideFileType($$et{TIFF_TYPE} = ...): a file-type side effect. FILE_TYPE is not supplied to the walk yet (Session::for_ifd takes it from the caller's Condition members, which no caller seeds)",
    "reason": "Image::ExifTool::Exif::IdentifyRawFile has no proven port"
   },
   {
    "id": "0x0111",
    "name": "StripOffsets/OtherImageStart/PreviewJXLStart/PreviewImageStart/JpgFromRawStart",
+   "note": "no IFD entry: codegen.py emits nothing for this id in ifd/exif.rs (every alternative is an offset/length pointer, IsOffset/OffsetPair; their Conditions read TIFF_TYPE/DIR_NAME/Compression/SubfileType), so the walk never resolves an alternative to convert",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
   },
   {
    "id": "0x0117",
    "name": "StripByteCounts/OtherImageLength/PreviewJXLLength/PreviewImageLength/JpgFromRawLength",
+   "note": "no IFD entry: as StripOffsets (0x0111), the byte-count half of the offset pairs",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
   },
   {
    "id": "0x014a",
    "name": "SubIFD/A100DataOffset",
+   "note": "no IFD entry: SubIFD's Condition calls Image::ExifTool::Sony::SetARW and reads DIR_NAME/FILE_TYPE/Make/SubfileType/Compression; A100DataOffset is an offset",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
   },
   {
    "id": "0x0201",
    "name": "ThumbnailOffset/PreviewImageStart/JpgFromRawStart/OtherImageStart",
+   "note": "no IFD entry: offset alternatives whose Conditions read DIR_NAME/TIFF_TYPE/FILE_TYPE/PATH[-2] and call OverrideFileType (NRW detection)",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
   },
   {
    "id": "0x0202",
    "name": "ThumbnailLength/PreviewImageLength/JpgFromRawLength/OtherImageLength",
+   "note": "no IFD entry: the length half of 0x0201's offset pairs",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
-  },
-  {
-   "id": "0x4747",
-   "name": "XP_DIP_XML",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0x8298",
-   "name": "Copyright",
-   "reason": "Image::ExifTool::Options has no proven port"
   },
   {
    "id": "0x927c",
    "name": "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteGoogle/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyxHyperFire/MakerNoteReconyxUltraFire/MakerNoteReconyxHyperFire2/MakerNoteReconyxMicroFire/MakerNoteReconyxHyperFire4K/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
+   "note": "no IFD entry: the MakerNotes dispatch array (SubDirectory alternatives chosen by $$valPt/Make/Model; MakerNotePhaseOne's Condition calls OverrideFileType)",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
-  },
-  {
-   "id": "0x9286",
-   "name": "UserComment",
-   "reason": "Image::ExifTool::Exif::ConvertExifText has no proven port"
   },
   {
    "id": "0x9287",
    "name": "LearningOptOutIn",
+   "note": "PrintConv reads Exif.pm's file-scoped lexical hashes %use and %ind (absent from the dump) and uses shift and a C-style for loop",
    "reason": "builtin shift not modelled"
-  },
-  {
-   "id": "0x9c9b",
-   "name": "XPTitle",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0x9c9c",
-   "name": "XPComment",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0x9c9d",
-   "name": "XPAuthor",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0x9c9e",
-   "name": "XPKeywords",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0x9c9f",
-   "name": "XPSubject",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xa20c",
-   "name": "SpatialFrequencyResponse",
-   "reason": "Image::ExifTool::Exif::PrintSFR has no proven port"
-  },
-  {
-   "id": "0xa302",
-   "name": "CFAPattern",
-   "reason": "Image::ExifTool::Exif::DecodeCFAPattern has no proven port"
-  },
-  {
-   "id": "0xa40e",
-   "name": "DevelopmentTypeDescription",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xa462",
    "name": "CompositeImageExposureTimes",
+   "note": "RawConv loops over the value by byte offset with Get16u/GetRational64u/GetRational64s (while loop, declarations): grammar work, not a helper",
    "reason": "AST node decl not modelled"
-  },
-  {
-   "id": "0xbc01",
-   "name": "PixelFormat",
-   "reason": "Image::ExifTool::ASF::GetGUID has no proven port"
-  },
-  {
-   "id": "0xc615",
-   "name": "LocalizedCameraModel",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc634",
    "name": "SR2Private/DNGAdobeData/MakerNotePentax/MakerNotePentax5/MakerNoteRicohPentax/MakerNoteDJIInfo/DNGPrivateData",
+   "note": "the static table's variant group has no alternative with a conversion: all are SubDirectory edges except DNGPrivateData (Binary, no ValueConv/PrintConv), which the static path already reports",
    "reason": "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"
-  },
-  {
-   "id": "0xc68b",
-   "name": "OriginalRawFileName",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6d2",
-   "name": "PanasonicTitle",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6d3",
-   "name": "PanasonicTitle2",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6f3",
-   "name": "CameraCalibrationSig",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6f4",
-   "name": "ProfileCalibrationSig",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6f6",
-   "name": "AsShotProfileName",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6f8",
-   "name": "ProfileName",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc6fe",
-   "name": "ProfileCopyright",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc716",
-   "name": "PreviewApplicationName",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc717",
-   "name": "PreviewApplicationVersion",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
-  },
-  {
-   "id": "0xc718",
-   "name": "PreviewSettingsName",
-   "reason": "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm"
   },
   {
    "id": "0xc740",
    "name": "OpcodeList1",
-   "reason": "AST node deref not modelled"
+   "note": "%opcodeInfo sets ConvertBinary => 1 (recorded only by name in the dump's _extra_keys): the PrintConv runs on the SCALAR reference, and its OTHER sub Exif::PrintOpcode dereferences $$val and unpacks x${pos}N4 records",
+   "reason": "ConvertBinary not modelled"
   },
   {
    "id": "0xc741",
    "name": "OpcodeList2",
-   "reason": "AST node deref not modelled"
+   "note": "as OpcodeList1: ConvertBinary, PrintOpcode over $$val",
+   "reason": "ConvertBinary not modelled"
   },
   {
    "id": "0xc74e",
    "name": "OpcodeList3",
-   "reason": "AST node deref not modelled"
+   "note": "as OpcodeList1: ConvertBinary, PrintOpcode over $$val",
+   "reason": "ConvertBinary not modelled"
   },
   {
    "id": "0xc763",
    "name": "TimeCodes",
+   "note": "PrintConv maps hex over split, then a while loop of sprintf('%.2x') BCD and timezone arithmetic (declarations, while): grammar work, not a helper",
    "reason": "AST node decl not modelled"
   }
  ],
- "rust_sha256": "bf39e55f748b70c634bdc59f74a33233aa6c11c5fd9d827a33354d104ea4505a",
+ "rust_sha256": "accbb2fe370ec32f4ffbc584d9ddb155e5a78fa182830c84dd261092caca13f7",
  "schema": "oxidex_conv_ledger_v1",
  "table": "Exif::Main",
  "table_sha256": "7e46afd009047f158b5460b4d7cc4014d58eed686e1962b2fca922c5cb048ff1",

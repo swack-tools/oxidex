@@ -29,8 +29,12 @@
 # never reads -- it refuses whatever would consult GetByteOrder) and
 # "members" ({KEY: ARG}, set in $$et before the call). Their result adds
 # "set_members" ({KEY: OUT} for every non-reference member the call created
-# or changed) and "warnings" ([OUT...], each message the call passed to
-# $self->Warn, recorded instead of issued -- Decode ignores Warn's return).
+# or changed; {"t":"deleted"} for one it deleted) and "warnings" ([OUT...],
+# each message the call passed to $self->Warn, recorded instead of issued --
+# every caller ignores Warn's return -- with "ignorable" set to Warn's second
+# argument when one was passed). ConvertExifText and DecodeCFAPattern are
+# side-effect cases too. A pure case that carries "byte_order" runs after
+# SetByteOrder (PrintSFR reads GetByteOrder through Get16u/GetRational64u).
 # They run with $^W = 1, as the exiftool script sets it: Charset.pm has no
 # `use warnings`, so its unpack/pack see the global flag.
 use strict;
@@ -44,6 +48,7 @@ require Image::ExifTool::Exif;
 require Image::ExifTool::GPS;
 require Image::ExifTool::Canon;
 require Image::ExifTool::XMP;
+require Image::ExifTool::ASF;
 
 $SIG{__WARN__} = sub { };    # numeric warnings are not part of the value
 
@@ -90,8 +95,15 @@ my %CALL = (
     'Image::ExifTool::XMP::ConvertXMPDate'     => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::XMP::ConvertXMPDate(@a)) },
     'Image::ExifTool::Decode' => sub { my ($et, @a) = @_; local $^W = 1; (scalar &Image::ExifTool::Decode($et, @a)) },
     'Image::ExifTool::Encode' => sub { my ($et, @a) = @_; local $^W = 1; (scalar &Image::ExifTool::Encode($et, @a)) },
+    'Image::ExifTool::Exif::ConvertExifText'  => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::Exif::ConvertExifText($et, @a)) },
+    'Image::ExifTool::Exif::DecodeCFAPattern' => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::Exif::DecodeCFAPattern($et, @a)) },
+    'Image::ExifTool::Exif::PrintCFAPattern'  => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::Exif::PrintCFAPattern(@a)) },
+    'Image::ExifTool::Exif::PrintSFR'         => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::Exif::PrintSFR(@a)) },
+    'Image::ExifTool::ASF::GetGUID'           => sub { my ($et, @a) = @_; (scalar &Image::ExifTool::ASF::GetGUID(@a)) },
+    'Image::ExifTool::Printable'              => sub { my ($et, @a) = @_; (scalar $et->Printable(@a)) },
 );
-my %SIDE_EFFECTS = map { $_ => 1 } qw(Image::ExifTool::Decode Image::ExifTool::Encode);
+my %SIDE_EFFECTS = map { $_ => 1 } qw(Image::ExifTool::Decode Image::ExifTool::Encode
+    Image::ExifTool::Exif::ConvertExifText Image::ExifTool::Exif::DecodeCFAPattern);
 
 my $json = JSON::PP->new->canonical;
 local $/;
@@ -122,6 +134,7 @@ for my $case (@$cases) {
     # ConvertFileSize reads OPTIONS only through an optional trailing $et.
     $main::WITH_SESSION = $$case{with_session};
     unless ($SIDE_EFFECTS{$$case{helper}}) {
+        Image::ExifTool::SetByteOrder($$case{byte_order}) if $$case{byte_order};
         my @r = eval { $fn->($et, @a) };
         if ($@) {
             push @results, { die => 1 };
@@ -137,7 +150,7 @@ for my $case (@$cases) {
     my @warned;
     my @r = eval {
         no warnings 'redefine';
-        local *Image::ExifTool::Warn = sub { push @warned, $_[1]; return 1 };
+        local *Image::ExifTool::Warn = sub { push @warned, [ $_[1], $_[2] ]; return 1 };
         $fn->($et, @a);
     };
     if ($@) {
@@ -152,7 +165,15 @@ for my $case (@$cases) {
         die "$$case{helper}: reference-valued member $k changed\n" if ref $v;
         $set{$k} = out($v);
     }
-    push @results, { out => [ map { out($_) } @r ], set_members => \%set,
-                     warnings => [ map { out($_) } @warned ] };
+    foreach my $k (sort keys %before) {
+        $set{$k} = { t => 'deleted' } unless exists $$et{$k};
+    }
+    my @w;
+    foreach (@warned) {
+        my $o = out($$_[0]);
+        $$o{ignorable} = "$$_[1]" if defined $$_[1];
+        push @w, $o;
+    }
+    push @results, { out => [ map { out($_) } @r ], set_members => \%set, warnings => \@w };
 }
 print $json->encode(\@results), "\n";

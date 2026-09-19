@@ -57,9 +57,11 @@ class Capture(unittest.TestCase):
             for c in h["cases"]:
                 self.assertTrue(("out" in c) ^ ("die" in c), (name, c["args"]))
 
-    def test_side_effects_are_recorded_for_decode_and_encode_only(self):
+    def test_side_effects_are_recorded_for_the_session_mutating_ports_only(self):
         for name, h in CAPTURE["helpers"].items():
-            mutating = name in ("Image::ExifTool::Decode", "Image::ExifTool::Encode")
+            mutating = name in ("Image::ExifTool::Decode", "Image::ExifTool::Encode",
+                                "Image::ExifTool::Exif::ConvertExifText",
+                                "Image::ExifTool::Exif::DecodeCFAPattern")
             for c in h["cases"]:
                 self.assertEqual("set_members" in c and "warnings" in c, mutating,
                                  (name, c["args"]))
@@ -72,7 +74,7 @@ class Capture(unittest.TestCase):
         self.assertEqual(set(tables), {n for n, t in cs.items() if t & 0x001})
 
     def test_decode_dependencies_are_recorded(self):
-        for name in ("Image::ExifTool::Decode", "Image::ExifTool::Encode"):
+        for name in [h["perl"] for h in H.HELPERS if h.get("deps")]:
             deps = CAPTURE["helpers"][name]["dependencies"]
             want = [h["deps"] for h in H.HELPERS if h["perl"] == name][0]
             self.assertEqual(sorted(deps), sorted(want))

@@ -13,10 +13,10 @@
 //! plus a map of Perl scalars for the rest, and the ExifTool options a helper
 //! sub reads.
 //!
-//! `Ctx` is not replaced here. This is the first slice of v2 step 1: the
-//! type, its Perl scalar semantics, and the helper library
-//! ([`super::helpers`]) that reads it. Nothing in the read path constructs a
-//! `Session` yet, so no output changes.
+//! `Ctx` is not replaced here. The IFD walk (`ifd_engine`) builds one
+//! `Session` per directory ([`Session::for_ifd`]) for the generated
+//! conversion arms (`conv`), which the helper library ([`super::helpers`])
+//! reads and mutates as ExifTool's subs mutate `$self`.
 //!
 //! # Perl scalar semantics
 //!
@@ -361,7 +361,18 @@ pub struct Session {
     pub format: Option<String>,
     members: HashMap<String, MemberVal>,
     options: HashMap<String, MemberVal>,
-    warnings: Vec<MemberVal>,
+    warnings: Vec<Warning>,
+}
+
+/// One `$self->Warn($str [, $ignorable])` request a helper made, recorded
+/// as asked: `ignorable` is the call's second argument (0 when absent).
+/// What `Warn` itself then does with it -- the `[minor] ` prefix, the
+/// `IgnoreMinorErrors`/`NoWarning`/`Validate` options, de-duplication, the
+/// `Warning` tag -- belongs to whoever drains the list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Warning {
+    pub message: MemberVal,
+    pub ignorable: i64,
 }
 
 impl Default for Session {
@@ -374,8 +385,9 @@ impl Default for Session {
 /// the ported helpers and their call sites read. An option absent here reads
 /// as `undef`, which is also its ExifTool default (`CoordFormat`,
 /// `DateFormat`, `GlobalTimeShift`, `KeepUTCTime`, `StrictDate`,
-/// `CharsetEXIF`, `CharsetFileName`). `CharsetRIFF` and `SystemTimeRes`
-/// default to the integer 0 (see [`Session::new`]). The helper oracle
+/// `CharsetEXIF`, `CharsetFileName`, `Validate`). `CharsetRIFF`,
+/// `SystemTimeRes` and `Verbose` default to the integer 0 (see
+/// [`Session::new`]). The helper oracle
 /// captures `Image::ExifTool->new`'s own values for all of these, and
 /// `helpers::tests::session_option_defaults_match_the_pinned_perl` holds
 /// this table to them.
@@ -389,7 +401,39 @@ const DEFAULT_OPTIONS: &[(&str, &str)] = &[
 ];
 
 /// Options whose `@availableOptions` default is the integer 0.
-const DEFAULT_ZERO_OPTIONS: &[&str] = &["CharsetRIFF", "SystemTimeRes"];
+const DEFAULT_ZERO_OPTIONS: &[&str] = &["CharsetRIFF", "SystemTimeRes", "Verbose"];
+
+/// The scalar members `ExifTool::Init` (ExifTool.pm:4330-4376, pinned 13.59)
+/// sets before any file is read, with the value it sets. They are
+/// "always set" only in the sense that ExifTool never leaves them undefined:
+/// `Make`, `Model`, `CameraType`, `FileType` and `TIFF_TYPE` are then
+/// OVERWRITTEN as the file is read (Make's `RawConv`, `DoProcessTIFF`'s
+/// `$$self{TIFF_TYPE} = $fileType`, ...), so a reader that does not know the
+/// current value must leave the member unsupplied rather than seed this
+/// initial one. [`Session::for_ifd`] supplies only what the IFD walk knows.
+pub const INIT_MEMBERS: &[(&str, &str)] = &[
+    ("TIFF_TYPE", ""),
+    ("Make", ""),
+    ("Model", ""),
+    ("CameraType", ""),
+    ("FileType", ""),
+    ("PRIORITY_DIR", ""),
+];
+
+/// The members `ProcessExif` and `ProcessDirectory` set for EVERY IFD before
+/// its first entry is converted: `DIR_NAME` (ExifTool.pm:9078, the
+/// directory's own name; `PATH` gains it too, but a Perl array is not a
+/// [`MemberVal`]), and `Compression`/`SubfileType`, reset to `''`
+/// (Exif.pm:6446-6447 "make sure that Compression and SubfileType are
+/// defined for this IFD (for Condition's)"; ProcessDirectory saves and
+/// restores all three around the directory, ExifTool.pm:9075/9088).
+pub const IFD_MEMBERS: &[&str] = &["DIR_NAME", "Compression", "SubfileType"];
+
+/// Members the file-level readers set before an IFD is walked and never
+/// leave undefined afterwards: `TIFF_TYPE` (ExifTool.pm:4369 `''`, then
+/// `DoProcessTIFF` 8715) and `FILE_TYPE` (ExifTool.pm:2985/3048). A walk
+/// supplies them only when its caller says what they are.
+pub const FILE_MEMBERS: &[&str] = &["TIFF_TYPE", "FILE_TYPE"];
 
 impl Session {
     #[must_use]
@@ -412,6 +456,37 @@ impl Session {
             options,
             warnings: Vec::new(),
         }
+    }
+
+    /// The session one `ProcessExif` directory's conversions run in: its
+    /// byte order (`GetByteOrder()`), the [`IFD_MEMBERS`] -- `DIR_NAME` when
+    /// the walk knows the directory's name, `Compression` and `SubfileType`
+    /// reset to `''` -- and whatever per-file members the caller already
+    /// knows (`known`: `Make`, `Model`, [`FILE_MEMBERS`], ...), exactly as
+    /// given. A member the caller does not know stays unsupplied, so an arm
+    /// that reads it declines ([`Session::has_member`]) instead of reading
+    /// `Init`'s placeholder.
+    #[must_use]
+    pub fn for_ifd<'a>(
+        byte_order: ByteOrder,
+        dir_name: Option<&str>,
+        known: impl IntoIterator<Item = (&'a str, MemberVal)>,
+    ) -> Self {
+        let mut s = Self::new();
+        s.byte_order = Some(byte_order);
+        for (key, value) in known {
+            // A non-UTF-8 Make/Model leaves the typed slot unsupplied.
+            let _ = s.set_member(key, value);
+        }
+        if let Some(name) = dir_name {
+            s.members
+                .insert("DIR_NAME".to_string(), MemberVal::Str(name.to_string()));
+        }
+        for key in ["Compression", "SubfileType"] {
+            s.members
+                .insert(key.to_string(), MemberVal::Str(String::new()));
+        }
+        s
     }
 
     /// `$$self{key}`. The typed keys read through their fields; an absent
@@ -439,8 +514,10 @@ impl Session {
         }
     }
 
-    /// `$$self{key} = value`. `Make`/`Model` are strings (or `undef`, which
-    /// clears them); any other type for them is a [`TypeMismatch`].
+    /// `$$self{key} = value`. `Make`/`Model` are UTF-8 strings (or `undef`,
+    /// which clears them); any other value for them is a [`TypeMismatch`],
+    /// and leaves the slot UNSUPPLIED (never the stale previous value), so a
+    /// later read declines.
     pub fn set_member(&mut self, key: &str, value: MemberVal) -> Result<(), TypeMismatch> {
         let slot = match key {
             "Make" => &mut self.make,
@@ -454,6 +531,7 @@ impl Session {
             MemberVal::Str(s) => *slot = Some(s),
             MemberVal::Undef => *slot = None,
             _ => {
+                *slot = None;
                 return Err(TypeMismatch {
                     key: key.to_string(),
                     expected: "Str",
@@ -461,6 +539,18 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// `delete $$self{key}`: afterwards the member is unsupplied, as it is
+    /// absent (not `undef`) in Perl.
+    pub fn remove_member(&mut self, key: &str) {
+        match key {
+            "Make" => self.make = None,
+            "Model" => self.model = None,
+            _ => {
+                self.members.remove(key);
+            }
+        }
     }
 
     /// The keys of every untyped member set so far (`Make`/`Model` live in
@@ -487,12 +577,17 @@ impl Session {
     /// `Warn`'s own engine behaviour (`NoWarning`, de-duplication, the
     /// `Warning` tag) belongs to whoever drains the list, not to the port.
     pub fn warn(&mut self, message: MemberVal) {
-        self.warnings.push(message);
+        self.warn_ignorable(message, 0);
+    }
+
+    /// Record a `$self->Warn($str, $ignorable)` call (see [`Warning`]).
+    pub fn warn_ignorable(&mut self, message: MemberVal, ignorable: i64) {
+        self.warnings.push(Warning { message, ignorable });
     }
 
     /// Every `Warn` request recorded so far, oldest first.
     #[must_use]
-    pub fn warnings(&self) -> &[MemberVal] {
+    pub fn warnings(&self) -> &[Warning] {
         &self.warnings
     }
 }
@@ -561,5 +656,66 @@ mod tests {
         assert_eq!(s.member("FacesDetected"), MemberVal::Int(2));
         assert_eq!(s.option("ByteUnit"), MemberVal::Str("SI".into()));
         assert_eq!(s.option("DateFormat"), MemberVal::Undef);
+    }
+
+    #[test]
+    fn a_non_utf8_make_leaves_the_slot_unsupplied_not_stale() {
+        let mut s = Session::new();
+        s.set_member("Make", MemberVal::Str("Canon".into()))
+            .unwrap();
+        assert!(
+            s.set_member("Make", MemberVal::Bytes(b"Can\xf3n".to_vec()))
+                .is_err()
+        );
+        assert!(!s.has_member("Make"));
+        s.set_member("X", MemberVal::Int(1)).unwrap();
+        s.remove_member("X");
+        assert!(!s.has_member("X"));
+        assert_eq!(s.member("X"), MemberVal::Undef);
+    }
+
+    #[test]
+    fn an_ifd_session_carries_what_process_exif_always_sets() {
+        let s = Session::for_ifd(
+            ByteOrder::BigEndian,
+            Some("ExifIFD"),
+            [("TIFF_TYPE", MemberVal::Str("APP1".into()))],
+        );
+        assert_eq!(s.byte_order, Some(ByteOrder::BigEndian));
+        assert_eq!(s.member("DIR_NAME"), MemberVal::Str("ExifIFD".into()));
+        for key in ["Compression", "SubfileType"] {
+            assert!(s.has_member(key), "{key}");
+            assert_eq!(s.member(key), MemberVal::Str(String::new()));
+        }
+        assert_eq!(s.member("TIFF_TYPE"), MemberVal::Str("APP1".into()));
+        // What the walk does not know stays unsupplied.
+        for key in ["FILE_TYPE", "Make", "Model", "PRIORITY_DIR"] {
+            assert!(!s.has_member(key), "{key}");
+        }
+        assert!(!Session::for_ifd(ByteOrder::LittleEndian, None, []).has_member("DIR_NAME"));
+        for key in IFD_MEMBERS {
+            assert!(s.has_member(key), "{key}");
+        }
+        assert_eq!(INIT_MEMBERS.len(), 6);
+        assert_eq!(FILE_MEMBERS, &["TIFF_TYPE", "FILE_TYPE"]);
+    }
+
+    #[test]
+    fn warn_requests_keep_their_ignorable_argument() {
+        let mut s = Session::new();
+        s.warn(MemberVal::Str("a".into()));
+        s.warn_ignorable(MemberVal::Str("b".into()), 1);
+        let got: Vec<(MemberVal, i64)> = s
+            .warnings()
+            .iter()
+            .map(|w| (w.message.clone(), w.ignorable))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (MemberVal::Str("a".into()), 0),
+                (MemberVal::Str("b".into()), 1)
+            ]
+        );
     }
 }

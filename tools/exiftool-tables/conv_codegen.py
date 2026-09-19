@@ -53,6 +53,14 @@ READ_SLOTS = ("RawConv", "ValueConv", "PrintConv")
 # each port. Only subs listed in helpers.rs's PORTS may appear here (checked
 # in `ported_helpers`). `kind` is the Rust call shape.
 HELPER_CALLS = {
+    "Image::ExifTool::Exif::ConvertExifText": "exif_text",
+    "Image::ExifTool::Exif::DecodeCFAPattern": "self_val_mut",
+    "Image::ExifTool::Exif::PrintCFAPattern": "unary_result",
+    "Image::ExifTool::Exif::PrintSFR": "session_unary",
+    "Image::ExifTool::ASF::GetGUID": "pure_scalar",
+    "Image::ExifTool::Decode": "decode",
+    "Image::ExifTool::Encode": "encode",
+    "Image::ExifTool::Printable": "printable",
     "Image::ExifTool::IsFloat": "is_float",
     "Image::ExifTool::IsInt": "is_int",
     "Image::ExifTool::Exif::PrintExposureTime": "unary_result",
@@ -65,6 +73,14 @@ HELPER_CALLS = {
     "Image::ExifTool::ConvertDateTime": "session_result",
 }
 RUST_NAMES = {
+    "Image::ExifTool::Exif::ConvertExifText": "convert_exif_text",
+    "Image::ExifTool::Exif::DecodeCFAPattern": "decode_cfa_pattern",
+    "Image::ExifTool::Exif::PrintCFAPattern": "print_cfa_pattern",
+    "Image::ExifTool::Exif::PrintSFR": "print_sfr",
+    "Image::ExifTool::ASF::GetGUID": "asf_get_guid",
+    "Image::ExifTool::Decode": "decode",
+    "Image::ExifTool::Encode": "encode",
+    "Image::ExifTool::Printable": "printable",
     "Image::ExifTool::IsFloat": "is_float",
     "Image::ExifTool::IsInt": "is_int",
     "Image::ExifTool::Exif::PrintExposureTime": "print_exposure_time",
@@ -83,16 +99,70 @@ ENGINE_CALLS = {"Image::ExifTool::GetByteOrder"}
 # appear here imports these into the caller's package (ExifTool.pm
 # %EXPORT_TAGS); a bare call to one resolves to Image::ExifTool::<name>.
 EXPORTED_UTILS = {"IsFloat", "IsInt", "GetByteOrder"}
-# Session members `ProcessExif` always sets before any tag of the directory
-# is converted (Exif.pm:6446-6447). Any other member an arm reads must be
-# supplied by the caller or the entry declines (`Session::has_member`).
-ALWAYS_SET_MEMBERS = set()
+# `$self->Options(NAME)` with one literal NAME, for these names only: each
+# is an `@availableOptions` key, so `exists $$options{NAME}` holds and
+# Options returns `$$options{NAME}` without its case-fixing search
+# (ExifTool.pm `sub Options`). The arm reads `Session::option`, whose
+# defaults `helpers::tests::session_option_defaults_match_the_pinned_perl`
+# holds to `Image::ExifTool->new`.
+OPTION_READS = {"CharsetEXIF"}
+
+# Why each field that stays refused stays refused, beyond the generator's
+# first-hit reason: what it would take, checked against the pinned 13.59
+# source and the static IFD table (`src/exiftool_tables/ifd/exif.rs`).
+# Recorded in the ledger as `note`; a note for a field that is no longer
+# refused is an error (`ledger`), so this cannot go stale silently.
+REFUSAL_NOTES = {
+    0x00FE: "RawConv calls $self->SetPriorityDir() (writes PRIORITY_DIR, the duplicate-tag "
+            "priority directory, ExifTool.pm:9636) and reads/writes PageCount and MultiPage, "
+            "per-file members no IFD walk carries across directories",
+    0x00FF: "same as SubfileType: SetPriorityDir, PageCount, MultiPage",
+    0x0103: "RawConv calls Exif::IdentifyRawFile, which reads FILE_TYPE and IdentifiedRawFile "
+            "and, for a TIFF file, calls OverrideFileType($$et{TIFF_TYPE} = ...): a file-type "
+            "side effect. FILE_TYPE is not supplied to the walk yet (Session::for_ifd takes it "
+            "from the caller's Condition members, which no caller seeds)",
+    0x0111: "no IFD entry: codegen.py emits nothing for this id in ifd/exif.rs (every "
+            "alternative is an offset/length pointer, IsOffset/OffsetPair; their Conditions "
+            "read TIFF_TYPE/DIR_NAME/Compression/SubfileType), so the walk never resolves an "
+            "alternative to convert",
+    0x0117: "no IFD entry: as StripOffsets (0x0111), the byte-count half of the offset pairs",
+    0x014A: "no IFD entry: SubIFD's Condition calls Image::ExifTool::Sony::SetARW and reads "
+            "DIR_NAME/FILE_TYPE/Make/SubfileType/Compression; A100DataOffset is an offset",
+    0x0201: "no IFD entry: offset alternatives whose Conditions read DIR_NAME/TIFF_TYPE/"
+            "FILE_TYPE/PATH[-2] and call OverrideFileType (NRW detection)",
+    0x0202: "no IFD entry: the length half of 0x0201's offset pairs",
+    0x927C: "no IFD entry: the MakerNotes dispatch array (SubDirectory alternatives chosen by "
+            "$$valPt/Make/Model; MakerNotePhaseOne's Condition calls OverrideFileType)",
+    0x9287: "PrintConv reads Exif.pm's file-scoped lexical hashes %use and %ind (absent from "
+            "the dump) and uses shift and a C-style for loop",
+    0xA462: "RawConv loops over the value by byte offset with Get16u/GetRational64u/"
+            "GetRational64s (while loop, declarations): grammar work, not a helper",
+    0xC634: "the static table's variant group has no alternative with a conversion: all are "
+            "SubDirectory edges except DNGPrivateData (Binary, no ValueConv/PrintConv), which "
+            "the static path already reports",
+    0xC740: "%opcodeInfo sets ConvertBinary => 1 (recorded only by name in the dump's "
+            "_extra_keys): the PrintConv runs on the SCALAR reference, and its OTHER sub "
+            "Exif::PrintOpcode dereferences $$val and unpacks x${pos}N4 records",
+    0xC741: "as OpcodeList1: ConvertBinary, PrintOpcode over $$val",
+    0xC74E: "as OpcodeList1: ConvertBinary, PrintOpcode over $$val",
+    0xC763: "PrintConv maps hex over split, then a while loop of sprintf('%.2x') BCD and "
+            "timezone arithmetic (declarations, while): grammar work, not a helper",
+}
 
 
 class Refuse(Exception):
     def __init__(self, reason):
         super().__init__(reason)
         self.reason = reason
+
+
+def ascii_lit(s: str) -> str:
+    """A Perl source literal as Rust text. ExifTool's modules have no `use
+    utf8`: a non-ASCII literal is a byte string whose bytes the dump's JSON
+    no longer pins down, so it refuses the field."""
+    if any(ord(ch) > 0x7F for ch in s):
+        raise Refuse("non-ASCII literal (its Perl bytes are not pinned by the dump)")
+    return s
 
 
 def rust_str(s: str) -> str:
@@ -242,9 +312,13 @@ def interp_pieces(body: str):
 _CLASS_ESC_OK = set("sSdDwWtnrfe\\]-^[./()|*+?{}$@&~#: '\"")
 
 
-def translate_regex(pat: str, flags: str):
-    """(rust pattern, uses `$` anchor). Refuses what the regex crate cannot
-    express identically for a byte subject with no newline."""
+def translate_regex(pat: str, flags: str, eol_ok: bool = False):
+    """(rust pattern, uses `$` as `\\z`). Refuses what the regex crate cannot
+    express identically. With `eol_ok`, a `$` that ENDS the pattern becomes
+    the capture `(?P<eol>\\n?)\\z` (exact for a match and for a single
+    substitution: `conv/rt.rs` module doc); any other `$` is `\\z`, exact for
+    a subject that does not end in a newline (rt declines one that does)."""
+    ascii_lit(pat)
     for f in flags:
         if f not in "isg":
             raise Refuse(f"regex flag /{f} not modelled")
@@ -323,6 +397,10 @@ def translate_regex(pat: str, flags: str):
             continue
         if c == "$":
             rest = pat[i + 1:]
+            if rest == "" and eol_ok:
+                out.append(r"(?P<eol>\n?)\z")
+                i += 1
+                continue
             if rest == "" or rest[0] in ")|":
                 out.append(r"\z")
                 dollar = True
@@ -447,8 +525,10 @@ class Fn:
     `ret` is "out" (a conversion slot: returns `R<Out>`) or "scalar" (a hash
     `OTHER` sub or a list item: returns `R<MemberVal>`)."""
 
-    def __init__(self, mod: Module, pkg: str, ret: str, slot: str):
+    def __init__(self, mod: Module, pkg: str, ret: str, slot: str, tag_name=None, form=None):
         self.mod, self.pkg, self.ret, self.slot = mod, pkg, ret, slot
+        self.tag_name, self.form = tag_name, form
+        self.uses_session = False
         self.lines = []
         self.locals = {}       # perl scalar name -> rust ident
         self.undef_locals = set()
@@ -465,6 +545,11 @@ class Fn:
     def t(self):
         self.tmp += 1
         return f"t{self.tmp}"
+
+    def sess(self):
+        """The session parameter, marking the fn as reading it."""
+        self.uses_session = True
+        return "s"
 
     def wrap_ret(self, expr_out: str) -> str:
         return f"Ok({expr_out})"
@@ -634,21 +719,25 @@ class Fn:
             if repl[0] != "interp" or repl[2]:
                 raise Refuse("replacement with interpolation")
             text = unescape_dq(repl[1])
-            rust_pat, dollar = translate_regex(pat, flags.replace("g", ""))
-            name = self.mod.regex(rust_pat)
-            g = "true" if "g" in flags else "false"
-            self.lines.append(
-                f"{dst} = rt::subst(&{name}, {str(dollar).lower()}, &{dst}, {rust_str(text)}, {g})?;")
+            self.lines.append(f"{dst} = {self.subst_call(dst, pat, flags, text)}.0;")
             return
         _, frm, to, flags = rhs
         if flags:
             raise Refuse("tr/// flags")
-        f, t = unescape_dq(frm), unescape_dq(to)
+        f, t = ascii_lit(unescape_dq(frm)), ascii_lit(unescape_dq(to))
         if "-" in f.strip("-") or "-" in t.strip("-") or len(f) != len(t):
             raise Refuse("tr/// with a range or unequal lists")
         self.lines.append(
             f"{dst} = rt::tr(&{dst}, {rust_bytes(f.encode('latin-1'))}, "
             f"{rust_bytes(t.encode('latin-1'))})?;")
+
+    def subst_call(self, dst, pat, flags, text):
+        """`rt::subst(...)?`: an `R<(new value, substituted)>` expression."""
+        g = "g" in flags
+        rust_pat, dollar = translate_regex(pat, flags.replace("g", ""), eol_ok=not g)
+        name = self.mod.regex(rust_pat)
+        return (f"rt::subst(&{name}, {str(dollar).lower()}, &{dst}, {rust_str(ascii_lit(text))}, "
+                f"{str(g).lower()})?")
 
     def decl(self, st):
         _, op, lhs, rhs = st
@@ -706,7 +795,7 @@ class Fn:
         if node[0] == "unop" and node[1] == "\\":
             inner = node[2]
             if inner[0] == "var" and inner[1] == "$":
-                return f"Out::Binary({self.ex(inner)}.perl_string().into_bytes())"
+                return f"Out::Binary({self.ex(inner)}.perl_bytes().into_owned())"
             raise Refuse("reference to something other than a scalar")
         return f"Out::Scalar({self.ex(node)})"
 
@@ -729,13 +818,17 @@ class Fn:
             return f"{self.locals[name]}.clone()"
         if name == "_" and "_" in self.locals:
             return f"{self.locals['_']}.clone()"
+        if name == "tag" and self.slot == "RawConv" and self.form == "str" and self.tag_name:
+            # FoundTag's `my $tag = $$tagInfo{Name}` (ExifTool.pm), in scope
+            # for a string RawConv's eval.
+            return f"rt::string({rust_str(ascii_lit(self.tag_name))})"
         raise Refuse(f"lexical ${name} (eval-site context) not modelled")
 
     def member(self, key):
         if key in self.writes:
             raise Refuse("member read after write in one arm")
         self.reads.add(key)
-        return f"member(s, {rust_str(key)})?"
+        return f"member({self.sess()}, {rust_str(ascii_lit(key))})?"
 
     def ex(self, node):
         k = node[0]
@@ -744,7 +837,7 @@ class Fn:
         if k == "num":
             return perl_num_literal(node[1])
         if k == "str":
-            return f"rt::string({rust_str(node[1])})"
+            return f"rt::string({rust_str(ascii_lit(node[1]))})"
         if k == "interp":
             pieces = interp_pieces(node[1])
             if not pieces:
@@ -758,10 +851,11 @@ class Fn:
                     e = f"rt::index(&{self.lists[name]}, &rt::int({idx}))"
                     acc = e if acc is None else f"rt::concat(&{acc}, &{e})"
                     continue
-                e = f"rt::string({rust_str(v)})" if kind == "lit" else self.var(("var", "$", v))
+                e = (f"rt::string({rust_str(ascii_lit(v))})" if kind == "lit"
+                     else self.var(("var", "$", v)))
                 acc = e if acc is None else f"rt::concat(&{acc}, &{e})"
             if len(pieces) == 1 and pieces[0][0] == "var":
-                acc = f"MemberVal::Str({acc}.perl_string())"
+                acc = f"MemberVal::from_bytes({acc}.perl_bytes().into_owned())"
             return acc
         if k == "paren":
             return self.ex(node[1])
@@ -799,10 +893,22 @@ class Fn:
                     raise Refuse(f"quote-like {mk} as a match")
                 if "g" in flags:
                     raise Refuse("m//g")
-                rust_pat, dollar = translate_regex(pat, flags)
+                rust_pat, dollar = translate_regex(pat, flags, eol_ok=True)
                 name = self.mod.regex(rust_pat)
                 m = f"rt::re_match(&{name}, {str(dollar).lower()}, &{self.ex(lhs)})?"
                 return m if op == "=~" else f"rt::not(&{m})"
+            if rhs[0] == "subst" and op == "=~":
+                # s/// for its value: 1 or PL_sv_no (non-global only).
+                _, pat, repl, flags, _parsed = rhs
+                if "e" in flags or "r" in flags or "g" in flags:
+                    raise Refuse("s///e, s///r or s///g used for its value")
+                if repl[0] != "interp" or repl[2]:
+                    raise Refuse("replacement with interpolation")
+                dst = self.target(lhs)
+                nv, hit = self.t(), self.t()
+                call = self.subst_call(dst, pat, flags, unescape_dq(repl[1]))
+                return (f"{{ let ({nv}, {hit}) = {call}; {dst} = {nv}; "
+                        f"rt::subst_count({hit}) }}")
             raise Refuse("s/// or tr/// used for its value")
         if k == "assign" and node[1] in (".=", "+=", "-=", "*="):
             _, op, lhs, rhs = node
@@ -932,10 +1038,22 @@ class Fn:
         if q in ENGINE_CALLS:
             if args:
                 raise Refuse("GetByteOrder with arguments")
-            return "byte_order(s)?"
+            return f"byte_order({self.sess()})?"
         if q not in HELPER_CALLS:
             raise Refuse(helper_refusal(q))
         return self.helper(q, args)
+
+    def session_call(self, rust, args, n):
+        """`helpers::<rust>(s, a0, .., a{n-1})` with `undef` for a missing
+        trailing argument. Each argument is bound first, left to right as
+        Perl evaluates them, so none borrows the session the call takes."""
+        binds, refs = [], []
+        for k in range(n):
+            v = self.t()
+            e = self.ex(args[k]) if k < len(args) else "MemberVal::Undef"
+            binds.append(f"let {v} = {e};")
+            refs.append(f"&{v}")
+        return "{ " + " ".join(binds) + f" h(helpers::{rust}({self.sess()}, {', '.join(refs)}))? }}"
 
     def helper(self, q, args, with_self=False):
         shape = HELPER_CALLS[q]
@@ -944,9 +1062,36 @@ class Fn:
         if shape == "session_result":
             if not with_self or len(args) != 1:
                 raise Refuse(f"{q} not called as a method with one argument")
-            return f"h(helpers::{rust}(s, &{self.ex(args[0])}))?"
+            return f"h(helpers::{rust}({self.sess()}, &{self.ex(args[0])}))?"
+        # `$self->Decode($val, $from, $fromOrder, $to, $toOrder)`,
+        # `$self->Encode($val, $to, $toOrder)`, `$self->Printable($val, $max)`
+        methods = {"decode": 5, "encode": 3, "printable": 2}
+        if shape in methods:
+            if not with_self:
+                raise Refuse(f"{q} not called as a method")
+            if not 1 <= len(args) <= methods[shape]:
+                raise Refuse(f"{q} arity")
+            return self.session_call(rust, args, methods[shape])
         if with_self:
             raise Refuse(f"{q} called as a method")
+        is_self = lambda a: a == ("var", "$", "self")  # noqa: E731
+        if shape == "exif_text":
+            # ConvertExifText($self, $val [, $asciiFlex [, $tag]])
+            if not 2 <= len(args) <= 4 or not is_self(args[0]):
+                raise Refuse(f"{q} not called with $self first")
+            return self.session_call(rust, args[1:], 3)
+        if shape == "self_val_mut":
+            if len(args) != 2 or not is_self(args[0]):
+                raise Refuse(f"{q} not called as ($self, $val)")
+            return self.session_call(rust, args[1:], 1)
+        if shape == "session_unary":
+            if len(args) != 1:
+                raise Refuse(f"{q} arity")
+            return self.session_call(rust, args, 1)
+        if shape == "pure_scalar":
+            if len(args) != 1:
+                raise Refuse(f"{q} arity")
+            return f"helpers::{rust}(&{self.ex(args[0])})"
         if shape == "is_float":
             if len(args) != 1:
                 raise Refuse("IsFloat arity")
@@ -980,6 +1125,10 @@ class Fn:
         _, obj, name, args = node
         if obj != ("var", "$", "self"):
             raise Refuse("method on something other than $self")
+        if name == "Options":
+            if len(args) != 1 or args[0][0] != "str" or args[0][1] not in OPTION_READS:
+                raise Refuse("Options other than a read of " + "/".join(sorted(OPTION_READS)))
+            return f"{self.sess()}.option({rust_str(args[0][1])})"
         q = "Image::ExifTool::" + name
         if q not in HELPER_CALLS:
             raise Refuse(helper_refusal(q))
@@ -997,6 +1146,10 @@ class Fn:
             return f"rt::int_of(&{self.ex(args[0])})?"
         if name == "undef" and not args:
             return "MemberVal::Undef"
+        if name == "hex":
+            if len(args) != 1:
+                raise Refuse("hex arity")
+            return f"rt::hex(&{self.ex(args[0])})?"
         if name == "unpack":
             if len(args) == 2 and args[0] == ("str", "H*"):
                 return f"rt::unpack_hex(&{self.ex(args[1])})"
@@ -1035,8 +1188,8 @@ def parse_slot_source(v):
     return None, None
 
 
-def compile_body(mod, fn_name, form, text, slot, ret, params, conv_map=None):
-    fn = Fn(mod, "Image::ExifTool", ret, slot)
+def compile_body(mod, fn_name, form, text, slot, ret, params, conv_map=None, tag_name=None):
+    fn = Fn(mod, "Image::ExifTool", ret, slot, tag_name=tag_name, form=form)
     fn.conv_map = conv_map
     try:
         if form == "str":
@@ -1054,15 +1207,14 @@ def compile_body(mod, fn_name, form, text, slot, ret, params, conv_map=None):
     fn.body(stmts)
     rtype = "R<Out>" if ret == "out" else "R<MemberVal>"
     uses_w = any("w.push" in ln for ln in fn.lines)
-    uses_s = any(("member(s" in ln or "(s," in ln or "byte_order(s)" in ln) for ln in fn.lines)
     wparam = "w" if uses_w else "_w"
-    sparam = "s" if uses_s else "_s"
+    sparam = "s" if fn.uses_session else "_s"
     mut = "mut " if any(re.search(r"\bval = ", ln) for ln in fn.lines) else ""
     if ret == "out":
-        sig = (f"fn {fn_name}({sparam}: &Session, {mut}val: MemberVal, "
+        sig = (f"fn {fn_name}({sparam}: &mut Session, {mut}val: MemberVal, "
                f"{wparam}: &mut Vec<(&'static str, MemberVal)>) -> {rtype}")
     else:
-        if uses_s or uses_w:
+        if fn.uses_session or uses_w:
             raise Refuse("session access inside an OTHER / list-item sub")
         sig = f"fn {fn_name}({mut}val: MemberVal) -> {rtype}"
     src = sig + " {\n" + "\n".join(fn.lines) + "\n}\n"
@@ -1079,6 +1231,9 @@ def compile_hash(mod, name, conv, tag, print_conv):
     extra = sorted(set(directives) - {"BITMASK", "OTHER"})
     if extra:
         raise Refuse(f"hash directives not modelled: {extra}")
+    for k, v in mp.items():
+        ascii_lit(k)
+        ascii_lit(v)
     entries = sorted(mp.items(), key=lambda kv: kv[0].encode("utf-8"))
     lines = [f"static {name}_MAP: &[(&str, &str)] = &["]
     lines += [f"    ({rust_str(k)}, {rust_str(v)})," for k, v in entries]
@@ -1092,7 +1247,7 @@ def compile_hash(mod, name, conv, tag, print_conv):
         for k, v in bm.items():
             if not re.fullmatch(r"\d+", str(k)) or not isinstance(v, str):
                 raise Refuse("BITMASK entry not modelled")
-            pairs.append((int(k), v))
+            pairs.append((int(k), ascii_lit(v)))
         pairs.sort()
         lines.append(f"static {name}_BITS: &[(i64, &str)] = &[" +
                      ", ".join(f"({k}, {rust_str(v)})" for k, v in pairs) + "];")
@@ -1143,7 +1298,7 @@ def compile_slot(mod, tid, tag, slot, v):
             raise Refuse("hash RawConv")
         call = compile_hash(mod, base.upper(), v, tag, print_conv)
         mod.fns.append(
-            f"fn {base}(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) "
+            f"fn {base}(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) "
             f"-> R<Out> {{\nOk(Out::Scalar({call}?))\n}}\n")
         return base, "hash"
     if isinstance(v, dict) and v.get("kind") == "list":
@@ -1171,7 +1326,7 @@ def compile_slot(mod, tid, tag, slot, v):
                 mod.fns.append(f"fn {iname}(val: &MemberVal) -> R<MemberVal> {{ {iname}_body(val.clone()) }}\n")
             names.append(f"Some({iname} as fn(&MemberVal) -> R<MemberVal>)")
         mod.fns.append(
-            f"fn {base}(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) "
+            f"fn {base}(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) "
             f"-> R<Out> {{\nOk(Out::Scalar(rt::list_conv(&val, &[{', '.join(names)}], "
             f"{str(print_conv).lower()})?.unwrap_or(MemberVal::Undef)))\n}}\n")
         return base, "list"
@@ -1179,7 +1334,7 @@ def compile_slot(mod, tid, tag, slot, v):
     if form is None:
         raise Refuse(f"{slot} form not modelled")
     params = ["val", "self"]
-    src, fn = compile_body(mod, base, form, text, slot, "out", params)
+    src, fn = compile_body(mod, base, form, text, slot, "out", params, tag_name=tag.get("Name"))
     mod.fns.append(src)
     return base, form
 
@@ -1195,9 +1350,13 @@ def source_text(v):
 def compile_field(mod, tid, tag):
     """Rust source of one arm, or Refuse."""
     for key in ("Relist", "RawJoin", "ConvertBinary", "List"):
-        if truthy_key(tag, key):
+        # The dump records some keys only BY NAME in `_extra_keys` (their
+        # value not serialized): `%opcodeInfo`'s `ConvertBinary => 1` reaches
+        # OpcodeList1-3 that way. Presence there refuses as well.
+        if truthy_key(tag, key) or key in (tag.get("_extra_keys") or []):
             raise Refuse(f"{key} not modelled")
     slots = {s: tag[s] for s in READ_SLOTS if tag.get(s) is not None}
+    binary = truthy_key(tag, "Binary")
     fns = {}
     before = (len(mod.fns), len(mod.statics), dict(mod.regex_ids), set(mod.helpers_used))
     try:
@@ -1210,8 +1369,7 @@ def compile_field(mod, tid, tag):
         mod.regex_ids = before[2]
         mod.helpers_used = before[3]
         raise
-    binary = truthy_key(tag, "Binary")
-    lines = [f"fn arm_{tid:04x}(s: &Session, raw: &MemberVal) -> R<Arm> {{"]
+    lines = [f"fn arm_{tid:04x}(s: &mut Session, raw: &MemberVal) -> R<Arm> {{"]
     lines.append("let mut w: Vec<(&'static str, MemberVal)> = Vec::new();")
     lines.append("let val = raw.clone();")
     changed = False
@@ -1226,7 +1384,7 @@ def compile_field(mod, tid, tag):
         lines.append(f"let value = {fns['ValueConv'][0]}(s, val, &mut w)?;")
         changed = True
     elif binary:
-        lines.append("let value = Out::Binary(val.perl_string().into_bytes());")
+        lines.append("let value = Out::Binary(val.perl_bytes().into_owned());")
         changed = True
     else:
         lines.append("let value = Out::Scalar(val);")
@@ -1251,11 +1409,9 @@ def compile_field(mod, tid, tag):
 
 def helper_refusal(q):
     """Why a call to `q` refuses the field: no proven port at all, or a port
-    (helpers.rs PORTS) this backend does not call yet -- `Decode`/`Encode`
-    (#829) take `&mut Session`, record warnings and work on byte strings,
-    none of which the arms' runtime carries in this slice."""
+    (helpers.rs PORTS) this backend has no call shape for."""
     if q in ported_helpers():
-        return f"{q} is ported (helpers.rs) but not yet callable from a generated arm"
+        return f"{q} is ported (helpers.rs) but has no call shape in HELPER_CALLS"
     return f"{q} has no proven port"
 
 
@@ -1355,16 +1511,26 @@ def render_rust(g, dump_sha):
         "    CLAIMED.binary_search(&id).is_ok()",
         "}",
         "",
-        "/// Runs the arm for `id` on `$val`. `Arm::Decline` for an unclaimed id.",
+        "/// Runs the arm for `id` on `$val` in the directory's session (a helper",
+        "/// may set members there, as ExifTool's subs set them on `$self`).",
+        "/// `Arm::Decline` for an unclaimed id, and for an entry whose conversion",
+        "/// made a `$self->Warn` request: ExifTool then also reports a `Warning`",
+        "/// tag -- and, for a Perl warning raised inside the conversion's eval,",
+        "/// a second `\"ValueConv <tag>: ...\"` one -- which an arm does not model.",
         "#[must_use]",
-        "pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {",
-        "    finish(match id {",
+        "pub fn decode(s: &mut Session, id: u16, val: &MemberVal) -> Arm {",
+        "    let warned = s.warnings().len();",
+        "    let arm = finish(match id {",
     ]
     for tid, _name, _src in g["arms"]:
         out.append(f"        0x{tid:04x} => arm_{tid:04x}(s, val),")
     out += [
         '        _ => Err(Decline("no generated arm for this id")),',
-        "    })",
+        "    });",
+        "    if s.warnings().len() > warned {",
+        '        return Arm::Decline("a conversion made a Warn request (the Warning tag is not modelled)");',
+        "    }",
+        "    arm",
         "}",
         "",
         "fn h(r: Result<MemberVal, HelperError>) -> R<MemberVal> {",
@@ -1424,6 +1590,10 @@ def hash_keys(source):
 
 
 def ledger(g, dump_sha, rust_sha):
+    stale = sorted(set(REFUSAL_NOTES) - {r["id"] for r in g["refused"]})
+    if stale:
+        raise SystemExit(f"REFUSAL_NOTES names fields that are no longer refused: "
+                         f"{[hex(i) for i in stale]}")
     return {
         "schema": LEDGER_SCHEMA,
         "tool": "tools/exiftool-tables/conv_codegen.py",
@@ -1439,7 +1609,8 @@ def ledger(g, dump_sha, rust_sha):
                            source_sha256=hashlib.sha256(
                                source_text(r["source"]).encode()).hexdigest())
                       for r in g["generated"]],
-        "refused": [dict(id=f"0x{r['id']:04x}", name=r["name"], reason=r["reason"])
+        "refused": [dict(id=f"0x{r['id']:04x}", name=r["name"], reason=r["reason"],
+                         **({"note": REFUSAL_NOTES[r["id"]]} if r["id"] in REFUSAL_NOTES else {}))
                     for r in g["refused"]],
         "not_conversion_fields": [dict(id=f"0x{r['id']:04x}", name=r["name"], reason=r["reason"])
                                   for r in g["skipped"]],

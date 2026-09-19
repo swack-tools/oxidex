@@ -1,6 +1,8 @@
 //! The proof of the generated arms: every probe `conv_oracle.py` ran through
 //! the pinned ExifTool's own `FoundTag`/`GetValue` is replayed through the
-//! arm, and the bytes must agree.
+//! arm, and the bytes must agree -- the `-n` value, the default value, every
+//! member the pipeline created, changed or deleted, and every `Warn` request
+//! it made.
 
 use std::collections::BTreeMap;
 
@@ -23,40 +25,51 @@ fn hex(h: &str) -> Vec<u8> {
         .collect()
 }
 
-/// A probe as the walker would hand it to an arm. `None` for bytes that are
-/// not UTF-8: the walker declines those before calling (`MemberVal::Str`
-/// cannot carry them), so there is nothing to compare.
-fn arg(v: &Value) -> Option<MemberVal> {
-    Some(match v["t"].as_str().expect("type") {
+/// A probe as the walker hands it to an arm: a byte string stays bytes
+/// (`MemberVal::Bytes` when it is not UTF-8).
+fn arg(v: &Value) -> MemberVal {
+    match v["t"].as_str().expect("type") {
         "undef" => MemberVal::Undef,
-        "s" => MemberVal::Str(String::from_utf8(hex(v["hex"].as_str().expect("hex"))).ok()?),
+        "s" => MemberVal::from_bytes(hex(v["hex"].as_str().expect("hex"))),
         "i" => MemberVal::Int(v["v"].as_str().expect("v").parse().expect("int")),
         "f" => MemberVal::Float(v["v"].as_str().expect("v").parse().expect("float")),
         t => panic!("arg type {t}"),
-    })
+    }
 }
 
-/// One ExifTool output: `undef`, a scalar's bytes, a SCALAR ref's bytes.
+/// One ExifTool output: `undef`, a scalar's bytes, a SCALAR ref's bytes,
+/// a deleted member. A Perl CHARACTER string (`u8`) holding a character
+/// above 0x7F is its own kind: the runtime models byte strings only, so it
+/// can never compare equal. One whose characters are all ASCII (Recompose's
+/// `pack('C0U*')` of an empty list is a flagged `""`) is the same string as
+/// the byte string in every context -- length, regex, comparison, print.
 #[derive(Debug, PartialEq, Eq)]
 enum Seen {
     Undef,
     Scalar(Vec<u8>),
     Ref(Vec<u8>),
+    Deleted,
+    CharString(Vec<u8>),
     Other(String),
 }
 
 fn perl(o: &Value) -> Seen {
+    let bytes = || hex(o["hex"].as_str().expect("hex"));
+    if o.get("u8").is_some() && !bytes().is_ascii() {
+        return Seen::CharString(bytes());
+    }
     match o["t"].as_str().expect("t") {
         "undef" => Seen::Undef,
-        "s" => Seen::Scalar(hex(o["hex"].as_str().expect("hex"))),
-        "ref" => Seen::Ref(hex(o["hex"].as_str().expect("hex"))),
+        "s" => Seen::Scalar(bytes()),
+        "ref" => Seen::Ref(bytes()),
+        "deleted" => Seen::Deleted,
         _ => Seen::Other(o["ref"].to_string()),
     }
 }
 
 fn scalar(v: &MemberVal) -> Seen {
     if v.is_defined() {
-        Seen::Scalar(v.perl_string().into_bytes())
+        Seen::Scalar(v.perl_bytes().into_owned())
     } else {
         Seen::Undef
     }
@@ -76,10 +89,62 @@ fn session(case: &Value) -> Session {
         _ => ByteOrder::LittleEndian,
     });
     for (k, v) in case["members"].as_object().expect("members") {
-        s.set_member(k, arg(v).expect("member probe is UTF-8"))
-            .expect("member type");
+        s.set_member(k, arg(v)).expect("member type");
+    }
+    if let Some(opts) = case.get("options").and_then(Value::as_object) {
+        for (k, v) in opts {
+            s.set_option(k, arg(v));
+        }
     }
     s
+}
+
+/// The members the arm's pipeline set: its session's changes (a helper's
+/// `DecodeWarn...`, a deleted `WrongByteOrder`) and the `$$self{X} = ...`
+/// writes it reports for its caller to apply.
+fn members_set(
+    before: &Session,
+    after: &Session,
+    writes: &[(&str, MemberVal)],
+) -> BTreeMap<String, Seen> {
+    let mut set: BTreeMap<String, Seen> = after
+        .member_names()
+        .filter(|k| !before.has_member(k) || before.member(k) != after.member(k))
+        .map(|k| (k.to_string(), scalar(&after.member(k))))
+        .collect();
+    for k in before.member_names() {
+        if !after.has_member(k) {
+            set.insert(k.to_string(), Seen::Deleted);
+        }
+    }
+    for (k, v) in writes {
+        set.insert((*k).to_string(), scalar(v));
+    }
+    set
+}
+
+fn warnings_made(before: &Session, after: &Session) -> Vec<(Seen, i64)> {
+    after.warnings()[before.warnings().len()..]
+        .iter()
+        .map(|w| (scalar(&w.message), w.ignorable))
+        .collect()
+}
+
+fn perl_warnings(case: &Value) -> Vec<(Seen, i64)> {
+    case.get("warnings")
+        .and_then(Value::as_array)
+        .map(|w| {
+            w.iter()
+                .map(|w| {
+                    let ign = w
+                        .get("ignorable")
+                        .and_then(Value::as_str)
+                        .map_or(0, |v| v.parse().expect("ignorable"));
+                    (perl(w), ign)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[test]
@@ -100,31 +165,51 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
         exif_main::CLAIMED,
         "the capture must cover exactly the generated arms (re-run conv_oracle.py --write)"
     );
-    let (mut checked, mut matched, mut unrepresentable) = (0usize, 0usize, 0usize);
+    let (mut checked, mut matched, mut non_utf8) = (0usize, 0usize, 0usize);
     let mut declined: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut failures: Vec<String> = Vec::new();
     for (fid, field) in fields {
         let id = u16::from_str_radix(fid.trim_start_matches("0x"), 16).expect("id");
         for case in field["cases"].as_array().expect("cases") {
             checked += 1;
-            let Some(val) = arg(&case["val"]) else {
-                unrepresentable += 1;
-                continue;
+            let val = arg(&case["val"]);
+            if matches!(val, MemberVal::Bytes(_)) {
+                non_utf8 += 1;
+            }
+            let before = session(case);
+            let mut s = before.clone();
+            let fail = |why: String| {
+                format!(
+                    "{fid} {} val {} opts {}: {why}",
+                    field["name"],
+                    case["val"],
+                    case.get("options").unwrap_or(&Value::Null)
+                )
             };
-            let s = session(case);
-            let fail = |why: String| format!("{fid} {} val {}: {why}", field["name"], case["val"]);
-            match exif_main::decode(&s, id, &val) {
+            match exif_main::decode(&mut s, id, &val) {
                 Arm::Decline(why) => *declined.entry(why).or_default() += 1,
                 Arm::Suppress => {
+                    // RawConv's undef (FoundTag stores nothing) or ValueConv's
+                    // (GetValue returns nothing): either way no tag, and the
+                    // side effects up to that point must agree.
                     let perl_suppressed = case.get("suppressed").is_some()
                         || (perl(&case["vc"]) == Seen::Undef && perl(&case["pc"]) == Seen::Undef);
-                    if perl_suppressed {
+                    let (warned, perl_warned) = (warnings_made(&before, &s), perl_warnings(case));
+                    let set = members_set(&before, &s, &[]);
+                    let want_set: BTreeMap<String, Seen> = case["set"]
+                        .as_object()
+                        .expect("set")
+                        .iter()
+                        .map(|(k, v)| (k.clone(), perl(v)))
+                        .collect();
+                    if perl_suppressed && perl_warned == warned && set == want_set {
                         matched += 1;
                     } else {
                         failures.push(fail(format!(
-                            "arm suppressed; perl vc {:?} pc {:?}",
-                            perl(&case["vc"]),
-                            perl(&case["pc"])
+                            "arm suppressed; perl vc {:?} pc {:?} set {want_set:?} warn \
+                             {perl_warned:?}; rust set {set:?} warn {warned:?}",
+                            case.get("vc").map(perl),
+                            case.get("pc").map(perl)
                         )));
                     }
                 }
@@ -138,23 +223,21 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
                         .print
                         .as_ref()
                         .map_or_else(|| r.value.as_ref().map_or_else(|| scalar(&val), rust), rust);
-                    let mut writes: BTreeMap<String, Seen> = BTreeMap::new();
-                    for (k, v) in &r.writes {
-                        writes.insert((*k).to_string(), scalar(v));
-                    }
+                    let writes = members_set(&before, &s, &r.writes);
                     let want_writes: BTreeMap<String, Seen> = case["set"]
                         .as_object()
                         .expect("set")
                         .iter()
                         .map(|(k, v)| (k.clone(), perl(v)))
                         .collect();
+                    let (warned, want_warned) = (warnings_made(&before, &s), perl_warnings(case));
                     let (pv, pp) = (perl(&case["vc"]), perl(&case["pc"]));
-                    if vc == pv && pc == pp && writes == want_writes {
+                    if vc == pv && pc == pp && writes == want_writes && warned == want_warned {
                         matched += 1;
                     } else {
                         failures.push(fail(format!(
-                            "perl vc {pv:?} pc {pp:?} set {want_writes:?}; \
-                             rust vc {vc:?} pc {pc:?} set {writes:?}"
+                            "perl vc {pv:?} pc {pp:?} set {want_writes:?} warn {want_warned:?}; \
+                             rust vc {vc:?} pc {pc:?} set {writes:?} warn {warned:?}"
                         )));
                     }
                 }
@@ -163,9 +246,8 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
     }
     let n_declined: usize = declined.values().sum();
     eprintln!(
-        "conv oracle: {checked} probes over {} arms: {matched} byte-identical, \
-         {n_declined} declined {declined:?}, {unrepresentable} non-UTF-8 probes the walker \
-         declines before calling, {} disagreements",
+        "conv oracle: {checked} probes over {} arms ({non_utf8} with non-UTF-8 byte input): \
+         {matched} byte-identical, {n_declined} declined {declined:?}, {} disagreements",
         fields.len(),
         failures.len()
     );
@@ -180,7 +262,7 @@ fn every_generated_arm_matches_the_pinned_perl_capture() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    assert_eq!(checked, matched + n_declined + unrepresentable);
+    assert_eq!(checked, matched + n_declined);
 }
 
 #[test]

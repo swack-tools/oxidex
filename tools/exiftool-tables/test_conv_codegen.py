@@ -31,9 +31,18 @@ class RegexTranslation(unittest.TestCase):
 
     def test_refusals(self):
         for pat, flags in [(r"(a)\1", ""), (r"(?=x)", ""), (r"$val", ""), ("a", "x"),
-                           ("a", "m"), (r"[[:alpha:]]", ""), (r"\Qx", "")]:
+                           ("a", "m"), (r"[[:alpha:]]", ""), (r"\Qx", ""), ("\u00e9", "")]:
             with self.assertRaises(C.Refuse, msg=pat):
                 C.translate_regex(pat, flags)
+
+    def test_pattern_final_dollar_is_exact_where_allowed(self):
+        # Perl's `$` is end-or-before-a-final-newline; at the very end of the
+        # pattern it becomes the `eol` capture (rt keeps it out of an s///
+        # span), elsewhere `\z` with the run-time decline flag.
+        self.assertEqual(C.translate_regex(r"\s+$", "", eol_ok=True),
+                         (r"(?-u)\s+(?P<eol>\n?)\z", False))
+        self.assertEqual(C.translate_regex(r"(a$|b)", "", eol_ok=True),
+                         (r"(?-u)(a\z|b)", True))
 
 
 class Formats(unittest.TestCase):
@@ -78,11 +87,50 @@ def compile_one(tag):
 
 class Fields(unittest.TestCase):
     def test_unported_helper_refuses_the_whole_field(self):
-        tag = {"Name": "X", "ValueConv": {"kind": "expr", "expr": '$self->Decode($val,"UTF8")'},
+        tag = {"Name": "X", "RawConv": {"kind": "expr", "expr": "$self->SetPriorityDir(); $val"},
                "PrintConv": {"kind": "expr", "expr": '"$val m"'}}
         with self.assertRaises(C.Refuse) as cm:
             compile_one(tag)
-        self.assertIn("Decode", cm.exception.reason)
+        self.assertIn("SetPriorityDir", cm.exception.reason)
+
+    def test_session_mutating_helpers_take_the_session_after_their_arguments(self):
+        tag = {"Name": "X", "ValueConv": {"kind": "expr", "expr": '$self->Decode($val,"UCS2","II")'}}
+        (src, slots, _), mod = compile_one(tag)
+        body = "\n".join(mod.fns)
+        self.assertIn("fn vc_1234(s: &mut Session", body)
+        self.assertRegex(body, r"let t1 = val.clone\(\);.*h\(helpers::decode\(s, &t1, &t2, &t3, &t4, &t5\)\)")
+        tag = {"Name": "X", "RawConv": {"kind": "expr",
+                                        "expr": "Image::ExifTool::Exif::ConvertExifText($self,$val,1,$tag)"}}
+        (_src, _slots, _), mod = compile_one(tag)
+        self.assertIn('rt::string("X")', "\n".join(mod.fns))  # FoundTag's $tag
+        with self.assertRaises(C.Refuse):  # $self first, or nothing
+            compile_one({"Name": "X", "RawConv": {"kind": "expr", "expr":
+                         "Image::ExifTool::Exif::ConvertExifText($val,1)"}})
+
+    def test_options_reads_only_known_option_names(self):
+        ok = {"Name": "X", "ValueConv": {"kind": "expr", "expr": "$self->Options('CharsetEXIF')"}}
+        (_src, _slots, _), mod = compile_one(ok)
+        self.assertIn('s.option("CharsetEXIF")', "\n".join(mod.fns))
+        for name in ("charsetexif", "Verbose", "Bogus"):
+            with self.assertRaises(C.Refuse, msg=name):
+                compile_one({"Name": "X", "ValueConv": {"kind": "expr",
+                             "expr": f"$self->Options('{name}')"}})
+
+    def test_substitution_used_for_its_value(self):
+        tag = {"Name": "X", "ValueConv": {"kind": "expr",
+                                          "expr": "$val =~ s/^ab//i and $val = hex($val); $val"}}
+        (_src, _slots, _), mod = compile_one(tag)
+        body = "\n".join(mod.fns)
+        self.assertIn("rt::subst_count(", body)
+        self.assertIn("rt::hex(", body)
+        with self.assertRaises(C.Refuse):
+            compile_one({"Name": "X", "ValueConv": {"kind": "expr", "expr": "($val =~ s/a//g) + 1"}})
+
+    def test_non_ascii_literal_refuses(self):
+        with self.assertRaises(C.Refuse):
+            compile_one({"Name": "X", "PrintConv": {"kind": "expr", "expr": '"$val \u00b5s"'}})
+        with self.assertRaises(C.Refuse):
+            compile_one({"Name": "X", "PrintConv": {"kind": "enum", "map": {"1": "\u00b5"}}})
 
     def test_eval_site_lexicals_refuse(self):
         tag = {"Name": "X", "RawConv": {"kind": "expr", "expr": "Foo($tag)"}}
@@ -91,6 +139,13 @@ class Fields(unittest.TestCase):
         tag = {"Name": "X", "ValueConv": {"kind": "expr", "expr": "$val . $tag"}}
         with self.assertRaises(C.Refuse):
             compile_one(tag)
+
+    def test_refusal_keys_recorded_only_by_name_still_refuse(self):
+        tag = {"Name": "X", "Binary": "1", "_extra_keys": ["ConvertBinary", "WriteGroup"],
+               "PrintConv": {"kind": "enum", "map": {"1": "a"}}}
+        with self.assertRaises(C.Refuse) as cm:
+            compile_one(tag)
+        self.assertIn("ConvertBinary", cm.exception.reason)
 
     def test_member_write_is_rawconv_only(self):
         ok = {"Name": "X", "RawConv": {"kind": "expr", "expr": "$$self{X} = $val"}}
@@ -143,6 +198,7 @@ class CommittedOutputs(unittest.TestCase):
         self.assertEqual(len(seen), len(set(seen)))
         for r in self.ledger["refused"]:
             self.assertTrue(r["reason"])
+            self.assertTrue(r.get("note"), r["name"])
 
     def test_capture_covers_exactly_this_generation(self):
         cap = json.loads(self.capture_path.read_text(encoding="utf-8"))

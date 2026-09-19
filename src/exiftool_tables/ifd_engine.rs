@@ -903,14 +903,10 @@ fn walk(
         .insert("SubfileType", MemberValue::Str(String::new()));
 
     // Autogeneration v2: the table's generated conversion arms, run first
-    // for every field they claim (mixed mode, `conv` module doc), over a
-    // session carrying this directory's byte order (`GetByteOrder()`).
+    // for every field they claim (mixed mode, `conv` module doc), over this
+    // directory's session (`directory_session`).
     let generated = conv::decoder(table);
-    let mut session = Session::new();
-    session.byte_order = Some(match dir.byte_order {
-        ByteOrder::Little => SessionByteOrder::LittleEndian,
-        ByteOrder::Big => SessionByteOrder::BigEndian,
-    });
+    let mut session = directory_session(&dir);
 
     let mut warn_count = 0u32;
     for (index, entry) in entries.iter().enumerate() {
@@ -1026,7 +1022,8 @@ fn walk(
         // first; on a decline the existing path below runs for this entry.
         let mut declined = false;
         if let Some(decode) = generated.filter(|_| conv::claims(table, tag)) {
-            match generated_arm(decode, &session, tag, &raw) {
+            sync_ctx_members(&mut session, ctx);
+            match generated_arm(decode, &mut session, tag, &raw) {
                 Arm::Decline(_) => declined = true,
                 Arm::Suppress => continue,
                 Arm::Report(report) => {
@@ -1141,11 +1138,56 @@ fn walk(
     Some(())
 }
 
+/// The session one directory's generated conversions run in
+/// ([`Session::for_ifd`]): the directory's byte order (`GetByteOrder()`)
+/// and its name as `DIR_NAME` (`$$dirInfo{DirName}`, ExifTool.pm:9078 --
+/// the name [`IfdDir::group1`] carries). The per-file members come from
+/// `ctx` before each arm ([`sync_ctx_members`]).
+fn directory_session(dir: &IfdDir<'_>) -> Session {
+    let order = match dir.byte_order {
+        ByteOrder::Little => SessionByteOrder::LittleEndian,
+        ByteOrder::Big => SessionByteOrder::BigEndian,
+    };
+    Session::for_ifd(order, dir.group1, [])
+}
+
+/// The members the walk's Conditions already track in `ctx` -- `Make`,
+/// `Model`, `Compression`/`SubfileType` (reset to `''` per IFD,
+/// Exif.pm:6446-6447, then set by those tags' `DataMember`), and
+/// `TIFF_TYPE`/`FILE_TYPE` when a caller seeds them -- copied into the
+/// session before each arm, so both read one source of truth and a value
+/// the existing path set since the last arm is never stale. A key `ctx`
+/// does not hold is removed: the arm then declines rather than read `Init`'s
+/// placeholder.
+fn sync_ctx_members(session: &mut Session, ctx: &cond::Ctx) {
+    for key in [
+        "Make",
+        "Model",
+        "Compression",
+        "SubfileType",
+        "TIFF_TYPE",
+        "FILE_TYPE",
+    ] {
+        match ctx.members.get(key) {
+            Some(member) => {
+                let value = match member {
+                    MemberValue::Str(s) => MemberVal::Str(s.clone()),
+                    MemberValue::Bytes(b) => MemberVal::from_bytes(b.clone()),
+                    MemberValue::Num(n) => MemberVal::Int(*n),
+                };
+                // A non-UTF-8 Make/Model leaves the typed slot unsupplied.
+                let _ = session.set_member(key, value);
+            }
+            None => session.remove_member(key),
+        }
+    }
+}
+
 /// The Perl scalar `ReadValue` hands a conversion (ExifTool.pm:6297-6330):
 /// an integer IV, a `float`/`double` NV, a rational's `RoundFloat` string
-/// (or `inf`/`undef`), a string or byte run as its bytes, a fixed-count
-/// entry as ONE space-joined string. `None` for bytes that are not UTF-8,
-/// which `MemberVal::Str` cannot hold: the arm is not called.
+/// (or `inf`/`undef`), a string or byte run as its exact bytes (a
+/// [`MemberVal::Bytes`] when they are not UTF-8: the arms' runtime is
+/// byte-exact), a fixed-count entry as ONE space-joined string.
 fn perl_scalar(raw: &DecodedValue) -> Option<MemberVal> {
     Some(match raw {
         DecodedValue::Integer(i) => MemberVal::Int(*i),
@@ -1154,7 +1196,7 @@ fn perl_scalar(raw: &DecodedValue) -> Option<MemberVal> {
             MemberVal::Str(ifd_perl_string(raw)?)
         }
         DecodedValue::StringBytes(bytes) | DecodedValue::Undefined(bytes) => {
-            MemberVal::Str(String::from_utf8(bytes.clone()).ok()?)
+            MemberVal::from_bytes(bytes.clone())
         }
         DecodedValue::String(s) => MemberVal::Str(s.clone()),
         DecodedValue::Array(values) => MemberVal::Str(
@@ -1167,22 +1209,50 @@ fn perl_scalar(raw: &DecodedValue) -> Option<MemberVal> {
     })
 }
 
-/// Runs `tag`'s generated arm on the entry's `ReadValue` result. A value
-/// the arm cannot be handed declines. (No Exif::Main arm reads the eval-site
-/// `$count`/`$format`; the backend refuses any that would.)
-fn generated_arm(decode: conv::Decode, session: &Session, tag: &IfdTag, raw: &DecodedValue) -> Arm {
-    match perl_scalar(raw) {
-        Some(val) => decode(session, tag.id, &val),
-        None => Arm::Decline("value bytes are not UTF-8"),
+/// Runs `tag`'s generated arm on the entry's `ReadValue` result. (No
+/// Exif::Main arm reads the eval-site `$count`/`$format`; the backend
+/// refuses any that would; and a conversion that made a `Warn` request has
+/// already declined, `conv::Decode`'s contract.) The arm's report is taken
+/// only when the row it becomes is exact: every string the row carries must
+/// be UTF-8 -- the arm is byte-exact, but a `TagValue` holds text -- and a
+/// report that leaves `$val` unconverted (`value: None`) must have UTF-8
+/// `$val`, since the row then shows the value read. Otherwise the existing
+/// path runs, as before.
+fn generated_arm(
+    decode: conv::Decode,
+    session: &mut Session,
+    tag: &IfdTag,
+    raw: &DecodedValue,
+) -> Arm {
+    let Some(val) = perl_scalar(raw) else {
+        return Arm::Decline("value has no Perl scalar form here");
+    };
+    let arm = decode(session, tag.id, &val);
+    if let Arm::Report(report) = &arm {
+        let text = |out: &conv::Out| match out {
+            conv::Out::Scalar(v) => !matches!(v, MemberVal::Bytes(_)),
+            conv::Out::Binary(_) => true,
+        };
+        let exact = report
+            .value
+            .as_ref()
+            .map_or(!matches!(val, MemberVal::Bytes(_)), text)
+            && report.print.as_ref().is_none_or(text);
+        if !exact {
+            return Arm::Decline("a reported value is not UTF-8 text");
+        }
     }
+    arm
 }
 
-/// `$$self{X} = v` as the `Cond` grammar's member: an IV as `Num`, anything
-/// else as its string; `undef` clears it.
+/// `$$self{X} = v` as the `Cond` grammar's member: an IV as `Num`, a byte
+/// string as `Str`/`Bytes` exactly, anything else as its string; `undef`
+/// clears it.
 fn member_of(value: &MemberVal) -> Option<MemberValue> {
     match value {
         MemberVal::Int(i) => Some(MemberValue::Num(*i)),
         MemberVal::Undef => None,
+        MemberVal::Bytes(b) => Some(MemberValue::Bytes(b.clone())),
         other => Some(MemberValue::Str(other.perl_string())),
     }
 }
@@ -1247,7 +1317,7 @@ fn generated_row(
             None if tag.omitted.any() => perl_scalar(raw).map(|v| v.perl_string()),
             _ => None,
         };
-        !matches!((print, before), (conv::Out::Scalar(p), Some(b)) if p.is_defined() && p.perl_string() == b)
+        !matches!((print, before), (conv::Out::Scalar(p), Some(b)) if p.is_defined() && p.perl_bytes().as_ref() == b.as_bytes())
     });
     let untouched = report.value.is_none() && print.is_none();
     let (value, value_conv) = match &print {

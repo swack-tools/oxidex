@@ -154,6 +154,33 @@ HELPERS = [
     dict(rank=None, spike="ConvertFileSize", perl="Image::ExifTool::ConvertFileSize",
          module="Image/ExifTool.pm", uses=None, status=PORTED,
          note="complete: SI and Binary ByteUnit branches, with or without $et"),
+    # The helpers Exif::Main's refused conversions call (#838's REFUSED
+    # table). `deps` are the engine subs each port reproduces inline.
+    dict(rank=None, spike="Exif::ConvertExifText", perl="Image::ExifTool::Exif::ConvertExifText",
+         module="Image/ExifTool/Exif.pm", uses=None, status=PORTED,
+         deps=["Image/ExifTool.pm::Options", "Image/ExifTool.pm::Decode"],
+         note="complete except a Perl-true Validate option (its extra warnings), which "
+              "refuses; Decode as ported"),
+    dict(rank=None, spike="Exif::DecodeCFAPattern", perl="Image::ExifTool::Exif::DecodeCFAPattern",
+         module="Image/ExifTool/Exif.pm", uses=None, status=PORTED,
+         deps=["Image/ExifTool.pm::GetByteOrder"],
+         note="complete; GetByteOrder with no Session byte order refuses"),
+    dict(rank=None, spike="Exif::PrintCFAPattern", perl="Image::ExifTool::Exif::PrintCFAPattern",
+         module="Image/ExifTool/Exif.pm", uses=None, status=PORTED,
+         note="complete for canonical-integer fields (every DecodeCFAPattern result); "
+              "any other field refuses"),
+    dict(rank=None, spike="Exif::PrintSFR", perl="Image::ExifTool::Exif::PrintSFR",
+         module="Image/ExifTool/Exif.pm", uses=None, status=PORTED,
+         deps=["Image/ExifTool.pm::Get16u", "Image/ExifTool.pm::Get32u",
+               "Image/ExifTool.pm::DoUnpackStd", "Image/ExifTool.pm::GetRational64u",
+               "Image/ExifTool.pm::RoundFloat"],
+         note="complete; GetByteOrder with no Session byte order refuses"),
+    dict(rank=None, spike="ASF::GetGUID", perl="Image::ExifTool::ASF::GetGUID",
+         module="Image/ExifTool/ASF.pm", uses=None, status=PORTED, note="complete"),
+    dict(rank=None, spike="ET->Printable", perl="Image::ExifTool::Printable",
+         module="Image/ExifTool.pm", uses=None, status=PORTED,
+         note="complete for a plain scalar (a SCALAR reference is never a conversion's "
+              "$val); a non-integer $maxLen or Verbose refuses"),
 ]
 
 
@@ -449,6 +476,107 @@ def decode_cases(add):
     add(E, [S("abc"), S("UCS2")])
 
 
+def exif_helper_cases(add):
+    """Probes for the Exif::Main helpers (ConvertExifText, DecodeCFAPattern,
+    PrintCFAPattern, PrintSFR, ASF::GetGUID, Printable)."""
+    II, MM = {"byte_order": "II"}, {"byte_order": "MM"}
+    CET = "Image::ExifTool::Exif::ConvertExifText"
+    texts = [b"", b"abc", b"1234567", b"ASCII\0\0\0Hello", b"ASCII\0\0\0Hello   ",
+             b"ASCII\0\0\0Hello  \n", b"ASCII\0\0\0Hello \n\n", b"ASCII\0\0\0a\0junk ",
+             b"ASCII   Hi", b"ASCII  \nHi", b"ASCII \n Hi", b"ASCII\0\0\0", b"ASCII\0\0\0   ",
+             b"\0" * 8 + b"text", b" " * 8 + b"text  ", b"\0" + b" " * 7 + b"t", b" " + b"\0" * 7 + b"t",
+             b" " * 7 + b"\ntext", b" " * 6 + b"\n\ntext", b"Ascii\0\0\0x", b"ASCIIX\0\0x",
+             b"ASCII\0\0\0caf\xe9", b"ASCII\0\0\0caf\xc3\xa9", b"\0" * 8, b"\0" * 20,
+             b"UNICODE\0H\0i\0", b"UNICODE\0\0H\0i", b"UNICODE\0\xff\xfeH\0i\0",
+             b"UNICODE\0\xfe\xff\0H\0i", b"UNICODE\0H\0i", b"UNICODE\0", b"UNICODE H\0 \0 \0",
+             b"UNICODE\0\x3d\xd8\x00\xde", b"UNICODE\0\xe9\0\0\0x\0", b"Unicode\0H\0i\0",
+             b"UNICODE\nH\0", b"JIS\0\0\0\0\0\x30\x21", b"JIS     \x24\x22\x24\x24", b"JIS\0\0\0\0x\x30",
+             b"JIS\0\0\0\0\0", b"XYZ\0\0\0\0\0abc  ", b"\xff" * 12, b"12345678 9 ", b"ASCII\0\0\0\x80 "]
+    flexes = [[I(1), S("UserComment")], [I(1)], [S("1"), U], [U, S("Tag")], [I(0), S("")],
+              [S("Other"), S("Tag")], []]
+    for v in texts:
+        for fl in flexes:
+            for bo in (II, MM):
+                add(CET, [Bx(v)] + fl, None, extra=bo)
+    for v in (U, I(5), F("1.5"), S("ASCII\0\0\0x")):
+        add(CET, [v, I(1), S("UserComment")], None, extra=II)
+    for opts in ({"CharsetEXIF": S("Latin")}, {"CharsetEXIF": S("UTF8")}, {"CharsetEXIF": S("0")},
+                 {"Charset": S("Latin")}, {"Validate": I(1)}, {"Validate": S("0")}):
+        for v in (b"ASCII\0\0\0caf\xe9 ", b"UNICODE\0H\0\xe9\0", b"XYZ\0\0\0\0\0a", b"ASCII\0\0\0a"):
+            for fl in ([I(1), S("UserComment")], [S("1"), U], [I(2)]):
+                add(CET, [Bx(v)] + fl, opts, extra=II)
+    for mem in ({"WrongByteOrder": I(1)}, {"WrongByteOrder": U}):
+        for v in (b"abc", b"ASCII\0\0\0x", b"UNICODE\0\0H\0i"):
+            add(CET, [Bx(v), I(1), S("UserComment")], None, extra={**II, "members": mem})
+    # no Session byte order: Decode's 'Unknown' needs GetByteOrder
+    add(CET, [Bx(b"UNICODE\0H\0i\0"), I(1), S("UserComment")])
+    add(CET, [Bx(b"ASCII\0\0\0Hi"), I(1), S("UserComment")])
+
+    DCP = "Image::ExifTool::Exif::DecodeCFAPattern"
+    cfas = [b"\x02\x00\x02\x00\x00\x01\x01\x02", b"\x00\x02\x00\x02\x00\x01\x01\x02",
+            b"\x02\x00\x02\x00\x00\x01\x01", b"\x03\x00\x03\x00\x01", b"\x01\x00\x01\x00",
+            b"\x00\x00\x00\x00", b"\xff\xff\xff\xff\x01", b"\x00\x01\x00\x03\x00\x01\x02",
+            b"\x01\x00\x03\x00\x00\x01\x02", b"0112", b"0112\n", b"01", b"7", b"0126", b"01122",
+            b"", b"\x01\x02\x03", b"0 1 2", b"\x06\x00\x06\x00" + bytes(range(36)),
+            b"\x00\x06\x00\x06" + bytes(range(36)), b"\x00\x02\x00\x02" + b"\x00\x01\x01\x02\x09"]
+    for v in cfas:
+        for bo in (II, MM):
+            add(DCP, [Bx(v)], None, extra=bo)
+    for v in (U, I(12), I(789), I(1234), F("0.5")):
+        add(DCP, [v], None, extra=II)
+    add(DCP, [Bx(b"\x02\x00\x02\x00\x00\x01\x01\x02")])
+    add(DCP, [Bx(b"0112")])
+
+    PCP = "Image::ExifTool::Exif::PrintCFAPattern"
+    for v in ["2 2 0 1 1 2", "2 2 0 1 1", "0 2", "2 0 1 2", "1", "", "1 2", "3 2 0 1 2 1 2 0",
+              "2 3 0 1 2 3 4 5 6", "2 2 -1 -7 -8 7", "-1 2 0", "2 -2 0 1 1 2", "1 1", "1 1 9",
+              "2 1 0 1", "abc def", "00 2 0", "4 4 " + " ".join(["1"] * 16), "65535 65535 1",
+              "1 -1 3", "-1 -1 2", "  2   2  0 1 1 2  ", "2\t2\n0 1 1 2", "3 1 0 1 2",
+              "2 2 0 1 1 2 extra", "1 1 5", "1 1 6", "1 1 -8", "1 3 0 1 2", "3 3 0 1 2 3 4 5 6 0 1"]:
+        add(PCP, [S(v)])
+    for v in (U, I(5)):
+        add(PCP, [v])
+
+    SFR = "Image::ExifTool::Exif::PrintSFR"
+
+    def sfr(n, m, names, rats, order):
+        e = "<" if order == "II" else ">"
+        import struct
+        return (struct.pack(e + "HH", n, m) + b"".join(x + b"\0" for x in names)
+                + b"".join(struct.pack(e + "II", a, b) for a, b in rats))
+    for order, bo in (("II", II), ("MM", MM)):
+        vals = [sfr(2, 2, [b"H", b"V"], [(1, 2), (3, 4), (5, 0), (0, 0)], order),
+                sfr(1, 3, [b"Col"], [(1, 3), (2, 3), (10, 1)], order),
+                sfr(0, 0, [], [], order) + b"x", sfr(2, 0, [b"a", b"b"], [], order),
+                sfr(2, 1, [b"a"], [(1, 1), (2, 2)], order),
+                sfr(2, 1, [b"a", b"b", b"c"], [(1, 1), (2, 2)], order),
+                sfr(3, 1, [b"", b"x", b""], [(7, 1), (4294967295, 3), (1, 4294967295)], order),
+                sfr(2, 2, [b"H", b"V"], [(1, 2)], order), b"\x01\x00\x01\x00",
+                b"\x01\x00\x01\x00\x00", b"abcde", b"\x00\x00\x00\x00\x00\x00",
+                sfr(1, 1, [b"caf\xe9"], [(1, 3)], order)]
+        for v in vals:
+            add(SFR, [Bx(v)], None, extra=bo)
+    for v in (U, S(""), S("abcd"), I(12345)):
+        add(SFR, [v], None, extra=II)
+    add(SFR, [Bx(sfr(1, 1, [b"a"], [(1, 3)], "II"))])
+
+    GG = "Image::ExifTool::ASF::GetGUID"
+    for v in [bytes(range(16)), bytes(range(15)), bytes(range(17)), b"\xff" * 16, b"",
+              bytes.fromhex("24c3dd6f034efe4bb1853d77768dc90c"), b"0123456789abcdef"]:
+        add(GG, [Bx(v)])
+    for v in (U, I(5), S("0123456789abcde\n")):
+        add(GG, [v])
+
+    PR = "Image::ExifTool::Printable"
+    pvals = [U, S(""), S("abc"), Bx(b"a\0b\x01c\x1f\x7f\xff d"), S("x" * 100), S("y" * 25),
+             S("z" * 61), S("w" * 2100), I(5), F("1.5"), Bx(b"caf\xc3\xa9")]
+    for v in pvals:
+        for ml in ([], [U], [I(0)], [I(10)], [I(30)], [S("abc")], [F("25.5")], [I(-5)]):
+            for opts in (None, {"Verbose": I(4)}, {"Verbose": I(5)}, {"Verbose": S("x")},
+                         {"Verbose": F("4.5")}):
+                add(PR, [v] + ml, opts)
+
+
 def cases():
     out = []
 
@@ -552,6 +680,7 @@ def cases():
             add("Image::ExifTool::ConvertFileSize", [a], bu, with_session=True)
 
     decode_cases(add)
+    exif_helper_cases(add)
     return out
 
 
@@ -559,7 +688,7 @@ def cases():
 OPTION_DEFAULTS = ["ByteUnit", "Charset", "CharsetEXIF", "CharsetFileName", "CharsetID3",
                    "CharsetIPTC", "CharsetPhotoshop", "CharsetQuickTime", "CharsetRIFF",
                    "CoordFormat", "DateFormat", "GlobalTimeShift", "KeepUTCTime",
-                   "StrictDate", "SystemTimeRes"]
+                   "StrictDate", "SystemTimeRes", "Validate", "Verbose"]
 
 # Keys a case carries besides helper/args (copied into the capture).
 CASE_KEYS = ("options", "with_session", "byte_order", "members")

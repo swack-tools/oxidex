@@ -3,7 +3,7 @@
 //! source (ExifTool 13.59, table sha256 `7e46afd009047f15...`). Do not edit by
 //! hand. See `super` (conv/mod.rs) for what an arm is and how it is proven.
 //!
-//! 528 fields generated, 40 refused (`REFUSED`, with reasons), 29 not conversion fields
+//! 552 fields generated, 16 refused (`REFUSED`, with reasons), 29 not conversion fields
 //! (SubDirectory edges / `Unknown`).
 #![allow(
     clippy::all,
@@ -36,38 +36,40 @@ pub static CLAIMED: &[u16] = &[
     0x0145, 0x0146, 0x0147, 0x0148, 0x014c, 0x014d, 0x014e, 0x0150, 0x0151, 0x0152, 0x0153, 0x0154,
     0x0155, 0x0156, 0x0157, 0x0158, 0x0159, 0x015a, 0x015b, 0x015f, 0x0191, 0x0192, 0x0193, 0x0194,
     0x0195, 0x01b1, 0x01b2, 0x01b3, 0x01b5, 0x0200, 0x0203, 0x0205, 0x0206, 0x0207, 0x0208, 0x0209,
-    0x0211, 0x0212, 0x0213, 0x0214, 0x022f, 0x0303, 0x03e7, 0x1000, 0x1001, 0x1002, 0x4746, 0x4749,
-    0x5001, 0x5002, 0x5003, 0x5004, 0x5005, 0x5006, 0x5007, 0x5008, 0x5009, 0x500a, 0x500b, 0x500c,
-    0x500d, 0x500e, 0x500f, 0x5010, 0x5011, 0x5012, 0x5013, 0x5014, 0x5015, 0x5016, 0x5017, 0x5018,
-    0x5019, 0x501a, 0x501b, 0x5020, 0x5021, 0x5022, 0x5023, 0x5024, 0x5025, 0x5026, 0x5027, 0x5028,
-    0x5029, 0x502a, 0x502b, 0x502c, 0x502d, 0x502e, 0x502f, 0x5030, 0x5031, 0x5032, 0x5033, 0x5034,
-    0x5035, 0x5036, 0x5037, 0x5038, 0x5039, 0x503a, 0x503b, 0x5090, 0x5091, 0x5100, 0x5101, 0x5102,
-    0x5103, 0x5104, 0x5110, 0x5111, 0x5112, 0x5113, 0x7000, 0x7010, 0x7031, 0x7032, 0x7034, 0x7035,
-    0x7036, 0x7037, 0x7038, 0x7310, 0x7313, 0x74c7, 0x74c8, 0x800d, 0x80a3, 0x80a4, 0x80a5, 0x80a6,
-    0x80b9, 0x80ba, 0x80bb, 0x80bc, 0x80e3, 0x80e4, 0x80e5, 0x80e6, 0x8214, 0x8215, 0x8216, 0x8217,
-    0x8218, 0x8219, 0x821a, 0x827d, 0x828d, 0x828e, 0x828f, 0x829a, 0x829d, 0x82a5, 0x82a6, 0x82a7,
-    0x82a8, 0x82a9, 0x82aa, 0x82ab, 0x82ac, 0x830e, 0x8335, 0x8336, 0x835c, 0x835d, 0x835e, 0x835f,
-    0x847e, 0x847f, 0x8480, 0x8481, 0x8482, 0x84e0, 0x84e1, 0x84e2, 0x84e3, 0x84e4, 0x84e5, 0x84e6,
-    0x84e7, 0x84e8, 0x84e9, 0x84ea, 0x84eb, 0x84ec, 0x84ed, 0x84ee, 0x84ef, 0x84f0, 0x8546, 0x85b8,
-    0x85d7, 0x85d8, 0x8602, 0x877f, 0x8780, 0x8781, 0x8782, 0x87ac, 0x87af, 0x87b0, 0x87b1, 0x87be,
-    0x8822, 0x8824, 0x8827, 0x8828, 0x8829, 0x882a, 0x882b, 0x8830, 0x8831, 0x8832, 0x8833, 0x8834,
-    0x8835, 0x885c, 0x885d, 0x885e, 0x8871, 0x9000, 0x9003, 0x9004, 0x9009, 0x9010, 0x9011, 0x9012,
-    0x9101, 0x9102, 0x9201, 0x9202, 0x9203, 0x9204, 0x9205, 0x9206, 0x9207, 0x9208, 0x9209, 0x920a,
-    0x920b, 0x920c, 0x920d, 0x920e, 0x920f, 0x9210, 0x9211, 0x9212, 0x9213, 0x9214, 0x9215, 0x9216,
-    0x9217, 0x923a, 0x923b, 0x923c, 0x923f, 0x9290, 0x9291, 0x9292, 0x932f, 0x9330, 0x9331, 0x9400,
-    0x9401, 0x9402, 0x9403, 0x9404, 0x9405, 0x9a00, 0xa000, 0xa001, 0xa002, 0xa003, 0xa004, 0xa010,
-    0xa011, 0xa101, 0xa20b, 0xa20d, 0xa20e, 0xa20f, 0xa210, 0xa211, 0xa212, 0xa213, 0xa214, 0xa215,
-    0xa216, 0xa217, 0xa300, 0xa301, 0xa401, 0xa402, 0xa403, 0xa404, 0xa405, 0xa406, 0xa407, 0xa408,
-    0xa409, 0xa40a, 0xa40b, 0xa40c, 0xa40d, 0xa40f, 0xa410, 0xa411, 0xa412, 0xa420, 0xa430, 0xa431,
-    0xa432, 0xa433, 0xa434, 0xa435, 0xa436, 0xa437, 0xa438, 0xa439, 0xa43a, 0xa43b, 0xa43c, 0xa460,
-    0xa461, 0xa480, 0xa481, 0xa500, 0xafc0, 0xafc1, 0xafc2, 0xafc3, 0xafc4, 0xafc5, 0xb4c3, 0xbc02,
+    0x0211, 0x0212, 0x0213, 0x0214, 0x022f, 0x0303, 0x03e7, 0x1000, 0x1001, 0x1002, 0x4746, 0x4747,
+    0x4749, 0x5001, 0x5002, 0x5003, 0x5004, 0x5005, 0x5006, 0x5007, 0x5008, 0x5009, 0x500a, 0x500b,
+    0x500c, 0x500d, 0x500e, 0x500f, 0x5010, 0x5011, 0x5012, 0x5013, 0x5014, 0x5015, 0x5016, 0x5017,
+    0x5018, 0x5019, 0x501a, 0x501b, 0x5020, 0x5021, 0x5022, 0x5023, 0x5024, 0x5025, 0x5026, 0x5027,
+    0x5028, 0x5029, 0x502a, 0x502b, 0x502c, 0x502d, 0x502e, 0x502f, 0x5030, 0x5031, 0x5032, 0x5033,
+    0x5034, 0x5035, 0x5036, 0x5037, 0x5038, 0x5039, 0x503a, 0x503b, 0x5090, 0x5091, 0x5100, 0x5101,
+    0x5102, 0x5103, 0x5104, 0x5110, 0x5111, 0x5112, 0x5113, 0x7000, 0x7010, 0x7031, 0x7032, 0x7034,
+    0x7035, 0x7036, 0x7037, 0x7038, 0x7310, 0x7313, 0x74c7, 0x74c8, 0x800d, 0x80a3, 0x80a4, 0x80a5,
+    0x80a6, 0x80b9, 0x80ba, 0x80bb, 0x80bc, 0x80e3, 0x80e4, 0x80e5, 0x80e6, 0x8214, 0x8215, 0x8216,
+    0x8217, 0x8218, 0x8219, 0x821a, 0x827d, 0x828d, 0x828e, 0x828f, 0x8298, 0x829a, 0x829d, 0x82a5,
+    0x82a6, 0x82a7, 0x82a8, 0x82a9, 0x82aa, 0x82ab, 0x82ac, 0x830e, 0x8335, 0x8336, 0x835c, 0x835d,
+    0x835e, 0x835f, 0x847e, 0x847f, 0x8480, 0x8481, 0x8482, 0x84e0, 0x84e1, 0x84e2, 0x84e3, 0x84e4,
+    0x84e5, 0x84e6, 0x84e7, 0x84e8, 0x84e9, 0x84ea, 0x84eb, 0x84ec, 0x84ed, 0x84ee, 0x84ef, 0x84f0,
+    0x8546, 0x85b8, 0x85d7, 0x85d8, 0x8602, 0x877f, 0x8780, 0x8781, 0x8782, 0x87ac, 0x87af, 0x87b0,
+    0x87b1, 0x87be, 0x8822, 0x8824, 0x8827, 0x8828, 0x8829, 0x882a, 0x882b, 0x8830, 0x8831, 0x8832,
+    0x8833, 0x8834, 0x8835, 0x885c, 0x885d, 0x885e, 0x8871, 0x9000, 0x9003, 0x9004, 0x9009, 0x9010,
+    0x9011, 0x9012, 0x9101, 0x9102, 0x9201, 0x9202, 0x9203, 0x9204, 0x9205, 0x9206, 0x9207, 0x9208,
+    0x9209, 0x920a, 0x920b, 0x920c, 0x920d, 0x920e, 0x920f, 0x9210, 0x9211, 0x9212, 0x9213, 0x9214,
+    0x9215, 0x9216, 0x9217, 0x923a, 0x923b, 0x923c, 0x923f, 0x9286, 0x9290, 0x9291, 0x9292, 0x932f,
+    0x9330, 0x9331, 0x9400, 0x9401, 0x9402, 0x9403, 0x9404, 0x9405, 0x9a00, 0x9c9b, 0x9c9c, 0x9c9d,
+    0x9c9e, 0x9c9f, 0xa000, 0xa001, 0xa002, 0xa003, 0xa004, 0xa010, 0xa011, 0xa101, 0xa20b, 0xa20c,
+    0xa20d, 0xa20e, 0xa20f, 0xa210, 0xa211, 0xa212, 0xa213, 0xa214, 0xa215, 0xa216, 0xa217, 0xa300,
+    0xa301, 0xa302, 0xa401, 0xa402, 0xa403, 0xa404, 0xa405, 0xa406, 0xa407, 0xa408, 0xa409, 0xa40a,
+    0xa40b, 0xa40c, 0xa40d, 0xa40e, 0xa40f, 0xa410, 0xa411, 0xa412, 0xa420, 0xa430, 0xa431, 0xa432,
+    0xa433, 0xa434, 0xa435, 0xa436, 0xa437, 0xa438, 0xa439, 0xa43a, 0xa43b, 0xa43c, 0xa460, 0xa461,
+    0xa480, 0xa481, 0xa500, 0xafc0, 0xafc1, 0xafc2, 0xafc3, 0xafc4, 0xafc5, 0xb4c3, 0xbc01, 0xbc02,
     0xbc03, 0xbc04, 0xbc80, 0xbc81, 0xbc82, 0xbc83, 0xbcc0, 0xbcc1, 0xbcc2, 0xbcc3, 0xbcc4, 0xbcc5,
-    0xc427, 0xc428, 0xc429, 0xc42a, 0xc44f, 0xc573, 0xc580, 0xc5e0, 0xc612, 0xc613, 0xc614, 0xc616,
-    0xc617, 0xc618, 0xc619, 0xc61a, 0xc61b, 0xc61c, 0xc61d, 0xc61e, 0xc61f, 0xc620, 0xc621, 0xc622,
-    0xc623, 0xc624, 0xc625, 0xc626, 0xc627, 0xc628, 0xc629, 0xc62a, 0xc62b, 0xc62c, 0xc62d, 0xc62e,
-    0xc62f, 0xc630, 0xc631, 0xc632, 0xc633, 0xc635, 0xc640, 0xc65a, 0xc65b, 0xc65c, 0xc65d, 0xc660,
-    0xc68d, 0xc68e, 0xc690, 0xc692, 0xc6bf, 0xc6c5, 0xc6f7, 0xc6f9, 0xc6fa, 0xc6fb, 0xc6fc, 0xc6fd,
-    0xc714, 0xc715, 0xc719, 0xc71a, 0xc71b, 0xc71c, 0xc71d, 0xc71e, 0xc71f, 0xc725, 0xc726, 0xc761,
+    0xc427, 0xc428, 0xc429, 0xc42a, 0xc44f, 0xc573, 0xc580, 0xc5e0, 0xc612, 0xc613, 0xc614, 0xc615,
+    0xc616, 0xc617, 0xc618, 0xc619, 0xc61a, 0xc61b, 0xc61c, 0xc61d, 0xc61e, 0xc61f, 0xc620, 0xc621,
+    0xc622, 0xc623, 0xc624, 0xc625, 0xc626, 0xc627, 0xc628, 0xc629, 0xc62a, 0xc62b, 0xc62c, 0xc62d,
+    0xc62e, 0xc62f, 0xc630, 0xc631, 0xc632, 0xc633, 0xc635, 0xc640, 0xc65a, 0xc65b, 0xc65c, 0xc65d,
+    0xc660, 0xc68b, 0xc68d, 0xc68e, 0xc690, 0xc692, 0xc6bf, 0xc6c5, 0xc6d2, 0xc6d3, 0xc6f3, 0xc6f4,
+    0xc6f6, 0xc6f7, 0xc6f8, 0xc6f9, 0xc6fa, 0xc6fb, 0xc6fc, 0xc6fd, 0xc6fe, 0xc714, 0xc715, 0xc716,
+    0xc717, 0xc718, 0xc719, 0xc71a, 0xc71b, 0xc71c, 0xc71d, 0xc71e, 0xc71f, 0xc725, 0xc726, 0xc761,
     0xc764, 0xc772, 0xc789, 0xc791, 0xc792, 0xc793, 0xc7a1, 0xc7a3, 0xc7a4, 0xc7a5, 0xc7a6, 0xc7a7,
     0xc7a8, 0xc7aa, 0xc7b5, 0xc7d7, 0xc7d8, 0xc7e9, 0xc7ea, 0xc7eb, 0xc7ec, 0xc7ed, 0xc7ee, 0xcd2d,
     0xcd2e, 0xcd30, 0xcd31, 0xcd32, 0xcd33, 0xcd34, 0xcd35, 0xcd36, 0xcd37, 0xcd38, 0xcd39, 0xcd3a,
@@ -119,144 +121,24 @@ pub static REFUSED: &[(u16, &str, &str)] = &[
         "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm",
     ),
     (
-        0x4747,
-        "XP_DIP_XML",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0x8298,
-        "Copyright",
-        "Image::ExifTool::Options has no proven port",
-    ),
-    (
         0x927c,
         "MakerNoteApple/MakerNoteNikon/MakerNoteCanon/MakerNoteCasio/MakerNoteCasio2/MakerNoteDJIInfo/MakerNoteDJI/MakerNoteFLIR/MakerNoteFujiFilm/MakerNoteGE/MakerNoteGE2/MakerNoteGoogle/MakerNoteHasselblad/MakerNoteHP/MakerNoteHP2/MakerNoteHP4/MakerNoteHP6/MakerNoteISL/MakerNoteJVC/MakerNoteJVCText/MakerNoteKodak1a/MakerNoteKodak1b/MakerNoteKodak2/MakerNoteKodak3/MakerNoteKodak4/MakerNoteKodak5/MakerNoteKodak6a/MakerNoteKodak6b/MakerNoteKodak7/MakerNoteKodak8a/MakerNoteKodak8b/MakerNoteKodak8c/MakerNoteKodak9/MakerNoteKodak10/MakerNoteKodak11/MakerNoteKodak12/MakerNoteKodakUnknown/MakerNoteKyocera/MakerNoteMinolta/MakerNoteMinolta2/MakerNoteMinolta3/MakerNoteMotorola/MakerNoteNikon2/MakerNoteNikon3/MakerNoteNintendo/MakerNoteOlympus/MakerNoteOlympus2/MakerNoteOlympus3/MakerNoteLeica/MakerNoteLeica2/MakerNoteLeica3/MakerNoteLeica4/MakerNoteLeica5/MakerNoteLeica6/MakerNoteLeica7/MakerNoteLeica8/MakerNoteLeica9/MakerNoteLeica10/MakerNotePanasonic/MakerNotePanasonic2/MakerNotePanasonic3/MakerNotePentax/MakerNotePentax2/MakerNotePentax3/MakerNotePentax4/MakerNotePentax5/MakerNotePentax6/MakerNotePhaseOne/MakerNoteReconyxHyperFire/MakerNoteReconyxUltraFire/MakerNoteReconyxHyperFire2/MakerNoteReconyxMicroFire/MakerNoteReconyxHyperFire4K/MakerNoteRicohPentax/MakerNoteRicoh/MakerNoteRicoh2/MakerNoteRicohText/MakerNoteSamsung1a/MakerNoteSamsung1b/MakerNoteSamsung2/MakerNoteSanyo/MakerNoteSanyoC4/MakerNoteSanyoPatch/MakerNoteSigma/MakerNoteSony/MakerNoteSony2/MakerNoteSony3/MakerNoteSony4/MakerNoteSony5/MakerNoteSonyEricsson/MakerNoteSonySRF/MakerNoteUnknownText/MakerNoteUnknownBinary/MakerNoteUnknown",
         "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm",
     ),
-    (
-        0x9286,
-        "UserComment",
-        "Image::ExifTool::Exif::ConvertExifText has no proven port",
-    ),
     (0x9287, "LearningOptOutIn", "builtin shift not modelled"),
-    (
-        0x9c9b,
-        "XPTitle",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0x9c9c,
-        "XPComment",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0x9c9d,
-        "XPAuthor",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0x9c9e,
-        "XPKeywords",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0x9c9f,
-        "XPSubject",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xa20c,
-        "SpatialFrequencyResponse",
-        "Image::ExifTool::Exif::PrintSFR has no proven port",
-    ),
-    (
-        0xa302,
-        "CFAPattern",
-        "Image::ExifTool::Exif::DecodeCFAPattern has no proven port",
-    ),
-    (
-        0xa40e,
-        "DevelopmentTypeDescription",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
     (
         0xa462,
         "CompositeImageExposureTimes",
         "AST node decl not modelled",
     ),
     (
-        0xbc01,
-        "PixelFormat",
-        "Image::ExifTool::ASF::GetGUID has no proven port",
-    ),
-    (
-        0xc615,
-        "LocalizedCameraModel",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
         0xc634,
         "SR2Private/DNGAdobeData/MakerNotePentax/MakerNotePentax5/MakerNoteRicohPentax/MakerNoteDJIInfo/DNGPrivateData",
         "_variants group: alternatives are chosen by the walker's compiled Condition (offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm",
     ),
-    (
-        0xc68b,
-        "OriginalRawFileName",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6d2,
-        "PanasonicTitle",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6d3,
-        "PanasonicTitle2",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6f3,
-        "CameraCalibrationSig",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6f4,
-        "ProfileCalibrationSig",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6f6,
-        "AsShotProfileName",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6f8,
-        "ProfileName",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc6fe,
-        "ProfileCopyright",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc716,
-        "PreviewApplicationName",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc717,
-        "PreviewApplicationVersion",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (
-        0xc718,
-        "PreviewSettingsName",
-        "Image::ExifTool::Decode is ported (helpers.rs) but not yet callable from a generated arm",
-    ),
-    (0xc740, "OpcodeList1", "AST node deref not modelled"),
-    (0xc741, "OpcodeList2", "AST node deref not modelled"),
-    (0xc74e, "OpcodeList3", "AST node deref not modelled"),
+    (0xc740, "OpcodeList1", "ConvertBinary not modelled"),
+    (0xc741, "OpcodeList2", "ConvertBinary not modelled"),
+    (0xc74e, "OpcodeList3", "ConvertBinary not modelled"),
     (0xc763, "TimeCodes", "AST node decl not modelled"),
 ];
 
@@ -266,10 +148,16 @@ pub fn claims(id: u16) -> bool {
     CLAIMED.binary_search(&id).is_ok()
 }
 
-/// Runs the arm for `id` on `$val`. `Arm::Decline` for an unclaimed id.
+/// Runs the arm for `id` on `$val` in the directory's session (a helper
+/// may set members there, as ExifTool's subs set them on `$self`).
+/// `Arm::Decline` for an unclaimed id, and for an entry whose conversion
+/// made a `$self->Warn` request: ExifTool then also reports a `Warning`
+/// tag -- and, for a Perl warning raised inside the conversion's eval,
+/// a second `"ValueConv <tag>: ..."` one -- which an arm does not model.
 #[must_use]
-pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
-    finish(match id {
+pub fn decode(s: &mut Session, id: u16, val: &MemberVal) -> Arm {
+    let warned = s.warnings().len();
+    let arm = finish(match id {
         0x0001 => arm_0001(s, val),
         0x0002 => arm_0002(s, val),
         0x000b => arm_000b(s, val),
@@ -365,6 +253,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0x1001 => arm_1001(s, val),
         0x1002 => arm_1002(s, val),
         0x4746 => arm_4746(s, val),
+        0x4747 => arm_4747(s, val),
         0x4749 => arm_4749(s, val),
         0x5001 => arm_5001(s, val),
         0x5002 => arm_5002(s, val),
@@ -469,6 +358,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0x828d => arm_828d(s, val),
         0x828e => arm_828e(s, val),
         0x828f => arm_828f(s, val),
+        0x8298 => arm_8298(s, val),
         0x829a => arm_829a(s, val),
         0x829d => arm_829d(s, val),
         0x82a5 => arm_82a5(s, val),
@@ -575,6 +465,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0x923b => arm_923b(s, val),
         0x923c => arm_923c(s, val),
         0x923f => arm_923f(s, val),
+        0x9286 => arm_9286(s, val),
         0x9290 => arm_9290(s, val),
         0x9291 => arm_9291(s, val),
         0x9292 => arm_9292(s, val),
@@ -588,6 +479,11 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0x9404 => arm_9404(s, val),
         0x9405 => arm_9405(s, val),
         0x9a00 => arm_9a00(s, val),
+        0x9c9b => arm_9c9b(s, val),
+        0x9c9c => arm_9c9c(s, val),
+        0x9c9d => arm_9c9d(s, val),
+        0x9c9e => arm_9c9e(s, val),
+        0x9c9f => arm_9c9f(s, val),
         0xa000 => arm_a000(s, val),
         0xa001 => arm_a001(s, val),
         0xa002 => arm_a002(s, val),
@@ -597,6 +493,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xa011 => arm_a011(s, val),
         0xa101 => arm_a101(s, val),
         0xa20b => arm_a20b(s, val),
+        0xa20c => arm_a20c(s, val),
         0xa20d => arm_a20d(s, val),
         0xa20e => arm_a20e(s, val),
         0xa20f => arm_a20f(s, val),
@@ -610,6 +507,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xa217 => arm_a217(s, val),
         0xa300 => arm_a300(s, val),
         0xa301 => arm_a301(s, val),
+        0xa302 => arm_a302(s, val),
         0xa401 => arm_a401(s, val),
         0xa402 => arm_a402(s, val),
         0xa403 => arm_a403(s, val),
@@ -623,6 +521,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xa40b => arm_a40b(s, val),
         0xa40c => arm_a40c(s, val),
         0xa40d => arm_a40d(s, val),
+        0xa40e => arm_a40e(s, val),
         0xa40f => arm_a40f(s, val),
         0xa410 => arm_a410(s, val),
         0xa411 => arm_a411(s, val),
@@ -653,6 +552,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xafc4 => arm_afc4(s, val),
         0xafc5 => arm_afc5(s, val),
         0xb4c3 => arm_b4c3(s, val),
+        0xbc01 => arm_bc01(s, val),
         0xbc02 => arm_bc02(s, val),
         0xbc03 => arm_bc03(s, val),
         0xbc04 => arm_bc04(s, val),
@@ -677,6 +577,7 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xc612 => arm_c612(s, val),
         0xc613 => arm_c613(s, val),
         0xc614 => arm_c614(s, val),
+        0xc615 => arm_c615(s, val),
         0xc616 => arm_c616(s, val),
         0xc617 => arm_c617(s, val),
         0xc618 => arm_c618(s, val),
@@ -714,20 +615,31 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xc65c => arm_c65c(s, val),
         0xc65d => arm_c65d(s, val),
         0xc660 => arm_c660(s, val),
+        0xc68b => arm_c68b(s, val),
         0xc68d => arm_c68d(s, val),
         0xc68e => arm_c68e(s, val),
         0xc690 => arm_c690(s, val),
         0xc692 => arm_c692(s, val),
         0xc6bf => arm_c6bf(s, val),
         0xc6c5 => arm_c6c5(s, val),
+        0xc6d2 => arm_c6d2(s, val),
+        0xc6d3 => arm_c6d3(s, val),
+        0xc6f3 => arm_c6f3(s, val),
+        0xc6f4 => arm_c6f4(s, val),
+        0xc6f6 => arm_c6f6(s, val),
         0xc6f7 => arm_c6f7(s, val),
+        0xc6f8 => arm_c6f8(s, val),
         0xc6f9 => arm_c6f9(s, val),
         0xc6fa => arm_c6fa(s, val),
         0xc6fb => arm_c6fb(s, val),
         0xc6fc => arm_c6fc(s, val),
         0xc6fd => arm_c6fd(s, val),
+        0xc6fe => arm_c6fe(s, val),
         0xc714 => arm_c714(s, val),
         0xc715 => arm_c715(s, val),
+        0xc716 => arm_c716(s, val),
+        0xc717 => arm_c717(s, val),
+        0xc718 => arm_c718(s, val),
         0xc719 => arm_c719(s, val),
         0xc71a => arm_c71a(s, val),
         0xc71b => arm_c71b(s, val),
@@ -799,7 +711,11 @@ pub fn decode(s: &Session, id: u16, val: &MemberVal) -> Arm {
         0xfe57 => arm_fe57(s, val),
         0xfe58 => arm_fe58(s, val),
         _ => Err(Decline("no generated arm for this id")),
-    })
+    });
+    if s.warnings().len() > warned {
+        return Arm::Decline("a conversion made a Warn request (the Warning tag is not modelled)");
+    }
+    arm
 }
 
 fn h(r: Result<MemberVal, HelperError>) -> R<MemberVal> {
@@ -838,7 +754,7 @@ static PC_0001: rt::HashConv = rt::HashConv {
     print_hex: false,
 };
 static RE_0: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?-u)\\x00+\\z").expect("generated regex compiles"));
+    LazyLock::new(|| Regex::new("(?-u)\\x00+(?P<eol>\\n?)\\z").expect("generated regex compiles"));
 static PC_0106_MAP: &[(&str, &str)] = &[
     ("0", "WhiteIsZero"),
     ("1", "BlackIsZero"),
@@ -886,7 +802,7 @@ static PC_010A: rt::HashConv = rt::HashConv {
     print_hex: false,
 };
 static RE_1: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?-u)\\s+\\z").expect("generated regex compiles"));
+    LazyLock::new(|| Regex::new("(?-u)\\s+(?P<eol>\\n?)\\z").expect("generated regex compiles"));
 static PC_0112_MAP: &[(&str, &str)] = &[
     ("1", "Horizontal (normal)"),
     ("2", "Mirror horizontal"),
@@ -1221,6 +1137,12 @@ static PC_7036: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
+static RE_2: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("(?-u) *\\x00").expect("generated regex compiles"));
+static RE_3: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("(?s-u) *\\x00.*").expect("generated regex compiles"));
+static RE_4: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("(?-u)\\n(?P<eol>\\n?)\\z").expect("generated regex compiles"));
 static PC_84E3_MAP: &[(&str, &str)] = &[
     ("0", "Byte"),
     ("1", "Word"),
@@ -1320,7 +1242,7 @@ static PC_8822: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_2: LazyLock<Regex> =
+static RE_5: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u)\\s+").expect("generated regex compiles"));
 static PC_8830_MAP: &[(&str, &str)] = &[
     ("0", "Unknown"),
@@ -1345,7 +1267,7 @@ static PC_8830: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_3: LazyLock<Regex> =
+static RE_6: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u),?\\s+").expect("generated regex compiles"));
 static PC_9101_MAP: &[(&str, &str)] = &[
     ("0", "-"),
@@ -1363,8 +1285,9 @@ static PC_9101: rt::HashConv = rt::HashConv {
     other: Some(pc_9101_other_ref),
     print_hex: false,
 };
-static RE_4: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?-u)^(inf|undef)\\z").expect("generated regex compiles"));
+static RE_7: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?-u)^(inf|undef)(?P<eol>\\n?)\\z").expect("generated regex compiles")
+});
 static PC_9207_MAP: &[(&str, &str)] = &[
     ("0", "Unknown"),
     ("1", "Average"),
@@ -1423,8 +1346,9 @@ static PC_9208: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_5: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?i-u)^(off|on)\\z").expect("generated regex compiles"));
+static RE_8: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i-u)^(off|on)(?P<eol>\\n?)\\z").expect("generated regex compiles")
+});
 static PC_9209_MAP: &[(&str, &str)] = &[
     ("0", "No Flash"),
     ("1", "Fired"),
@@ -1506,8 +1430,8 @@ static PC_9217: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_6: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?-u) +\\z").expect("generated regex compiles"));
+static RE_9: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("(?-u) +(?P<eol>\\n?)\\z").expect("generated regex compiles"));
 static PC_A001_MAP: &[(&str, &str)] = &[
     ("1", "sRGB"),
     ("2", "Adobe RGB"),
@@ -1739,6 +1663,73 @@ static PC_A460: rt::HashConv = rt::HashConv {
     bits_per_word: None,
     other: None,
     print_hex: false,
+};
+static RE_10: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i-u)^6fddc324-4e03-4bfe-b185-3d77768dc9").expect("generated regex compiles")
+});
+static PC_BC01_MAP: &[(&str, &str)] = &[
+    ("10", "16-bit BGR565"),
+    ("11", "16-bit Gray"),
+    ("12", "24-bit BGR"),
+    ("13", "24-bit RGB"),
+    ("14", "32-bit BGR"),
+    ("15", "32-bit BGRA"),
+    ("16", "32-bit PBGRA"),
+    ("17", "32-bit Gray Float"),
+    ("18", "48-bit RGB Fixed Point"),
+    ("19", "32-bit BGR101010"),
+    ("21", "48-bit RGB"),
+    ("22", "64-bit RGBA"),
+    ("23", "64-bit PRGBA"),
+    ("24", "96-bit RGB Fixed Point"),
+    ("25", "128-bit RGBA Float"),
+    ("26", "128-bit PRGBA Float"),
+    ("27", "128-bit RGB Float"),
+    ("28", "32-bit CMYK"),
+    ("29", "64-bit RGBA Fixed Point"),
+    ("30", "128-bit RGBA Fixed Point"),
+    ("31", "64-bit CMYK"),
+    ("32", "24-bit 3 Channels"),
+    ("33", "32-bit 4 Channels"),
+    ("34", "40-bit 5 Channels"),
+    ("35", "48-bit 6 Channels"),
+    ("36", "56-bit 7 Channels"),
+    ("37", "64-bit 8 Channels"),
+    ("38", "48-bit 3 Channels"),
+    ("39", "64-bit 4 Channels"),
+    ("40", "80-bit 5 Channels"),
+    ("41", "96-bit 6 Channels"),
+    ("42", "112-bit 7 Channels"),
+    ("43", "128-bit 8 Channels"),
+    ("44", "40-bit CMYK Alpha"),
+    ("45", "80-bit CMYK Alpha"),
+    ("46", "32-bit 3 Channels Alpha"),
+    ("47", "40-bit 4 Channels Alpha"),
+    ("48", "48-bit 5 Channels Alpha"),
+    ("49", "56-bit 6 Channels Alpha"),
+    ("5", "Black & White"),
+    ("50", "64-bit 7 Channels Alpha"),
+    ("51", "72-bit 8 Channels Alpha"),
+    ("52", "64-bit 3 Channels Alpha"),
+    ("53", "80-bit 4 Channels Alpha"),
+    ("54", "96-bit 5 Channels Alpha"),
+    ("55", "112-bit 6 Channels Alpha"),
+    ("56", "128-bit 7 Channels Alpha"),
+    ("57", "144-bit 8 Channels Alpha"),
+    ("58", "64-bit RGBA Half"),
+    ("59", "48-bit RGB Half"),
+    ("61", "32-bit RGBE"),
+    ("62", "16-bit Gray Half"),
+    ("63", "32-bit Gray Fixed Point"),
+    ("8", "8-bit Gray"),
+    ("9", "16-bit BGR555"),
+];
+static PC_BC01: rt::HashConv = rt::HashConv {
+    map: PC_BC01_MAP,
+    bitmask: None,
+    bits_per_word: None,
+    other: None,
+    print_hex: true,
 };
 static PC_BC02_MAP: &[(&str, &str)] = &[
     ("0", "Horizontal (normal)"),
@@ -2087,11 +2078,11 @@ static PC_CD31: rt::HashConv = rt::HashConv {
     other: None,
     print_hex: false,
 };
-static RE_7: LazyLock<Regex> =
+static RE_11: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("(?-u)^.*: ").expect("generated regex compiles"));
 
 // 0x0001 InteropIndex
-fn arm_0001(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0001(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2113,7 +2104,7 @@ fn arm_0001(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0002 InteropVersion
-fn arm_0002(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0002(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_0002(s, val, &mut w)? {
@@ -2134,7 +2125,7 @@ fn arm_0002(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x000b ProcessingSoftware
-fn arm_000b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_000b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2150,7 +2141,7 @@ fn arm_000b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0100 ImageWidth
-fn arm_0100(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0100(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2166,7 +2157,7 @@ fn arm_0100(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0101 ImageHeight
-fn arm_0101(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0101(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2182,7 +2173,7 @@ fn arm_0101(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0102 BitsPerSample
-fn arm_0102(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0102(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2198,7 +2189,7 @@ fn arm_0102(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0106 PhotometricInterpretation
-fn arm_0106(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0106(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2220,7 +2211,7 @@ fn arm_0106(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0107 Thresholding
-fn arm_0107(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0107(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2242,7 +2233,7 @@ fn arm_0107(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0108 CellWidth
-fn arm_0108(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0108(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2258,7 +2249,7 @@ fn arm_0108(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0109 CellLength
-fn arm_0109(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0109(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2274,7 +2265,7 @@ fn arm_0109(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x010a FillOrder
-fn arm_010a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_010a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2296,7 +2287,7 @@ fn arm_010a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x010d DocumentName
-fn arm_010d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_010d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2312,7 +2303,7 @@ fn arm_010d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x010e ImageDescription
-fn arm_010e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_010e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2328,7 +2319,7 @@ fn arm_010e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x010f Make
-fn arm_010f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_010f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_010f(s, val, &mut w)? {
@@ -2349,7 +2340,7 @@ fn arm_010f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0110 Model
-fn arm_0110(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0110(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_0110(s, val, &mut w)? {
@@ -2370,7 +2361,7 @@ fn arm_0110(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0112 Orientation
-fn arm_0112(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0112(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2392,7 +2383,7 @@ fn arm_0112(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0115 SamplesPerPixel
-fn arm_0115(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0115(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2408,7 +2399,7 @@ fn arm_0115(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0116 RowsPerStrip
-fn arm_0116(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0116(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2424,7 +2415,7 @@ fn arm_0116(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0118 MinSampleValue
-fn arm_0118(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0118(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2440,7 +2431,7 @@ fn arm_0118(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0119 MaxSampleValue
-fn arm_0119(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0119(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2456,7 +2447,7 @@ fn arm_0119(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x011a XResolution
-fn arm_011a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_011a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2472,7 +2463,7 @@ fn arm_011a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x011b YResolution
-fn arm_011b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_011b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2488,7 +2479,7 @@ fn arm_011b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x011c PlanarConfiguration
-fn arm_011c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_011c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2510,7 +2501,7 @@ fn arm_011c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x011d PageName
-fn arm_011d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_011d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2526,7 +2517,7 @@ fn arm_011d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x011e XPosition
-fn arm_011e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_011e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2542,7 +2533,7 @@ fn arm_011e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x011f YPosition
-fn arm_011f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_011f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2558,7 +2549,7 @@ fn arm_011f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0120 FreeOffsets
-fn arm_0120(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0120(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_0120(s, val, &mut w)?;
@@ -2574,7 +2565,7 @@ fn arm_0120(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0121 FreeByteCounts
-fn arm_0121(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0121(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_0121(s, val, &mut w)?;
@@ -2590,7 +2581,7 @@ fn arm_0121(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0122 GrayResponseUnit
-fn arm_0122(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0122(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2612,10 +2603,10 @@ fn arm_0122(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0123 GrayResponseCurve
-fn arm_0123(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0123(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -2628,7 +2619,7 @@ fn arm_0123(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0124 T4Options
-fn arm_0124(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0124(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2650,7 +2641,7 @@ fn arm_0124(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0125 T6Options
-fn arm_0125(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0125(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2672,7 +2663,7 @@ fn arm_0125(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0128 ResolutionUnit
-fn arm_0128(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0128(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2694,7 +2685,7 @@ fn arm_0128(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0129 PageNumber
-fn arm_0129(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0129(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2710,7 +2701,7 @@ fn arm_0129(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x012c ColorResponseUnit
-fn arm_012c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_012c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2726,10 +2717,10 @@ fn arm_012c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x012d TransferFunction
-fn arm_012d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_012d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -2742,7 +2733,7 @@ fn arm_012d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0131 Software
-fn arm_0131(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0131(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_0131(s, val, &mut w)? {
@@ -2763,7 +2754,7 @@ fn arm_0131(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0132 ModifyDate
-fn arm_0132(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0132(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2785,7 +2776,7 @@ fn arm_0132(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x013b Artist
-fn arm_013b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_013b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_013b(s, val, &mut w)? {
@@ -2806,7 +2797,7 @@ fn arm_013b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x013c HostComputer
-fn arm_013c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_013c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2822,7 +2813,7 @@ fn arm_013c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x013d Predictor
-fn arm_013d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_013d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2844,7 +2835,7 @@ fn arm_013d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x013e WhitePoint
-fn arm_013e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_013e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2860,7 +2851,7 @@ fn arm_013e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x013f PrimaryChromaticities
-fn arm_013f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_013f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2876,10 +2867,10 @@ fn arm_013f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0140 ColorMap
-fn arm_0140(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0140(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -2892,7 +2883,7 @@ fn arm_0140(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0141 HalftoneHints
-fn arm_0141(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0141(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2908,7 +2899,7 @@ fn arm_0141(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0142 TileWidth
-fn arm_0142(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0142(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2924,7 +2915,7 @@ fn arm_0142(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0143 TileLength
-fn arm_0143(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0143(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2940,7 +2931,7 @@ fn arm_0143(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0144 TileOffsets
-fn arm_0144(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0144(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_0144(s, val, &mut w)?;
@@ -2956,7 +2947,7 @@ fn arm_0144(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0145 TileByteCounts
-fn arm_0145(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0145(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_0145(s, val, &mut w)?;
@@ -2972,7 +2963,7 @@ fn arm_0145(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0146 BadFaxLines
-fn arm_0146(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0146(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -2988,7 +2979,7 @@ fn arm_0146(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0147 CleanFaxData
-fn arm_0147(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0147(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3010,7 +3001,7 @@ fn arm_0147(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0148 ConsecutiveBadFaxLines
-fn arm_0148(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0148(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3026,7 +3017,7 @@ fn arm_0148(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x014c InkSet
-fn arm_014c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_014c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3048,7 +3039,7 @@ fn arm_014c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x014d InkNames
-fn arm_014d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_014d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3064,7 +3055,7 @@ fn arm_014d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x014e NumberofInks
-fn arm_014e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_014e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3080,7 +3071,7 @@ fn arm_014e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0150 DotRange
-fn arm_0150(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0150(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3096,7 +3087,7 @@ fn arm_0150(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0151 TargetPrinter
-fn arm_0151(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0151(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3112,7 +3103,7 @@ fn arm_0151(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0152 ExtraSamples
-fn arm_0152(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0152(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3134,7 +3125,7 @@ fn arm_0152(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0153 SampleFormat
-fn arm_0153(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0153(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3156,7 +3147,7 @@ fn arm_0153(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0154 SMinSampleValue
-fn arm_0154(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0154(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3172,7 +3163,7 @@ fn arm_0154(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0155 SMaxSampleValue
-fn arm_0155(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0155(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3188,7 +3179,7 @@ fn arm_0155(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0156 TransferRange
-fn arm_0156(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0156(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3204,7 +3195,7 @@ fn arm_0156(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0157 ClipPath
-fn arm_0157(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0157(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3220,7 +3211,7 @@ fn arm_0157(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0158 XClipPathUnits
-fn arm_0158(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0158(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3236,7 +3227,7 @@ fn arm_0158(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0159 YClipPathUnits
-fn arm_0159(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0159(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3252,7 +3243,7 @@ fn arm_0159(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x015a Indexed
-fn arm_015a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_015a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3274,10 +3265,10 @@ fn arm_015a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x015b JPEGTables
-fn arm_015b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_015b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -3290,7 +3281,7 @@ fn arm_015b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x015f OPIProxy
-fn arm_015f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_015f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3312,7 +3303,7 @@ fn arm_015f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0191 ProfileType
-fn arm_0191(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0191(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3334,7 +3325,7 @@ fn arm_0191(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0192 FaxProfile
-fn arm_0192(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0192(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3356,7 +3347,7 @@ fn arm_0192(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0193 CodingMethods
-fn arm_0193(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0193(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3378,7 +3369,7 @@ fn arm_0193(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0194 VersionYear
-fn arm_0194(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0194(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3394,7 +3385,7 @@ fn arm_0194(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0195 ModeNumber
-fn arm_0195(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0195(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3410,7 +3401,7 @@ fn arm_0195(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x01b1 Decode
-fn arm_01b1(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_01b1(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3426,7 +3417,7 @@ fn arm_01b1(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x01b2 DefaultImageColor
-fn arm_01b2(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_01b2(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3442,7 +3433,7 @@ fn arm_01b2(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x01b3 T82Options
-fn arm_01b3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_01b3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3458,10 +3449,10 @@ fn arm_01b3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x01b5 JPEGTables
-fn arm_01b5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_01b5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -3474,7 +3465,7 @@ fn arm_01b5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0200 JPEGProc
-fn arm_0200(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0200(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3496,7 +3487,7 @@ fn arm_0200(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0203 JPEGRestartInterval
-fn arm_0203(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0203(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3512,7 +3503,7 @@ fn arm_0203(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0205 JPEGLosslessPredictors
-fn arm_0205(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0205(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3528,7 +3519,7 @@ fn arm_0205(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0206 JPEGPointTransforms
-fn arm_0206(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0206(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3544,7 +3535,7 @@ fn arm_0206(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0207 JPEGQTables
-fn arm_0207(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0207(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3560,7 +3551,7 @@ fn arm_0207(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0208 JPEGDCTables
-fn arm_0208(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0208(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3576,7 +3567,7 @@ fn arm_0208(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0209 JPEGACTables
-fn arm_0209(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0209(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3592,7 +3583,7 @@ fn arm_0209(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0211 YCbCrCoefficients
-fn arm_0211(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0211(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3608,7 +3599,7 @@ fn arm_0211(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0212 YCbCrSubSampling
-fn arm_0212(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0212(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3630,7 +3621,7 @@ fn arm_0212(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0213 YCbCrPositioning
-fn arm_0213(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0213(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3652,7 +3643,7 @@ fn arm_0213(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0214 ReferenceBlackWhite
-fn arm_0214(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0214(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3668,7 +3659,7 @@ fn arm_0214(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x022f StripRowCounts
-fn arm_022f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_022f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3684,7 +3675,7 @@ fn arm_022f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x0303 RenderingIntent
-fn arm_0303(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_0303(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3706,7 +3697,7 @@ fn arm_0303(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x03e7 USPTOMiscellaneous
-fn arm_03e7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_03e7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3722,7 +3713,7 @@ fn arm_03e7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x1000 RelatedImageFileFormat
-fn arm_1000(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_1000(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3738,7 +3729,7 @@ fn arm_1000(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x1001 RelatedImageWidth
-fn arm_1001(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_1001(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3754,7 +3745,7 @@ fn arm_1001(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x1002 RelatedImageHeight
-fn arm_1002(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_1002(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3770,7 +3761,7 @@ fn arm_1002(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x4746 Rating
-fn arm_4746(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_4746(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3785,8 +3776,24 @@ fn arm_4746(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0x4747 XP_DIP_XML
+fn arm_4747(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_4747(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0x4749 RatingPercent
-fn arm_4749(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_4749(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3802,7 +3809,7 @@ fn arm_4749(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5001 ResolutionXUnit
-fn arm_5001(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5001(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3818,7 +3825,7 @@ fn arm_5001(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5002 ResolutionYUnit
-fn arm_5002(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5002(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3834,7 +3841,7 @@ fn arm_5002(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5003 ResolutionXLengthUnit
-fn arm_5003(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5003(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3850,7 +3857,7 @@ fn arm_5003(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5004 ResolutionYLengthUnit
-fn arm_5004(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5004(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3866,7 +3873,7 @@ fn arm_5004(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5005 PrintFlags
-fn arm_5005(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5005(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3882,7 +3889,7 @@ fn arm_5005(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5006 PrintFlagsVersion
-fn arm_5006(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5006(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3898,7 +3905,7 @@ fn arm_5006(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5007 PrintFlagsCrop
-fn arm_5007(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5007(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3914,7 +3921,7 @@ fn arm_5007(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5008 PrintFlagsBleedWidth
-fn arm_5008(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5008(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3930,7 +3937,7 @@ fn arm_5008(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5009 PrintFlagsBleedWidthScale
-fn arm_5009(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5009(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3946,7 +3953,7 @@ fn arm_5009(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x500a HalftoneLPI
-fn arm_500a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_500a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3962,7 +3969,7 @@ fn arm_500a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x500b HalftoneLPIUnit
-fn arm_500b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_500b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3978,7 +3985,7 @@ fn arm_500b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x500c HalftoneDegree
-fn arm_500c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_500c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -3994,7 +4001,7 @@ fn arm_500c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x500d HalftoneShape
-fn arm_500d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_500d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4010,7 +4017,7 @@ fn arm_500d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x500e HalftoneMisc
-fn arm_500e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_500e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4026,7 +4033,7 @@ fn arm_500e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x500f HalftoneScreen
-fn arm_500f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_500f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4042,7 +4049,7 @@ fn arm_500f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5010 JPEGQuality
-fn arm_5010(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5010(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4058,10 +4065,10 @@ fn arm_5010(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5011 GridSize
-fn arm_5011(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5011(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -4074,7 +4081,7 @@ fn arm_5011(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5012 ThumbnailFormat
-fn arm_5012(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5012(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4090,7 +4097,7 @@ fn arm_5012(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5013 ThumbnailWidth
-fn arm_5013(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5013(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4106,7 +4113,7 @@ fn arm_5013(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5014 ThumbnailHeight
-fn arm_5014(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5014(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4122,7 +4129,7 @@ fn arm_5014(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5015 ThumbnailColorDepth
-fn arm_5015(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5015(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4138,7 +4145,7 @@ fn arm_5015(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5016 ThumbnailPlanes
-fn arm_5016(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5016(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4154,7 +4161,7 @@ fn arm_5016(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5017 ThumbnailRawBytes
-fn arm_5017(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5017(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4170,7 +4177,7 @@ fn arm_5017(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5018 ThumbnailLength
-fn arm_5018(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5018(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4186,7 +4193,7 @@ fn arm_5018(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5019 ThumbnailCompressedSize
-fn arm_5019(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5019(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4202,10 +4209,10 @@ fn arm_5019(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x501a ColorTransferFunction
-fn arm_501a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_501a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -4218,10 +4225,10 @@ fn arm_501a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x501b ThumbnailData
-fn arm_501b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_501b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -4234,7 +4241,7 @@ fn arm_501b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5020 ThumbnailImageWidth
-fn arm_5020(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5020(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4250,7 +4257,7 @@ fn arm_5020(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5021 ThumbnailImageHeight
-fn arm_5021(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5021(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4266,7 +4273,7 @@ fn arm_5021(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5022 ThumbnailBitsPerSample
-fn arm_5022(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5022(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4282,7 +4289,7 @@ fn arm_5022(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5023 ThumbnailCompression
-fn arm_5023(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5023(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4298,7 +4305,7 @@ fn arm_5023(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5024 ThumbnailPhotometricInterp
-fn arm_5024(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5024(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4314,7 +4321,7 @@ fn arm_5024(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5025 ThumbnailDescription
-fn arm_5025(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5025(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4330,7 +4337,7 @@ fn arm_5025(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5026 ThumbnailEquipMake
-fn arm_5026(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5026(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4346,7 +4353,7 @@ fn arm_5026(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5027 ThumbnailEquipModel
-fn arm_5027(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5027(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4362,7 +4369,7 @@ fn arm_5027(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5028 ThumbnailStripOffsets
-fn arm_5028(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5028(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4378,7 +4385,7 @@ fn arm_5028(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5029 ThumbnailOrientation
-fn arm_5029(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5029(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4394,7 +4401,7 @@ fn arm_5029(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x502a ThumbnailSamplesPerPixel
-fn arm_502a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_502a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4410,7 +4417,7 @@ fn arm_502a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x502b ThumbnailRowsPerStrip
-fn arm_502b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_502b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4426,7 +4433,7 @@ fn arm_502b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x502c ThumbnailStripByteCounts
-fn arm_502c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_502c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4442,7 +4449,7 @@ fn arm_502c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x502d ThumbnailResolutionX
-fn arm_502d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_502d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4458,7 +4465,7 @@ fn arm_502d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x502e ThumbnailResolutionY
-fn arm_502e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_502e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4474,7 +4481,7 @@ fn arm_502e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x502f ThumbnailPlanarConfig
-fn arm_502f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_502f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4490,7 +4497,7 @@ fn arm_502f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5030 ThumbnailResolutionUnit
-fn arm_5030(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5030(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4506,7 +4513,7 @@ fn arm_5030(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5031 ThumbnailTransferFunction
-fn arm_5031(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5031(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4522,7 +4529,7 @@ fn arm_5031(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5032 ThumbnailSoftware
-fn arm_5032(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5032(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4538,7 +4545,7 @@ fn arm_5032(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5033 ThumbnailDateTime
-fn arm_5033(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5033(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4554,7 +4561,7 @@ fn arm_5033(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5034 ThumbnailArtist
-fn arm_5034(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5034(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4570,7 +4577,7 @@ fn arm_5034(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5035 ThumbnailWhitePoint
-fn arm_5035(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5035(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4586,7 +4593,7 @@ fn arm_5035(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5036 ThumbnailPrimaryChromaticities
-fn arm_5036(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5036(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4602,7 +4609,7 @@ fn arm_5036(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5037 ThumbnailYCbCrCoefficients
-fn arm_5037(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5037(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4618,7 +4625,7 @@ fn arm_5037(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5038 ThumbnailYCbCrSubsampling
-fn arm_5038(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5038(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4634,7 +4641,7 @@ fn arm_5038(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5039 ThumbnailYCbCrPositioning
-fn arm_5039(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5039(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4650,7 +4657,7 @@ fn arm_5039(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x503a ThumbnailRefBlackWhite
-fn arm_503a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_503a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4666,7 +4673,7 @@ fn arm_503a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x503b ThumbnailCopyright
-fn arm_503b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_503b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4682,7 +4689,7 @@ fn arm_503b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5090 LuminanceTable
-fn arm_5090(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5090(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4698,7 +4705,7 @@ fn arm_5090(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5091 ChrominanceTable
-fn arm_5091(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5091(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4714,7 +4721,7 @@ fn arm_5091(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5100 FrameDelay
-fn arm_5100(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5100(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4730,7 +4737,7 @@ fn arm_5100(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5101 LoopCount
-fn arm_5101(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5101(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4746,7 +4753,7 @@ fn arm_5101(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5102 GlobalPalette
-fn arm_5102(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5102(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4762,7 +4769,7 @@ fn arm_5102(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5103 IndexBackground
-fn arm_5103(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5103(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4778,7 +4785,7 @@ fn arm_5103(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5104 IndexTransparent
-fn arm_5104(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5104(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4794,7 +4801,7 @@ fn arm_5104(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5110 PixelUnits
-fn arm_5110(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5110(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4810,7 +4817,7 @@ fn arm_5110(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5111 PixelsPerUnitX
-fn arm_5111(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5111(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4826,7 +4833,7 @@ fn arm_5111(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5112 PixelsPerUnitY
-fn arm_5112(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5112(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4842,7 +4849,7 @@ fn arm_5112(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x5113 PaletteHistogram
-fn arm_5113(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_5113(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4858,7 +4865,7 @@ fn arm_5113(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7000 SonyRawFileType
-fn arm_7000(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7000(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4880,7 +4887,7 @@ fn arm_7000(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7010 SonyToneCurve
-fn arm_7010(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7010(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4896,7 +4903,7 @@ fn arm_7010(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7031 VignettingCorrection
-fn arm_7031(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7031(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4918,7 +4925,7 @@ fn arm_7031(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7032 VignettingCorrParams
-fn arm_7032(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7032(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4934,7 +4941,7 @@ fn arm_7032(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7034 ChromaticAberrationCorrection
-fn arm_7034(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7034(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4956,7 +4963,7 @@ fn arm_7034(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7035 ChromaticAberrationCorrParams
-fn arm_7035(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7035(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4972,7 +4979,7 @@ fn arm_7035(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7036 DistortionCorrection
-fn arm_7036(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7036(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -4994,7 +5001,7 @@ fn arm_7036(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7037 DistortionCorrParams
-fn arm_7037(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7037(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5010,7 +5017,7 @@ fn arm_7037(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7038 SonyRawImageSize
-fn arm_7038(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7038(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5026,7 +5033,7 @@ fn arm_7038(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7310 BlackLevel
-fn arm_7310(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7310(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5042,7 +5049,7 @@ fn arm_7310(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x7313 WB_RGGBLevels
-fn arm_7313(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_7313(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5058,7 +5065,7 @@ fn arm_7313(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x74c7 SonyCropTopLeft
-fn arm_74c7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_74c7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5074,7 +5081,7 @@ fn arm_74c7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x74c8 SonyCropSize
-fn arm_74c8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_74c8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5090,7 +5097,7 @@ fn arm_74c8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x800d ImageID
-fn arm_800d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_800d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5106,10 +5113,10 @@ fn arm_800d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80a3 WangTag1
-fn arm_80a3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80a3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -5122,10 +5129,10 @@ fn arm_80a3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80a4 WangAnnotation
-fn arm_80a4(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80a4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -5138,10 +5145,10 @@ fn arm_80a4(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80a5 WangTag3
-fn arm_80a5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80a5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -5154,7 +5161,7 @@ fn arm_80a5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80a6 WangTag4
-fn arm_80a6(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80a6(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5176,7 +5183,7 @@ fn arm_80a6(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80b9 ImageReferencePoints
-fn arm_80b9(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80b9(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5192,7 +5199,7 @@ fn arm_80b9(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80ba RegionXformTackPoint
-fn arm_80ba(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80ba(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5208,7 +5215,7 @@ fn arm_80ba(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80bb WarpQuadrilateral
-fn arm_80bb(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80bb(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5224,7 +5231,7 @@ fn arm_80bb(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80bc AffineTransformMat
-fn arm_80bc(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80bc(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5240,7 +5247,7 @@ fn arm_80bc(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80e3 Matteing
-fn arm_80e3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80e3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5256,7 +5263,7 @@ fn arm_80e3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80e4 DataType
-fn arm_80e4(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80e4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5272,7 +5279,7 @@ fn arm_80e4(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80e5 ImageDepth
-fn arm_80e5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80e5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5288,7 +5295,7 @@ fn arm_80e5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x80e6 TileDepth
-fn arm_80e6(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_80e6(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5304,7 +5311,7 @@ fn arm_80e6(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8214 ImageFullWidth
-fn arm_8214(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8214(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5320,7 +5327,7 @@ fn arm_8214(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8215 ImageFullHeight
-fn arm_8215(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8215(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5336,7 +5343,7 @@ fn arm_8215(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8216 TextureFormat
-fn arm_8216(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8216(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5352,7 +5359,7 @@ fn arm_8216(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8217 WrapModes
-fn arm_8217(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8217(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5368,7 +5375,7 @@ fn arm_8217(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8218 FovCot
-fn arm_8218(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8218(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5384,7 +5391,7 @@ fn arm_8218(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8219 MatrixWorldToScreen
-fn arm_8219(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8219(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5400,7 +5407,7 @@ fn arm_8219(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x821a MatrixWorldToCamera
-fn arm_821a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_821a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5416,7 +5423,7 @@ fn arm_821a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x827d Model2
-fn arm_827d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_827d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5432,7 +5439,7 @@ fn arm_827d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x828d CFARepeatPatternDim
-fn arm_828d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_828d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5448,7 +5455,7 @@ fn arm_828d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x828e CFAPattern2
-fn arm_828e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_828e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5464,7 +5471,7 @@ fn arm_828e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x828f BatteryLevel
-fn arm_828f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_828f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5479,8 +5486,29 @@ fn arm_828f(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0x8298 Copyright
+fn arm_8298(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let val = match raw_8298(s, val, &mut w)? {
+        Out::Scalar(MemberVal::Undef) => return Ok(Arm::Suppress),
+        Out::Scalar(v) => v,
+        Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
+    };
+    let value = Out::Scalar(val);
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0x829a ExposureTime
-fn arm_829a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_829a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5502,7 +5530,7 @@ fn arm_829a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x829d FNumber
-fn arm_829d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_829d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5524,7 +5552,7 @@ fn arm_829d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82a5 MDFileTag
-fn arm_82a5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82a5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5540,7 +5568,7 @@ fn arm_82a5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82a6 MDScalePixel
-fn arm_82a6(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82a6(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5556,7 +5584,7 @@ fn arm_82a6(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82a7 MDColorTable
-fn arm_82a7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82a7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5572,7 +5600,7 @@ fn arm_82a7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82a8 MDLabName
-fn arm_82a8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82a8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5588,7 +5616,7 @@ fn arm_82a8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82a9 MDSampleInfo
-fn arm_82a9(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82a9(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5604,7 +5632,7 @@ fn arm_82a9(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82aa MDPrepDate
-fn arm_82aa(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82aa(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5620,7 +5648,7 @@ fn arm_82aa(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82ab MDPrepTime
-fn arm_82ab(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82ab(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5636,7 +5664,7 @@ fn arm_82ab(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x82ac MDFileUnits
-fn arm_82ac(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_82ac(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5652,7 +5680,7 @@ fn arm_82ac(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x830e PixelScale
-fn arm_830e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_830e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5668,7 +5696,7 @@ fn arm_830e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8335 AdventScale
-fn arm_8335(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8335(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5684,7 +5712,7 @@ fn arm_8335(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8336 AdventRevision
-fn arm_8336(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8336(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5700,7 +5728,7 @@ fn arm_8336(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x835c UIC1Tag
-fn arm_835c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_835c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5716,7 +5744,7 @@ fn arm_835c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x835d UIC2Tag
-fn arm_835d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_835d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5732,7 +5760,7 @@ fn arm_835d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x835e UIC3Tag
-fn arm_835e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_835e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5748,7 +5776,7 @@ fn arm_835e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x835f UIC4Tag
-fn arm_835f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_835f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5764,7 +5792,7 @@ fn arm_835f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x847e IntergraphPacketData
-fn arm_847e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_847e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5780,7 +5808,7 @@ fn arm_847e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x847f IntergraphFlagRegisters
-fn arm_847f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_847f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5796,7 +5824,7 @@ fn arm_847f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8480 IntergraphMatrix
-fn arm_8480(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8480(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5812,7 +5840,7 @@ fn arm_8480(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8481 INGRReserved
-fn arm_8481(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8481(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5828,7 +5856,7 @@ fn arm_8481(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8482 ModelTiePoint
-fn arm_8482(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8482(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5844,7 +5872,7 @@ fn arm_8482(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e0 Site
-fn arm_84e0(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e0(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5860,7 +5888,7 @@ fn arm_84e0(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e1 ColorSequence
-fn arm_84e1(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e1(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5876,7 +5904,7 @@ fn arm_84e1(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e2 IT8Header
-fn arm_84e2(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e2(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5892,7 +5920,7 @@ fn arm_84e2(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e3 RasterPadding
-fn arm_84e3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5914,7 +5942,7 @@ fn arm_84e3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e4 BitsPerRunLength
-fn arm_84e4(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5930,7 +5958,7 @@ fn arm_84e4(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e5 BitsPerExtendedRunLength
-fn arm_84e5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5946,7 +5974,7 @@ fn arm_84e5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e6 ColorTable
-fn arm_84e6(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e6(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5962,7 +5990,7 @@ fn arm_84e6(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e7 ImageColorIndicator
-fn arm_84e7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -5984,7 +6012,7 @@ fn arm_84e7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e8 BackgroundColorIndicator
-fn arm_84e8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6006,7 +6034,7 @@ fn arm_84e8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84e9 ImageColorValue
-fn arm_84e9(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84e9(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6022,7 +6050,7 @@ fn arm_84e9(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84ea BackgroundColorValue
-fn arm_84ea(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84ea(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6038,7 +6066,7 @@ fn arm_84ea(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84eb PixelIntensityRange
-fn arm_84eb(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84eb(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6054,7 +6082,7 @@ fn arm_84eb(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84ec TransparencyIndicator
-fn arm_84ec(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84ec(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6070,7 +6098,7 @@ fn arm_84ec(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84ed ColorCharacterization
-fn arm_84ed(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84ed(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6086,7 +6114,7 @@ fn arm_84ed(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84ee HCUsage
-fn arm_84ee(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84ee(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6108,7 +6136,7 @@ fn arm_84ee(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84ef TrapIndicator
-fn arm_84ef(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84ef(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6124,7 +6152,7 @@ fn arm_84ef(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x84f0 CMYKEquivalent
-fn arm_84f0(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_84f0(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6140,7 +6168,7 @@ fn arm_84f0(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8546 SEMInfo
-fn arm_8546(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8546(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6156,7 +6184,7 @@ fn arm_8546(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x85b8 PixelMagicJBIGOptions
-fn arm_85b8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_85b8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6172,7 +6200,7 @@ fn arm_85b8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x85d7 JPLCartoIFD
-fn arm_85d7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_85d7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6188,7 +6216,7 @@ fn arm_85d7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x85d8 ModelTransform
-fn arm_85d8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_85d8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6204,7 +6232,7 @@ fn arm_85d8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8602 WB_GRGBLevels
-fn arm_8602(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8602(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6220,7 +6248,7 @@ fn arm_8602(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x877f TIFF_FXExtensions
-fn arm_877f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_877f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6242,7 +6270,7 @@ fn arm_877f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8780 MultiProfiles
-fn arm_8780(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8780(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6264,7 +6292,7 @@ fn arm_8780(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8781 SharedData
-fn arm_8781(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8781(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6280,7 +6308,7 @@ fn arm_8781(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8782 T88Options
-fn arm_8782(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8782(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6296,7 +6324,7 @@ fn arm_8782(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x87ac ImageLayer
-fn arm_87ac(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_87ac(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6312,7 +6340,7 @@ fn arm_87ac(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x87af GeoTiffDirectory
-fn arm_87af(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_87af(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_87af(s, val, &mut w)? {
@@ -6320,7 +6348,7 @@ fn arm_87af(s: &Session, raw: &MemberVal) -> R<Arm> {
         Out::Scalar(v) => v,
         Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
     };
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -6333,7 +6361,7 @@ fn arm_87af(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x87b0 GeoTiffDoubleParams
-fn arm_87b0(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_87b0(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_87b0(s, val, &mut w)? {
@@ -6341,7 +6369,7 @@ fn arm_87b0(s: &Session, raw: &MemberVal) -> R<Arm> {
         Out::Scalar(v) => v,
         Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
     };
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -6354,10 +6382,10 @@ fn arm_87b0(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x87b1 GeoTiffAsciiParams
-fn arm_87b1(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_87b1(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -6370,7 +6398,7 @@ fn arm_87b1(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x87be JBIGOptions
-fn arm_87be(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_87be(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6386,7 +6414,7 @@ fn arm_87be(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8822 ExposureProgram
-fn arm_8822(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8822(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6408,7 +6436,7 @@ fn arm_8822(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8824 SpectralSensitivity
-fn arm_8824(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8824(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6424,7 +6452,7 @@ fn arm_8824(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8827 ISO
-fn arm_8827(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8827(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6446,10 +6474,10 @@ fn arm_8827(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8828 Opto-ElectricConvFactor
-fn arm_8828(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8828(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -6462,7 +6490,7 @@ fn arm_8828(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8829 Interlace
-fn arm_8829(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8829(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6478,7 +6506,7 @@ fn arm_8829(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x882a TimeZoneOffset
-fn arm_882a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_882a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6494,7 +6522,7 @@ fn arm_882a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x882b SelfTimerMode
-fn arm_882b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_882b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6510,7 +6538,7 @@ fn arm_882b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8830 SensitivityType
-fn arm_8830(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8830(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6532,7 +6560,7 @@ fn arm_8830(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8831 StandardOutputSensitivity
-fn arm_8831(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8831(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6548,7 +6576,7 @@ fn arm_8831(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8832 RecommendedExposureIndex
-fn arm_8832(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8832(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6564,7 +6592,7 @@ fn arm_8832(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8833 ISOSpeed
-fn arm_8833(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8833(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6580,7 +6608,7 @@ fn arm_8833(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8834 ISOSpeedLatitudeyyy
-fn arm_8834(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8834(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6596,7 +6624,7 @@ fn arm_8834(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8835 ISOSpeedLatitudezzz
-fn arm_8835(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8835(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6612,7 +6640,7 @@ fn arm_8835(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x885c FaxRecvParams
-fn arm_885c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_885c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6628,7 +6656,7 @@ fn arm_885c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x885d FaxSubAddress
-fn arm_885d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_885d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6644,7 +6672,7 @@ fn arm_885d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x885e FaxRecvTime
-fn arm_885e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_885e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6660,7 +6688,7 @@ fn arm_885e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x8871 FedexEDR
-fn arm_8871(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_8871(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6676,7 +6704,7 @@ fn arm_8871(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9000 ExifVersion
-fn arm_9000(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9000(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_9000(s, val, &mut w)? {
@@ -6697,7 +6725,7 @@ fn arm_9000(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9003 DateTimeOriginal
-fn arm_9003(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9003(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6719,7 +6747,7 @@ fn arm_9003(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9004 CreateDate
-fn arm_9004(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9004(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6741,7 +6769,7 @@ fn arm_9004(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9009 GooglePlusUploadCode
-fn arm_9009(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9009(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6757,7 +6785,7 @@ fn arm_9009(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9010 OffsetTime
-fn arm_9010(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9010(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6773,7 +6801,7 @@ fn arm_9010(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9011 OffsetTimeOriginal
-fn arm_9011(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9011(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6789,7 +6817,7 @@ fn arm_9011(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9012 OffsetTimeDigitized
-fn arm_9012(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9012(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6805,7 +6833,7 @@ fn arm_9012(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9101 ComponentsConfiguration
-fn arm_9101(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9101(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6827,7 +6855,7 @@ fn arm_9101(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9102 CompressedBitsPerPixel
-fn arm_9102(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9102(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6843,7 +6871,7 @@ fn arm_9102(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9201 ShutterSpeedValue
-fn arm_9201(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9201(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_9201(s, val, &mut w)?;
@@ -6865,7 +6893,7 @@ fn arm_9201(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9202 ApertureValue
-fn arm_9202(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9202(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_9202(s, val, &mut w)?;
@@ -6887,7 +6915,7 @@ fn arm_9202(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9203 BrightnessValue
-fn arm_9203(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9203(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6903,7 +6931,7 @@ fn arm_9203(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9204 ExposureCompensation
-fn arm_9204(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9204(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6925,7 +6953,7 @@ fn arm_9204(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9205 MaxApertureValue
-fn arm_9205(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9205(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_9205(s, val, &mut w)?;
@@ -6947,7 +6975,7 @@ fn arm_9205(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9206 SubjectDistance
-fn arm_9206(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9206(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6969,7 +6997,7 @@ fn arm_9206(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9207 MeteringMode
-fn arm_9207(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9207(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -6991,7 +7019,7 @@ fn arm_9207(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9208 LightSource
-fn arm_9208(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9208(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7013,7 +7041,7 @@ fn arm_9208(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9209 Flash
-fn arm_9209(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9209(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7035,7 +7063,7 @@ fn arm_9209(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x920a FocalLength
-fn arm_920a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_920a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7057,7 +7085,7 @@ fn arm_920a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x920b FlashEnergy
-fn arm_920b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_920b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7073,7 +7101,7 @@ fn arm_920b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x920c SpatialFrequencyResponse
-fn arm_920c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_920c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7089,7 +7117,7 @@ fn arm_920c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x920d Noise
-fn arm_920d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_920d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7105,7 +7133,7 @@ fn arm_920d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x920e FocalPlaneXResolution
-fn arm_920e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_920e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7121,7 +7149,7 @@ fn arm_920e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x920f FocalPlaneYResolution
-fn arm_920f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_920f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7137,7 +7165,7 @@ fn arm_920f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9210 FocalPlaneResolutionUnit
-fn arm_9210(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9210(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7159,7 +7187,7 @@ fn arm_9210(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9211 ImageNumber
-fn arm_9211(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9211(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7175,7 +7203,7 @@ fn arm_9211(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9212 SecurityClassification
-fn arm_9212(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9212(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7197,7 +7225,7 @@ fn arm_9212(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9213 ImageHistory
-fn arm_9213(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9213(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7213,7 +7241,7 @@ fn arm_9213(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9214 SubjectArea
-fn arm_9214(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9214(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7229,7 +7257,7 @@ fn arm_9214(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9215 ExposureIndex
-fn arm_9215(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9215(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7245,7 +7273,7 @@ fn arm_9215(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9216 TIFF-EPStandardID
-fn arm_9216(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9216(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7267,7 +7295,7 @@ fn arm_9216(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9217 SensingMethod
-fn arm_9217(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9217(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7289,7 +7317,7 @@ fn arm_9217(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x923a CIP3DataFile
-fn arm_923a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_923a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7305,7 +7333,7 @@ fn arm_923a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x923b CIP3Sheet
-fn arm_923b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_923b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7321,7 +7349,7 @@ fn arm_923b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x923c CIP3Side
-fn arm_923c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_923c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7337,7 +7365,7 @@ fn arm_923c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x923f StoNits
-fn arm_923f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_923f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7352,8 +7380,29 @@ fn arm_923f(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0x9286 UserComment
+fn arm_9286(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let val = match raw_9286(s, val, &mut w)? {
+        Out::Scalar(MemberVal::Undef) => return Ok(Arm::Suppress),
+        Out::Scalar(v) => v,
+        Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
+    };
+    let value = Out::Scalar(val);
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0x9290 SubSecTime
-fn arm_9290(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9290(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_9290(s, val, &mut w)?;
@@ -7369,7 +7418,7 @@ fn arm_9290(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9291 SubSecTimeOriginal
-fn arm_9291(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9291(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_9291(s, val, &mut w)?;
@@ -7385,7 +7434,7 @@ fn arm_9291(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9292 SubSecTimeDigitized
-fn arm_9292(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9292(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_9292(s, val, &mut w)?;
@@ -7401,7 +7450,7 @@ fn arm_9292(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x932f MSDocumentText
-fn arm_932f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_932f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7417,10 +7466,10 @@ fn arm_932f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9330 MSPropertySetStorage
-fn arm_9330(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9330(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -7433,10 +7482,10 @@ fn arm_9330(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9331 MSDocumentTextPosition
-fn arm_9331(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9331(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -7449,7 +7498,7 @@ fn arm_9331(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9400 AmbientTemperature
-fn arm_9400(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9400(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7471,7 +7520,7 @@ fn arm_9400(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9401 Humidity
-fn arm_9401(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9401(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7487,7 +7536,7 @@ fn arm_9401(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9402 Pressure
-fn arm_9402(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9402(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7503,7 +7552,7 @@ fn arm_9402(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9403 WaterDepth
-fn arm_9403(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9403(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7519,7 +7568,7 @@ fn arm_9403(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9404 Acceleration
-fn arm_9404(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9404(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7535,7 +7584,7 @@ fn arm_9404(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9405 CameraElevationAngle
-fn arm_9405(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9405(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7551,7 +7600,7 @@ fn arm_9405(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0x9a00 XiaomiModel
-fn arm_9a00(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_9a00(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7566,8 +7615,88 @@ fn arm_9a00(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0x9c9b XPTitle
+fn arm_9c9b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_9c9b(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0x9c9c XPComment
+fn arm_9c9c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_9c9c(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0x9c9d XPAuthor
+fn arm_9c9d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_9c9d(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0x9c9e XPKeywords
+fn arm_9c9e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_9c9e(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0x9c9f XPSubject
+fn arm_9c9f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_9c9f(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xa000 FlashpixVersion
-fn arm_a000(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a000(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_a000(s, val, &mut w)? {
@@ -7588,7 +7717,7 @@ fn arm_a000(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa001 ColorSpace
-fn arm_a001(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a001(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7610,7 +7739,7 @@ fn arm_a001(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa002 ExifImageWidth
-fn arm_a002(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a002(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7626,7 +7755,7 @@ fn arm_a002(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa003 ExifImageHeight
-fn arm_a003(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a003(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7642,7 +7771,7 @@ fn arm_a003(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa004 RelatedSoundFile
-fn arm_a004(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a004(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7658,7 +7787,7 @@ fn arm_a004(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa010 SamsungRawPointersOffset
-fn arm_a010(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a010(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7674,7 +7803,7 @@ fn arm_a010(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa011 SamsungRawPointersLength
-fn arm_a011(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a011(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7690,7 +7819,7 @@ fn arm_a011(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa101 SamsungRawByteOrder
-fn arm_a101(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a101(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7706,7 +7835,7 @@ fn arm_a101(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa20b FlashEnergy
-fn arm_a20b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a20b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7721,8 +7850,30 @@ fn arm_a20b(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xa20c SpatialFrequencyResponse
+fn arm_a20c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = Out::Scalar(val);
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = match &value {
+        Out::Scalar(v) => match pc_a20c(s, v.clone(), &mut w)? {
+            Out::Scalar(MemberVal::Undef) => return Err(Decline("PrintConv returned undef")),
+            p => Some(p),
+        },
+        Out::Binary(_) => None,
+    };
+    Ok(Arm::Report(Report {
+        value: None,
+        print,
+        writes: w,
+    }))
+}
+
 // 0xa20d Noise
-fn arm_a20d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a20d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7738,7 +7889,7 @@ fn arm_a20d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa20e FocalPlaneXResolution
-fn arm_a20e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a20e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7754,7 +7905,7 @@ fn arm_a20e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa20f FocalPlaneYResolution
-fn arm_a20f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a20f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7770,7 +7921,7 @@ fn arm_a20f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa210 FocalPlaneResolutionUnit
-fn arm_a210(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a210(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7792,7 +7943,7 @@ fn arm_a210(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa211 ImageNumber
-fn arm_a211(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a211(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7808,7 +7959,7 @@ fn arm_a211(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa212 SecurityClassification
-fn arm_a212(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a212(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7824,7 +7975,7 @@ fn arm_a212(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa213 ImageHistory
-fn arm_a213(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a213(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7840,7 +7991,7 @@ fn arm_a213(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa214 SubjectLocation
-fn arm_a214(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a214(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7856,7 +8007,7 @@ fn arm_a214(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa215 ExposureIndex
-fn arm_a215(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a215(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7872,7 +8023,7 @@ fn arm_a215(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa216 TIFF-EPStandardID
-fn arm_a216(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a216(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7894,7 +8045,7 @@ fn arm_a216(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa217 SensingMethod
-fn arm_a217(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a217(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7916,7 +8067,7 @@ fn arm_a217(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa300 FileSource
-fn arm_a300(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a300(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7938,7 +8089,7 @@ fn arm_a300(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa301 SceneType
-fn arm_a301(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a301(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7959,8 +8110,35 @@ fn arm_a301(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xa302 CFAPattern
+fn arm_a302(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let val = match raw_a302(s, val, &mut w)? {
+        Out::Scalar(MemberVal::Undef) => return Ok(Arm::Suppress),
+        Out::Scalar(v) => v,
+        Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
+    };
+    let value = Out::Scalar(val);
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = match &value {
+        Out::Scalar(v) => match pc_a302(s, v.clone(), &mut w)? {
+            Out::Scalar(MemberVal::Undef) => return Err(Decline("PrintConv returned undef")),
+            p => Some(p),
+        },
+        Out::Binary(_) => None,
+    };
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xa401 CustomRendered
-fn arm_a401(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a401(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -7982,7 +8160,7 @@ fn arm_a401(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa402 ExposureMode
-fn arm_a402(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a402(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8004,7 +8182,7 @@ fn arm_a402(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa403 WhiteBalance
-fn arm_a403(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a403(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8026,7 +8204,7 @@ fn arm_a403(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa404 DigitalZoomRatio
-fn arm_a404(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a404(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8042,7 +8220,7 @@ fn arm_a404(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa405 FocalLengthIn35mmFormat
-fn arm_a405(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a405(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8064,7 +8242,7 @@ fn arm_a405(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa406 SceneCaptureType
-fn arm_a406(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a406(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8086,7 +8264,7 @@ fn arm_a406(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa407 GainControl
-fn arm_a407(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a407(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8108,7 +8286,7 @@ fn arm_a407(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa408 Contrast
-fn arm_a408(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a408(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8130,7 +8308,7 @@ fn arm_a408(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa409 Saturation
-fn arm_a409(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a409(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8152,7 +8330,7 @@ fn arm_a409(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa40a Sharpness
-fn arm_a40a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a40a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8174,10 +8352,10 @@ fn arm_a40a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa40b DeviceSettingDescription
-fn arm_a40b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a40b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -8190,7 +8368,7 @@ fn arm_a40b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa40c SubjectDistanceRange
-fn arm_a40c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a40c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8212,7 +8390,7 @@ fn arm_a40c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa40d DevelopmentType
-fn arm_a40d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a40d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_a40d(s, val, &mut w)?;
@@ -8233,8 +8411,24 @@ fn arm_a40d(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xa40e DevelopmentTypeDescription
+fn arm_a40e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_a40e(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xa40f DistortionCorrection
-fn arm_a40f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a40f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8256,7 +8450,7 @@ fn arm_a40f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa410 ChromaticAberrationCorrection
-fn arm_a410(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a410(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8278,7 +8472,7 @@ fn arm_a410(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa411 ShadingCorrection
-fn arm_a411(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a411(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8300,7 +8494,7 @@ fn arm_a411(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa412 NoiseReduction
-fn arm_a412(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a412(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8322,7 +8516,7 @@ fn arm_a412(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa420 ImageUniqueID
-fn arm_a420(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a420(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8338,7 +8532,7 @@ fn arm_a420(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa430 OwnerName
-fn arm_a430(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a430(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8354,7 +8548,7 @@ fn arm_a430(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa431 SerialNumber
-fn arm_a431(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a431(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8370,7 +8564,7 @@ fn arm_a431(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa432 LensInfo
-fn arm_a432(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a432(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8392,7 +8586,7 @@ fn arm_a432(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa433 LensMake
-fn arm_a433(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a433(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8408,7 +8602,7 @@ fn arm_a433(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa434 LensModel
-fn arm_a434(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a434(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8424,7 +8618,7 @@ fn arm_a434(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa435 LensSerialNumber
-fn arm_a435(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a435(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8440,7 +8634,7 @@ fn arm_a435(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa436 ImageTitle
-fn arm_a436(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a436(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8456,7 +8650,7 @@ fn arm_a436(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa437 Photographer
-fn arm_a437(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a437(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8472,7 +8666,7 @@ fn arm_a437(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa438 ImageEditor
-fn arm_a438(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a438(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8488,7 +8682,7 @@ fn arm_a438(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa439 CameraFirmware
-fn arm_a439(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a439(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8504,7 +8698,7 @@ fn arm_a439(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa43a RAWDevelopingSoftware
-fn arm_a43a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a43a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8520,7 +8714,7 @@ fn arm_a43a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa43b ImageEditingSoftware
-fn arm_a43b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a43b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8536,7 +8730,7 @@ fn arm_a43b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa43c MetadataEditingSoftware
-fn arm_a43c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a43c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8552,7 +8746,7 @@ fn arm_a43c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa460 CompositeImage
-fn arm_a460(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a460(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8574,7 +8768,7 @@ fn arm_a460(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa461 CompositeImageCount
-fn arm_a461(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a461(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8590,7 +8784,7 @@ fn arm_a461(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa480 GDALMetadata
-fn arm_a480(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a480(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8606,7 +8800,7 @@ fn arm_a480(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa481 GDALNoData
-fn arm_a481(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a481(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8622,7 +8816,7 @@ fn arm_a481(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xa500 Gamma
-fn arm_a500(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_a500(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8638,7 +8832,7 @@ fn arm_a500(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xafc0 ExpandSoftware
-fn arm_afc0(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_afc0(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8654,7 +8848,7 @@ fn arm_afc0(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xafc1 ExpandLens
-fn arm_afc1(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_afc1(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8670,7 +8864,7 @@ fn arm_afc1(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xafc2 ExpandFilm
-fn arm_afc2(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_afc2(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8686,7 +8880,7 @@ fn arm_afc2(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xafc3 ExpandFilterLens
-fn arm_afc3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_afc3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8702,7 +8896,7 @@ fn arm_afc3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xafc4 ExpandScanner
-fn arm_afc4(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_afc4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8718,7 +8912,7 @@ fn arm_afc4(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xafc5 ExpandFlashLamp
-fn arm_afc5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_afc5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8734,10 +8928,10 @@ fn arm_afc5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xb4c3 HasselbladRawImage
-fn arm_b4c3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_b4c3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -8749,8 +8943,30 @@ fn arm_b4c3(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xbc01 PixelFormat
+fn arm_bc01(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_bc01(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = match &value {
+        Out::Scalar(v) => match pc_bc01(s, v.clone(), &mut w)? {
+            Out::Scalar(MemberVal::Undef) => return Err(Decline("PrintConv returned undef")),
+            p => Some(p),
+        },
+        Out::Binary(_) => None,
+    };
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xbc02 Transformation
-fn arm_bc02(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc02(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8772,7 +8988,7 @@ fn arm_bc02(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbc03 Uncompressed
-fn arm_bc03(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc03(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8794,7 +9010,7 @@ fn arm_bc03(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbc04 ImageType
-fn arm_bc04(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc04(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8816,7 +9032,7 @@ fn arm_bc04(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbc80 ImageWidth
-fn arm_bc80(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc80(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8832,7 +9048,7 @@ fn arm_bc80(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbc81 ImageHeight
-fn arm_bc81(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc81(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8848,7 +9064,7 @@ fn arm_bc81(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbc82 WidthResolution
-fn arm_bc82(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc82(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8864,7 +9080,7 @@ fn arm_bc82(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbc83 HeightResolution
-fn arm_bc83(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bc83(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8880,7 +9096,7 @@ fn arm_bc83(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbcc0 ImageOffset
-fn arm_bcc0(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bcc0(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8896,7 +9112,7 @@ fn arm_bcc0(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbcc1 ImageByteCount
-fn arm_bcc1(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bcc1(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8912,7 +9128,7 @@ fn arm_bcc1(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbcc2 AlphaOffset
-fn arm_bcc2(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bcc2(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8928,7 +9144,7 @@ fn arm_bcc2(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbcc3 AlphaByteCount
-fn arm_bcc3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bcc3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8944,7 +9160,7 @@ fn arm_bcc3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbcc4 ImageDataDiscard
-fn arm_bcc4(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bcc4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8966,7 +9182,7 @@ fn arm_bcc4(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xbcc5 AlphaDataDiscard
-fn arm_bcc5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_bcc5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -8988,7 +9204,7 @@ fn arm_bcc5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc427 OceScanjobDesc
-fn arm_c427(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c427(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9004,7 +9220,7 @@ fn arm_c427(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc428 OceApplicationSelector
-fn arm_c428(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c428(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9020,7 +9236,7 @@ fn arm_c428(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc429 OceIDNumber
-fn arm_c429(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c429(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9036,7 +9252,7 @@ fn arm_c429(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc42a OceImageLogic
-fn arm_c42a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c42a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9052,10 +9268,10 @@ fn arm_c42a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc44f Annotations
-fn arm_c44f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c44f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -9068,7 +9284,7 @@ fn arm_c44f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc573 OriginalFileName
-fn arm_c573(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c573(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9084,7 +9300,7 @@ fn arm_c573(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc580 USPTOOriginalContentType
-fn arm_c580(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c580(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9106,7 +9322,7 @@ fn arm_c580(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc5e0 CR2CFAPattern
-fn arm_c5e0(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c5e0(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c5e0(s, val, &mut w)?;
@@ -9128,7 +9344,7 @@ fn arm_c5e0(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc612 DNGVersion
-fn arm_c612(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c612(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let val = match raw_c612(s, val, &mut w)? {
@@ -9155,7 +9371,7 @@ fn arm_c612(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc613 DNGBackwardVersion
-fn arm_c613(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c613(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9177,7 +9393,7 @@ fn arm_c613(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc614 UniqueCameraModel
-fn arm_c614(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c614(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9192,8 +9408,30 @@ fn arm_c614(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xc615 LocalizedCameraModel
+fn arm_c615(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c615(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = match &value {
+        Out::Scalar(v) => match pc_c615(s, v.clone(), &mut w)? {
+            Out::Scalar(MemberVal::Undef) => return Err(Decline("PrintConv returned undef")),
+            p => Some(p),
+        },
+        Out::Binary(_) => None,
+    };
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xc616 CFAPlaneColor
-fn arm_c616(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c616(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9215,7 +9453,7 @@ fn arm_c616(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc617 CFALayout
-fn arm_c617(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c617(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9237,10 +9475,10 @@ fn arm_c617(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc618 LinearizationTable
-fn arm_c618(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c618(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -9253,7 +9491,7 @@ fn arm_c618(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc619 BlackLevelRepeatDim
-fn arm_c619(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c619(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9269,7 +9507,7 @@ fn arm_c619(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc61a BlackLevel
-fn arm_c61a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c61a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9285,7 +9523,7 @@ fn arm_c61a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc61b BlackLevelDeltaH
-fn arm_c61b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c61b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c61b(s, val, &mut w)?;
@@ -9301,7 +9539,7 @@ fn arm_c61b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc61c BlackLevelDeltaV
-fn arm_c61c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c61c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c61c(s, val, &mut w)?;
@@ -9317,7 +9555,7 @@ fn arm_c61c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc61d WhiteLevel
-fn arm_c61d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c61d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9333,7 +9571,7 @@ fn arm_c61d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc61e DefaultScale
-fn arm_c61e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c61e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9349,7 +9587,7 @@ fn arm_c61e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc61f DefaultCropOrigin
-fn arm_c61f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c61f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9365,7 +9603,7 @@ fn arm_c61f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc620 DefaultCropSize
-fn arm_c620(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c620(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9381,7 +9619,7 @@ fn arm_c620(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc621 ColorMatrix1
-fn arm_c621(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c621(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9397,7 +9635,7 @@ fn arm_c621(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc622 ColorMatrix2
-fn arm_c622(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c622(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9413,7 +9651,7 @@ fn arm_c622(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc623 CameraCalibration1
-fn arm_c623(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c623(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9429,7 +9667,7 @@ fn arm_c623(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc624 CameraCalibration2
-fn arm_c624(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c624(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9445,7 +9683,7 @@ fn arm_c624(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc625 ReductionMatrix1
-fn arm_c625(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c625(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9461,7 +9699,7 @@ fn arm_c625(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc626 ReductionMatrix2
-fn arm_c626(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c626(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9477,7 +9715,7 @@ fn arm_c626(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc627 AnalogBalance
-fn arm_c627(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c627(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9493,7 +9731,7 @@ fn arm_c627(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc628 AsShotNeutral
-fn arm_c628(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c628(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9509,7 +9747,7 @@ fn arm_c628(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc629 AsShotWhiteXY
-fn arm_c629(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c629(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9525,7 +9763,7 @@ fn arm_c629(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc62a BaselineExposure
-fn arm_c62a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c62a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9541,7 +9779,7 @@ fn arm_c62a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc62b BaselineNoise
-fn arm_c62b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c62b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9557,7 +9795,7 @@ fn arm_c62b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc62c BaselineSharpness
-fn arm_c62c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c62c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9573,7 +9811,7 @@ fn arm_c62c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc62d BayerGreenSplit
-fn arm_c62d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c62d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9589,7 +9827,7 @@ fn arm_c62d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc62e LinearResponseLimit
-fn arm_c62e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c62e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9605,7 +9843,7 @@ fn arm_c62e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc62f CameraSerialNumber
-fn arm_c62f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c62f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9621,7 +9859,7 @@ fn arm_c62f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc630 DNGLensInfo
-fn arm_c630(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c630(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9643,7 +9881,7 @@ fn arm_c630(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc631 ChromaBlurRadius
-fn arm_c631(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c631(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9659,7 +9897,7 @@ fn arm_c631(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc632 AntiAliasStrength
-fn arm_c632(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c632(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9675,7 +9913,7 @@ fn arm_c632(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc633 ShadowScale
-fn arm_c633(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c633(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9691,7 +9929,7 @@ fn arm_c633(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc635 MakerNoteSafety
-fn arm_c635(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c635(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9713,7 +9951,7 @@ fn arm_c635(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc640 RawImageSegmentation
-fn arm_c640(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c640(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9729,7 +9967,7 @@ fn arm_c640(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc65a CalibrationIlluminant1
-fn arm_c65a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c65a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9751,7 +9989,7 @@ fn arm_c65a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc65b CalibrationIlluminant2
-fn arm_c65b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c65b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9773,7 +10011,7 @@ fn arm_c65b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc65c BestQualityScale
-fn arm_c65c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c65c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9789,7 +10027,7 @@ fn arm_c65c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc65d RawDataUniqueID
-fn arm_c65d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c65d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c65d(s, val, &mut w)?;
@@ -9805,7 +10043,7 @@ fn arm_c65d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc660 AliasLayerMetadata
-fn arm_c660(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c660(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9820,8 +10058,24 @@ fn arm_c660(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xc68b OriginalRawFileName
+fn arm_c68b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c68b(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xc68d ActiveArea
-fn arm_c68d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c68d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9837,7 +10091,7 @@ fn arm_c68d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc68e MaskedAreas
-fn arm_c68e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c68e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9853,7 +10107,7 @@ fn arm_c68e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc690 AsShotPreProfileMatrix
-fn arm_c690(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c690(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9869,7 +10123,7 @@ fn arm_c690(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc692 CurrentPreProfileMatrix
-fn arm_c692(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c692(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9885,7 +10139,7 @@ fn arm_c692(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc6bf ColorimetricReference
-fn arm_c6bf(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6bf(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9907,7 +10161,7 @@ fn arm_c6bf(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc6c5 SRawType
-fn arm_c6c5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6c5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9917,13 +10171,103 @@ fn arm_c6c5(s: &Session, raw: &MemberVal) -> R<Arm> {
     let print = None;
     Ok(Arm::Report(Report {
         value: None,
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc6d2 PanasonicTitle
+fn arm_c6d2(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let val = match raw_c6d2(s, val, &mut w)? {
+        Out::Scalar(MemberVal::Undef) => return Ok(Arm::Suppress),
+        Out::Scalar(v) => v,
+        Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
+    };
+    let value = vc_c6d2(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc6d3 PanasonicTitle2
+fn arm_c6d3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let val = match raw_c6d3(s, val, &mut w)? {
+        Out::Scalar(MemberVal::Undef) => return Ok(Arm::Suppress),
+        Out::Scalar(v) => v,
+        Out::Binary(_) => return Err(Decline("RawConv returned a reference")),
+    };
+    let value = vc_c6d3(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc6f3 CameraCalibrationSig
+fn arm_c6f3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c6f3(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc6f4 ProfileCalibrationSig
+fn arm_c6f4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c6f4(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc6f6 AsShotProfileName
+fn arm_c6f6(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c6f6(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
         print,
         writes: w,
     }))
 }
 
 // 0xc6f7 NoiseReductionApplied
-fn arm_c6f7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6f7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9938,8 +10282,24 @@ fn arm_c6f7(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xc6f8 ProfileName
+fn arm_c6f8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c6f8(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xc6f9 ProfileHueSatMapDims
-fn arm_c6f9(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6f9(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -9955,7 +10315,7 @@ fn arm_c6f9(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc6fa ProfileHueSatMapData1
-fn arm_c6fa(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6fa(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c6fa(s, val, &mut w)?;
@@ -9971,7 +10331,7 @@ fn arm_c6fa(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc6fb ProfileHueSatMapData2
-fn arm_c6fb(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6fb(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c6fb(s, val, &mut w)?;
@@ -9987,7 +10347,7 @@ fn arm_c6fb(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc6fc ProfileToneCurve
-fn arm_c6fc(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6fc(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c6fc(s, val, &mut w)?;
@@ -10003,7 +10363,7 @@ fn arm_c6fc(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc6fd ProfileEmbedPolicy
-fn arm_c6fd(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c6fd(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10024,8 +10384,24 @@ fn arm_c6fd(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xc6fe ProfileCopyright
+fn arm_c6fe(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c6fe(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xc714 ForwardMatrix1
-fn arm_c714(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c714(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10041,7 +10417,7 @@ fn arm_c714(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc715 ForwardMatrix2
-fn arm_c715(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c715(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10056,8 +10432,56 @@ fn arm_c715(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
+// 0xc716 PreviewApplicationName
+fn arm_c716(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c716(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc717 PreviewApplicationVersion
+fn arm_c717(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c717(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
+// 0xc718 PreviewSettingsName
+fn arm_c718(s: &mut Session, raw: &MemberVal) -> R<Arm> {
+    let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
+    let val = raw.clone();
+    let value = vc_c718(s, val, &mut w)?;
+    if value == Out::Scalar(MemberVal::Undef) {
+        return Ok(Arm::Suppress);
+    }
+    let print = None;
+    Ok(Arm::Report(Report {
+        value: Some(value),
+        print,
+        writes: w,
+    }))
+}
+
 // 0xc719 PreviewSettingsDigest
-fn arm_c719(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c719(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c719(s, val, &mut w)?;
@@ -10073,7 +10497,7 @@ fn arm_c719(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc71a PreviewColorSpace
-fn arm_c71a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c71a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10095,7 +10519,7 @@ fn arm_c71a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc71b PreviewDateTime
-fn arm_c71b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c71b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c71b(s, val, &mut w)?;
@@ -10117,7 +10541,7 @@ fn arm_c71b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc71c RawImageDigest
-fn arm_c71c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c71c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c71c(s, val, &mut w)?;
@@ -10133,7 +10557,7 @@ fn arm_c71c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc71d OriginalRawFileDigest
-fn arm_c71d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c71d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c71d(s, val, &mut w)?;
@@ -10149,7 +10573,7 @@ fn arm_c71d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc71e SubTileBlockSize
-fn arm_c71e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c71e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10165,7 +10589,7 @@ fn arm_c71e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc71f RowInterleaveFactor
-fn arm_c71f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c71f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10181,7 +10605,7 @@ fn arm_c71f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc725 ProfileLookTableDims
-fn arm_c725(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c725(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10197,7 +10621,7 @@ fn arm_c725(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc726 ProfileLookTableData
-fn arm_c726(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c726(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c726(s, val, &mut w)?;
@@ -10213,7 +10637,7 @@ fn arm_c726(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc761 NoiseProfile
-fn arm_c761(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c761(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10229,7 +10653,7 @@ fn arm_c761(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc764 FrameRate
-fn arm_c764(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c764(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10251,7 +10675,7 @@ fn arm_c764(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc772 TStop
-fn arm_c772(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c772(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10273,7 +10697,7 @@ fn arm_c772(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc789 ReelName
-fn arm_c789(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c789(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10289,7 +10713,7 @@ fn arm_c789(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc791 OriginalDefaultFinalSize
-fn arm_c791(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c791(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10305,7 +10729,7 @@ fn arm_c791(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc792 OriginalBestQualitySize
-fn arm_c792(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c792(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10321,7 +10745,7 @@ fn arm_c792(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc793 OriginalDefaultCropSize
-fn arm_c793(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c793(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10337,7 +10761,7 @@ fn arm_c793(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a1 CameraLabel
-fn arm_c7a1(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a1(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10353,7 +10777,7 @@ fn arm_c7a1(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a3 ProfileHueSatMapEncoding
-fn arm_c7a3(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a3(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10375,7 +10799,7 @@ fn arm_c7a3(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a4 ProfileLookTableEncoding
-fn arm_c7a4(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a4(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10397,7 +10821,7 @@ fn arm_c7a4(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a5 BaselineExposureOffset
-fn arm_c7a5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10413,7 +10837,7 @@ fn arm_c7a5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a6 DefaultBlackRender
-fn arm_c7a6(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a6(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10435,7 +10859,7 @@ fn arm_c7a6(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a7 NewRawImageDigest
-fn arm_c7a7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_c7a7(s, val, &mut w)?;
@@ -10451,7 +10875,7 @@ fn arm_c7a7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7a8 RawToPreviewGain
-fn arm_c7a8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7a8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10467,7 +10891,7 @@ fn arm_c7a8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7aa CacheVersion
-fn arm_c7aa(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7aa(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10489,7 +10913,7 @@ fn arm_c7aa(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7b5 DefaultUserCrop
-fn arm_c7b5(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7b5(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10505,10 +10929,10 @@ fn arm_c7b5(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7d7 ZIFMetadata
-fn arm_c7d7(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7d7(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -10521,10 +10945,10 @@ fn arm_c7d7(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7d8 ZIFAnnotations
-fn arm_c7d8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7d8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -10537,7 +10961,7 @@ fn arm_c7d8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7e9 DepthFormat
-fn arm_c7e9(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7e9(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10559,7 +10983,7 @@ fn arm_c7e9(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7ea DepthNear
-fn arm_c7ea(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7ea(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10575,7 +10999,7 @@ fn arm_c7ea(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7eb DepthFar
-fn arm_c7eb(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7eb(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10591,7 +11015,7 @@ fn arm_c7eb(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7ec DepthUnits
-fn arm_c7ec(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7ec(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10613,7 +11037,7 @@ fn arm_c7ec(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7ed DepthMeasureType
-fn arm_c7ed(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7ed(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10635,7 +11059,7 @@ fn arm_c7ed(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xc7ee EnhanceParams
-fn arm_c7ee(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_c7ee(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10651,10 +11075,10 @@ fn arm_c7ee(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd2d ProfileGainTableMap
-fn arm_cd2d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd2d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -10667,7 +11091,7 @@ fn arm_cd2d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd2e SemanticName
-fn arm_cd2e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd2e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10683,7 +11107,7 @@ fn arm_cd2e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd30 SemanticInstanceID
-fn arm_cd30(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd30(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10699,7 +11123,7 @@ fn arm_cd30(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd31 CalibrationIlluminant3
-fn arm_cd31(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd31(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10721,7 +11145,7 @@ fn arm_cd31(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd32 CameraCalibration3
-fn arm_cd32(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd32(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10737,7 +11161,7 @@ fn arm_cd32(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd33 ColorMatrix3
-fn arm_cd33(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd33(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10753,7 +11177,7 @@ fn arm_cd33(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd34 ForwardMatrix3
-fn arm_cd34(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd34(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10769,7 +11193,7 @@ fn arm_cd34(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd35 IlluminantData1
-fn arm_cd35(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd35(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10785,7 +11209,7 @@ fn arm_cd35(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd36 IlluminantData2
-fn arm_cd36(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd36(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10801,7 +11225,7 @@ fn arm_cd36(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd37 IlluminantData3
-fn arm_cd37(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd37(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10817,7 +11241,7 @@ fn arm_cd37(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd38 MaskSubArea
-fn arm_cd38(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd38(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10833,7 +11257,7 @@ fn arm_cd38(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd39 ProfileHueSatMapData3
-fn arm_cd39(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd39(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_cd39(s, val, &mut w)?;
@@ -10849,7 +11273,7 @@ fn arm_cd39(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd3a ReductionMatrix3
-fn arm_cd3a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd3a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10865,10 +11289,10 @@ fn arm_cd3a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd3f RGBTables
-fn arm_cd3f(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd3f(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -10881,10 +11305,10 @@ fn arm_cd3f(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd40 ProfileGainTableMap2
-fn arm_cd40(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd40(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -10897,7 +11321,7 @@ fn arm_cd40(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd43 ColumnInterleaveFactor
-fn arm_cd43(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd43(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10913,10 +11337,10 @@ fn arm_cd43(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd46 ImageStats
-fn arm_cd46(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd46(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -10929,7 +11353,7 @@ fn arm_cd46(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd48 ProfileGroupName
-fn arm_cd48(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd48(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10945,7 +11369,7 @@ fn arm_cd48(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd49 JXLDistance
-fn arm_cd49(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd49(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10961,7 +11385,7 @@ fn arm_cd49(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd4a JXLEffort
-fn arm_cd4a(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd4a(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10977,7 +11401,7 @@ fn arm_cd4a(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xcd4b JXLDecodeSpeed
-fn arm_cd4b(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_cd4b(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -10993,10 +11417,10 @@ fn arm_cd4b(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xea1c Padding
-fn arm_ea1c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_ea1c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
-    let value = Out::Binary(val.perl_string().into_bytes());
+    let value = Out::Binary(val.perl_bytes().into_owned());
     if value == Out::Scalar(MemberVal::Undef) {
         return Ok(Arm::Suppress);
     }
@@ -11009,7 +11433,7 @@ fn arm_ea1c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xea1d OffsetSchema
-fn arm_ea1d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_ea1d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = Out::Scalar(val);
@@ -11025,7 +11449,7 @@ fn arm_ea1d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfde8 OwnerName
-fn arm_fde8(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fde8(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fde8(s, val, &mut w)?;
@@ -11041,7 +11465,7 @@ fn arm_fde8(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfde9 SerialNumber
-fn arm_fde9(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fde9(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fde9(s, val, &mut w)?;
@@ -11057,7 +11481,7 @@ fn arm_fde9(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfdea Lens
-fn arm_fdea(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fdea(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fdea(s, val, &mut w)?;
@@ -11073,7 +11497,7 @@ fn arm_fdea(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe4c RawFile
-fn arm_fe4c(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe4c(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe4c(s, val, &mut w)?;
@@ -11089,7 +11513,7 @@ fn arm_fe4c(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe4d Converter
-fn arm_fe4d(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe4d(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe4d(s, val, &mut w)?;
@@ -11105,7 +11529,7 @@ fn arm_fe4d(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe4e WhiteBalance
-fn arm_fe4e(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe4e(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe4e(s, val, &mut w)?;
@@ -11121,7 +11545,7 @@ fn arm_fe4e(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe51 Exposure
-fn arm_fe51(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe51(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe51(s, val, &mut w)?;
@@ -11137,7 +11561,7 @@ fn arm_fe51(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe52 Shadows
-fn arm_fe52(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe52(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe52(s, val, &mut w)?;
@@ -11153,7 +11577,7 @@ fn arm_fe52(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe53 Brightness
-fn arm_fe53(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe53(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe53(s, val, &mut w)?;
@@ -11169,7 +11593,7 @@ fn arm_fe53(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe54 Contrast
-fn arm_fe54(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe54(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe54(s, val, &mut w)?;
@@ -11185,7 +11609,7 @@ fn arm_fe54(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe55 Saturation
-fn arm_fe55(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe55(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe55(s, val, &mut w)?;
@@ -11201,7 +11625,7 @@ fn arm_fe55(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe56 Sharpness
-fn arm_fe56(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe56(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe56(s, val, &mut w)?;
@@ -11217,7 +11641,7 @@ fn arm_fe56(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe57 Smoothness
-fn arm_fe57(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe57(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe57(s, val, &mut w)?;
@@ -11233,7 +11657,7 @@ fn arm_fe57(s: &Session, raw: &MemberVal) -> R<Arm> {
 }
 
 // 0xfe58 MoireFilter
-fn arm_fe58(s: &Session, raw: &MemberVal) -> R<Arm> {
+fn arm_fe58(s: &mut Session, raw: &MemberVal) -> R<Arm> {
     let mut w: Vec<(&'static str, MemberVal)> = Vec::new();
     let val = raw.clone();
     let value = vc_fe58(s, val, &mut w)?;
@@ -11248,29 +11672,37 @@ fn arm_fe58(s: &Session, raw: &MemberVal) -> R<Arm> {
     }))
 }
 
-fn pc_0001(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0001(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0001, true)?))
 }
 
-fn raw_0002(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_0, true, &val, "", false)?;
+fn raw_0002(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_0, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_0106(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0106(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0106, true)?))
 }
 
-fn pc_0107(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0107(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0107, true)?))
 }
 
-fn pc_010a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_010a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_010A, true)?))
 }
 
-fn raw_010f(_s: &Session, mut val: MemberVal, w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_1, true, &val, "", false)?;
+fn raw_010f(
+    _s: &mut Session,
+    mut val: MemberVal,
+    w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_1, false, &val, "", false)?.0;
     Ok(Out::Scalar({
         let t1 = val.clone();
         w.push(("Make", t1.clone()));
@@ -11278,8 +11710,12 @@ fn raw_010f(_s: &Session, mut val: MemberVal, w: &mut Vec<(&'static str, MemberV
     }))
 }
 
-fn raw_0110(_s: &Session, mut val: MemberVal, w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_1, true, &val, "", false)?;
+fn raw_0110(
+    _s: &mut Session,
+    mut val: MemberVal,
+    w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_1, false, &val, "", false)?.0;
     Ok(Out::Scalar({
         let t1 = val.clone();
         w.push(("Model", t1.clone()));
@@ -11287,60 +11723,64 @@ fn raw_0110(_s: &Session, mut val: MemberVal, w: &mut Vec<(&'static str, MemberV
     }))
 }
 
-fn pc_0112(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0112(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0112, true)?))
 }
 
-fn pc_011c(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_011c(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_011C, true)?))
 }
 
-fn vc_0120(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_0120(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(32),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn vc_0121(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_0121(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(32),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn pc_0122(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0122(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0122, true)?))
 }
 
-fn pc_0124(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0124(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0124, true)?))
 }
 
-fn pc_0125(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0125(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0125, true)?))
 }
 
-fn pc_0128(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0128(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0128, true)?))
 }
 
-fn raw_0131(_s: &Session, mut val: MemberVal, w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_1, true, &val, "", false)?;
+fn raw_0131(
+    _s: &mut Session,
+    mut val: MemberVal,
+    w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_1, false, &val, "", false)?.0;
     Ok(Out::Scalar({
         let t1 = val.clone();
         w.push(("Software", t1.clone()));
@@ -11348,56 +11788,60 @@ fn raw_0131(_s: &Session, mut val: MemberVal, w: &mut Vec<(&'static str, MemberV
     }))
 }
 
-fn pc_0132(s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0132(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::convert_date_time(s, &val.clone()))?))
 }
 
-fn raw_013b(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_1, true, &val, "", false)?;
+fn raw_013b(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_1, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_013d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_013d(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_013D, true)?))
 }
 
-fn vc_0144(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_0144(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(32),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn vc_0145(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_0145(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(32),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn pc_0147(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0147(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0147, true)?))
 }
 
-fn pc_014c(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_014c(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_014C, true)?))
 }
 
-fn pc_0152(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0152(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0152, true)?))
 }
 
@@ -11421,7 +11865,7 @@ fn pc_0153_item3(val: &MemberVal) -> R<MemberVal> {
     rt::hash_conv(&val, &PC_0153_ITEM3, true)
 }
 
-fn pc_0153(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0153(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(
         rt::list_conv(
             &val,
@@ -11437,59 +11881,70 @@ fn pc_0153(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     ))
 }
 
-fn pc_015a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_015a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_015A, true)?))
 }
 
-fn pc_015f(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_015f(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_015F, true)?))
 }
 
-fn pc_0191(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0191(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0191, true)?))
 }
 
-fn pc_0192(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0192(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0192, true)?))
 }
 
-fn pc_0193(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0193(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0193, true)?))
 }
 
-fn pc_0200(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0200(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0200, true)?))
 }
 
-fn pc_0212(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0212(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0212, true)?))
 }
 
-fn pc_0213(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0213(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0213, true)?))
 }
 
-fn pc_0303(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_0303(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_0303, true)?))
 }
 
-fn pc_7000(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_4747(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UCS2");
+        let t3 = rt::string("II");
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn pc_7000(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_7000, true)?))
 }
 
-fn pc_7031(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_7031(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_7031, true)?))
 }
 
-fn pc_7034(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_7034(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_7034, true)?))
 }
 
-fn pc_7036(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_7036(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_7036, true)?))
 }
 
-fn pc_80a6(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_80a6(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Le,
@@ -11498,79 +11953,118 @@ fn pc_80a6(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
         )) {
             Out::Scalar(val.clone())
         } else {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         },
     )
 }
 
-fn pc_829a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn raw_8298(
+    s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_2, false, &val, "\n", false)?.0;
+    val = rt::subst(&RE_3, false, &val, "", false)?.0;
+    val = rt::subst(&RE_4, false, &val, "", false)?.0;
+    let mut v_enc = s.option("CharsetEXIF");
+    let _ = {
+        let t1 = v_enc.clone();
+        if t1.is_truthy() {
+            {
+                let t2 = {
+                    let t3 = val.clone();
+                    let t4 = v_enc.clone();
+                    let t5 = MemberVal::Undef;
+                    let t6 = MemberVal::Undef;
+                    let t7 = MemberVal::Undef;
+                    h(helpers::decode(s, &t3, &t4, &t5, &t6, &t7))?
+                };
+                val = t2.clone();
+                t2
+            }
+        } else {
+            t1
+        }
+    };
+    return Ok(Out::Scalar(val.clone()));
+}
+
+fn pc_829a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::print_exposure_time(&val.clone()))?))
 }
 
-fn pc_829d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_829d(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::print_f_number(&val.clone()))?))
 }
 
-fn pc_84e3(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_84e3(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_84E3, true)?))
 }
 
-fn pc_84e7(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_84e7(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_84E7, true)?))
 }
 
-fn pc_84e8(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_84e8(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_84E8, true)?))
 }
 
-fn pc_84ee(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_84ee(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_84EE, true)?))
 }
 
-fn pc_877f(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_877f(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_877F, true)?))
 }
 
-fn pc_8780(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_8780(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_8780, true)?))
 }
 
-fn raw_87af(s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn raw_87af(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::concat(&val.clone(), &byte_order(s)?)))
 }
 
-fn raw_87b0(s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn raw_87b0(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::concat(&val.clone(), &byte_order(s)?)))
 }
 
-fn pc_8822(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_8822(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_8822, true)?))
 }
 
-fn pc_8827(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_2, false, &val, ", ", true)?;
+fn pc_8827(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_5, false, &val, ", ", true)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_8830(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_8830(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_8830, true)?))
 }
 
-fn raw_9000(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_0, true, &val, "", false)?;
+fn raw_9000(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_0, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_9003(s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9003(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::convert_date_time(s, &val.clone()))?))
 }
 
-fn pc_9004(s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9004(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::convert_date_time(s, &val.clone()))?))
 }
 
 fn pc_9101_other(val: MemberVal) -> R<MemberVal> {
-    let mut l_a: Vec<MemberVal> = rt::split_re(&RE_3, &val.clone())?;
+    let mut l_a: Vec<MemberVal> = rt::split_re(&RE_6, &val.clone())?;
     for t1 in 0..l_a.len() {
         let _ = {
             let t2 = {
@@ -11595,11 +12089,15 @@ fn pc_9101_other_ref(val: &MemberVal) -> R<MemberVal> {
     pc_9101_other(val.clone())
 }
 
-fn pc_9101(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9101(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9101, true)?))
 }
 
-fn vc_9201(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_9201(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     Ok(
         if rt::truthy(&{
             let t1 = {
@@ -11620,18 +12118,18 @@ fn vc_9201(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberV
     )
 }
 
-fn pc_9201(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9201(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::print_exposure_time(&val.clone()))?))
 }
 
-fn vc_9202(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_9202(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::pow(
         &rt::int(2),
         &rt::div(&val.clone(), &rt::int(2))?,
     )))
 }
 
-fn pc_9202(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9202(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::sprintf(
         &[rt::Fmt::Spec {
             minus: false,
@@ -11644,18 +12142,18 @@ fn pc_9202(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     )?))
 }
 
-fn pc_9204(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9204(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::print_fraction(&val.clone()))?))
 }
 
-fn vc_9205(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_9205(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::pow(
         &rt::int(2),
         &rt::div(&val.clone(), &rt::int(2))?,
     )))
 }
 
-fn pc_9205(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9205(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::sprintf(
         &[rt::Fmt::Spec {
             minus: false,
@@ -11668,19 +12166,19 @@ fn pc_9205(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     )?))
 }
 
-fn pc_9206(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    Ok(if rt::truthy(&rt::re_match(&RE_4, true, &val.clone())?) {
+fn pc_9206(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(if rt::truthy(&rt::re_match(&RE_7, false, &val.clone())?) {
         Out::Scalar(val.clone())
     } else {
         Out::Scalar(rt::concat(&val.clone(), &rt::string(" m")))
     })
 }
 
-fn pc_9207(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9207(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9207, true)?))
 }
 
-fn pc_9208(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9208(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9208, true)?))
 }
 
@@ -11689,7 +12187,7 @@ fn pc_9209_other(val: MemberVal) -> R<MemberVal> {
         let t1 = {
             let t2 = MemberVal::Undef;
             if t2.is_truthy() {
-                rt::re_match(&RE_5, true, &val.clone())?
+                rt::re_match(&RE_8, false, &val.clone())?
             } else {
                 t2
             }
@@ -11715,11 +12213,11 @@ fn pc_9209_other_ref(val: &MemberVal) -> R<MemberVal> {
     pc_9209_other(val.clone())
 }
 
-fn pc_9209(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9209(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9209, true)?))
 }
 
-fn pc_920a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_920a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::sprintf(
         &[
             rt::Fmt::Spec {
@@ -11735,113 +12233,219 @@ fn pc_920a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     )?))
 }
 
-fn pc_9210(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9210(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9210, true)?))
 }
 
-fn pc_9212(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9212(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9212, true)?))
 }
 
-fn pc_9216(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9216(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     val = rt::tr(&val, b" ", b".")?;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_9217(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9217(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_9217, true)?))
 }
 
-fn vc_9290(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_6, true, &val, "", false)?;
+fn raw_9286(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::int(1);
+        let t3 = rt::string("UserComment");
+        h(helpers::convert_exif_text(s, &t1, &t2, &t3))?
+    }))
+}
+
+fn vc_9290(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_9, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_9291(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_6, true, &val, "", false)?;
+fn vc_9291(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_9, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_9292(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_6, true, &val, "", false)?;
+fn vc_9292(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_9, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_9400(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_9400(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::concat(&val.clone(), &rt::string(" C"))))
 }
 
-fn raw_a000(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_0, true, &val, "", false)?;
+fn vc_9c9b(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UCS2");
+        let t3 = rt::string("II");
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_9c9c(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UCS2");
+        let t3 = rt::string("II");
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_9c9d(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UCS2");
+        let t3 = rt::string("II");
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_9c9e(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UCS2");
+        let t3 = rt::string("II");
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_9c9f(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UCS2");
+        let t3 = rt::string("II");
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn raw_a000(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_0, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_a001(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a001(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A001, true)?))
 }
 
-fn pc_a210(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a20c(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        h(helpers::print_sfr(s, &t1))?
+    }))
+}
+
+fn pc_a210(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A210, true)?))
 }
 
-fn pc_a216(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a216(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     val = rt::tr(&val, b" ", b".")?;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_a217(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a217(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A217, true)?))
 }
 
-fn pc_a300(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a300(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A300, true)?))
 }
 
-fn pc_a301(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a301(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A301, true)?))
 }
 
-fn pc_a401(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn raw_a302(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        h(helpers::decode_cfa_pattern(s, &t1))?
+    }))
+}
+
+fn pc_a302(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar(h(helpers::print_cfa_pattern(&val.clone()))?))
+}
+
+fn pc_a401(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A401, true)?))
 }
 
-fn pc_a402(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a402(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A402, true)?))
 }
 
-fn pc_a403(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a403(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A403, true)?))
 }
 
-fn pc_a405(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a405(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::concat(&val.clone(), &rt::string(" mm"))))
 }
 
-fn pc_a406(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a406(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A406, true)?))
 }
 
-fn pc_a407(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a407(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A407, true)?))
 }
 
-fn pc_a408(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a408(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A408, true)?))
 }
 
-fn pc_a409(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a409(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A409, true)?))
 }
 
-fn pc_a40a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a40a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A40A, true)?))
 }
 
-fn pc_a40c(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a40c(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A40C, true)?))
 }
 
-fn vc_a40d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_a40d(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::concat(
         &rt::concat(&rt::shr(&val.clone(), &rt::int(8))?, &rt::string(" ")),
         &rt::band(&val.clone(), &rt::int(255))?,
@@ -11858,7 +12462,7 @@ fn pc_a40d_item1(val: &MemberVal) -> R<MemberVal> {
     rt::hash_conv(&val, &PC_A40D_ITEM1, true)
 }
 
-fn pc_a40d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a40d(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(
         rt::list_conv(
             &val,
@@ -11872,23 +12476,38 @@ fn pc_a40d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     ))
 }
 
-fn pc_a40f(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_a40e(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn pc_a40f(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A40F, true)?))
 }
 
-fn pc_a410(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a410(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A410, true)?))
 }
 
-fn pc_a411(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a411(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A411, true)?))
 }
 
-fn pc_a412(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a412(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A412, true)?))
 }
 
-fn pc_a432(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a432(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     let mut l_vals: Vec<MemberVal> = rt::split_ws(&val.clone());
     let _ = {
         let t1 = rt::num_cmp(rt::Cmp::Eq, &rt::int(l_vals.len() as i64), &rt::int(4));
@@ -12036,43 +12655,76 @@ fn pc_a432(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberV
     return Ok(Out::Scalar(val.clone()));
 }
 
-fn pc_a460(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_a460(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_A460, true)?))
 }
 
-fn pc_bc02(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_bc01(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    let _ = {
+        let t1 = helpers::asf_get_guid(&val.clone());
+        val = t1.clone();
+        t1
+    };
+    let _ = {
+        let t2 = {
+            let (t3, t4) = rt::subst(&RE_10, false, &val, "", false)?;
+            val = t3;
+            rt::subst_count(t4)
+        };
+        if t2.is_truthy() {
+            {
+                let t5 = rt::hex(&val.clone())?;
+                val = t5.clone();
+                t5
+            }
+        } else {
+            t2
+        }
+    };
+    return Ok(Out::Scalar(val.clone()));
+}
+
+fn pc_bc01(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar(rt::hash_conv(&val, &PC_BC01, true)?))
+}
+
+fn pc_bc02(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_BC02, true)?))
 }
 
-fn pc_bc03(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_bc03(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_BC03, true)?))
 }
 
-fn pc_bc04(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_bc04(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_BC04, true)?))
 }
 
-fn pc_bcc4(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_bcc4(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_BCC4, true)?))
 }
 
-fn pc_bcc5(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_bcc5(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_BCC5, true)?))
 }
 
-fn pc_c580(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c580(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C580, true)?))
 }
 
-fn vc_c5e0(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c5e0(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &VC_C5E0, false)?))
 }
 
-fn pc_c5e0(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c5e0(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C5E0, true)?))
 }
 
-fn raw_c612(_s: &Session, val: MemberVal, w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn raw_c612(_s: &mut Session, val: MemberVal, w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar({
         let t1 = val.clone();
         w.push(("DNGVersion", t1.clone()));
@@ -12080,17 +12732,44 @@ fn raw_c612(_s: &Session, val: MemberVal, w: &mut Vec<(&'static str, MemberVal)>
     }))
 }
 
-fn pc_c612(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c612(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     val = rt::tr(&val, b" ", b".")?;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_c613(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c613(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     val = rt::tr(&val, b" ", b".")?;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_c616(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c615(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn pc_c615(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::int(0);
+        h(helpers::printable(s, &t1, &t2))?
+    }))
+}
+
+fn pc_c616(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     let mut l_cols: Vec<MemberVal> = {
         let mut v = Vec::new();
         v.extend(vec![rt::string("Red")]);
@@ -12121,39 +12800,43 @@ fn pc_c616(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     return Ok(Out::Scalar(rt::join(&rt::string(","), &l_vals.clone())));
 }
 
-fn pc_c617(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c617(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C617, true)?))
 }
 
-fn vc_c61b(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c61b(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn vc_c61c(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c61c(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn pc_c630(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c630(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     let mut l_vals: Vec<MemberVal> = rt::split_ws(&val.clone());
     let _ = {
         let t1 = rt::num_cmp(rt::Cmp::Eq, &rt::int(l_vals.len() as i64), &rt::int(4));
@@ -12301,114 +12984,251 @@ fn pc_c630(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberV
     return Ok(Out::Scalar(val.clone()));
 }
 
-fn pc_c635(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c635(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C635, true)?))
 }
 
-fn pc_c65a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c65a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C65A, true)?))
 }
 
-fn pc_c65b(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c65b(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C65B, true)?))
 }
 
-fn vc_c65d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c65d(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::uc(&rt::unpack_hex(&val.clone()))))
 }
 
-fn pc_c6bf(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c68b(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn pc_c6bf(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C6BF, true)?))
 }
 
-fn vc_c6fa(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn raw_c6d2(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(if rt::truthy(&rt::length(&val.clone())) {
+        Out::Scalar(val.clone())
+    } else {
+        Out::Scalar(MemberVal::Undef)
+    })
+}
+
+fn vc_c6d2(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn raw_c6d3(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(if rt::truthy(&rt::length(&val.clone())) {
+        Out::Scalar(val.clone())
+    } else {
+        Out::Scalar(MemberVal::Undef)
+    })
+}
+
+fn vc_c6d3(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c6f3(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c6f4(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c6f6(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c6f8(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c6fa(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn vc_c6fb(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c6fb(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn vc_c6fc(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c6fc(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn pc_c6fd(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c6fd(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C6FD, true)?))
 }
 
-fn vc_c719(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c6fe(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c716(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c717(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c718(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+    Ok(Out::Scalar({
+        let t1 = val.clone();
+        let t2 = rt::string("UTF8");
+        let t3 = MemberVal::Undef;
+        let t4 = MemberVal::Undef;
+        let t5 = MemberVal::Undef;
+        h(helpers::decode(s, &t1, &t2, &t3, &t4, &t5))?
+    }))
+}
+
+fn vc_c719(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::unpack_hex(&val.clone())))
 }
 
-fn pc_c71a(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c71a(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C71A, true)?))
 }
 
-fn vc_c71b(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c71b(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     return Ok(Out::Scalar(helpers::convert_xmp_date(
         &val.clone(),
         &MemberVal::Undef,
     )));
 }
 
-fn pc_c71b(s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c71b(s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(h(helpers::convert_date_time(s, &val.clone()))?))
 }
 
-fn vc_c71c(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c71c(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::unpack_hex(&val.clone())))
 }
 
-fn vc_c71d(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c71d(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::unpack_hex(&val.clone())))
 }
 
-fn vc_c726(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c726(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn pc_c764(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c764(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::div(
         &rt::int_of(&rt::add(
             &rt::mul(&val.clone(), &rt::int(1000)),
@@ -12418,7 +13238,7 @@ fn pc_c764(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     )?))
 }
 
-fn pc_c772(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c772(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::join(
         &rt::string("-"),
         &rt::split_ws(&val.clone())
@@ -12439,123 +13259,183 @@ fn pc_c772(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>
     )))
 }
 
-fn pc_c7a3(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7a3(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C7A3, true)?))
 }
 
-fn pc_c7a4(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7a4(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C7A4, true)?))
 }
 
-fn pc_c7a6(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7a6(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C7A6, true)?))
 }
 
-fn vc_c7a7(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_c7a7(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::unpack_hex(&val.clone())))
 }
 
-fn pc_c7aa(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7aa(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
     val = rt::tr(&val, b" ", b".")?;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn pc_c7e9(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7e9(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C7E9, true)?))
 }
 
-fn pc_c7ec(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7ec(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C7EC, true)?))
 }
 
-fn pc_c7ed(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_c7ed(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_C7ED, true)?))
 }
 
-fn pc_cd31(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn pc_cd31(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(Out::Scalar(rt::hash_conv(&val, &PC_CD31, true)?))
 }
 
-fn vc_cd39(_s: &Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
+fn vc_cd39(_s: &mut Session, val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
     Ok(
         if rt::truthy(&rt::num_cmp(
             rt::Cmp::Gt,
             &rt::length(&val.clone()),
             &rt::int(64),
         )) {
-            Out::Binary(val.clone().perl_string().into_bytes())
+            Out::Binary(val.clone().perl_bytes().into_owned())
         } else {
             Out::Scalar(val.clone())
         },
     )
 }
 
-fn vc_fde8(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fde8(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fde9(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fde9(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fdea(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fdea(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe4c(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe4c(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe4d(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe4d(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe4e(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe4e(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe51(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe51(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe52(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe52(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe53(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe53(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe54(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe54(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe55(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe55(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe56(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe56(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe57(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe57(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }
 
-fn vc_fe58(_s: &Session, mut val: MemberVal, _w: &mut Vec<(&'static str, MemberVal)>) -> R<Out> {
-    val = rt::subst(&RE_7, false, &val, "", false)?;
+fn vc_fe58(
+    _s: &mut Session,
+    mut val: MemberVal,
+    _w: &mut Vec<(&'static str, MemberVal)>,
+) -> R<Out> {
+    val = rt::subst(&RE_11, false, &val, "", false)?.0;
     Ok(Out::Scalar(val.clone()))
 }

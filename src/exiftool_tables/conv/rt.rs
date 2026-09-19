@@ -11,19 +11,30 @@
 //!
 //! Byte semantics: an ExifTool value from `ReadValue` is a Perl BYTE string
 //! (no UTF-8 flag, no `use utf8`, no `unicode_strings`), so `\s`, `\d`, `\w`,
-//! `uc`, `lc` and `/i` are ASCII-only and `.` matches one byte. Every regex
-//! is compiled `(?-u)` over the value's bytes; a result that is not valid
-//! UTF-8 (which [`MemberVal::Str`] cannot hold) declines.
+//! `uc`, `lc` and `/i` are ASCII-only and `.` matches one byte. Every
+//! operator here reads the EXACT string context ([`MemberVal::perl_bytes`])
+//! and builds its result with [`MemberVal::from_bytes`]: a value that is not
+//! UTF-8 travels as [`MemberVal::Bytes`] end to end, never through a lossy
+//! `String`. (Whether a final value can be SHOWN is the caller's question:
+//! the IFD walk declines a row whose text is not UTF-8.) Every regex is
+//! compiled `(?-u)` over the bytes.
 //!
-//! Perl's `$` (no `/m`) matches at the end OR before a final newline; with
-//! no newline in the subject it is exactly `\z`. The backend emits `\z` and
-//! passes `dollar: true`, and a subject containing `\n` declines -- the
-//! newline branch is refused rather than modelled.
+//! Perl's `$` (no `/m`) matches at the end OR before a final newline:
+//! at position `p` iff `p == len`, or `p == len - 1` and the last byte is
+//! `\n`. Two exact forms are emitted (`conv_codegen.py`
+//! `translate_regex`): a `$` that ends the whole pattern becomes the
+//! capture `(?P<eol>\n?)\z` ([`EOL`]) -- for a match only existence matters,
+//! and for a single substitution the `eol` group is kept out of the replaced
+//! span, which is exactly Perl's (the leftmost-first path through the rest
+//! of the pattern is the same, and at each end point exactly one branch of
+//! `\n?` can succeed). Any other `$` is emitted as `\z` with `dollar:
+//! true`, which is exact whenever the subject does not END with `\n`; a
+//! subject that does declines.
 
 use regex::bytes::Regex;
 
 use crate::exiftool_tables::helpers::{sprintf_d, sprintf_f};
-use crate::exiftool_tables::session::{MemberVal, PerlNum, numify_str};
+use crate::exiftool_tables::session::{MemberVal, PerlNum, numify_bytes};
 
 /// Why an arm did not produce a value: a branch this runtime does not model.
 /// The caller's existing path runs instead (mixed mode, per entry).
@@ -68,11 +79,13 @@ fn from_num(n: PerlNum) -> MemberVal {
     MemberVal::from(n)
 }
 
-fn bytes_to_val(b: Vec<u8>) -> R<MemberVal> {
-    String::from_utf8(b)
-        .map(MemberVal::Str)
-        .map_err(|_| Decline("result bytes are not valid UTF-8"))
+/// A Perl byte string built by an operator.
+fn bytes_val(b: Vec<u8>) -> MemberVal {
+    MemberVal::from_bytes(b)
 }
+
+/// The capture name a pattern-final `$` compiles to (see the module doc).
+pub const EOL: &str = "eol";
 
 /// Perl boolean context.
 #[must_use]
@@ -166,13 +179,12 @@ pub fn pow(a: &MemberVal, b: &MemberVal) -> MemberVal {
 /// flips the sign character instead (see `helpers::guard_string_negation`);
 /// declined.
 pub fn neg(a: &MemberVal) -> R<MemberVal> {
-    if let MemberVal::Str(s) = a {
-        let t = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    if let MemberVal::Str(_) | MemberVal::Bytes(_) = a {
+        let t = a.perl_bytes();
         let simple = !t.is_empty()
-            && t.bytes().all(|c| c.is_ascii_digit() || c == b'.')
-            && t.bytes().filter(|&c| c == b'.').count() <= 1
-            && t.bytes().any(|c| c.is_ascii_digit())
-            && t.len() == s.len();
+            && t.iter().all(|&c| c.is_ascii_digit() || c == b'.')
+            && t.iter().filter(|&&c| c == b'.').count() <= 1
+            && t.iter().any(u8::is_ascii_digit);
         if !simple {
             return Err(Decline("unary minus on a non-plain-number string"));
         }
@@ -322,8 +334,8 @@ pub fn num_cmp(op: Cmp, a: &MemberVal, b: &MemberVal) -> MemberVal {
 /// strings.
 #[must_use]
 pub fn str_cmp(op: Cmp, a: &MemberVal, b: &MemberVal) -> MemberVal {
-    let (x, y) = (a.perl_string(), b.perl_string());
-    let (x, y) = (x.as_bytes(), y.as_bytes());
+    let (x, y) = (a.perl_bytes(), b.perl_bytes());
+    let (x, y) = (&*x, &*y);
     MemberVal::Bool(match op {
         Cmp::Lt => x < y,
         Cmp::Gt => x > y,
@@ -341,9 +353,9 @@ pub fn str_cmp(op: Cmp, a: &MemberVal, b: &MemberVal) -> MemberVal {
 /// `.`
 #[must_use]
 pub fn concat(a: &MemberVal, b: &MemberVal) -> MemberVal {
-    let mut s = a.perl_string();
-    s.push_str(&b.perl_string());
-    MemberVal::Str(s)
+    let mut s = a.perl_bytes().into_owned();
+    s.extend_from_slice(&b.perl_bytes());
+    bytes_val(s)
 }
 
 /// `length($x)`: bytes; `undef` for `undef`.
@@ -356,22 +368,22 @@ pub fn length(a: &MemberVal) -> MemberVal {
 /// `uc` on a byte string: ASCII letters only.
 #[must_use]
 pub fn uc(a: &MemberVal) -> MemberVal {
-    MemberVal::Str(a.perl_string().to_ascii_uppercase())
+    bytes_val(a.perl_bytes().to_ascii_uppercase())
 }
 
 /// `lc` on a byte string: ASCII letters only.
 #[must_use]
 pub fn lc(a: &MemberVal) -> MemberVal {
-    MemberVal::Str(a.perl_string().to_ascii_lowercase())
+    bytes_val(a.perl_bytes().to_ascii_lowercase())
 }
 
 /// `unpack("H*", $x)`: lowercase hex of the bytes, high nybble first.
 #[must_use]
 pub fn unpack_hex(a: &MemberVal) -> MemberVal {
     use std::fmt::Write;
-    let s = a.perl_string();
+    let s = a.perl_bytes();
     let mut out = String::with_capacity(s.len() * 2);
-    for b in s.bytes() {
+    for &b in s.iter() {
         let _ = write!(out, "{b:02x}");
     }
     MemberVal::Str(out)
@@ -381,24 +393,25 @@ pub fn unpack_hex(a: &MemberVal) -> MemberVal {
 /// whitespace separate, trailing empty fields removed.
 #[must_use]
 pub fn split_ws(a: &MemberVal) -> Vec<MemberVal> {
-    a.perl_string()
-        .split(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'))
+    a.perl_bytes()
+        .split(|&c| crate::exiftool_tables::session::is_perl_space(c))
         .filter(|s| !s.is_empty())
-        .map(|s| MemberVal::Str(s.to_string()))
+        .map(|s| bytes_val(s.to_vec()))
         .collect()
 }
 
 /// `join($sep, LIST)`.
 #[must_use]
 pub fn join(sep: &MemberVal, items: &[MemberVal]) -> MemberVal {
-    let sep = sep.perl_string();
-    MemberVal::Str(
-        items
-            .iter()
-            .map(MemberVal::perl_string)
-            .collect::<Vec<_>>()
-            .join(&sep),
-    )
+    let sep = sep.perl_bytes();
+    let mut out = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.extend_from_slice(&sep);
+        }
+        out.extend_from_slice(&item.perl_bytes());
+    }
+    bytes_val(out)
 }
 
 /// `++$x` on a numeric scalar: an IV (or `undef`, which is 0) increments as
@@ -429,11 +442,10 @@ pub fn split_re(re: &Regex, v: &MemberVal) -> R<Vec<MemberVal>> {
     if re.is_match(b"") {
         return Err(Decline("split pattern that can match the empty string"));
     }
-    let s = v.perl_string();
-    let b = s.as_bytes();
+    let b = v.perl_bytes();
     let mut fields = Vec::new();
     let mut at = 0;
-    for m in re.find_iter(b) {
+    for m in re.find_iter(&b) {
         fields.push(b[at..m.start()].to_vec());
         at = m.end();
     }
@@ -441,14 +453,14 @@ pub fn split_re(re: &Regex, v: &MemberVal) -> R<Vec<MemberVal>> {
     while fields.last().is_some_and(Vec::is_empty) {
         fields.pop();
     }
-    fields.into_iter().map(bytes_to_val).collect()
+    Ok(fields.into_iter().map(bytes_val).collect())
 }
 
 /// `$conv->{$key}` inside a hash's `OTHER` sub: the hash's own entry, or
 /// `undef`.
 #[must_use]
 pub fn hash_get(map: &[(&'static str, &'static str)], key: &MemberVal) -> MemberVal {
-    lookup(map, &key.perl_string()).map_or(MemberVal::Undef, string)
+    lookup(map, &key.perl_bytes()).map_or(MemberVal::Undef, string)
 }
 
 /// `$array[$i]` for a Perl array: the index is `SvIV` of the scalar --
@@ -483,11 +495,14 @@ pub fn index(items: &[MemberVal], i: &MemberVal) -> MemberVal {
 // Regular expressions
 // ---------------------------------------------------------------------------
 
-fn subject(v: &MemberVal, dollar: bool) -> R<String> {
-    let s = v.perl_string();
-    if dollar && s.contains('\n') {
+/// The subject's bytes. With `dollar` (a `$` emitted as `\z`, module doc)
+/// a subject ending in `\n` declines: only there does Perl's `$` also match
+/// before the last byte.
+fn subject(v: &MemberVal, dollar: bool) -> R<std::borrow::Cow<'_, [u8]>> {
+    let s = v.perl_bytes();
+    if dollar && s.last() == Some(&b'\n') {
         return Err(Decline(
-            "`$` against a subject holding a newline (Perl's before-final-newline match)",
+            "`$` against a subject ending in a newline (Perl's before-final-newline match)",
         ));
     }
     Ok(s)
@@ -496,32 +511,88 @@ fn subject(v: &MemberVal, dollar: bool) -> R<String> {
 /// `$x =~ /re/`: yes / no.
 pub fn re_match(re: &Regex, dollar: bool, v: &MemberVal) -> R<MemberVal> {
     let s = subject(v, dollar)?;
-    Ok(MemberVal::Bool(re.is_match(s.as_bytes())))
+    Ok(MemberVal::Bool(re.is_match(&s)))
 }
 
-/// `$x =~ s/re/repl/[g]` with a literal replacement: the new string.
-/// (The operator's own value, the substitution count, is not modelled: the
-/// backend emits `s///` as a statement only.)
-pub fn subst(re: &Regex, dollar: bool, v: &MemberVal, repl: &str, global: bool) -> R<MemberVal> {
+/// `$x =~ s/re/repl/[g]` with a literal replacement: `(new value, whether
+/// it substituted)`. With no match the scalar is left exactly as it was
+/// (Perl's pp_subst does not touch it, so a number stays a number); with one
+/// it becomes the new byte string. A non-global pattern whose final `$`
+/// compiled to the [`EOL`] group replaces the span WITHOUT that group, as
+/// Perl's zero-width `$` would.
+pub fn subst(
+    re: &Regex,
+    dollar: bool,
+    v: &MemberVal,
+    repl: &str,
+    global: bool,
+) -> R<(MemberVal, bool)> {
     let s = subject(v, dollar)?;
-    let out = if global {
-        re.replace_all(s.as_bytes(), regex::bytes::NoExpand(repl.as_bytes()))
-    } else {
-        re.replace(s.as_bytes(), regex::bytes::NoExpand(repl.as_bytes()))
+    let repl = repl.as_bytes();
+    if global {
+        if re.capture_names().any(|n| n == Some(EOL)) {
+            return Err(Decline("s///g with a pattern-final `$`"));
+        }
+        if !re.is_match(&s) {
+            return Ok((v.clone(), false));
+        }
+        let out = re.replace_all(&s, regex::bytes::NoExpand(repl));
+        return Ok((bytes_val(out.into_owned()), true));
+    }
+    let Some(caps) = re.captures(&s) else {
+        return Ok((v.clone(), false));
     };
-    bytes_to_val(out.into_owned())
+    let whole = caps.get(0).expect("group 0");
+    let end = caps.name(EOL).map_or(whole.end(), |m| m.start());
+    let mut out = Vec::with_capacity(s.len() + repl.len());
+    out.extend_from_slice(&s[..whole.start()]);
+    out.extend_from_slice(repl);
+    out.extend_from_slice(&s[end..]);
+    Ok((bytes_val(out), true))
+}
+
+/// `s///`'s own value, non-global: 1 on a substitution, else `PL_sv_no`.
+#[must_use]
+pub fn subst_count(hit: bool) -> MemberVal {
+    if hit {
+        MemberVal::Int(1)
+    } else {
+        MemberVal::Bool(false)
+    }
 }
 
 /// `$x =~ tr/from/to/` for literal byte lists of equal length (no ranges,
 /// no flags): each byte of `from` becomes the byte at the same position of
-/// `to`; the first occurrence of a repeated `from` byte wins.
+/// `to`; the first occurrence of a repeated `from` byte wins. (pp_trans
+/// forces the scalar to a string whether or not a byte changed.)
 pub fn tr(v: &MemberVal, from: &[u8], to: &[u8]) -> R<MemberVal> {
-    let s = v.perl_string();
-    let out = s
-        .bytes()
-        .map(|b| from.iter().position(|&f| f == b).map_or(b, |i| to[i]))
+    let out = v
+        .perl_bytes()
+        .iter()
+        .map(|&b| from.iter().position(|&f| f == b).map_or(b, |i| to[i]))
         .collect();
-    bytes_to_val(out)
+    Ok(bytes_val(out))
+}
+
+/// `hex($x)` for a string of plain hex digits (an optional `0x`/`x`
+/// prefix, at most 15 digits, so the UV fits an IV): the IV. Anything else
+/// -- underscores, an illegal digit (Perl warns and stops), an empty string,
+/// a value past `IV_MAX` (a UV prints unlike an IV) -- declines.
+pub fn hex(v: &MemberVal) -> R<MemberVal> {
+    let b = v.perl_bytes();
+    let digits = b
+        .strip_prefix(b"0x")
+        .or_else(|| b.strip_prefix(b"0X"))
+        .or_else(|| b.strip_prefix(b"x"))
+        .or_else(|| b.strip_prefix(b"X"))
+        .unwrap_or(&b);
+    if digits.is_empty() || digits.len() > 15 || !digits.iter().all(u8::is_ascii_hexdigit) {
+        return Err(Decline("hex() of a string that is not plain hex digits"));
+    }
+    let text = std::str::from_utf8(digits).expect("ASCII hex digits");
+    Ok(MemberVal::Int(
+        i64::from_str_radix(text, 16).expect("at most 15 hex digits"),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -542,25 +613,34 @@ pub enum Fmt {
     },
 }
 
-fn pad(body: String, minus: bool, zero: bool, width: Option<usize>) -> String {
+/// Width padding. Perl pads by characters, which for a byte string are
+/// bytes.
+fn pad(body: Vec<u8>, minus: bool, zero: bool, width: Option<usize>) -> Vec<u8> {
     let Some(w) = width else { return body };
     if body.len() >= w {
         return body;
     }
     let fill = w - body.len();
     if minus {
-        return body + &" ".repeat(fill);
+        let mut out = body;
+        out.resize(w, b' ');
+        return out;
     }
     if zero {
-        let (sign, digits) = match body.strip_prefix('-') {
-            Some(rest) => ("-", rest.to_string()),
-            None => ("", body.clone()),
+        let (sign, digits): (&[u8], &[u8]) = match body.strip_prefix(b"-") {
+            Some(rest) => (b"-", rest),
+            None => (b"", &body),
         };
-        if digits.bytes().all(|c| c.is_ascii_hexdigit() || c == b'.') {
-            return format!("{sign}{}{digits}", "0".repeat(fill));
+        if digits.iter().all(|&c| c.is_ascii_hexdigit() || c == b'.') {
+            let mut out = sign.to_vec();
+            out.resize(sign.len() + fill, b'0');
+            out.extend_from_slice(digits);
+            return out;
         }
     }
-    " ".repeat(fill) + &body
+    let mut out = vec![b' '; fill];
+    out.extend_from_slice(&body);
+    out
 }
 
 /// `sprintf(FORMAT, LIST)` for a format the backend parsed. `%d` follows
@@ -568,11 +648,11 @@ fn pad(body: String, minus: bool, zero: bool, width: Option<usize>) -> String {
 /// rounding (`helpers::sprintf_f`), `%x` the UV of the value; a precision on
 /// `%x`/`%d` is a minimum digit count. Anything else the backend refuses.
 pub fn sprintf(fmt: &[Fmt], args: &[MemberVal]) -> R<MemberVal> {
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::new();
     let mut next = 0;
     for piece in fmt {
         match *piece {
-            Fmt::Lit(s) => out.push_str(s),
+            Fmt::Lit(s) => out.extend_from_slice(s.as_bytes()),
             Fmt::Spec {
                 minus,
                 zero,
@@ -583,16 +663,12 @@ pub fn sprintf(fmt: &[Fmt], args: &[MemberVal]) -> R<MemberVal> {
                 let arg = args.get(next).cloned().unwrap_or(MemberVal::Undef);
                 next += 1;
                 let body = match conv {
+                    // A byte string: a precision counts bytes.
                     b's' => {
-                        let s = arg.perl_string();
+                        let s = arg.perl_bytes();
                         match prec {
-                            Some(p) if p < s.len() => {
-                                if !s.is_char_boundary(p) {
-                                    return Err(Decline("%.Ns cutting a multibyte char"));
-                                }
-                                s[..p].to_string()
-                            }
-                            _ => s,
+                            Some(p) if p < s.len() => s[..p].to_vec(),
+                            _ => s.into_owned(),
                         }
                     }
                     b'd' => {
@@ -617,8 +693,9 @@ pub fn sprintf(fmt: &[Fmt], args: &[MemberVal]) -> R<MemberVal> {
                             }
                             None => s,
                         }
+                        .into_bytes()
                     }
-                    b'f' => sprintf_f(prec.unwrap_or(6), arg.perl_nv()),
+                    b'f' => sprintf_f(prec.unwrap_or(6), arg.perl_nv()).into_bytes(),
                     b'x' | b'X' => {
                         if let PerlNum::Float(f) = arg.perl_num() {
                             if !f.is_finite() {
@@ -635,15 +712,15 @@ pub fn sprintf(fmt: &[Fmt], args: &[MemberVal]) -> R<MemberVal> {
                         if conv == b'X' {
                             s = s.to_ascii_uppercase();
                         }
-                        s
+                        s.into_bytes()
                     }
                     _ => return Err(Decline("sprintf conversion not modelled")),
                 };
-                out.push_str(&pad(body, minus, zero && prec.is_none(), width));
+                out.extend_from_slice(&pad(body, minus, zero && prec.is_none(), width));
             }
         }
     }
-    Ok(MemberVal::Str(out))
+    Ok(bytes_val(out))
 }
 
 // ---------------------------------------------------------------------------
@@ -667,8 +744,8 @@ pub struct HashConv {
     pub print_hex: bool,
 }
 
-fn lookup(map: &[(&'static str, &'static str)], key: &str) -> Option<&'static str> {
-    map.binary_search_by(|(k, _)| k.as_bytes().cmp(key.as_bytes()))
+fn lookup(map: &[(&'static str, &'static str)], key: &[u8]) -> Option<&'static str> {
+    map.binary_search_by(|(k, _)| k.as_bytes().cmp(key))
         .ok()
         .map(|i| map[i].1)
 }
@@ -695,7 +772,7 @@ fn lookup(map: &[(&'static str, &'static str)], key: &str) -> Option<&'static st
 ///
 /// An `undef` `$val` is the hash key `""` (with a warning), as in Perl.
 pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<MemberVal> {
-    let key = val.perl_string();
+    let key = val.perl_bytes();
     if let Some(v) = lookup(conv.map, &key) {
         return Ok(string(v));
     }
@@ -710,7 +787,7 @@ pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<Member
     }
     if conv.print_hex && print_conv && val.is_defined() {
         let int_like = {
-            let b = key.as_bytes();
+            let b: &[u8] = &key;
             let b = b.strip_suffix(b"\n").unwrap_or(b);
             let digits = b
                 .strip_prefix(b"+")
@@ -719,13 +796,16 @@ pub fn hash_conv(val: &MemberVal, conv: &HashConv, print_conv: bool) -> R<Member
             !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
         };
         if int_like {
-            if matches!(numify_str(&key), PerlNum::Float(_)) {
+            if matches!(numify_bytes(&key), PerlNum::Float(_)) {
                 return Err(Decline("PrintHex of an integer string beyond the IV range"));
             }
             return Ok(MemberVal::Str(format!("Unknown (0x{:x})", uv(val))));
         }
     }
-    Ok(MemberVal::Str(format!("Unknown ({key})")))
+    let mut out = b"Unknown (".to_vec();
+    out.extend_from_slice(&key);
+    out.push(b')');
+    Ok(bytes_val(out))
 }
 
 /// `DecodeBits($vals, $lookup, $bits)` (ExifTool.pm:6385-6407).
