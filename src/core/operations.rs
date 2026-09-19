@@ -1375,6 +1375,12 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     // Process different segment types
     process_jfif_segments(&segments, &mut metadata, diagnostics);
     process_exif_segments(&segments, reader, &mut metadata, diagnostics);
+    // `Composite:OriginalDecisionData` reads the file at the Canon maker
+    // note's `OriginalDecisionDataOffset`, so it needs both.
+    crate::parsers::tiff::makernotes::canon::original_decision_data::process_original_decision_data(
+        reader,
+        &mut metadata,
+    );
     // Must run after `process_exif_segments`: a CIFF directory embedded in an
     // APP0 segment can carry its own `Make`/`Model`, and Step 18/19's
     // equal-priority tie rule (`TagSink::record`) gives the win to whichever

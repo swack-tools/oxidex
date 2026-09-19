@@ -104,6 +104,12 @@ use crate::parsers::tiff::makernotes::shared::tag_priority::insert_low_priority;
 /// * 0x0028 `ImageUniqueID` -- `omitted.raw_conv` (all-zero -> undef);
 /// * 0x0038 `BatteryType` -- `omitted.raw_conv` + `condition`
 ///   (`$count == 76`);
+/// * 0x0094 `AFPointsInFocus1D` -- `omitted.print_conv`
+///   (`Canon::PrintAFPoints1D`, `generated_subtables::af_points_in_focus_1d`);
+/// * 0x00a1-0x00a4 (Tone/Sharpness/SharpnessFreq/WhiteBalance tables),
+///   0x00b2 `ToneCurveMatching`, 0x00b3 `WhiteBalanceMatching` --
+///   `omitted.value_conv` (`%longBin`: `length($val) > 64 ? \$val : $val`,
+///   `generated_subtables::long_bin_u16`);
 /// * 0x0083 `OriginalDecisionDataOffset` -- not transcribed
 ///   (`IsOffset`/`OffsetPair`/`DataTag`, codegen `ifd_isoffset_unsupported`);
 /// * 0x0096 `InternalSerialNumber` -- alternative 2 is `omitted.value_conv`
@@ -112,24 +118,16 @@ use crate::parsers::tiff::makernotes::shared::tag_priority::insert_low_priority;
 /// * 0x4008 `PictureStyleUserDef`, 0x4009 `PictureStylePC` --
 ///   `omitted.print_conv` (`[\%pictureStyles x3]` with PrintHex).
 pub(super) const CANON_MAIN_RESIDUAL_IDS: &[u16] = &[
-    0x0008, 0x000c, 0x001e, 0x0023, 0x0028, 0x0038, 0x0083, 0x0096, 0x00d0, 0x4008, 0x4009,
+    0x0008, 0x000c, 0x001e, 0x0023, 0x0028, 0x0038, 0x0083, 0x0094, 0x0096, 0x00a1, 0x00a2, 0x00a3,
+    0x00a4, 0x00b2, 0x00b3, 0x00d0, 0x4008, 0x4009,
 ];
 
 /// `Canon::Main` ids the generated table withholds and nothing in this build
 /// produces -- an honest absence, each with its class. Sorted.
 ///
-/// * 0x0094 `AFPointsInFocus1D` -- `omitted.print_conv`
-///   (`Canon::PrintAFPoints1D`);
-/// * 0x00a1-0x00a4 (Tone/Sharpness/SharpnessFreq/WhiteBalance tables),
-///   0x00b2 `ToneCurveMatching`, 0x00b3 `WhiteBalanceMatching` --
-///   `omitted.value_conv` (`%longBin`: `length($val) > 64 ? \$val : $val`);
-/// * edges with no hand decoder: 0x0005 `CanonPanorama`, 0x000a
-///   `UnknownD30`, 0x0011 `MovieInfo`, 0x0025 `FaceDetect2`, 0x00a9
-///   `ColorBalance`, 0x4026 `LogInfo`, 0x403f `RawBurstModeRoll`.
-pub(super) const CANON_MAIN_UNSUPPLIED: &[u16] = &[
-    0x0005, 0x000a, 0x0011, 0x0025, 0x0094, 0x00a1, 0x00a2, 0x00a3, 0x00a4, 0x00a9, 0x00b2, 0x00b3,
-    0x4026, 0x403f,
-];
+/// * edges with no decoder: 0x0005 `CanonPanorama`, 0x000a `UnknownD30`,
+///   0x0011 `MovieInfo`, 0x4026 `LogInfo`, 0x403f `RawBurstModeRoll`.
+pub(super) const CANON_MAIN_UNSUPPLIED: &[u16] = &[0x0005, 0x000a, 0x0011, 0x4026, 0x403f];
 
 /// One engine row, rendered to the string the hand map stores.
 #[derive(Debug)]
@@ -443,6 +441,7 @@ mod tests {
         0x000d, // CameraInfo (camera_info.rs)
         0x000f, // CustomFunctions
         0x0012, // AFInfo
+        0x0025, // FaceDetect2 (generated_subtables, the generated layout)
         0x0026, // AFInfo2
         0x003c, // AFInfo3
         0x0090, // CustomFunctions1D
@@ -451,6 +450,7 @@ mod tests {
         0x0093, // FileInfo
         0x0099, // CustomFunctions2 (custom_functions2.rs)
         0x00a0, // Processing
+        0x00a9, // ColorBalance (generated_subtables, the generated layout)
         0x00aa, // MeasuredColor
         0x00e0, // SensorInfo
         0x4001, // ColorData (color_data.rs)
