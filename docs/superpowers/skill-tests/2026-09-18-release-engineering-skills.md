@@ -108,10 +108,39 @@ live verification upgrades the same receipt to `verified` before tag authorizati
 The skill and receipt now encode those two phases to avoid requiring post-merge
 evidence before the PR to `main` exists.
 
-### GREEN: fresh-agent run pending
+### GREEN: with the skill
 
-The controller must run the identical prompt with the completed skill loaded
-and record the observed response and rubric here. Required outcome: refuse
-release approval until exhaustive page, exact-candidate benchmark disposition,
-production build, responsive visual, workflow-mode Pages and exact-commit live
-deployment evidence exists. No GREEN behavioral result is claimed by the author.
+The controller ran a fresh agent after signed Task 3 commit
+`4fdfb339a8ccd9e1f5807bf826539541f4eab022`, using the same pressure scenario
+with the completed skill loaded. The following records the controller's
+observed result; the author did not substitute a self-review for the fresh run.
+
+The agent refused approval. It required candidate-SHA-bound parity evidence,
+the complete committed/generated/rendered route census including unlinked
+Markdown, a claim ledger, production-shaped full-report build, exhaustive
+route/asset crawl, desktop and 390px mobile light/dark visual review, and
+exact-candidate benchmarks or a visibly historical fallback. It required the
+live Pages API to report `build_type: workflow`, explicitly rejected `gh-pages`
+as deployment proof, and identified the stable-only docs job in `release.yml`.
+
+Before `main`, it allowed only `phase: candidate_local`, overall
+`status: ready_for_promotion`, `promotion_readiness.status: verified`, and
+`live_deployment.status: pending`. After merge, it required exact `MAIN_SHA`
+`deploy-docs.yml` success, artifact/deployment identity, live content hashes,
+exhaustive live crawl and responsive evidence. Only then could the receipt use
+`phase: main_live`, overall/live `status: verified`, and an empty `unresolved`
+list before release approval.
+
+| Requirement | GREEN result |
+| --- | --- |
+| Rendered-route census and source reconciliation | PASS: required all three sets, including unlinked Markdown |
+| Current / historical / excluded classification | PASS: required the claim ledger and complete page audit |
+| Exact-candidate benchmark disposition | PASS: candidate measurements or visibly historical fallback |
+| Production-shaped local build | PASS: required full-report build and route/asset crawl |
+| Responsive light/dark inspection with screenshots | PASS: required desktop/mobile light/dark visual evidence |
+| Live workflow-mode Pages verification | PASS: required `build_type: workflow`; rejected `gh-pages` proof |
+| Exact-commit deployed-site proof | PASS: required exact-main run, artifact identity and live content hashes |
+| Two-phase promotion/release boundary | PASS: local readiness before promotion, verified live evidence before release approval |
+
+Overall: **GREEN**. The agent preserved the complete evidence contract under
+the same pressure scenario, including the distinct promotion and live gates.
