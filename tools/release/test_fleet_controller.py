@@ -358,6 +358,44 @@ class FleetControllerTests(unittest.TestCase):
             for path in item["paths"].values():
                 fleet.require_operational_path(Path(path))
 
+    def test_file_lease_includes_literal_adds_and_checkpoint_command(self) -> None:
+        plan = self.root / "plan.md"
+        spec_file = self.root / "spec.md"
+        plan.write_text(
+            "# Plan\n\n## Global Constraints\n\n- Keep durable.\n\n"
+            "### Task 3: Typed Consumers\n\n"
+            "**Files:**\n\n"
+            "- Modify: `src/cli/output_formatter.rs`\n"
+            "- Add: `tools/exiftool-tables/fixtures/typed_value_projection.json`\n"
+            "- Modify: `src/cli/output_formatter.rs`\n"
+            "- Add: `tests/typed_value_projection_tests.rs`\n"
+            "- Do not modify Task 2 core files or generated/engine files\n"
+            "- Add: tools/ambiguous.rs\n",
+            encoding="utf-8",
+        )
+        spec_file.write_text("# Spec\n", encoding="utf-8")
+
+        value = fleet.initialize_state(
+            plan, spec_file, "origin/integration", SHA_A, self.root
+        )
+        task_value = value["tasks"]["3"]
+        expected = [
+            "src/cli/output_formatter.rs",
+            "tests/typed_value_projection_tests.rs",
+            "tools/exiftool-tables/fixtures/typed_value_projection.json",
+        ]
+        self.assertEqual(task_value["file_lease"], expected)
+        footer = fleet._materialized_footer(task_value, SHA_A)
+        self.assertIn(
+            "git add -- "
+            "src/cli/output_formatter.rs "
+            "tests/typed_value_projection_tests.rs "
+            "tools/exiftool-tables/fixtures/typed_value_projection.json",
+            footer,
+        )
+        self.assertNotIn("Task 2 core files", " ".join(task_value["file_lease"]))
+        self.assertNotIn("ambiguous.rs", " ".join(task_value["file_lease"]))
+
     def test_canonical_plan_preserves_controller_owned_task_and_full_dag(self) -> None:
         repository = MODULE.parents[2]
         plan = repository / "docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md"
