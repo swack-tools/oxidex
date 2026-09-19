@@ -32,8 +32,9 @@
 //! `Vec<(&String, &TagValue)>` explicitly. If a benchmark later shows this
 //! is a hot path, D1 explicitly leaves room to revisit the choice.
 
-use super::tag_occurrence::{Instance, TagOccurrence};
+use super::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use super::tag_value::TagValue;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -152,6 +153,13 @@ impl TagSink {
 
     pub fn get(&self, key: &str) -> Option<&TagValue> {
         self.winners.get(key).map(|&idx| &self.occurrences[idx].raw)
+    }
+
+    /// Projects the current winner for `key` through `channel`, borrowing
+    /// stored forms and owning only a computed legacy APEX conversion.
+    pub fn winner_projected(&self, key: &str, channel: ValueChannel) -> Option<Cow<'_, TagValue>> {
+        self.winner_occurrence(key)
+            .map(|occurrence| occurrence.project(channel))
     }
 
     /// The current winner occurrence for `key`, not just its `raw` value.
@@ -427,7 +435,7 @@ impl TagSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::tag_occurrence::TagOccurrence;
+    use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
 
     fn occ(value: &str, priority: u8, order: u32) -> TagOccurrence {
         TagOccurrence {
@@ -447,6 +455,67 @@ mod tests {
             instance,
             ..occ(value, priority, order)
         }
+    }
+
+    #[test]
+    fn winner_projection_preserves_instances() {
+        let mut sink = TagSink::new();
+        let mut track1 = occ_with_instance("track 1 raw", 1, 0, Instance(1));
+        track1.value = Some(TagValue::Integer(1));
+        track1.print = Some(TagValue::new_string("Track One"));
+        sink.record("QuickTime:TrackID".to_string(), track1);
+
+        let mut track2 = occ_with_instance("track 2 raw", 9, 1, Instance(2));
+        track2.value = Some(TagValue::Integer(2));
+        track2.print = Some(TagValue::new_string("Track Two"));
+        sink.record("QuickTime:TrackID".to_string(), track2);
+
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::Stored)
+                .as_deref(),
+            Some(&TagValue::new_string("track 1 raw"))
+        );
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Integer(1))
+        );
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::PrintConv)
+                .as_deref(),
+            Some(&TagValue::new_string("Track One"))
+        );
+        assert_eq!(sink.occurrences().count(), 2);
+
+        sink.remove("QuickTime:TrackID");
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::PrintConv),
+            None
+        );
+        assert_eq!(
+            sink.occurrences().count(),
+            1,
+            "only the loser remains active"
+        );
+    }
+
+    #[test]
+    fn get_mut_recomputes_compatibility_projection_after_warming() {
+        let mut sink = TagSink::new();
+        let occurrence =
+            TagOccurrence::from_insert_shim("ExifIFD:ApertureValue", TagValue::Float(2.0), 0);
+        sink.record("ExifIFD:ApertureValue".to_string(), occurrence);
+        assert_eq!(
+            sink.winner_projected("ExifIFD:ApertureValue", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Float(2.0))
+        );
+        *sink.get_mut("ExifIFD:ApertureValue").unwrap() = TagValue::Float(4.0);
+        assert_eq!(
+            sink.winner_projected("ExifIFD:ApertureValue", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Float(4.0))
+        );
     }
 
     /// Every winner projection yields keys in the file order of the
