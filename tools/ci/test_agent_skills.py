@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import shutil
 import tempfile
 import unittest
@@ -17,6 +18,12 @@ def canonical(skill: str, relative: str) -> str:
     """Read a file from the canonical shared-skill tree."""
 
     return (REPO / ".claude/skills" / skill / relative).read_text(encoding="utf-8")
+
+
+def bash_snippets(skill: str, relative: str) -> list[str]:
+    """Return fenced Bash snippets from one canonical skill file."""
+
+    return re.findall(r"```bash\n(.*?)```", canonical(skill, relative), re.DOTALL)
 
 
 def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.Path:
@@ -52,6 +59,77 @@ class SkillMirrorTests(unittest.TestCase):
             "Gatekeeper",
             "stapled",
             "do not move",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_release_finalization_pipeline_snippets_enable_pipefail(self):
+        for relative in ("references/gates.md", "references/github-release-and-macos.md"):
+            for index, snippet in enumerate(bash_snippets("oxidex-release-finalization", relative)):
+                if "|" not in snippet:
+                    continue
+                first_command = next(line.strip() for line in snippet.splitlines() if line.strip())
+                with self.subTest(relative=relative, snippet=index):
+                    self.assertEqual(first_command, "set -euo pipefail")
+
+    def test_release_finalization_reruns_are_bound_to_main_sha(self):
+        text = canonical("oxidex-release-finalization", "references/gates.md")
+        for phrase in (
+            "POST_MERGE_WORKTREE",
+            'git worktree add --detach "$POST_MERGE_WORKTREE" "$MAIN_SHA"',
+            'MAIN_HEAD=$(git -C "$POST_MERGE_WORKTREE" rev-parse \'HEAD^{commit}\')',
+            'test "$MAIN_HEAD" = "$MAIN_SHA"',
+            "MAIN_CARGO_TARGET_DIR",
+            "MAIN_EVIDENCE_DIR",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_release_finalization_selects_tag_bound_workflow_runs(self):
+        text = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        for phrase in (
+            "headBranch",
+            ".headBranch == $tag",
+            ".headSha == $sha",
+            ".workflowName == $workflow",
+            '.event == "push"',
+            "length == 1",
+            "selected-release-run.json",
+            "selected-docker-run.json",
+            "RELEASE_RUN_ID=$(jq -er",
+            "DOCKER_RUN_ID=$(jq -er",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_release_finalization_captures_created_pr(self):
+        text = canonical("oxidex-release-finalization", "references/gates.md")
+        for phrase in (
+            "PR_URL=$(gh pr create",
+            'printf \'%s\\n\' "$PR_URL"',
+            'PR=$(gh pr view "$PR_URL"',
+            'gh pr view "$PR"',
+            'gh pr checks "$PR"',
+        ):
+            self.assertIn(phrase, text)
+
+    def test_release_finalization_uses_durable_evidence_paths(self):
+        gates = canonical("oxidex-release-finalization", "references/gates.md")
+        github = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        entrypoint = canonical("oxidex-release-finalization", "SKILL.md")
+        self.assertIn("EVIDENCE_ROOT=/absolute/durable/evidence/root", gates)
+        self.assertIn("outside tracked repository content", entrypoint)
+        self.assertNotIn("/tmp/oxidex-release", gates + github)
+        self.assertNotRegex(gates + github, r"(?m)^\s*rm\s+-[^\n]*r")
+
+    def test_release_finalization_verifies_ssh_signed_tag(self):
+        text = canonical("oxidex-release-finalization", "references/gates.md")
+        for phrase in (
+            "gpg.ssh.allowedSignersFile",
+            "user.signingkey",
+            'tag -v "$TAG"',
+            '"${VERIFY[@]}"',
         ):
             self.assertIn(phrase, text)
 

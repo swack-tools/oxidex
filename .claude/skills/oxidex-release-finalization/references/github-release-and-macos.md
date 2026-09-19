@@ -2,30 +2,55 @@
 
 Use this reference only after the authorized tag push. Workflow configuration
 is an expectation; the tag-triggered runs and downloaded artifacts are proof.
+Continue using the unique durable `EVIDENCE_DIR` established by `gates.md`,
+outside tracked repository content; do not redirect release evidence to
+`/tmp` or delete the evidence tree after verification.
 
 ## Monitor exact-commit workflows
 
 Resolve the repository and record the tag object before inspecting runs:
 
 ```bash
+set -euo pipefail
 REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 git fetch origin --tags
 test "$(git rev-parse "refs/tags/$TAG^{}")" = "$MAIN_SHA"
 gh run list --workflow release.yml --commit "$MAIN_SHA" --event push \
-  --json databaseId,url,headSha,event,status,conclusion,workflowName
+  --json databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
+  > "$EVIDENCE_DIR/release-runs.json"
 gh run list --workflow docker.yml --commit "$MAIN_SHA" --event push \
-  --json databaseId,url,headSha,event,status,conclusion,workflowName
+  --json databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
+  > "$EVIDENCE_DIR/docker-runs.json"
+jq -e --arg tag "$TAG" --arg sha "$MAIN_SHA" --arg workflow "Release" '
+  [.[] | select(
+    .headBranch == $tag and .headSha == $sha and
+    .workflowName == $workflow and .event == "push"
+  )] | select(length == 1) | .[0]
+' "$EVIDENCE_DIR/release-runs.json" > "$EVIDENCE_DIR/selected-release-run.json"
+jq -e --arg tag "$TAG" --arg sha "$MAIN_SHA" --arg workflow "Docker" '
+  [.[] | select(
+    .headBranch == $tag and .headSha == $sha and
+    .workflowName == $workflow and .event == "push"
+  )] | select(length == 1) | .[0]
+' "$EVIDENCE_DIR/docker-runs.json" > "$EVIDENCE_DIR/selected-docker-run.json"
+RELEASE_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-release-run.json")
+DOCKER_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-docker-run.json")
 gh run watch "$RELEASE_RUN_ID" --exit-status
 gh run watch "$DOCKER_RUN_ID" --exit-status
 ```
 
-Require each selected run to name `MAIN_SHA` and the tag-push event. Record its
-run ID, URL, status, conclusion, and expected skips. For a SemVer pre-release,
+The `jq -e` filters refuse zero or multiple matches; never select "latest"
+silently. If a rerun creates multiple matching workflow runs, stop and record
+an explicit unambiguous selection rule (for example a maintainer-named run ID)
+before replacing the selected-run JSON. Require each selected run to name
+`TAG`, `MAIN_SHA`, the expected workflow name, and the tag-push event. Record
+its run ID, URL, status, conclusion, and expected skips. For a SemVer pre-release,
 the GitHub release must be a prerelease, must not become Latest, stable docs
 must not be relabelled, and Docker must publish only exact version tags (not
 `:latest`). For a stable release, verify the stable behaviors separately.
 
 ```bash
+set -euo pipefail
 gh api "repos/$REPO/releases/tags/$TAG" \
   | jq -S '{html_url,tag_name,target_commitish,draft,prerelease,assets:
       [.assets[] | {name,size,url:.browser_download_url}]}' \
@@ -53,6 +78,7 @@ advertised or emitted, verify them; current absence of a checksum asset must be
 recorded as `unverified`/not provided, never invented.
 
 ```bash
+set -euo pipefail
 mkdir -p "$EVIDENCE_DIR/assets"
 gh release download "$TAG" --dir "$EVIDENCE_DIR/assets"
 shasum -a 256 "$EVIDENCE_DIR"/assets/* | sort \
@@ -64,6 +90,7 @@ in `artifacts`. Inspect the Docker manifest for both architectures when Docker
 publication is in scope:
 
 ```bash
+set -euo pipefail
 docker buildx imagetools inspect "swackhamer/oxidex:$VERSION" \
   | tee "$EVIDENCE_DIR/docker-manifest.txt"
 ```
@@ -74,6 +101,7 @@ Run these on macOS against the actual GitHub release downloads, not the CI
 workspace artifact and not a locally rebuilt binary.
 
 ```bash
+set -euo pipefail
 MAC_BIN="$EVIDENCE_DIR/assets/oxidex-aarch64-apple-darwin"
 DMG="$EVIDENCE_DIR/assets/oxidex-v${VERSION}.dmg"
 file "$MAC_BIN" "$DMG" | tee "$EVIDENCE_DIR/macos-file.txt"

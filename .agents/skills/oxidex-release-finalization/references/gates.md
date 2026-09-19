@@ -9,6 +9,7 @@ Work in a dedicated release worktree and branch. Before edits or remote
 commands:
 
 ```bash
+set -euo pipefail
 VERSION=2.0.0-beta.1
 TAG="v$VERSION"
 PARITY_RECEIPT=/absolute/path/to/release-parity-receipt.json
@@ -19,12 +20,23 @@ git status --short --branch
 git rev-parse --show-toplevel
 ```
 
-Create a new evidence directory outside tracked paths and capture the immutable
-candidate identity. Replace the example evidence path with a unique timestamped
-path for the run.
+Create a new evidence directory under a user-provided durable root outside the
+tracked repository. A repo-adjacent sibling is acceptable; `/tmp` is not. Use a
+new run ID and refuse a pre-existing path rather than deleting or reusing it.
 
 ```bash
-EVIDENCE_DIR=/tmp/oxidex-release-v2.0.0-beta.1-20260918T120000Z
+set -euo pipefail
+REPO_ROOT=$(git rev-parse --show-toplevel)
+EVIDENCE_ROOT=/absolute/durable/evidence/root
+RUN_ID=20260918T120000Z-unique-suffix
+case "$EVIDENCE_ROOT" in
+  "$REPO_ROOT"|"$REPO_ROOT"/*|/tmp|/tmp/*)
+    echo "refusing: evidence root must be durable and outside tracked repository content" >&2
+    exit 1
+    ;;
+esac
+EVIDENCE_DIR="$EVIDENCE_ROOT/oxidex-release-${TAG}-${RUN_ID}"
+test ! -e "$EVIDENCE_DIR"
 mkdir -p "$EVIDENCE_DIR"
 CANDIDATE_SHA=$(git rev-parse --verify 'HEAD^{commit}')
 git show --no-patch --format=fuller "$CANDIDATE_SHA" | tee "$EVIDENCE_DIR/candidate.txt"
@@ -42,6 +54,7 @@ root version. Preserve intentional independent versions such as
 `oxidex-tags-shared` and non-publishable `0.0.0` utility crates.
 
 ```bash
+set -euo pipefail
 cargo metadata --no-deps --format-version 1 \
   | jq -S '{workspace_members, packages: [.packages[] | {name, version, manifest_path}]}' \
   | tee "$EVIDENCE_DIR/workspace-versions.json"
@@ -65,6 +78,7 @@ candidate in `oxidex_sha`; the documentation receipt binds it in
 `candidate_sha`.
 
 ```bash
+set -euo pipefail
 jq -e --arg sha "$CANDIDATE_SHA" '
   .schema_version == 1 and .oxidex_sha == $sha and .status == "verified"
   and (.refusals | length) == 0
@@ -94,6 +108,7 @@ Use the shared host lock and dedicated target directory for Cargo work. Keep
 each command, exit code, candidate SHA, log path, and tool version in `gates`.
 
 ```bash
+set -euo pipefail
 CARGO_TARGET_DIR=/Users/allen/git/codex-release-engineering-skills-target \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   "$EVIDENCE_DIR/ci-standard.log" -- just ci-standard
@@ -116,14 +131,21 @@ Push the release branch and open a PR with `main` as the base. A direct push to
 `main` is never part of this skill.
 
 ```bash
-gh pr create --base main --head "$(git branch --show-current)" \
-  --title "release: prepare v${VERSION}" --body-file "$EVIDENCE_DIR/pr-body.md"
+set -euo pipefail
+PR_URL=$(gh pr create --base main --head "$(git branch --show-current)" \
+  --title "release: prepare v${VERSION}" --body-file "$EVIDENCE_DIR/pr-body.md")
+test -n "$PR_URL"
+printf '%s\n' "$PR_URL" | tee "$EVIDENCE_DIR/pr-url.txt"
+PR=$(gh pr view "$PR_URL" --json number --jq '.number')
+test -n "$PR"
 gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup
+gh pr checks "$PR" --required
 ```
 
 Require review approval and all required checks. After the authorized merge:
 
 ```bash
+set -euo pipefail
 git fetch origin main --tags
 MAIN_SHA=$(gh pr view "$PR" --json mergedAt,mergeCommit --jq '.mergeCommit.oid')
 test -n "$MAIN_SHA"
@@ -135,14 +157,55 @@ git show --no-patch --format=fuller "$MAIN_SHA" | tee "$EVIDENCE_DIR/main.txt"
 Revalidate candidate-bound evidence:
 
 ```bash
+set -euo pipefail
 CANDIDATE_TREE=$(git rev-parse "$CANDIDATE_SHA^{tree}")
 MAIN_TREE=$(git rev-parse "$MAIN_SHA^{tree}")
+MAIN_EVIDENCE_DIR="$EVIDENCE_DIR/main-$MAIN_SHA"
+POST_MERGE_WORKTREE="$EVIDENCE_ROOT/worktrees/oxidex-release-main-$MAIN_SHA"
+MAIN_CARGO_TARGET_DIR="$EVIDENCE_ROOT/cargo-targets/oxidex-release-main-$MAIN_SHA"
+test ! -e "$MAIN_EVIDENCE_DIR"
+test ! -e "$POST_MERGE_WORKTREE"
+test ! -e "$MAIN_CARGO_TARGET_DIR"
+mkdir -p "$MAIN_EVIDENCE_DIR" "$(dirname "$POST_MERGE_WORKTREE")" \
+  "$(dirname "$MAIN_CARGO_TARGET_DIR")"
+git worktree add --detach "$POST_MERGE_WORKTREE" "$MAIN_SHA"
+MAIN_HEAD=$(git -C "$POST_MERGE_WORKTREE" rev-parse 'HEAD^{commit}')
+test "$MAIN_HEAD" = "$MAIN_SHA"
 ```
+
+All post-merge reruns execute from `POST_MERGE_WORKTREE`, never from the
+candidate worktree. Before each receipt or gate command, assert its `HEAD` is
+still `MAIN_SHA`. Use `MAIN_EVIDENCE_DIR` for outputs and
+`MAIN_CARGO_TARGET_DIR` for Cargo products. Do not remove these directories as
+part of the release procedure; they are durable evidence.
+
+```bash
+set -euo pipefail
+(
+  cd "$POST_MERGE_WORKTREE"
+  test "$(git rev-parse 'HEAD^{commit}')" = "$MAIN_SHA"
+  CARGO_TARGET_DIR="$MAIN_CARGO_TARGET_DIR" \
+  python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+    "$MAIN_EVIDENCE_DIR/ci-standard.log" -- just ci-standard
+  python3 -m unittest tools.ci.test_release_workflow -v \
+    2>&1 | tee "$MAIN_EVIDENCE_DIR/release-workflow-tests.log"
+  actionlint -config-file .github/actionlint.yaml \
+    .github/workflows/release.yml .github/workflows/docker.yml \
+    2>&1 | tee "$MAIN_EVIDENCE_DIR/actionlint.log"
+)
+```
+
+If the trees differ, regenerate both the parity and documentation receipts
+from this same detached worktree, writing them under `MAIN_EVIDENCE_DIR`, then
+validate their SHA fields against `MAIN_SHA` before rerunning every release
+gate above. If the trees match, preserve the candidate receipts only with the
+recorded tree-equivalence proof; the exact-`main` gate and CI evidence still
+comes from this detached worktree and `MAIN_SHA`.
 
 | Candidate/main result | Required action |
 | --- | --- |
-| Trees differ | Invalidate both receipts; rerun them and every release gate against `MAIN_SHA`. |
-| Trees match but commit SHAs differ | Preserve candidate receipts with the tree-equivalence proof; rerun commit-sensitive gates and require CI for `MAIN_SHA`. |
+| Trees differ | Invalidate both receipts; rerun them and every release gate from `POST_MERGE_WORKTREE` after asserting `HEAD == MAIN_SHA`. |
+| Trees match but commit SHAs differ | Preserve candidate receipts with the tree-equivalence proof; rerun commit-sensitive gates from `POST_MERGE_WORKTREE` and require CI for `MAIN_SHA`. |
 | Required CI is absent, pending, skipped unexpectedly, or failed | Block. |
 | Exact `main` commit has successful required CI and compatible evidence | Proceed to tag dry run. |
 
@@ -155,6 +218,7 @@ First prove the tag does not already exist locally or remotely. An existing tag
 is a stop condition, not something to overwrite.
 
 ```bash
+set -euo pipefail
 git rev-parse -q --verify "refs/tags/$TAG" && exit 1 || true
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
   echo "refusing: remote tag already exists" >&2
@@ -173,10 +237,20 @@ Immediately before the authorized push, re-fetch and repeat the tag-absence,
 main-ancestry, version, CI, and receipt checks. Then and only then:
 
 ```bash
+set -euo pipefail
 just tag "$VERSION" "$MAIN_SHA" 2>&1 | tee "$EVIDENCE_DIR/tag-push.log"
 git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
 test "$(git rev-parse "refs/tags/$TAG^{}")" = "$MAIN_SHA"
-git tag -v "$TAG" 2>&1 | tee "$EVIDENCE_DIR/tag-verification.log"
+if [ "$(git config --get gpg.format)" = "ssh" ]; then
+  SIGNING_KEY=$(git config --get user.signingkey)
+  [ -f "$SIGNING_KEY" ] && SIGNING_KEY=$(<"$SIGNING_KEY")
+  ALLOWED_SIGNERS="$EVIDENCE_DIR/tag-allowed-signers"
+  printf '%s %s\n' "$(git config --get user.email)" "$SIGNING_KEY" > "$ALLOWED_SIGNERS"
+  VERIFY=(git -c gpg.ssh.allowedSignersFile="$ALLOWED_SIGNERS" tag -v "$TAG")
+else
+  VERIFY=(git tag -v "$TAG")
+fi
+"${VERIFY[@]}" 2>&1 | tee "$EVIDENCE_DIR/tag-verification.log"
 ```
 
 Do not put the real push command in an unattended script or combine it with

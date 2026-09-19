@@ -21,9 +21,9 @@ its code signature, Gatekeeper assessment, and stapled notarization ticket.
 Require the release version, expected tag, full candidate SHA, a verified
 parity receipt, a verified documentation receipt, and explicit packaging
 decisions. Refuse a missing, stale, partial, blocked, or SHA-mismatched
-receipt. Copy `templates/release-finalization-receipt.json` to a unique
-evidence directory and update it as facts become available; never turn an
-unavailable check into a pass.
+receipt. Copy `templates/release-finalization-receipt.json` to a unique durable
+evidence directory outside tracked repository content and update it as facts
+become available; never turn an unavailable check into a pass.
 
 The receipt is `verified` only after every required gate, exact-commit
 workflow, expected artifact, and macOS check is proved. Otherwise set
