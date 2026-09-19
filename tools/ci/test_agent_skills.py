@@ -155,7 +155,8 @@ class SkillMirrorTests(unittest.TestCase):
     def test_parity_release_instrument_contract(self):
         text = canonical("exiftool-parity", "SKILL.md")
         for phrase in (
-            "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
         ):

@@ -16,12 +16,19 @@ running comparisons; for release claims also read
 
 Read the expected ExifTool release from the repository's `.exiftool-version`.
 The canonical local interpreter is
-`/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2`; the pinned tree is
-`/tmp/oxidex-exiftool-cache/exiftool`. Invoke that interpreter explicitly with
-the tree's library and script, with user configuration excluded. Require
+`/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2`; the pinned tree is
+`/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool`; its executable is
+`/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool` and its library
+is `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/lib`. Invoke that
+interpreter explicitly with that library and script, with user configuration
+excluded. Require
 Perl `v5.38.2`, the pinned ExifTool version, working standard/decompression
-modules, and `OOXML.docx` reporting **DOCX**, not ZIP. A version probe alone is
-insufficient. Export `EXIFTOOL_PERL` for harnesses that resolve their own oracle.
+modules, and `OOXML.docx` reporting **DOCX**, not ZIP. The authenticated
+combined corpus is the sibling
+`/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples`, never a child
+of the checkout; select it only after `bootstrap_oracle.py verify` has refreshed
+its sibling manifest. A version probe alone is insufficient. Export
+`EXIFTOOL_PERL` for harnesses that resolve their own oracle.
 
 If `strict.pm` is missing, any probe fails, or the pin differs, record
 `status: blocked` and the failed command/exit/stderr. Do not run a sweep or
@@ -29,9 +36,9 @@ publish a score. Never fall back to Homebrew, another Perl, a PATH-resolved
 oracle, or an allow-skew switch, even if the version string matches. Recovery
 requires restoring this canonical Perl 5.38.2 installation with its matching
 standard library and required modules, then passing every probe again. Keep
-repair work separate from the refused measurement. The installation was known
-broken during this skill's 2026-09-19 revision; re-probe rather than assuming
-either continued failure or recovery.
+repair work separate from the refused measurement. Do not infer current health
+from a historical incident or from a version string; re-probe the selected
+installation before each measurement.
 
 ## Measurement workflow
 

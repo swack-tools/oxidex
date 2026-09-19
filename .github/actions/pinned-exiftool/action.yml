@@ -51,3 +51,4 @@ runs:
       run: |
         sudo cpanm --notest Archive::Zip 2>/dev/null || sudo cpan -T Archive::Zip
         perl -MArchive::Zip -e 1
+        echo "OXIDEX_TABLES_PERL=$(command -v perl)" >> "$GITHUB_ENV"
