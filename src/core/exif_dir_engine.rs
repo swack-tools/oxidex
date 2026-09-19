@@ -526,7 +526,12 @@ pub(crate) fn walk(
                 .tag(entry.tag_id)
                 .is_some_and(|tag| tag.omitted.any() && tag.name == row.name)
         });
-        let display = datetime_typed(engine_row_value(row.value));
+        let mut display = datetime_typed(engine_row_value(row.value));
+        if matches!(&display, TagValue::Binary(_))
+            && let Some(TagValue::String(text)) = &stored
+        {
+            display = TagValue::new_string(text.clone());
+        }
         let no_print_conv = match (row.value_conv, row.rational) {
             (Some(value_conv), _) => datetime_typed(engine_row_value(value_conv)),
             (None, Some(fraction)) => rational_value(fraction).unwrap_or_else(|| display.clone()),
