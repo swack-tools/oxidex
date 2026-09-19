@@ -82,6 +82,8 @@ benches/target/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/exiftool-parity/
+# Codex project skills are tracked mirrors of the canonical Claude skills.
+# Regenerate/check them with tools/ci/sync_agent_skills.py.
 
 # Git worktrees
 .worktrees/
