@@ -70,6 +70,9 @@ use value::SonyValue;
 const SONY_DSC_SIGNATURE: &[u8] = b"SONY DSC ";
 const SONY_CAM_SIGNATURE: &[u8] = b"SONY CAM ";
 const SONY_SIGNATURE: &[u8] = b"SONY";
+/// `Sony::PIC` (MakerNotes.pm:1065-1066): a non-IFD text MakerNote written by
+/// the DSC-H200/J10/W370/W510 and MHS-TS20.
+const SONY_PIC_SIGNATURE: &[u8] = b"SONY PIC\0";
 
 /// Length of the "SONY xxx " header, including the three NUL bytes that pad it.
 /// ExifTool starts the IFD at a fixed `$valuePtr + 12`.
@@ -94,6 +97,13 @@ const TAG_SHOT_INFO: u16 = 0x3000;
 /// `$$self{AFAreaILCA}` (Sony.pm:1279, 1297), which four of `AFPointSelected`'s
 /// five arms are gated on.
 const TAG_AF_AREA_MODE_SETTING: u16 = 0x201c;
+/// `PixelShiftInfo` is a six-byte opaque value whose useful representation is
+/// entirely ExifTool's RawConv/PrintConv pair (Sony.pm:1643-1674). The
+/// generated `Sony::Main` row omits both, so it is decoded by hand here.
+const TAG_PIXEL_SHIFT_INFO: u16 = 0x202f;
+/// `HiddenInfo` is an int32u offset/length pair which is itself a binary
+/// sub-directory (Sony.pm:1744-1748, 6090-6110).
+const TAG_HIDDEN_INFO: u16 = 0x2044;
 
 /// `PreviewImage` (Sony.pm:906-939). Deliberately absent from [`MAIN_TABLE`]
 /// - see [`parse_sony_preview_image_tag`] for why this tag needs the whole
@@ -183,7 +193,13 @@ impl MakerNoteParser for SonyParser {
         // no enclosing block, so the subtraction is skipped instead of landing
         // somewhere plausible and wrong.
         let data = ctx.payload();
-        match parse_sony_makernote_impl(data, byte_order, model, ctx.payload_tiff_offset()) {
+        match parse_sony_makernote_impl(
+            data,
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            ctx.tiff_base(),
+        ) {
             Ok((parsed_tags, parsed_forms)) => {
                 tags.extend(parsed_tags);
                 value_forms.extend(parsed_forms);
@@ -309,9 +325,19 @@ fn parse_sony_makernote_impl(
     _byte_order: ByteOrder,
     model: Option<&str>,
     data_base: Option<u32>,
+    tiff_base: u64,
 ) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
     if data.is_empty() {
         return Ok((HashMap::new(), HashMap::new()));
+    }
+
+    // `Sony::PIC` is not a TIFF IFD. ExifTool's ProcessSonyPIC scans its
+    // complete payload for printable text runs, exposes each long run as a
+    // binary TextInfo tag, then derives selected key/value fields from those
+    // same runs (Sony.pm:11063-11115). Parsing its first two bytes as an IFD
+    // count would silently return no tags for DSC-H300-class notes.
+    if data.starts_with(SONY_PIC_SIGNATURE) {
+        return Ok((parse_sony_pic(data), HashMap::new()));
     }
 
     // Skip whichever header this body writes; the IFD follows it.
@@ -504,18 +530,25 @@ fn parse_sony_makernote_impl(
             TAG_CAMERA_INFO => {
                 // ExifTool picks between `CameraInfo` (A700/A850/A900),
                 // `CameraInfo2` (A200/A230/.../A390) and `CameraInfo3` purely
-                // by byte count (Sony.pm:716-747); the two extractors below
+                // by byte count (Sony.pm:716-747); the three extractors below
                 // each refuse a count that is not theirs.
                 let mut tags = HashMap::new();
                 let bytes = value.bytes();
-                if !amount::extract_camera_info(bytes, model, &mut tags) {
-                    amount::extract_camera_info2(bytes, &mut tags);
+                if !amount::extract_camera_info(bytes, model, &mut tags)
+                    && !amount::extract_camera_info2(bytes, &mut tags)
+                {
+                    amount::extract_camera_info3(bytes, model, &mut tags);
                 }
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
             }
             TAG_FOCUS_INFO => {
                 let mut tags = HashMap::new();
-                amount::extract_focus_info(value.bytes(), model, &mut tags);
+                // Sony.pm's 0x0020 falls through from `FocusInfo` (by byte
+                // count) to `MoreInfo`, whose own offset directory refuses
+                // anything that is not one.
+                if !amount::extract_focus_info(value.bytes(), model, &mut tags) {
+                    amount::extract_more_info(value.bytes(), model, &mut tags);
+                }
                 push_all(&mut found, tags, SUB_DIRECTORY_PRIORITY);
             }
             TAG_CAMERA_SETTINGS => {
@@ -538,6 +571,37 @@ fn parse_sony_makernote_impl(
                     byte_order,
                     &mut cipher_ctx,
                 )?;
+            }
+            TAG_PIXEL_SHIFT_INFO => {
+                if let Some(printed) = render_pixel_shift_info(&value, byte_order) {
+                    found.push(Found::new(
+                        "Sony:PixelShiftInfo".to_string(),
+                        printed,
+                        DEFAULT_PRIORITY,
+                    ));
+                }
+            }
+            TAG_HIDDEN_INFO => {
+                // This sub-directory is not a pointer to one payload: its
+                // value is the two int32u fields ProcessBinaryData exposes
+                // (`Sony::HiddenInfo`, FORMAT int32u, no table PRIORITY).
+                if let (Some(offset), Some(length)) = (value.int_at(0), value.int_at(1)) {
+                    // `HiddenDataOffset` is flagged IsOffset, so
+                    // ProcessBinaryData adds `$base + $$self{BASE}`
+                    // (ExifTool.pm:10152-10155): the TIFF header's absolute
+                    // file position. JPEG's APP1 TIFF begins at byte 12.
+                    let offset = offset.checked_add_unsigned(tiff_base).unwrap_or(offset);
+                    found.push(Found::new(
+                        "Sony:HiddenDataOffset".to_string(),
+                        offset.to_string(),
+                        DEFAULT_PRIORITY,
+                    ));
+                    found.push(Found::new(
+                        "Sony:HiddenDataLength".to_string(),
+                        length.to_string(),
+                        DEFAULT_PRIORITY,
+                    ));
+                }
             }
             TAG_MINOLTA_MAKERNOTE => {
                 let Some(start) = value.first_int().filter(|v| *v != 0) else {
@@ -613,6 +677,151 @@ fn parse_sony_makernote_impl(
     }
 
     Ok(resolve_duplicates(found))
+}
+
+/// Applies Sony.pm's PixelShiftInfo `RawConv` followed by its `PrintConv`
+/// (Sony.pm:1643-1674).
+///
+/// The stored value is `undef[6]`, so it is read by raw byte offsets, not by
+/// its TIFF component type. `Get32u` reads the first four bytes in the
+/// MakerNote's byte order; the trailing bytes are the shot number and the
+/// source-image count.
+fn render_pixel_shift_info(value: &SonyValue<'_>, byte_order: ByteOrder) -> Option<String> {
+    let bytes = value.bytes();
+    let head: [u8; 4] = bytes.get(0..4)?.try_into().ok()?;
+    let group = match byte_order {
+        ByteOrder::LittleEndian => u32::from_le_bytes(head),
+        ByteOrder::BigEndian => u32::from_be_bytes(head),
+    };
+    let shot = *bytes.get(4)?;
+    let total = *bytes.get(5)?;
+    // RawConv: sprintf("%.2d%.2d%.2d%.2d %d %d 0x%x", ...)
+    let id = format!(
+        "{:02}{:02}{:02}{:02}",
+        (group >> 17) & 0x1f,
+        (group >> 12) & 0x1f,
+        (group >> 6) & 0x3f,
+        group & 0x3f,
+    );
+    let raw = format!("{id} {shot} {total} 0x{:x}", group >> 22);
+    // PrintConv: `'00000000 0 0 0x0' => 'n/a'`; OTHER rewrites to
+    // "Group $1, Shot $2/$3 ($4)", then `s{Shot 0+/0*(\d+)\b}{Composed
+    // $1-shot}` names the combined image of a PixelShift set.
+    if raw == "00000000 0 0 0x0" {
+        return Some("n/a".to_string());
+    }
+    let shot_text = if shot == 0 {
+        format!("Composed {total}-shot")
+    } else {
+        format!("Shot {shot}/{total}")
+    };
+    Some(format!("Group {id}, {shot_text} (0x{:x})", group >> 22))
+}
+
+/// Decodes the text blocks from the non-IFD `SONY PIC\0` MakerNote.
+///
+/// Mirrors the deliberately broad text scan in `ProcessSonyPIC`
+/// (Sony.pm:11095-11112): `/(\w[\x09\x0a\x0d\x20-\x7e]+)/sg`, keeping only runs
+/// longer than 32 bytes. Each kept run is a `TextInfoN` tag, which ExifTool
+/// marks `Binary`, so it prints as the binary-data placeholder. The key/value
+/// fields are then read out of the same run by [`extract_pic_fields`].
+///
+/// Not ported: the H200 panorama `PIC_IFD` at offset 12 (Sony.pm:11074-11090),
+/// which main's fix did not cover either.
+fn parse_sony_pic(data: &[u8]) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+    let mut text_info_index = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < data.len() {
+        // `\w` on a non-UTF-8 Perl string is ASCII-only.
+        while cursor < data.len() && !(data[cursor].is_ascii_alphanumeric() || data[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < data.len() && matches!(data[cursor], b'\t' | b'\n' | b'\r' | b' '..=b'~') {
+            cursor += 1;
+        }
+        let text = &data[start..cursor];
+        if text.len() <= 32 {
+            continue;
+        }
+
+        text_info_index += 1;
+        tags.insert(
+            format!("Sony:TextInfo{text_info_index}"),
+            format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                text.len()
+            ),
+        );
+        extract_pic_fields(text, &mut tags);
+    }
+
+    tags
+}
+
+/// Finds `/\b$key\s*([^\s;,:]+)/` in `text` and returns the capture: the first
+/// occurrence of `key` preceded by a non-word byte (or the start) and followed,
+/// after optional whitespace, by at least one byte outside `[\s;,:]`.
+fn pic_field<'t>(text: &'t str, key: &str) -> Option<&'t str> {
+    let bytes = text.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let is_space = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+    let mut from = 0;
+    while let Some(found) = text[from..].find(key) {
+        let at = from + found;
+        from = at + 1;
+        if at > 0 && is_word(bytes[at - 1]) {
+            continue;
+        }
+        let mut pos = at + key.len();
+        while pos < bytes.len() && is_space(bytes[pos]) {
+            pos += 1;
+        }
+        let value_start = pos;
+        while pos < bytes.len()
+            && !is_space(bytes[pos])
+            && !matches!(bytes[pos], b';' | b',' | b':')
+        {
+            pos += 1;
+        }
+        if pos > value_start {
+            return Some(&text[value_start..pos]);
+        }
+    }
+    None
+}
+
+/// Applies the `Sony::PIC` key/value rows main's fix covered to one TextInfo
+/// block (Sony.pm:10598-10620), in ExifTool's `sort { lc $a cmp lc $b }`
+/// key order: `barcode:`/`BarCode:`, then `BC:`, then `Temp:Clbt:`.
+fn extract_pic_fields(text: &[u8], tags: &mut HashMap<String, String>) {
+    // Every byte of a run is printable ASCII or \t/\n/\r.
+    let Ok(text) = std::str::from_utf8(text) else {
+        return;
+    };
+
+    if let Some(value) = pic_field(text, "barcode:") {
+        tags.insert("Sony:Barcode".to_string(), value.to_string());
+    }
+    if let Some(value) = pic_field(text, "BarCode:") {
+        // ValueConv: `length($val) > 12 ? substr($val,0,12) : $val`.
+        let value = value.get(..12).unwrap_or(value);
+        tags.insert("Sony:Barcode".to_string(), value.to_string());
+    }
+    // Condition: `not $$self{VALUE}{Barcode}`; ValueConv: `s/IP1.*//`.
+    if !tags.contains_key("Sony:Barcode")
+        && let Some(value) = pic_field(text, "BC:")
+    {
+        let value = value.split("IP1").next().unwrap_or(value);
+        tags.insert("Sony:Barcode".to_string(), value.to_string());
+    }
+    // PrintConv: `"$val C"`.
+    if let Some(value) = pic_field(text, "Temp:Clbt:") {
+        tags.insert("Sony:BoardTemperature".to_string(), format!("{value} C"));
+    }
 }
 
 /// ExifTool's priority for a tag whose table declares none.

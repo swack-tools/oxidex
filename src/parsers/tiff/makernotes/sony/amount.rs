@@ -583,8 +583,8 @@ static EXPOSURE_LEVEL_INCREMENTS: &[(i64, &str)] = &[(33, "1/3 EV"), (50, "1/2 E
 /// Decodes tag 0x0010 when it holds a `CameraInfo2` block.
 ///
 /// Returns `false` when the byte count belongs to one of the sibling tables
-/// (`CameraInfo`, `CameraInfo3`) this module does not implement, so the caller
-/// leaves the tag alone rather than decoding it with the wrong layout.
+/// (`CameraInfo`, `CameraInfo3`), so the caller tries those in turn rather
+/// than decoding the tag with the wrong layout.
 pub fn extract_camera_info2(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
     if !CAMERA_INFO2_COUNTS.contains(&data.len()) {
         return false;
@@ -594,6 +594,31 @@ pub fn extract_camera_info2(data: &[u8], tags: &mut HashMap<String, String>) -> 
     if let Some(spec) = data.get(..8).and_then(print_lens_spec) {
         tags.insert("Sony:LensSpec".to_string(), spec);
     }
+    true
+}
+
+/// Decodes the bounded `CameraInfo3` field needed by the 15360-byte A-mount
+/// layout.  The length and model gate are the `Sony::Main` / `CameraInfo3`
+/// conditions from Sony.pm:718-742 and 3015-3020 respectively.
+pub fn extract_camera_info3(
+    data: &[u8],
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) -> bool {
+    if data.len() != 15360 {
+        return false;
+    }
+    if matches!(model.unwrap_or(""), "DSLR-A450" | "DSLR-A500" | "DSLR-A550") {
+        return true;
+    }
+    let Some(raw) = data.get(0x10..0x12) else {
+        return true;
+    };
+    let focal_length = f64::from(u16::from_le_bytes([raw[0], raw[1]])) * 2.0 / 3.0;
+    tags.insert(
+        "Sony:FocalLengthTeleZoom".to_string(),
+        format!("{focal_length:.1} mm"),
+    );
     true
 }
 
@@ -643,6 +668,136 @@ pub fn extract_focus_info(
             "Sony:TiffMeteringImage".to_string(),
             "(Binary data 7404 bytes, use -b option to extract)".to_string(),
         );
+    }
+    true
+}
+
+// ============================================================================
+// MoreInfo / MoreSettings (tag 0x0020, count 20480)
+// ============================================================================
+
+/// Decodes `MoreSettings` (block id 1) in Sony's little-endian `MoreInfo`
+/// offset directory.
+pub fn extract_more_info(
+    data: &[u8],
+    model: Option<&str>,
+    tags: &mut HashMap<String, String>,
+) -> bool {
+    let reader = EndianReader::little_endian(data);
+    let (Some(entry_count), Some(declared_len)) = (reader.u16_at(0), reader.u16_at(2)) else {
+        return false;
+    };
+    let entry_count = usize::from(entry_count);
+    let len = usize::from(declared_len).min(data.len());
+    if entry_count > 50 || len < 4 + entry_count * 4 {
+        return false;
+    }
+
+    let entries: Vec<(u16, usize)> = (0..entry_count)
+        .filter_map(|index| {
+            let pos = 4 + index * 4;
+            Some((reader.u16_at(pos)?, usize::from(reader.u16_at(pos + 2)?)))
+        })
+        .collect();
+    let Some((_, start)) = entries.iter().find(|(id, _)| *id == 1) else {
+        return true;
+    };
+    if *start >= len {
+        return true;
+    }
+    let end = entries
+        .iter()
+        .map(|(_, offset)| *offset)
+        .filter(|offset| *offset > *start && *offset <= len)
+        .min()
+        .unwrap_or(len);
+    let block = &data[*start..end];
+    let model = model.unwrap_or("");
+    let early_a_mount = matches!(model, "DSLR-A450" | "DSLR-A500" | "DSLR-A550");
+    let later_a_mount = matches!(model, "DSLR-A560" | "DSLR-A580")
+        || model.starts_with("SLT-A")
+        || matches!(model, "NEX-C3" | "NEX-VG10" | "NEX-VG10E");
+    if !early_a_mount && !later_a_mount {
+        return true;
+    }
+
+    if early_a_mount && let Some(raw) = block.get(0x1a..0x1e) {
+        let red = u16::from_be_bytes([raw[0], raw[1]]);
+        let blue = u16::from_be_bytes([raw[2], raw[3]]);
+        tags.insert(
+            "Sony:CustomWB_RBLevels".to_string(),
+            format!("{red} {blue}"),
+        );
+    }
+    if early_a_mount && let Some(raw) = block.get(0x24..0x26) {
+        let value = f64::from(i16::from_le_bytes([raw[0], raw[1]])) / 8.0;
+        let printed = if value == 0.0 {
+            "0".to_string()
+        } else {
+            format!("{value:+.1}")
+        };
+        tags.insert("Sony:ExposureCompensation2".to_string(), printed);
+    }
+    if early_a_mount && let Some(&raw) = block.get(0x23) {
+        // Sony.pm:3806-3813: each 16 raw steps doubles the focal length.
+        let focal_length = 10.0 * 2f64.powf((f64::from(raw) - 28.0) / 16.0);
+        tags.insert(
+            "Sony:FocalLength2".to_string(),
+            format!("{focal_length:.1} mm"),
+        );
+    }
+    if early_a_mount && let Some(raw) = block.get(0x26..0x28) {
+        // Sony.pm:3850-3859: signed little-endian eighth-EV value.
+        let value = f64::from(i16::from_le_bytes([raw[0], raw[1]])) / 8.0;
+        let printed = if value == 0.0 {
+            "0".to_string()
+        } else {
+            format!("{value:+.1}")
+        };
+        tags.insert("Sony:FlashExposureCompSet2".to_string(), printed);
+    }
+    if early_a_mount && let Some(&raw) = block.get(0x29) {
+        tags.insert("Sony:FocusPosition2".to_string(), raw.to_string());
+    }
+    if early_a_mount && let Some(value) = block.get(0x28) {
+        let printed = match value {
+            1 => Some("Horizontal (normal)"),
+            2 => Some("Rotate 180"),
+            6 => Some("Rotate 90 CW"),
+            8 => Some("Rotate 270 CW"),
+            _ => None,
+        };
+        if let Some(printed) = printed {
+            tags.insert("Sony:Orientation2".to_string(), printed.to_string());
+        }
+    }
+    // MoreSettings' 0x20 and 0x7c are model-overlapping alternatives: Sony.pm
+    // defines these arms for the A560/A580, SLT-Axx and NEX-C3/VG10 bodies
+    // (0x20 `$$self{Model} !~ /^NEX-(3|5|5C)/` after the A450/A500/A550
+    // FNumber arm; 0x7c `!~ /^NEX-(3|5|5C)|DSLR-(A450|A500|A550)/`).
+    if later_a_mount {
+        if let Some(value) = block.get(0x20) {
+            let printed = match value {
+                0 => Some("n/a"),
+                1 => Some("Phase-detect AF"),
+                2 => Some("Contrast AF"),
+                _ => None,
+            };
+            if let Some(printed) = printed {
+                tags.insert("Sony:LiveViewAFMethod".to_string(), printed.to_string());
+            }
+        }
+        if let Some(value) = block.get(0x7c) {
+            let printed = match value {
+                136 => Some("Did not fire"),
+                167 => Some("Fired"),
+                182 => Some("Fired, HSS"),
+                _ => None,
+            };
+            if let Some(printed) = printed {
+                tags.insert("Sony:FlashActionExternal".to_string(), printed.to_string());
+            }
+        }
     }
     true
 }
