@@ -39,13 +39,19 @@ EVIDENCE_DIR="$EVIDENCE_ROOT/oxidex-release-${TAG}-${RUN_ID}"
 test ! -e "$EVIDENCE_DIR"
 mkdir -p "$EVIDENCE_DIR"
 CANDIDATE_SHA=$(git rev-parse --verify 'HEAD^{commit}')
+CANDIDATE_CARGO_TARGET_DIR="$EVIDENCE_DIR/cargo-target-candidate"
+test ! -e "$CANDIDATE_CARGO_TARGET_DIR"
+mkdir "$CANDIDATE_CARGO_TARGET_DIR"
+printf '%s\n' "$CANDIDATE_CARGO_TARGET_DIR" | tee "$EVIDENCE_DIR/candidate-cargo-target.txt"
 git show --no-patch --format=fuller "$CANDIDATE_SHA" | tee "$EVIDENCE_DIR/candidate.txt"
 git status --porcelain=v1 | tee "$EVIDENCE_DIR/status.txt"
 ```
 
 Require a clean tree. Record the full SHA and evidence directory in every
 receipt and log; `HEAD`, "tip", branch names, and abbreviated SHAs are not
-release identities.
+release identities. Record `CANDIDATE_CARGO_TARGET_DIR` in the receipt and use
+it only for this release run's candidate worktree; the shared lock permits
+concurrent builds and does not provide artifact isolation.
 
 ## 2. Complete version inventory
 
@@ -58,18 +64,42 @@ set -euo pipefail
 cargo metadata --no-deps --format-version 1 \
   | jq -S '{workspace_members, packages: [.packages[] | {name, version, manifest_path}]}' \
   | tee "$EVIDENCE_DIR/workspace-versions.json"
-VERSION_RE=${VERSION//./\\.}
-rg -n --hidden -g '!target' -g '!.git' \
-  "$VERSION_RE|v$VERSION_RE|\[package\]|^version\s*=|VERSION|__version__" \
-  Cargo.toml Cargo.lock oxidex-tags* packaging bindings src docs CHANGELOG.md README.md \
-  .github justfile | tee "$EVIDENCE_DIR/version-references.txt"
+```
+
+Search every tracked text file for version literals independently of the new
+`VERSION`. This includes older release/archive URLs, prose, packaging and
+dependency pins; a search for only the requested version misses stale values.
+
+```bash
+set -euo pipefail
+VERSION_LITERAL_RE='(^|[^[:alnum:]_])[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?'
+git grep -n -I -E "$VERSION_LITERAL_RE" -- . \
+  | tee "$EVIDENCE_DIR/version-literals.txt"
+```
+
+Also inventory computed/field-based version sources and validate the tag:
+
+```bash
+set -euo pipefail
+git grep -n -I -E '\[package\]|version[[:space:]]*=|VERSION|__version__' -- . \
+  | tee "$EVIDENCE_DIR/version-fields.txt"
 python3 tools/ci/release_version.py --tag "$TAG" --cargo-toml Cargo.toml \
   | tee "$EVIDENCE_DIR/release-version.txt"
 ```
 
-Review the results against the packaging decision and documentation receipt.
-Do not silently normalize independent package versions or count dependency
-versions in `Cargo.lock` as release versions.
+Reconcile every hit in `version_inventory` against the packaging decision and
+documentation receipt. Record path/line, literal, kind (OxiDex package,
+user-facing release, independent package, dependency or unrelated numeric
+literal), disposition (`current`, `historical`, `independent` or `excluded`),
+reason and supporting evidence. Unresolved hits block completion. Current
+OxiDex versions must equal `VERSION`; historical references need visible
+historical context. Exclusions require an explicit scope reason. For example,
+`packaging/homebrew/oxidex.rb` contains a `v0.1.0.tar.gz` archive URL and a
+placeholder checksum: inventory it and decide whether that packaging is in
+scope; neither automatic replacement nor a claim of a published formula is
+justified by finding it. Keep dependency pins, including those in `Cargo.lock`,
+separate from OxiDex release versions; preserve intentional independent crate
+versions and retain the excluded/dependency hit list for audit.
 
 ## 3. Receipt compatibility
 
@@ -109,7 +139,7 @@ each command, exit code, candidate SHA, log path, and tool version in `gates`.
 
 ```bash
 set -euo pipefail
-CARGO_TARGET_DIR=/Users/allen/git/codex-release-engineering-skills-target \
+CARGO_TARGET_DIR="$CANDIDATE_CARGO_TARGET_DIR" \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   "$EVIDENCE_DIR/ci-standard.log" -- just ci-standard
 python3 -m unittest tools.ci.test_release_workflow -v \

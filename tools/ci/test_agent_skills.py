@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -212,6 +214,69 @@ class SkillMirrorTests(unittest.TestCase):
             "do not move",
         ):
             self.assertIn(phrase, text)
+
+    def test_candidate_gates_use_recorded_release_specific_cargo_target(self):
+        text = canonical("oxidex-release-finalization", "references/gates.md")
+        self.assertNotIn("codex-release-engineering-skills-target", text)
+        for required in (
+            'CANDIDATE_CARGO_TARGET_DIR="$EVIDENCE_DIR/cargo-target-candidate"',
+            'test ! -e "$CANDIDATE_CARGO_TARGET_DIR"',
+            '"$EVIDENCE_DIR/candidate-cargo-target.txt"',
+            'CARGO_TARGET_DIR="$CANDIDATE_CARGO_TARGET_DIR"',
+        ):
+            self.assertIn(required, text)
+
+    def test_version_inventory_finds_old_archive_and_prose_versions(self):
+        snippets = bash_snippets("oxidex-release-finalization", "references/gates.md")
+        inventory = next((s for s in snippets if "VERSION_LITERAL_RE=" in s), "")
+        self.assertTrue(inventory, "version inventory must search independently of VERSION")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "evidence").mkdir()
+            (root / "formula.rb").write_text(
+                'url "https://example.test/archive/refs/tags/v0.1.0.tar.gz"\n',
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("Install OxiDex 1.7.9 today.\n", encoding="utf-8")
+            (root / "Cargo.toml").write_text('[dependencies]\nexample = "3.4.5"\n', encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "add", "formula.rb", "README.md", "Cargo.toml"], cwd=root, check=True)
+            result = subprocess.run(
+                ["bash", "-c", inventory], cwd=root, text=True, capture_output=True,
+                env={**os.environ, "VERSION": "2.0.0-beta.1", "EVIDENCE_DIR": str(root / "evidence")},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            evidence = (root / "evidence/version-literals.txt").read_text(encoding="utf-8")
+            for literal in ("v0.1.0.tar.gz", "1.7.9", "3.4.5"):
+                self.assertIn(literal, evidence)
+
+    def test_downloaded_macos_payloads_require_run_provenance_and_identity(self):
+        text = canonical("oxidex-release-finalization", "references/github-release-and-macos.md")
+        for required in (
+            'actions/runs/$RELEASE_RUN_ID/artifacts',
+            '.workflow_run.id == $run', '.workflow_run.head_sha == $sha',
+            'gh run download "$RELEASE_RUN_ID"',
+            'cmp "$MAC_BIN" "$RUN_MAC_BIN"', 'cmp "$DMG" "$RUN_DMG"',
+            'mktemp -d "$EVIDENCE_DIR/dmg-mount.XXXXXX"',
+            'hdiutil attach -readonly', '-mountpoint "$DMG_MOUNT"',
+            'trap cleanup_macos_mount EXIT', 'hdiutil detach "$DMG_MOUNT"',
+            'rmdir "$DMG_MOUNT"', 'macos-cleanup.log',
+            'codesign --verify --strict --verbose=4 "$MAC_DMG_PAYLOAD"',
+            'spctl --assess --type execute --verbose=4 "$MAC_DMG_PAYLOAD"',
+            'test "$MAC_BIN_SHA256" = "$DMG_PAYLOAD_SHA256"',
+            '"$MAC_BIN" --version', '"$MAC_DMG_PAYLOAD" --version',
+            '"oxidex $VERSION"',
+        ):
+            self.assertIn(required, text)
+
+    def test_release_comparison_tests_scope_panic_override_to_test_invocation(self):
+        text = canonical("exiftool-parity", "references/harnesses.md")
+        self.assertIn(
+            "CARGO_PROFILE_RELEASE_PANIC=unwind cargo test --release --features exiftool-comparison -- --nocapture",
+            text,
+        )
+        self.assertNotIn("export CARGO_PROFILE_RELEASE_PANIC", text)
+        self.assertNotRegex(text, r"CARGO_PROFILE_RELEASE_PANIC=unwind[^\n]*cargo build")
 
     def test_release_documentation_contract(self):
         skill = REPO / ".claude/skills/oxidex-release-documentation"
