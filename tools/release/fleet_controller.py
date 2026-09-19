@@ -378,7 +378,7 @@ def _parse_file_lease(section: str) -> list[str]:
         return []
     paths: list[str] = []
     for line in files_match.group(1).splitlines():
-        match = re.match(r"\s*-\s+(?:Create|Modify|Delete|Test):\s+`([^`]+)`", line)
+        match = re.match(r"\s*-\s+(?:Add|Create|Modify|Delete|Test):\s+`([^`]+)`", line)
         if match:
             paths.append(match.group(1))
     return sorted(set(paths))
