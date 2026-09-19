@@ -677,7 +677,10 @@ selects the newest process record and refuses `--last`.
 - `oracle-lock.json` pins Perl 5.38.2 source SHA-256
   `a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e`,
   Archive-Zip 1.68 SHA-256
-  `65089896661884077a90a17515153a2108a6a86ba6d69b02632cc201345a277e`,
+  `984e185d785baf6129c6e75f8eb44411745ac00bf6122fb1c8e822a3861ec650`
+  (the digest published in the CPAN author
+  [`CHECKSUMS`](https://cpan.metacpan.org/authors/id/P/PH/PHRED/CHECKSUMS)
+  file for the 163,490-byte `Archive-Zip-1.68.tar.gz` artifact),
   and ExifTool tag object `2200871d9cef988051d2a99d67df3bda6cbb30a8`.
 - `fleet_controller.py init|materialize|event|checkpoint|reconcile|recover|
   launch|monitor|status|heartbeat|resume|stop` validates the task DAG and
