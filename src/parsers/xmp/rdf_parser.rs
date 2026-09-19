@@ -820,11 +820,19 @@ fn parse_xmp_packet(
         if !legacy.has(&legacy_tag) {
             legacy.push(&legacy_tag, tag, &values.join(", "));
         }
+        // A nested `rdf:Description` / `rdf:parseType="Resource"` item can
+        // leave an earlier pass with only the first `rdf:li` as a scalar
+        // (SamsungGalaxyS25Ultra.jpg's GContainer:Directory). Keep the list
+        // transport even then (origin/main a5fdaf48).
+        // If results already has this tag from extract_artwork_title_values (a
+        // LangAlt property), it must remain a scalar string in each language,
+        // never a list of all languages.
+        let is_artwork_title = tag.starts_with("XMP-iptcExt:ArtworkTitle");
+        if values.len() > 1 && !is_artwork_title {
+            list_elements.retain(|(existing, _)| existing != tag);
+            list_elements.push((tag.clone(), values.clone()));
+        }
         if !results.iter().any(|(t, _)| t == tag) {
-            if values.len() > 1 {
-                list_elements.retain(|(existing, _)| existing != tag);
-                list_elements.push((tag.clone(), values.clone()));
-            }
             results.push((tag.clone(), values.join(", ")));
         }
     }
@@ -843,6 +851,7 @@ fn parse_xmp_packet(
             continue;
         }
         if values.len() > 1 {
+            list_elements.retain(|(existing, _)| existing != &tag);
             list_elements.push((tag.clone(), values.clone()));
         }
         results.push((tag, values.join(", ")));
@@ -875,9 +884,20 @@ fn parse_xmp_packet(
     // group rather than `XMP` (`Google::HDRPlusMakerNote`'s `GROUPS => { 0
     // => 'MakerNotes' }`), so decode it here, before `format_xmp_value` gets
     // a chance to see -- and rewrite -- the raw base64 text.
+    //
+    // The older, text-framed version-2 stream is the same envelope under
+    // `GCamera:hdrp_makernote` (`HDRPMakerNote`), and its burst counters live
+    // in a separate protobuf-framed `GCamera:shot_log_data` property
+    // (`Google::ShotLogData`, `IsProtobuf`). Ported from origin/main ed2982e1.
     let raw_hdrp_makernote = results
         .iter()
-        .find(|(tag, _)| tag == "XMP-GCamera:HDRPlusMakerNote")
+        .find(|(tag, _)| {
+            tag == "XMP-GCamera:HDRPlusMakerNote" || tag == "XMP-GCamera:HDRPMakerNote"
+        })
+        .map(|(_, value)| value.clone());
+    let raw_hdrp_shot_log = results
+        .iter()
+        .find(|(tag, _)| tag == "XMP-GCamera:ShotLogData")
         .map(|(_, value)| value.clone());
 
     // Tactical carriage for Canon.pm:10145-10175's CalcSensorDiag: the
@@ -979,15 +999,46 @@ fn parse_xmp_packet(
         }
     }
 
-    if let Some(raw) = raw_hdrp_makernote {
-        for (tag, value) in super::google_hdrp::decode_hdrp_plus_makernote(&raw) {
-            if !formatted.iter().any(|(t, _)| *t == tag) {
-                entries.push(XmpEntry::plain(
-                    tag.clone(),
-                    XmpValue::Scalar(value.clone()),
-                ));
-                formatted.push((tag, XmpValue::Scalar(value)));
-            }
+    let decoded_hdrp = raw_hdrp_makernote
+        .iter()
+        .flat_map(|raw| super::google_hdrp::decode_hdrp_plus_makernote(raw))
+        .chain(
+            raw_hdrp_shot_log
+                .iter()
+                .flat_map(|raw| super::google_hdrp::decode_hdrp_shot_log_data(raw)),
+        );
+    for (tag, value) in decoded_hdrp {
+        if !formatted.iter().any(|(t, _)| *t == tag) {
+            entries.push(XmpEntry::plain(
+                tag.clone(),
+                XmpValue::Scalar(value.clone()),
+            ));
+            formatted.push((tag, XmpValue::Scalar(value)));
+        }
+    }
+
+    // Google Depth's `Device:Container/Container:Directory` is a sequence of
+    // `rdf:li` records, each wrapping its Item fields in an `rdf:value`.
+    // ExifTool reports those fields once per record as duplicate tags, not
+    // as one list, and the primary (un-Copy'd) value is the first record's --
+    // GooglePixel4a.jpg: `ContainerDirectoryDataURI` is `primary_image`, with
+    // `android/original_image` etc. as Copy1..3. Keep that primary record
+    // rather than a List. Narrow on purpose: these three tags, as in
+    // origin/main 8a264d7e, re-expressed on the family-1 keys.
+    for (tag, value) in formatted
+        .iter_mut()
+        .map(|(tag, value)| (tag.as_str(), value))
+        .chain(entries.iter_mut().map(|e| (e.tag.as_str(), &mut e.value)))
+    {
+        if matches!(
+            tag,
+            "XMP-Device:ContainerDirectoryMime"
+                | "XMP-Device:ContainerDirectoryLength"
+                | "XMP-Device:ContainerDirectoryDataURI"
+        ) && let XmpValue::List(values) = value
+            && let Some(first) = values.first().cloned()
+        {
+            *value = XmpValue::Scalar(first);
         }
     }
 

@@ -11,13 +11,9 @@
 //! `src/parsers/tiff/makernotes` for exactly this reason (see
 //! `tiff/makernote_dispatcher.rs` and `tiff/makernotes/mod.rs`).
 //!
-//! Only the scalar device/app identification fields are decoded here
-//! (`Google.pm:547-561` plus `FrameCount`/`CreateDate` at `9-3`/`9-36-1`).
-//! The large binary payloads under the same table (`ImageData`,
-//! `TimeLogText`, `SummaryText`, per-frame `PayloadFrame*`, ...) are left
-//! unimplemented -- getting their exact ExifTool-reported byte counts and
-//! binary framing right is a separate, larger effort, and a wrong value
-//! under a real tag name is worse than an absent tag.
+//! This implements the named scalar HDRP fields exercised by the pinned
+//! corpus.  Unknown protobuf records deliberately remain absent: a plausible
+//! value under a real ExifTool tag name is worse than no value at all.
 
 use std::io::Read;
 
@@ -31,12 +27,48 @@ use std::io::Read;
 /// format handled by a different, unimplemented code path), or fails to
 /// decrypt/gunzip -- rather than fabricating a value.
 pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
+    let Some(decoded) = decode_base64_flexible(raw_value) else {
+        return Vec::new();
+    };
+    decode_hdrp_makernote_bytes(&decoded)
+}
+
+/// Decodes the raw bytes of an Exif `MakerNoteGoogle` (`HDRP\\x02` or
+/// `HDRP\\x03`).  Google uses the identical encrypted envelope for its XMP
+/// `HdrPlusMakernote` property and for the TIFF MakerNote selected by
+/// `MakerNotes.pm`'s `MakerNoteGoogle` condition, so keeping the cryptographic
+/// and text/protobuf decoding in one place prevents the two entry points from
+/// drifting.
+pub fn decode_hdrp_makernote_bytes(raw: &[u8]) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let Some(inflated) = decrypt_and_inflate(raw_value) else {
+    let Some((version, inflated)) = decrypt_and_inflate(raw) else {
         return out;
     };
 
+    if version == 2 {
+        return decode_hdrp_v2_text(&inflated);
+    }
+    if version != 3 {
+        return out;
+    }
+
     let top = parse_fields(&inflated);
+
+    // `1-1`/`1-2`: the named finished-image records (Google.pm:526-527).
+    // ImageData is Binary => 1, so ExifTool renders its decoded byte length.
+    if let Some(Field::Bytes(sub1)) = last_field(&top, 1) {
+        let f1 = parse_fields(sub1);
+        push_string_field(&f1, 1, "MakerNotes:ImageName", &mut out);
+        if let Some(Field::Bytes(bytes)) = last_field(&f1, 2) {
+            out.push((
+                "MakerNotes:ImageData".to_string(),
+                format!(
+                    "(Binary data {} bytes, use -b option to extract)",
+                    bytes.len()
+                ),
+            ));
+        }
+    }
 
     // `9-36-1`: HDR-Plus frame CreateDate (Google.pm:539-546).
     if let Some(Field::Bytes(sub9)) = last_field(&top, 9) {
@@ -65,27 +97,88 @@ pub fn decode_hdrp_plus_makernote(raw_value: &str) -> Vec<(String, String)> {
         push_string_field(&f12, 4, "MakerNotes:DeviceHardwareRevision", &mut out);
         push_string_field(&f12, 6, "MakerNotes:HDRPSoftware", &mut out);
         push_string_field(&f12, 7, "MakerNotes:AndroidRelease", &mut out);
+        // `12-8`: Unix milliseconds, PrintConv => ConvertDateTime
+        // (Google.pm:554-559). The protobuf value is integral milliseconds,
+        // and the source table's precision is three decimal places.
+        if let Some(Field::Varint(millis)) = last_field(&f12, 8) {
+            if let Ok(millis) = i64::try_from(*millis)
+                && let Some(utc) = chrono::DateTime::from_timestamp_millis(millis)
+            {
+                out.push((
+                    "MakerNotes:SoftwareDate".to_string(),
+                    utc.with_timezone(&chrono::Local)
+                        .format("%Y:%m:%d %H:%M:%S%.3f%:z")
+                        .to_string(),
+                ));
+            }
+        }
         push_string_field(&f12, 9, "MakerNotes:Application", &mut out);
         push_string_field(&f12, 10, "MakerNotes:AppVersion", &mut out);
+
+        // `12-12-*`, `12-13-*`, and `12-14` are protobuf fixed32 floats.
+        // ExifTool widens the f32 and stringifies the resulting Perl NV with
+        // `%.15g`; keep that exact rendering through the shared formatter.
+        if let Some(Field::Bytes(exposure)) = last_field(&f12, 12) {
+            let exposure = parse_fields(exposure);
+            push_f32_field(
+                &exposure,
+                1,
+                "MakerNotes:ExposureTimeMin",
+                1.0 / 1000.0,
+                &mut out,
+            );
+            push_f32_field(
+                &exposure,
+                2,
+                "MakerNotes:ExposureTimeMax",
+                1.0 / 1000.0,
+                &mut out,
+            );
+        }
+        if let Some(Field::Bytes(iso)) = last_field(&f12, 13) {
+            let iso = parse_fields(iso);
+            push_f32_field(&iso, 1, "MakerNotes:ISOMin", 1.0, &mut out);
+            push_f32_field(&iso, 2, "MakerNotes:ISOMax", 1.0, &mut out);
+        }
+        push_f32_field(&f12, 14, "MakerNotes:MaxAnalogISO", 1.0, &mut out);
     }
 
+    out
+}
+
+/// Extracts the two scalar fields in `Google::ShotLogData` (Google.pm:576-577).
+/// This is a separate HDRP v3 property in v2-era Pixel XMP packets.
+pub fn decode_hdrp_shot_log_data(raw_value: &str) -> Vec<(String, String)> {
+    // `ShotLogData` is marked `IsProtobuf` by the table, so ExifTool parses
+    // it as protobuf even when its enclosing HDRP stream is version 2.
+    let Some(decoded) = decode_base64_flexible(raw_value) else {
+        return Vec::new();
+    };
+    let Some((_, inflated)) = decrypt_and_inflate(&decoded) else {
+        return Vec::new();
+    };
+    let fields = parse_fields(&inflated);
+    let mut out = Vec::new();
+    if let Some(Field::Varint(n)) = last_field(&fields, 2) {
+        out.push(("MakerNotes:MeteringFrameCount".to_string(), n.to_string()));
+    }
+    if let Some(Field::Varint(n)) = last_field(&fields, 3) {
+        out.push((
+            "MakerNotes:OriginalPayloadFrameCount".to_string(),
+            n.to_string(),
+        ));
+    }
     out
 }
 
 /// Base64-decodes, decrypts, and gunzips a `HdrPlusMakernote` value,
 /// mirroring `Google::ProcessHDRP` (Google.pm:670-780). Returns `None` on
 /// any failure, or if the decoded version isn't 3 (protobuf-framed).
-fn decrypt_and_inflate(raw_value: &str) -> Option<Vec<u8>> {
-    let decoded = decode_base64_flexible(raw_value)?;
+fn decrypt_and_inflate(decoded: &[u8]) -> Option<(u8, Vec<u8>)> {
     if decoded.len() < 5 || &decoded[0..4] != b"HDRP" {
         return None;
     }
     let version = decoded[4];
-    if version != 3 {
-        // Version 2 is the older text-based HDRPMakerNote format
-        // (`ProcessHDRPMakerNote`, Google.pm:630-663) -- not implemented.
-        return None;
-    }
 
     let mut payload = decoded[5..].to_vec();
     let pad = (8 - (payload.len() % 8)) % 8;
@@ -118,7 +211,167 @@ fn decrypt_and_inflate(raw_value: &str) -> Option<Vec<u8>> {
     let mut gz = flate2::read::GzDecoder::new(&payload[..]);
     let mut buf = Vec::new();
     gz.read_to_end(&mut buf).ok()?;
-    Some(buf)
+    Some((version, buf))
+}
+
+/// Tag names from `%Image::ExifTool::Google::HDRPMakerNote` (Google.pm:
+/// 591-615), keyed by the heading text `ProcessHDRPMakerNote` uses as the tag
+/// ID. Every named entry is `Binary => 1`.
+const V2_TABLE: &[(&[u8], &str)] = &[
+    (b"InitParams", "InitParamsText"),
+    (b"Logging metadata", "LoggingMetadataText"),
+    (b"Merged image", "MergedImage"),
+    (b"Finished image", "FinishedImage"),
+    (b"Payload frame", "PayloadFrame"),
+    (b"Payload metadata", "PayloadMetadataText"),
+    (b"ShotLogData", "ShotLogDataText"),
+    (b"ShotParams", "ShotParamsText"),
+    (b"StaticMetadata", "StaticMetadataText"),
+    (b"Summary", "SummaryText"),
+    (b"Time log", "TimeLogText"),
+    (b"Unused logging metadata", "UnusedLoggingMetadata"),
+    (b"Rectiface", "RectifaceText"),
+    (b"GoudaRequest", "GoudaRequestText"),
+];
+
+/// A port of `ProcessHDRPMakerNote` (Google.pm:630-663), the text-framed
+/// version-2 HDRP stream. Ported from origin/main ed2982e1/f6d86743/a5fdaf48
+/// and re-expressed as a line-for-line transcription of the Perl loop, so
+/// that segmentation, the inline-value rule and `ProcessingNotes` follow
+/// ExifTool rather than a fixed list of observed strings.
+///
+/// Every line matching `^ ?([A-Z].*)$` is a heading. A heading that has
+/// neither a `:` nor is a single `\w+` word is a `ProcessingNotes` value. A
+/// heading `Name: value` (or `Name (base64): value`) is a one-line tag; a
+/// bare `Name` or `Name:` owns every byte up to the next heading's text.
+///
+/// What is reported: the table's named (all `Binary`) tags as ExifTool's
+/// binary placeholder, `ProcessingNotes`, and the `MakeTagInfo`-named
+/// `Payload frame N (base64)` tags, whose decoded bytes ExifTool also prints
+/// as binary. Any other heading ExifTool would name through `MakeTagInfo`
+/// stays absent: its printed form (text or binary) depends on the value's
+/// bytes in a way not modelled here, and an absent tag beats a guessed one.
+///
+/// ExifTool keeps the last of a repeated tag as the primary value, so the
+/// returned list holds one entry per tag, carrying the last value seen.
+fn decode_hdrp_v2_text(data: &[u8]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut emit = |name: String, value: String| {
+        let tag = format!("MakerNotes:{name}");
+        out.retain(|(existing, _)| *existing != tag);
+        out.push((tag, value));
+    };
+    let handle = |id: &[u8], value: &[u8], emit: &mut dyn FnMut(String, String)| {
+        if let Some((_, name)) = V2_TABLE.iter().find(|(tid, _)| *tid == id) {
+            emit((*name).to_string(), binary_placeholder(value.len()));
+        } else if let Some(name) = payload_frame_name(id) {
+            emit(name, binary_placeholder(value.len()));
+        }
+    };
+
+    let mut search = 0usize; // Perl's pos($$dataPt) for the heading regex
+    let mut pos = 0usize; // `$pos`: end of the heading owning the value
+    let mut tag: Option<Vec<u8>> = None;
+    loop {
+        let heading = next_v2_heading(data, search);
+        let (end, last) = match heading {
+            Some((start, line_end)) => {
+                search = line_end;
+                (start, false)
+            }
+            None => (data.len(), true),
+        };
+        if let Some(id) = tag.take() {
+            let from = pos + 1;
+            // `last if $len <= 0; # (just to be safe)`
+            if end <= from {
+                break;
+            }
+            handle(&id, &data[from..end], &mut emit);
+        }
+        if last {
+            break;
+        }
+        let (start, line_end) = heading.expect("not last");
+        let text = &data[start..line_end];
+        let is_word = text.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_');
+        if !text.contains(&b':') && !is_word {
+            emit(
+                "ProcessingNotes".to_string(),
+                String::from_utf8_lossy(text).into_owned(),
+            );
+            continue;
+        }
+        pos = line_end;
+        // `$tag =~ s/( \(base64\))?: ?(.*)//`: the first `:`, with an
+        // optional ` (base64)` in front of it, ends the tag ID.
+        let mut id = text.to_vec();
+        if let Some(colon) = text.iter().position(|b| *b == b':') {
+            let base64 = text[..colon].ends_with(b" (base64)");
+            id.truncate(if base64 { colon - 9 } else { colon });
+            let mut value = &text[colon + 1..];
+            if value.first() == Some(&b' ') {
+                value = &value[1..];
+            }
+            // `and $2`: Perl truth, so an empty value or "0" falls through
+            // to the multi-line form.
+            if !value.is_empty() && value != b"0" {
+                if base64 {
+                    if let Some(bytes) = std::str::from_utf8(value)
+                        .ok()
+                        .and_then(decode_base64_flexible)
+                    {
+                        handle(&id, &bytes, &mut emit);
+                    }
+                } else {
+                    handle(&id, value, &mut emit);
+                }
+                continue;
+            }
+        }
+        tag = Some(id);
+    }
+    out
+}
+
+/// Finds the next `^ ?([A-Z].*)$` match (`/mg`) at or after `from`,
+/// returning the offsets of `$1` and of the end of its line.
+fn next_v2_heading(data: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut line_start = from;
+    // `^` under /m matches at the start of the string or after a newline.
+    if line_start != 0 && data.get(line_start - 1) != Some(&b'\n') {
+        line_start = line_start + data[line_start..].iter().position(|b| *b == b'\n')? + 1;
+    }
+    while line_start < data.len() {
+        let line_end = data[line_start..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(data.len(), |n| line_start + n);
+        let mut start = line_start;
+        if data.get(start) == Some(&b' ') {
+            start += 1;
+        }
+        if data.get(start).is_some_and(u8::is_ascii_uppercase) && start < line_end {
+            return Some((start, line_end));
+        }
+        line_start = line_end + 1;
+    }
+    None
+}
+
+/// The name `HandleTag(..., MakeTagInfo => 1)` gives a `Payload frame N`
+/// tag ID (ExifTool.pm:9311-9316): words capitalised after a non-letter,
+/// illegal characters removed -- `Payload frame 07` -> `PayloadFrame07`.
+fn payload_frame_name(id: &[u8]) -> Option<String> {
+    let index = id.strip_prefix(b"Payload frame ")?;
+    if index.is_empty() || !index.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    Some(format!("PayloadFrame{}", std::str::from_utf8(index).ok()?))
+}
+
+fn binary_placeholder(len: usize) -> String {
+    format!("(Binary data {len} bytes, use -b option to extract)")
 }
 
 /// XORs the little-endian `u32` at `buf[offset..offset+4]` with `word`.
@@ -150,14 +403,16 @@ enum Field<'a> {
     Varint(u64),
     /// Wire type 2 (string, bytes, or embedded message).
     Bytes(&'a [u8]),
+    /// Wire type 5. Google HDRP uses these for its `float` fields.
+    Fixed32(u32),
 }
 
 /// Parses top-level Protobuf records from `data`, stopping (and keeping
 /// whatever was already decoded) at the first malformed record rather than
 /// guessing at a resync point. Only wire types 0 (varint) and 2
 /// (length-delimited) are needed for the fields this module reads; a
-/// fixed32/fixed64 record is skipped over (kept out of the result) since
-/// none of the target fields use them.
+/// fixed64 records are skipped. Fixed32 is retained because Google HDRP's
+/// known exposure and ISO fields are protobuf `float`s.
 fn parse_fields(data: &[u8]) -> Vec<(u32, Field<'_>)> {
     let mut out = Vec::new();
     let mut pos = 0usize;
@@ -198,6 +453,12 @@ fn parse_fields(data: &[u8]) -> Vec<(u32, Field<'_>)> {
                 if pos + 4 > data.len() {
                     break;
                 }
+                out.push((
+                    id,
+                    Field::Fixed32(u32::from_le_bytes(
+                        data[pos..pos + 4].try_into().expect("four-byte field"),
+                    )),
+                ));
                 pos += 4;
             }
             _ => break, // deprecated group start/end (3/4) or invalid type
@@ -246,9 +507,74 @@ fn push_string_field(
     }
 }
 
+fn push_f32_field(
+    fields: &[(u32, Field<'_>)],
+    id: u32,
+    tag: &str,
+    scale: f64,
+    out: &mut Vec<(String, String)>,
+) {
+    if let Some(Field::Fixed32(bits)) = last_field(fields, id) {
+        let value = f64::from(f32::from_bits(*bits)) * scale;
+        out.push((
+            tag.to_string(),
+            crate::core::formatters::numeric_precision::perl_number(value),
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn v2(text: &str) -> Vec<(String, String)> {
+        decode_hdrp_v2_text(text.as_bytes())
+    }
+
+    /// Google.pm:630-663 on a synthetic stream: a bare heading owns the bytes
+    /// up to the next heading's text (including that heading's leading
+    /// space), `Name (base64): v` is one decoded line, an unknown one-line
+    /// heading ends the previous value and stays absent, and a sentence-like
+    /// heading is `ProcessingNotes` (the last one is the primary value).
+    #[test]
+    fn v2_text_follows_process_hdrp_makernote() {
+        let out = v2("InitParams\nabc\ndef\n Rectiface:\nxy\nNot a tag line.\n\
+             Payload frame 07 (base64): AAECAw==\nUnknownThing: 5\nzz\n\
+             Summary: inline\nignored\nLast note here.\n");
+        let get = |t: &str| {
+            out.iter()
+                .find(|(k, _)| k == &format!("MakerNotes:{t}"))
+                .map(|(_, v)| v.as_str())
+        };
+        // "abc\ndef\n " -- through the byte before `Rectiface`.
+        assert_eq!(
+            get("InitParamsText"),
+            Some("(Binary data 9 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            get("RectifaceText"),
+            Some("(Binary data 3 bytes, use -b option to extract)")
+        );
+        assert_eq!(
+            get("PayloadFrame07"),
+            Some("(Binary data 4 bytes, use -b option to extract)")
+        );
+        // Inline value: only "inline", not the following line.
+        assert_eq!(
+            get("SummaryText"),
+            Some("(Binary data 6 bytes, use -b option to extract)")
+        );
+        assert_eq!(get("ProcessingNotes"), Some("Last note here."));
+        assert!(get("UnknownThing").is_none());
+        assert_eq!(out.len(), 5);
+    }
+
+    /// `last if $len <= 0`: an empty multi-line value stops the scan.
+    #[test]
+    fn v2_empty_value_stops_the_scan() {
+        let out = v2("InitParams\nSummary: x\n");
+        assert!(out.is_empty(), "{out:?}");
+    }
 
     /// Round-trips the encryption in `decrypt_and_inflate` against its own
     /// inverse to pin the xorshift64* keystream and padding handling

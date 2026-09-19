@@ -3711,6 +3711,21 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
         return;
     }
 
+    // `MakerNoteGoogle` is selected by its `HDRP\x02`/`HDRP\x03` signature
+    // (see `claimed_before_samsung1a`), not by a numeric TIFF directory. Its
+    // encrypted/gzipped envelope is the one GCamera's XMP HDRP property uses,
+    // and Google.pm routes both through `ProcessHDRP` into the MakerNotes
+    // group, so decode it with the same code (ported from origin/main
+    // 47037a04).
+    if ctx.payload().starts_with(b"HDRP\x02") || ctx.payload().starts_with(b"HDRP\x03") {
+        for (tag, value) in
+            crate::parsers::xmp::google_hdrp::decode_hdrp_makernote_bytes(ctx.payload())
+        {
+            metadata.insert(tag, TagValue::String(value));
+        }
+        return;
+    }
+
     // Sigma reads the same context, but writes `MetadataMap` rather than the
     // `HashMap<String, String>` the dispatcher's trait returns: its
     // `PreviewImage` is binary and its `PreviewImageStart` an integer, neither
