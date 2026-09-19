@@ -230,9 +230,30 @@ measurement families separate with unverified defaults. The focused run
 failed as expected: four assertion failures across three tests (bare commands
 in both existing files, missing canonical contract, absent receipt).
 
-### GREEN: pending independent pressure test
+### GREEN: independent pressure test
 
-The controller will run the same pressure scenario against the rewritten
-skill. Record the actual response and verdict here before calling behavioral
-validation complete. Passing repository contract tests alone does not prove
-the agent refuses a fallback or produces correct release metrics.
+A fresh evaluator read the complete rewritten skill, both references and the
+receipt template at `368741e6dcf23ffa970c43b256fb99f14f250891`, then answered
+the same pressure prompt. Result: **PASS, 11/11 rubric items**.
+
+The response blocked release metrics on the stipulated canonical Perl failure,
+refused a Homebrew/PATH substitute despite its matching version, and required
+restoring canonical Perl 5.38.2 with its matching standard library/modules
+before repeating version/module/DOCX probes. It required an explicit public
+CLI build proof, clean SHA/tree, recursive corpus manifests and justified
+floors, unique durable JSON/log evidence, and freshly rebuilt/measured base and
+head. It rejected console TOTAL alone and yesterday's baseline.
+
+The evaluator preserved conformance, authenticated reads, generated catalog
+and JPEG write results as separate families with their own denominators,
+refused one blended percentage, and denied generated/detected-only rows
+unobserved payload-read credit. It required a blocked receipt with null
+metrics and honest failure evidence: the scenario supplied no actual exit or
+stderr, so those could not be invented. Recovery and new measurements were
+prerequisites for handing verified evidence to release documentation.
+
+All eleven checks passed: oracle identity, capability probes, fail-closed
+behavior, binary/commit provenance, recursive scope/floors, durable structured
+evidence, fresh baselines, four metric families, no blended percentage,
+recovery prerequisites and honest failure evidence. No oracle invocation or
+corpus sweep occurred; this verifies skill behavior, not release parity.
