@@ -15,11 +15,12 @@
 
 #![allow(dead_code)]
 
-use super::tag_occurrence::TagOccurrence;
+use super::tag_occurrence::{TagOccurrence, ValueChannel};
 use super::tag_sink::TagSink;
 use super::tag_value::TagValue;
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Uninterpreted metadata retained without inventing a public tag name or value.
@@ -479,6 +480,23 @@ impl MetadataMap {
         self.sink.occurrences()
     }
 
+    /// Every active occurrence in file order, paired with its lookup key and
+    /// the value projected through `channel`. Duplicate instances remain
+    /// distinct; tombstoned occurrences remain absent. Each value is borrowed
+    /// unless projection must compute the legacy APEX compatibility form.
+    pub fn project_occurrences(
+        &self,
+        channel: ValueChannel,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, Cow<'_, TagValue>)> {
+        self.sink.occurrences().map(move |occurrence| {
+            let key = match &occurrence.id {
+                oxidex_tags::TagId::Named(key) => key.as_str(),
+                oxidex_tags::TagId::Numeric(_) => occurrence.name.as_ref(),
+            };
+            (key, occurrence, occurrence.project(channel))
+        })
+    }
+
     /// How many occurrences this map has ever recorded, retired ones
     /// included. Positions `0..recorded_len()` are what
     /// [`active_occurrence`](Self::active_occurrence) accepts, and a later
@@ -746,6 +764,71 @@ impl IntoIterator for MetadataMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_occurrences_keeps_duplicate_order() {
+        use super::super::tag_occurrence::{Instance, ValueChannel};
+
+        let mut map = MetadataMap::new();
+        for (order, label) in [(0, "first"), (1, "second")] {
+            let mut occurrence = TagOccurrence::from_insert_shim(
+                "File:Comment",
+                TagValue::new_string(format!("{label} raw")),
+                order,
+            );
+            occurrence.value = Some(TagValue::new_string(format!("{label} typed")));
+            occurrence.print = Some(TagValue::new_string(format!("{label} printed")));
+            occurrence.priority = 0;
+            occurrence.instance = Instance::default();
+            map.sink.record("File:Comment".to_string(), occurrence);
+        }
+        map.insert("File:Retired", TagValue::new_string("gone"));
+        map.remove("File:Retired");
+
+        let projected: Vec<_> = map
+            .project_occurrences(ValueChannel::PrintConv)
+            .map(|(key, occurrence, value)| (key.to_string(), occurrence.order, value.into_owned()))
+            .collect();
+        assert_eq!(
+            projected,
+            vec![
+                (
+                    "File:Comment".to_string(),
+                    0,
+                    TagValue::new_string("first printed")
+                ),
+                (
+                    "File:Comment".to_string(),
+                    1,
+                    TagValue::new_string("second printed")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn warmed_renamed_occurrence_projection_uses_its_new_name() {
+        let mut source = MetadataMap::new();
+        source.insert("ExifIFD:ApertureValue", TagValue::Float(2.0));
+        let occurrence = source
+            .sink
+            .winner_occurrence("ExifIFD:ApertureValue")
+            .unwrap();
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(2.0)
+        );
+
+        let mut target = MetadataMap::new();
+        target.insert_renamed_occurrence("ExifIFD:ShutterSpeedValue".to_string(), occurrence);
+        assert_eq!(
+            target
+                .sink
+                .winner_projected("ExifIFD:ShutterSpeedValue", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Float(0.25))
+        );
+    }
 
     /// The two ways parsers copy a sub-map into the file's map -- `iter()`
     /// with clones, and consuming `for (k, v) in sub` -- both hand the tags
