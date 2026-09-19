@@ -102,8 +102,9 @@ Still required:
 - [ ] Finish the long-tail and remaining DJI/main ports: Nikon, Pentax,
       Panasonic, Kodak, Casio, HP, Ricoh, Samsung, MediaJukebox, Vivo, and any
       residual composite or XMP dependencies.
-- [ ] Decide whether autogeneration Step 2a typed values are a beta blocker.
-      Record the decision and rationale here.
+- [x] Treat autogeneration Step 2a typed values as a beta blocker for routes
+      promoted to the generated runtime; the detailed boundary is recorded in
+      section 2.4.
 - [ ] Re-run the main-divergence measurement against the latest candidate;
       replace the pre-port counts in
       `docs/reference/main-divergence-2026-09-18.md` with current facts or
@@ -119,6 +120,295 @@ Still required:
       observed reads, write coverage, and output conformance as separate
       metrics.
 
+### 2.1 Define the functional completion boundary
+
+The beta does not require every ExifTool Perl callback to be generated. It does
+require one explicit ownership model with no ambiguous overlap:
+
+- generated declarations own source-derived tag names, IDs, formats, layouts,
+  conditions, conversions, and enum maps that the generator can represent;
+- hand-written container walkers own format traversal and byte acquisition;
+- narrowly named residual handlers own only source constructs that the
+  generator explicitly refuses; and
+- the shared tag pipeline owns occurrence order, groups, stored values,
+  `ValueConv`, `PrintConv`, filtering, and output insertion.
+
+- [ ] Create a machine-readable ownership inventory for every enabled table.
+      Each field must be `generated`, `walker-owned`, `residual`, `refused`, or
+      `not applicable`; no field may silently fall between paths.
+- [ ] Make duplicate ownership a verification error. A generated arm and a
+      hand-written compatibility branch must not both claim the same source
+      tag unless a documented transition test proves why both are temporarily
+      required.
+- [ ] Make every refusal carry the source release, module/table/tag identity,
+      unsupported source expression or callback, and intended owning layer.
+- [ ] Define the beta blocker: all enabled routes must use the shared pipeline,
+      and every remaining hand path must be enumerated and tested. Complete
+      generation of every ExifTool format may continue after the beta.
+
+Current inventory snapshot at `67d58b95` (textual counts are navigation aids,
+not coverage measurements or automatic deletion targets):
+
+| Surface | Current observation | Required end state |
+|---|---:|---|
+| Generated conversion dispatch | `Exif::Main` only | Registry/codegen dispatches every enabled generated table |
+| `Exif::Main` conversion ledger | 551 generated / 17 refused / 29 not-conversion | Every refusal resolved or explicitly residual/walker-owned |
+| Generated helpers used by `Exif::Main` | 13 | Source-faithful helper library expands as tables require it |
+| `exiftool_compat.rs` `base_name` branches | 51 | Zero unowned post-hoc formatting branches |
+| Legacy `.insert(` textual matches under `src/` | 4,078 | Classified and migrated where they bypass the shared value pipeline |
+| Occurrence-aware insertion textual matches | 163 | The normal insertion path, with narrow documented adapters |
+| Conversion-capable engines | general, IFD, keyed, serial | One conversion pipeline behind walker-specific adapters |
+
+Recalculate these inventories with a checked-in script before using them as a
+release metric. A falling line count is not evidence of rising parity.
+
+### 2.2 Generalize generated conversion code beyond `Exif::Main`
+
+- [ ] Replace the hard-coded `Exif::Main` test in
+      `src/exiftool_tables/conv/mod.rs::decoder()` with a generated registry or
+      equivalent source-derived dispatch over every table with conversion
+      arms.
+- [ ] Generate one independently reviewable module/section and ledger per
+      ExifTool module/table, rather than adding a hand-maintained vendor
+      dictionary.
+- [ ] Preserve per-field mixed mode: supported fields execute generated arms;
+      refused fields decline to their named residual owner without disabling
+      the rest of the table.
+- [ ] Carry `Condition`, `RawConv`, `ValueConv`, and `PrintConv` as distinct
+      stages. Do not collapse them into a display-only conversion.
+- [ ] Generate stable source identities that survive unrelated row movement;
+      tests and write profiles must not depend on incidental array position or
+      a regenerated numeric expression ID.
+- [ ] Add verifier coverage for generated registry completeness, stale modules,
+      orphan ledgers, duplicate arms, and generated files not listed by the
+      release-specific artifact manifest.
+- [ ] Expand tables in measured payoff order using current corpus reads and
+      refusal/helper frequency, not by vendor preference or raw declaration
+      count.
+- [ ] For each newly supported expression/helper, compare its behavior with the
+      exact Perl source in the pinned ExifTool release. Never implement a
+      plausible approximation.
+
+### 2.3 Complete `Session` and source-faithful helper semantics
+
+- [ ] Use one long-lived `Session` per input file. Directory walkers must not
+      create isolated state that loses values or `DataMember` effects needed by
+      later tables.
+- [ ] Thread the session through all enabled walkers and conversion engines,
+      including nested subdirectories and MakerNotes.
+- [ ] Seed and update the ExifTool-visible state required by generated
+      expressions: make/model, byte order, file and TIFF types, directory
+      metadata, options, requested tags, values, and processed-state guards.
+- [ ] Preserve source evaluation order. Conditions and conversions must see the
+      same earlier values and data-member writes that ExifTool sees.
+- [ ] Finish exact Perl scalar behavior needed by accepted expressions:
+      byte strings, Unicode boundaries, numeric/string coercion, truthiness,
+      `undef`, signed zero, list/scalar context, and source-specific formatting.
+- [ ] Port helpers in measured refusal/use-count order. Select behavior by the
+      pinned source body/hash when ExifTool changed a helper between releases;
+      do not silently reuse a 13.59 implementation for an older source tree.
+- [ ] Add cycle and recursion protection equivalent to ExifTool's processed
+      state without suppressing legitimate duplicate occurrences.
+- [ ] Test helper behavior at boundary values and with byte-exact fixtures,
+      including malformed input and negative zero.
+
+### 2.4 Finish Step 2a: typed values beside display values
+
+Decision for beta:
+
+> Treat Step 2a as a beta blocker for every route promoted to the generated
+> runtime. A partially migrated route may remain only as a named residual with
+> an owner and parity test. The public library must not require clients to
+> reverse-parse a display string to recover the value.
+
+- [ ] Define the canonical occurrence payload with separate representations
+      for source/stored value, typed `ValueConv` result, and optional
+      `PrintConv` display value.
+- [ ] Preserve multiplicity, ordering, group identity, units, and undefined or
+      suppressed states in that payload.
+- [ ] Make CLI normal mode project the display value and numeric mode (`-n`)
+      project the typed/non-printed value from the same occurrence.
+- [ ] Make the Rust library, C ABI, JSON output, composites, and writers consume
+      the correct value channel rather than whichever string was inserted
+      first.
+- [ ] Migrate insertion sites that bypass the occurrence-aware sink. Classify
+      the remaining legacy `.insert(` calls as parser-local construction,
+      explicit compatibility adapters, or defects.
+- [ ] Remove post-hoc display reparsing where the ExifTool source consumes a
+      typed `ValueConv` result. Keep and test intentional ExifTool behavior that
+      itself stringifies and reparses a value.
+- [ ] Add paired normal/`-n` oracle tests for numeric, rational, enum, date/time,
+      binary, list, undefined, duplicate, unit-bearing, and signed-zero values.
+- [ ] Prove Step 2a does not change occurrence order, group assignment, request
+      filtering, write lookup identity, or suppression semantics.
+
+### 2.5 Complete directory wiring and residual ownership
+
+- [ ] Finish mixed-mode ownership for IFD0, IFD1, ExifIFD, and InteropIFD so
+      every decoded row is offered to the generated runtime exactly once and a
+      decline reaches at most one residual handler.
+- [ ] Resolve the 17 current `Exif::Main` refusals one by one. In particular:
+  - [ ] port or classify `SetPriorityDir` and `IdentifyRawFile` behavior;
+  - [ ] model `SubDirectory`, offset, SubIFD, MakerNote, and DNG private-data
+        edges in walker adapters rather than pretending they are conversions;
+  - [ ] resolve `Copyright` ownership without IFD1 double insertion;
+  - [ ] support or explicitly refuse the unmodelled shift used by
+        `LearningOptOutIn`;
+  - [ ] implement exact declaration/loop/rational semantics for
+        `CompositeImageExposureTimes`;
+  - [ ] implement or retain named residuals for `ConvertBinary` and
+        `PrintOpcode` used by `OpcodeList1`/`2`/`3`; and
+  - [ ] implement exact declaration/loop/`sprintf` behavior for `TimeCodes`.
+- [ ] Replace the hand-kept `0x9400 AmbientTemperature` path only after the
+      generated typed-value track preserves its negative-zero behavior.
+- [ ] Move XP string decoding to the generated `Decode` path, then remove those
+      IDs from `IFD0_HAND_KEPT` after byte-exact tests pass.
+- [ ] Keep genuine structural tags such as IPTC, GeoTIFF, PrintIM, pointer, and
+      MakerNote traversal walker-owned; do not delete traversal merely because
+      the tag declaration is generated.
+- [ ] Retire the ExifIFD-to-IFD0 yield rule when the generated engine owns the
+      row and group semantics directly (the documented E-3 cleanup).
+- [ ] Make edge suppression/request behavior request-aware so explicitly
+      requested tags are not lost merely because a subdirectory edge is
+      normally silent.
+- [ ] Fold `ifd1_engine_rows` and equivalent replay/drain buffers into the
+      shared directory path once ordering tests prove equivalence.
+- [ ] Apply the same model to Canon, FujiFilm, Olympus, Sony, and subsequent
+      generated tables; avoid a second vendor-specific pipeline.
+
+### 2.6 Delete replaced code without deleting required walkers
+
+Removal is an output of proven ownership transfer, not a preliminary cleanup.
+
+- [ ] Add a deletion ledger with: old file/symbol, exact source tags or
+      behavior, generated/new owner, oracle fixtures, generated-on result,
+      generated-off attribution result, and deletion commit.
+- [ ] Delete hand-written Exif::Main tag/conversion arms only after their
+      generated or named residual owner passes occurrence-aware parity.
+- [ ] Delete each `src/core/exiftool_compat.rs` branch once the owning generated
+      table emits the same stored, typed, and printed forms. Do not retain a
+      formatting fixup that masks a bad generated conversion.
+- [ ] Delete duplicate tag-name, enum, lens, and conversion maps once the
+      source-derived table demonstrably owns them. Keep product logic and
+      format traversal that ExifTool does not express as table data.
+- [ ] Consolidate the conversion portions of the general, IFD, keyed, and
+      serial engines into the shared pipeline. Retain small decoding adapters
+      where their byte layout or traversal is genuinely different.
+- [ ] Remove temporary replay, drain, fallback, and double-insert shims after
+      the shared pipeline owns ordering and occurrence insertion.
+- [ ] Delete stale generated artifacts through the release-specific manifest;
+      never use a broad filesystem deletion or assume every release produces
+      the same module set.
+- [ ] Add CI checks that reject new manual tag knowledge for source constructs
+      the generator supports and reject an old residual whose ledger entry is
+      now generated.
+- [ ] Run generated-on/generated-off attribution tests. A parity result is not
+      evidence for generated ownership if the hand path still produces it.
+- [ ] Measure deleted manual rules and residuals separately from total source
+      lines. Report any code that cannot yet be removed and why.
+
+### 2.7 Wire all walkers into one tag pipeline
+
+- [ ] Inventory every hand-written container walker (`ProcessJPEG`,
+      `ProcessMOV`, RIFF, PDF, OLE, ZIP/container formats, and other enabled
+      families) with its source callback, supported releases, and shared-pipeline
+      entry point.
+- [ ] Route walker-produced values through the same condition/conversion/sink
+      stages used by generated IFD tables.
+- [ ] Enumerate hand-ported ExifTool subs as versioned adapters with fixtures;
+      do not describe them as generated coverage.
+- [ ] Ensure keyed, serial, binary-data, and encrypted/specialized walkers can
+      invoke generated field arms while retaining their required acquisition
+      logic.
+- [ ] Preserve duplicate occurrences, family groups, source order, requested
+      tags, unknown-tag policy, and error/warning behavior across adapters.
+- [ ] Add route-level tests proving a detected format is actually parsed and
+      does not merely return identity tags.
+
+### 2.8 Make upgrades between two ExifTool versions routine
+
+Already landed as upgrade infrastructure and regression coverage:
+
+- [x] Isolated BEFORE/AFTER upgrade transaction with distinct target
+      directories, caller identity checks, conformance floors, and recovery.
+- [x] Release-derived generated-artifact inventory, including modules present
+      in one release and absent in another (`#846`).
+- [x] Garmin/FIT/QuickTime fixes that removed known release-specific generator
+      and test assumptions (`#846`).
+- [x] Per-release ConvInv profiles and the 1,530/1,530 public write matrix for
+      both rehearsal releases (`#842`).
+
+Still required for an actual version-to-version upgrade:
+
+- [ ] Keep `.exiftool-version` as the single release pin consumed by Rust,
+      Python, CI, generation, tests, and release documentation.
+- [ ] Make the transaction accept explicit old and new source trees, verify
+      both version and capability probes, and record both source hashes.
+- [ ] Generate the BEFORE state from the committed old pin and the AFTER state
+      from the requested new pin in separate clean worktrees/target directories;
+      never compare a new generator against stale old artifacts.
+- [ ] Derive the full artifact manifest from each release so added, removed,
+      split, or renamed modules are applied intentionally and stale outputs are
+      removed only from the manifest delta.
+- [ ] Make source facts in tests release-aware or regenerated from pinned
+      fixtures. Eliminate hard-coded 13.59 expectations that caused the
+      historical 113 failures on 11.78 and 79 failures on 12.64 (F3).
+- [ ] Gate, version, or retire hand-written behavior that silently preserves
+      newer 13.59 tags when running older sources. Rehearsal EXTRA counts from
+      the hand layer are compatibility drift, not successful coverage.
+- [ ] Generate per-release native write/readback expectations instead of using
+      the 13.59-only authenticated contract (F6).
+- [ ] Compare reads against each release's own pinned ExifTool oracle and
+      writes against that release's own writable surface.
+- [ ] Prove both upgrade and downgrade transactions, plus a same-pin
+      reproducibility run with no tracked diff.
+- [ ] For changed unsupported expressions or helper bodies, fail closed with a
+      ledger entry and preserve the caller's old generated artifacts. Never
+      reuse an apparently compatible implementation silently.
+- [ ] Make promotion apply only the declared pin and generated/fixture manifest
+      delta after all gates pass; preserve a durable recovery command and do
+      not leave a mixed-version tree on failure.
+- [ ] Re-run the fixed 11.78 -> 12.64 rehearsal end to end with zero code or
+      fixture interventions between stages, then run 12.64 -> 11.78.
+- [ ] Run one current-pin -> next-pin rehearsal before every future release and
+      publish its refusal, generated-share, read, write, and manual-intervention
+      receipts.
+
+Version-transition acceptance matrix:
+
+| Stage | Old release | New release | Required proof |
+|---|---|---|---|
+| Source acquisition | | | Version and capability probes; source hashes |
+| Same-pin regeneration | | | Byte-identical or explained deterministic diff |
+| Forward generation | | | Manifest delta, ledgers, verifier, no manual edit |
+| Forward reads | | | Native-oracle conformance and zero lost proven reads |
+| Forward writes | | | Per-release writable matrix and native readback |
+| Reverse generation | | | Clean downgrade with removed artifacts accounted for |
+| Reverse reads/writes | | | Old-release native expectations restored |
+| Failure recovery | | | Original pin/artifacts/caller preserved |
+
+### 2.9 Functional acceptance evidence
+
+- [ ] Run unit, integration, doc, feature-matrix, ignored-test, and release-mode
+      suites after generated wiring and deletion work.
+- [ ] Run table/source verification and prove generated outputs are clean after
+      a second regeneration.
+- [ ] Run occurrence-aware combined-corpus conformance against the pinned
+      oracle and report MISSING, VALUE, EXTRA, RENAME, ceiling, files, and
+      occurrence count.
+- [ ] Run the exclusive read-regression gate and require zero newly lost proven
+      reads.
+- [ ] Measure generated declaration count, accepted/refused rows, generated
+      dependency of observed reads, walker/residual reads, write/readback
+      coverage, and output conformance separately.
+- [ ] Investigate every remaining case that `main` matches and the candidate
+      does not; classify it as ported, superseded, intentionally removed, or a
+      release blocker.
+- [ ] Update `docs/AUTOGENERATION-PLAN.md`,
+      `docs/AUTOGENERATION-V2-DESIGN.md`, upgrade rehearsal documentation, and
+      the ExifTool parity skill to match the implemented pipeline and current
+      commands.
+
 Evidence:
 
 | Measurement | Candidate SHA | Instrument/receipt | Result |
@@ -126,6 +416,12 @@ Evidence:
 | Combined-corpus conformance | | | |
 | `t/images` read-regression gate | | | |
 | Generated-table verification | | | |
+| Generated-on/off attribution | | | |
+| Typed normal/`-n` parity | | | |
+| Hand residual/deletion ledger | | | |
+| Same-pin reproducibility | | | |
+| 11.78 -> 12.64 rehearsal | | | |
+| 12.64 -> 11.78 rehearsal | | | |
 | Remaining main-only behavior | | | |
 
 ## 3. Fix and validate macOS release linking
