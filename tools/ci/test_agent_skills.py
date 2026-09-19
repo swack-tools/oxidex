@@ -45,6 +45,36 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
 
 
 class SkillMirrorTests(unittest.TestCase):
+    def test_parity_markdown_has_no_bare_oracle_command(self):
+        skill = REPO / ".claude/skills/exiftool-parity"
+        # Command tokens, including inline examples, must use the pinned argv.
+        bare = re.compile(r"(?<![\w/.-])exiftool\s+(?:-[A-Za-z]|FILE\b)")
+        for path in skill.rglob("*.md"):
+            with self.subTest(path=path.relative_to(skill)):
+                self.assertNotRegex(path.read_text(encoding="utf-8"), bare)
+
+    def test_parity_release_instrument_contract(self):
+        text = canonical("exiftool-parity", "SKILL.md")
+        for phrase in (
+            "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
+            ".exiftool-version", "DOCX", "--recursive", "--min-files",
+            "--min-tags", "--json-out", "blocked", "strict.pm",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_parity_receipt_separates_measurement_families(self):
+        path = REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json"
+        self.assertTrue(path.is_file(), "release parity receipt is absent")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["schema_version"], 1)
+        self.assertEqual(receipt["status"], "unverified")
+        for field in ("oxidex_sha", "exiftool_version", "oracle", "corpora", "regressions", "refusals"):
+            self.assertIn(field, receipt)
+        for family in ("conformance", "authenticated_reads", "generated_catalog", "write_matrix"):
+            self.assertIsInstance(receipt[family], dict)
+            self.assertEqual(receipt[family]["status"], "unverified")
+        self.assertNotIn("overall_parity_percent", receipt)
+
     def test_shared_skill_allowlist_is_discovered(self):
         self.assertIn("exiftool-parity", sync.shared_skill_names(REPO))
 

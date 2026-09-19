@@ -1,90 +1,87 @@
 ---
 name: exiftool-parity
-description: Use when verifying oxidex metadata output against real ExifTool — checking tag coverage gaps, confirming a parser fix closed a gap without regressions, running or debugging the tag-comparison or jpeg-tag-matrix harnesses, comparing a single file's tags by hand, or locating ground-truth sample corpora, caches, and baselines.
-user-invocable: false
+description: Use when measuring OxiDex output against pinned ExifTool, verifying parser regressions, diagnosing a single metadata file, or producing provenance-backed parity metrics for release documentation.
 ---
 
-# ExifTool Parity Verification
+# ExifTool parity
 
-## Overview
+Measure the public output that the selected OxiDex commit actually produces.
+Every published number names its instrument, commit, binary, oracle, corpus,
+options and denominator. Read [harnesses.md](references/harnesses.md) before
+running comparisons; for release claims also read
+[release-metrics.md](references/release-metrics.md) and fill
+[release-parity-receipt.json](templates/release-parity-receipt.json).
 
-Parity = same `Group:TagName` keys and values as real ExifTool. `tag-comparison` diffs oxidex **in-process via the library** (`format_for_exiftool()`) against `exiftool -json`; `jpeg-tag-matrix` drives the oxidex and exiftool CLIs.
+## Oracle prerequisite
 
-## When to Use
+Read the expected ExifTool release from the repository's `.exiftool-version`.
+The canonical local interpreter is
+`/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2`; the pinned tree is
+`/tmp/oxidex-exiftool-cache/exiftool`. Invoke that interpreter explicitly with
+the tree's library and script, with user configuration excluded. Require
+Perl `v5.38.2`, the pinned ExifTool version, working standard/decompression
+modules, and `OOXML.docx` reporting **DOCX**, not ZIP. A version probe alone is
+insufficient. Export `EXIFTOOL_PERL` for harnesses that resolve their own oracle.
 
-- Verifying a parser change closed a tag gap; measuring coverage; before claiming parity in commits.
-- NOT for wiring a new tag (see the wire-tag skill) or unit tests that never touch exiftool.
+If `strict.pm` is missing, any probe fails, or the pin differs, record
+`status: blocked` and the failed command/exit/stderr. Do not run a sweep or
+publish a score. Never fall back to Homebrew, another Perl, a PATH-resolved
+oracle, or an allow-skew switch, even if the version string matches. Recovery
+requires restoring this canonical Perl 5.38.2 installation with its matching
+standard library and required modules, then passing every probe again. Keep
+repair work separate from the refused measurement. The installation was known
+broken during this skill's 2026-09-19 revision; re-probe rather than assuming
+either continued failure or recovery.
 
-## Tag knowledge != tag coverage
+## Measurement workflow
 
-Two different ExifTool views feed this repo. Confusing them explains most "we already know this tag, why is it missing?" confusion:
+1. Use a dedicated `staging/<slug>` worktree and `CARGO_TARGET_DIR`. Run
+   `tools/preflight.sh`; verify the exact base/head commits. Refuse dirty or
+   stale source/binaries, including instrument staleness warnings. Release
+   evidence may not use dirty-tree or skew overrides.
+2. Create a unique, durable evidence directory outside the checkout. Record
+   clean SHA/tree, tool versions, command argv, environment affecting the run,
+   exit codes, raw logs and hashes. Build an explicit public CLI with
+   `corpus_read_receipt.py build`; use its Cargo-selected executable and hash.
+   Recheck source and binary identity after measurement.
+3. Probe the oracle before expensive work. Select and hash corpus manifests;
+   record roots, filters and exclusions. Use `--recursive` for nested corpora,
+   and set justified `--min-files` and `--min-tags` floors before observing
+   results. Missing roots and breached floors are refusals, not smaller scores.
+4. Run conformance with explicit `--oxidex`, `--exiftool-dir`, and `--json-out`.
+   Keep full JSON plus logs; a console TOTAL line is not a release artifact.
+   Keep per-format/per-file MISSING, VALUE, RENAME and EXTRA detail, duplicate
+   occurrences, group identities, score, rename ceiling and precision.
+5. For change attribution, rebuild and remeasure the exact base commit in its
+   own clean worktree/target, then head with the same oracle, corpus and
+   options. Do not reuse yesterday's or a supplied stale baseline. Compare
+   per-file identities and occurrences; a better total can hide regressions.
+6. For release metrics, run the separate authenticated-read receipt/verifier
+   and published-read regression gate, catalog ratchet, and JPEG write matrix
+   as scoped in the references. Use shared locking for builds/tests and
+   exclusive locking for corpus sweeps/read gates. Cap expensive parallel work.
+7. Hand the filled receipt and hashed evidence to
+   `oxidex-release-documentation`. Mark missing required evidence `unverified`
+   or failed/refused evidence `blocked`; never substitute zero or a pass.
 
-| Source | Gives you | Omits |
-|---|---|---|
-| `exiftool -f -listx` → `src/tag_sync` | `count encoding id index lang name type version writable` | **everything about layout** |
-| Perl symbol table → `src/exiftool_tables` | `FORMAT`, `FIRST_ENTRY`, per-field `Format`, `Mask`, `SubDirectory` edges, `Condition`, `ValueConv` | conversions it refuses to approximate (counted, not silent) |
+## What each claim means
 
-`-listx` is the *documentation* view: it can say a tag exists but never how to read one. Verified empirically against 13.30 — `-listx` output contains zero occurrences of `SubDirectory`, `FIRST_ENTRY`, `ValueConv`, `Condition`, or `DataMember`. So a rising `oxidex-tags-*` count is **not** evidence of rising extraction coverage; only a comparison run is.
+Keep conformance, authenticated reads, generated catalog declarations and
+write-matrix results separate. **Never report one blended overall parity
+percentage.** Conformance output agreement does not establish a source row was
+executed, and a JPEG round trip does not establish all-format write support.
 
-Corollary for gap work: before writing a parser, check whether `oxidex::exiftool_tables::find_table(module, table)` already carries the layout. Re-deriving by hand a binary record ExifTool already declares is the expensive way to close a gap. See `docs/TRANSCRIPTION.md`.
+Generated `oxidex-tags-*` declarations and the `-listx` documentation view are
+tag knowledge, not observed extraction coverage. Detected-only identity tags
+(`FileType`, `FileTypeExtension`, `MIMEType`) do not earn observed-read credit
+for metadata payloads. Retain them in the instrument's output if it counts
+them, but identify that scope explicitly. Do not alter counts to improve a
+claim. Source-coordinate credit comes only from the authenticated instrument.
 
-## Measuring the gap by kind
-
-`tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <src> --oxidex <bin>` classifies every difference as RENAME / MISSING / VALUE / EXTRA and prints a `ceiling` column — what each format would score if every rename were fixed. A large score-to-ceiling spread means free coverage (string edits), not parsing work. ExifTool's own `t/images` (~190 files) is a ready-made corpus and `perl -Ilib ./exiftool` runs straight from an unpacked tarball.
-
-## Quick Reference
-
-| Task | Command |
-|---|---|
-| Version check | `exiftool -ver` vs `EXIFTOOL_VERSION` pin in `.github/workflows/jpeg-tag-matrix.yml` vs `/tmp/oxidex-exiftool-cache/.exiftool-version` vs `EXIFTOOL_VERSION` in `src/exiftool_tables/binary_tables.rs` |
-| Verify generated tables | `just verify-tables` (reads its release from the stamp; fetches if uncached) |
-| Regenerate tables | `just regen-tables [version]` (extract → codegen → independent verify) |
-| Gap by kind (rename vs missing) | `python3 tools/exiftool-tables/conformance.py <corpus> --exiftool-dir <src> --oxidex <bin>` |
-| Build main harness | `cargo build --release --bin tag-comparison --features tag-comparison-binary` |
-| Fixloop rebuild | `--profile fixloop` instead of `--release` → `target/fixloop/tag-comparison` |
-| Full-corpus comparison | `just compare-exiftool-full` (persistent cache; writes `comparison.json`) |
-| One format | `just compare-exiftool-format JPEG` |
-| Gap report | `uv run scripts/find_tag_gaps.py [--only-format NAME] [--cache-dir DIR]` |
-| Comparison integration tests | `just test-comparison` (`cargo test --release --features exiftool-comparison -- --nocapture`) |
-| Build JPEG matrix | `cargo build --release --features jpeg-tag-matrix-binary --bin jpeg-tag-matrix` |
-| JPEG write matrix | `./target/release/jpeg-tag-matrix manifest --flag-noops` / `run --workers 8` / `report --check-baseline` (ratchet: `report --update-baseline`) |
-| Coverage doc | `just docs-coverage` |
-
-Full flags, env vars, per-recipe corpora: `references/harnesses.md`.
-
-## Data Locations
-
-| Location | Contents |
-|---|---|
-| `tests/fixtures/` | Committed: `jpeg/` (incl. `tag_matrix_base.jpg`, `makernotes/`, `edge_cases/`), `png/`, `tiff/`, `mp4/`, `pdf/`, `raw/`, `jpeg-tag-matrix/` stubs, `manifest.json` |
-| `test_data/audio/` | `sample.flac` |
-| `/tmp/oxidex-exiftool-cache/` | `exiftool/` checkout, `.exiftool-version` (at cache root), `combined-samples/`, `samples-<Mfr>.tar.gz`, `exiftool-tag-cache/`, `oxidex-tag-cache/` |
-| `docs/reference/` | Committed: `jpeg-tag-baseline.json`, `jpeg-tag-matrix.md`, `jpeg-tag-support.md`, `tag-coverage-analysis.md`. Gitignored generated: `docs/reference/comparison/`, repo-root `comparison.json` |
-
-## Single-File Manual Comparison
-
-```bash
-exiftool -G1 -s FILE                 # ground truth (quote in commits)
-exiftool -json -a -G1 -struct FILE   # integration-test flags
-./target/release/oxidex -j -e FILE   # JSON, exiftool-compat formatting
-```
-
-`-G` = family 0 (`EXIF:Make`); `-G1` = family 1 (`IFD0:Make`). `oxidex -j -e` emits family-1-style groups — compare against `-G1`; `tag-comparison` uses `-G` and reconciles internally.
-
-## Verifying a Fix
-
-1. Before: run the start-snapshot `tag-comparison` command (`references/harnesses.md`) → `/tmp/tagcmp-<F>-start.json`.
-2. After the fix, re-run with `-end` names. Require: `missing_in_oxidex` + `value_differences` strictly lower AND `regressions` empty.
-3. `cargo fmt --all` + `cargo test --workspace`; quote the real `exiftool -G1 -s` value in the commit.
-
-Automated version: `.claude/workflows/exiftool-coverage-loop.js` (same cache dir and protocol).
-
-## Common Mistakes
-
-- Without `--features tag-comparison-binary`/`jpeg-tag-matrix-binary`: explicit `--bin` errors loudly; bare `cargo build`/`cargo test` silently omits the target.
-- Comparison tests without `--features exiftool-comparison` are `ignore`d — "0 failed" proves nothing.
-- `oxidex -j` without `-e` — formatting and groups differ from exiftool; always add `-e`.
-- JSON display: `-json` prints `[1,2]`, plain ExifTool prints `1, 2` — verify against plain `exiftool FILE`.
-- `tag-comparison` never runs the oxidex CLI — CLI-only bugs surface only via `jpeg-tag-matrix` or manual `oxidex -j -e`.
-- `find_tag_gaps.py --only-format` needs a cache dir already populated by `just compare-exiftool-full`.
-- Version skew: homebrew exiftool, the CI `EXIFTOOL_VERSION` pin in `.github/workflows/jpeg-tag-matrix.yml`, and the `/tmp` cache checkout (`.exiftool-version`) can all differ and explain phantom gaps — check all three before debugging.
+Before implementing a gap, inspect the pinned Perl table and
+`src/exiftool_tables::find_table(module, table)`; see `docs/TRANSCRIPTION.md`.
+A missing generated row can mean the generator refused an unsupported
+conversion. Never approximate conversions or hand-edit generated tables.
+Re-express the source behavior, test against the oracle, regenerate through
+the generator, and measure again. A rename ceiling is a diagnostic estimate,
+not earned parity.

@@ -200,3 +200,39 @@ unresolved items; optional live confirmation did not create a deployment gate.
 
 Overall: **GREEN** for the corrected local-verification contract. This is a
 behavioral test of the skill, not an actual release documentation audit.
+
+## Task 4: ExifTool parity skill revision
+
+### RED: existing-skill pressure baseline
+
+The controller gave a fresh agent the existing skill and harness reference
+with pressure to use a working Homebrew oracle after canonical Perl failed
+to load `strict.pm`, quote only TOTAL, blend generated/read metrics and reuse
+yesterday's baseline. The agent performed a static scenario evaluation and
+executed no unsafe fallback or corpus run. Repository rules remained binding;
+their protection was not credited to the skill under test.
+
+The old skill passed two checks: it separated generated tag knowledge from
+observed extraction, and described RENAME/MISSING/VALUE/EXTRA. It failed eight
+explicit skill-contract checks: refusal of bare/Homebrew fallback; blocking
+on canonical capability failure; complete tool/binary/commit/corpus identity;
+unique durable evidence; recursive scope and file/tag floors; structured
+conformance evidence; four independent metric families without a blended
+percentage; and explicit rejection of a stale supplied baseline. These are
+documented instruction gaps, not observed unsafe execution.
+
+### RED: repository contract tests
+
+Added three tests before rewriting the skill: every Markdown file rejects a
+bare oracle command token, the entrypoint requires the canonical interpreter
+and capability/floor/JSON controls, and the JSON receipt keeps all four
+measurement families separate with unverified defaults. The focused run
+failed as expected: four assertion failures across three tests (bare commands
+in both existing files, missing canonical contract, absent receipt).
+
+### GREEN: pending independent pressure test
+
+The controller will run the same pressure scenario against the rewritten
+skill. Record the actual response and verdict here before calling behavioral
+validation complete. Passing repository contract tests alone does not prove
+the agent refuses a fallback or produces correct release metrics.
