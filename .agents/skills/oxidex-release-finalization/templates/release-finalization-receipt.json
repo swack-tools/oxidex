@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "version": "2.0.0-beta.1",
+  "tag": "v2.0.0-beta.1",
+  "candidate_sha": "full-commit-sha",
+  "main_sha": "full-main-commit-sha",
+  "gates": [],
+  "workflows": [],
+  "artifacts": [],
+  "macos_verification": {
+    "status": "unverified",
+    "evidence": []
+  },
+  "status": "blocked",
+  "next_action": "name the next safe action"
+}

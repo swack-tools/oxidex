@@ -13,6 +13,12 @@ from tools.ci import sync_agent_skills as sync
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
+def canonical(skill: str, relative: str) -> str:
+    """Read a file from the canonical shared-skill tree."""
+
+    return (REPO / ".claude/skills" / skill / relative).read_text(encoding="utf-8")
+
+
 def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.Path:
     """Create the smallest repository fixture needed by the mirror tests."""
 
@@ -36,6 +42,18 @@ class SkillMirrorTests(unittest.TestCase):
 
     def test_agents_mirror_matches_canonical(self):
         self.assertEqual(sync.compare_skill_mirror(REPO), [])
+
+    def test_release_finalization_contract(self):
+        text = canonical("oxidex-release-finalization", "SKILL.md")
+        for phrase in (
+            "reviewed PR",
+            "exact `main` commit",
+            "explicit maintainer",
+            "Gatekeeper",
+            "stapled",
+            "do not move",
+        ):
+            self.assertIn(phrase, text)
 
     def test_check_mode_reports_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
