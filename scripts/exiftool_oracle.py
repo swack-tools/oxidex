@@ -49,6 +49,7 @@ from typing import Any, NamedTuple
 BINARY_ENV = "EXIFTOOL"
 CACHE_DIR_ENV = "EXIFTOOL_CACHE_DIR"
 PERL_ENV = "EXIFTOOL_PERL"
+TABLE_PERL_ENV = "OXIDEX_TABLES_PERL"
 ALLOW_SKEW_ENV = "OXIDEX_ALLOW_EXIFTOOL_SKEW"
 DEFAULT_CACHE_DIR = "/Users/allen/oxidex-ops/cache/exiftool/13.59"
 DURABLE_ROOT = Path("/Users/allen/oxidex-ops").resolve()
@@ -250,6 +251,32 @@ def choose_perl() -> str | None:
             return cand
         fallback = fallback or cand
     return fallback
+
+
+def choose_table_perl(explicit: str | None = None) -> str | None:
+    """Resolve the table verifier's explicit, capability-checked interpreter.
+
+    CI builds its pinned source tree under an ephemeral runner and therefore
+    cannot use the workstation release root.  This separate channel is used
+    only by the source-table verifier; ordinary parity/release resolution keeps
+    the durable-root fence in :func:`choose_perl`.
+    """
+    raw = (explicit or os.environ.get(TABLE_PERL_ENV, "")).strip()
+    if not raw:
+        return choose_perl()
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    perl = str(resolved)
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        return None
+    if not _runs([perl, "-e", "1"]) or missing_modules(perl):
+        return None
+    return perl
 
 
 def shebang_interpreter(binary: str | Path) -> str | None:
