@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 import tempfile
 import unittest
 
@@ -40,6 +41,32 @@ class SkillMirrorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = make_fixture(pathlib.Path(tmp), canonical="alpha", mirror="beta")
             self.assertNotEqual(sync.main(["--repo", str(repo), "--check"]), 0)
+
+    def test_missing_canonical_skill_is_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_fixture(pathlib.Path(tmp), canonical="alpha", mirror="alpha")
+            shutil.rmtree(repo / ".claude/skills/alpha")
+            differences = sync.compare_skill_mirror(repo)
+            self.assertTrue(any("canonical skill" in difference for difference in differences))
+            self.assertNotEqual(sync.main(["--repo", str(repo), "--check"]), 0)
+
+    def test_write_replaces_only_allowlisted_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = make_fixture(pathlib.Path(tmp), canonical="alpha", mirror="stale")
+            mirror_skill = repo / ".agents/skills/alpha"
+            (mirror_skill / "stale.txt").write_text("stale", encoding="utf-8")
+            unlisted = repo / ".agents/skills/unlisted"
+            unlisted.mkdir()
+            sentinel = unlisted / "SENTINEL"
+            sentinel.write_text("keep", encoding="utf-8")
+
+            sync.write_skill_mirror(repo)
+
+            self.assertTrue((repo / ".agents").is_dir())
+            self.assertTrue((repo / ".agents/skills").is_dir())
+            self.assertTrue(sentinel.is_file())
+            self.assertEqual(sync.compare_skill_mirror(repo), [])
+            self.assertFalse((mirror_skill / "stale.txt").exists())
 
 
 if __name__ == "__main__":

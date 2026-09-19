@@ -57,6 +57,9 @@ def compare_skill_mirror(repo: pathlib.Path) -> list[str]:
     for name in shared_skill_names(repo):
         canonical_root = repo / ".claude/skills" / name
         mirror_root = repo / ".agents/skills" / name
+        if not canonical_root.is_dir():
+            differences.append(f"{name}: canonical skill directory missing")
+            continue
         canonical = _regular_files(canonical_root)
         mirror = _regular_files(mirror_root)
         for relative in sorted(canonical.keys() - mirror.keys()):
