@@ -1520,6 +1520,11 @@ check-staleness version="":
 gate branch tag:
     tools/fleet/gate.sh {{branch}} {{tag}}
 
+# Ownership is provenance-only: it reconciles generated declarations and
+# explicit runtime residuals; it does not claim corpus observation.
+verify-runtime-ownership:
+    uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
+
 # Fleet python suite (fleetlib CAS, claims, queue, verdict admissibility,
 # drift, intent/ledger). Needs a FRESH release binary for the ledger tests --
 # a stale one reports MISSING for formats the tip parses (measured: 11
