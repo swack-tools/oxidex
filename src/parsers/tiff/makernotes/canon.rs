@@ -14,7 +14,9 @@ pub mod color_data;
 mod custom_functions2;
 mod custom_functions2_tables;
 pub mod filter_info;
+mod generated_subtables;
 mod main_engine;
+pub mod original_decision_data;
 
 use crate::core::formatters::perl_number as format_perl_number;
 use crate::error::{ExifToolError, Result};
@@ -532,6 +534,47 @@ fn extract_canon_bytes_with_base<'a>(
     data.get(relative_offset..relative_offset.checked_add(byte_count)?)
 }
 
+/// [`extract_canon_bytes_with_base`], plus a value of four bytes or fewer,
+/// which lives inline in the entry's offset slot (re-encoded in the note's
+/// byte order, the order `value_offset` was read in).
+fn extract_canon_value_bytes(
+    entry: &IfdEntry,
+    data: &[u8],
+    byte_order: ByteOrder,
+    base_offset: u32,
+) -> Option<Vec<u8>> {
+    if let Some(bytes) = extract_canon_bytes_with_base(entry, data, base_offset) {
+        return Some(bytes.to_vec());
+    }
+    let type_size: usize = match entry.field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        _ => return None,
+    };
+    let byte_count = type_size.checked_mul(entry.value_count as usize)?;
+    if byte_count == 0 || byte_count > 4 {
+        return None;
+    }
+    let slot = match byte_order {
+        ByteOrder::LittleEndian => entry.value_offset.to_le_bytes(),
+        ByteOrder::BigEndian => entry.value_offset.to_be_bytes(),
+    };
+    Some(slot[..byte_count].to_vec())
+}
+
+/// The bytes of a (realigned) 16-bit-word record, in the note's byte order --
+/// the buffer a generated `%Canon` table is walked over.
+fn encode_i16_record(record: &[i16], byte_order: ByteOrder) -> Vec<u8> {
+    record
+        .iter()
+        .flat_map(|word| match byte_order {
+            ByteOrder::LittleEndian => word.to_le_bytes(),
+            ByteOrder::BigEndian => word.to_be_bytes(),
+        })
+        .collect()
+}
+
 /// Returns a Canon BinaryData record as the 16-bit-word view used by
 /// [`binary_tables`].
 ///
@@ -804,6 +847,28 @@ const CANON_INTERNAL_SERIAL_NUMBER: u16 = 0x0096;
 const CANON_PROCESSING_INFO: u16 = 0x00A0;
 const CANON_MEASURED_COLOR: u16 = 0x00AA;
 const CANON_VRD_OFFSET: u16 = 0x00D0;
+/// Canon.pm:1728 -- `%Canon::FaceDetect2`, an `int8u` BinaryData record;
+/// decoded through the generated table ([`generated_subtables`]).
+const CANON_FACE_DETECT2: u16 = 0x0025;
+/// Canon.pm:1826 -- eight opaque bytes encoding the EOS-1D's 45-point AF grid,
+/// `PrintConv => 'Image::ExifTool::Canon::PrintAFPoints1D($val)'`.
+const CANON_AF_POINTS_IN_FOCUS_1D: u16 = 0x0094;
+/// Canon.pm:1902-1905 and 1916-1919 -- `int16u` arrays carrying `%longBin`,
+/// which turns the space-joined numbers Binary once they exceed 64 bytes.
+const CANON_TONE_CURVE_TABLE: u16 = 0x00A1;
+const CANON_SHARPNESS_TABLE: u16 = 0x00A2;
+const CANON_SHARPNESS_FREQ_TABLE: u16 = 0x00A3;
+const CANON_WHITE_BALANCE_TABLE: u16 = 0x00A4;
+const CANON_TONE_CURVE_MATCHING: u16 = 0x00B2;
+const CANON_WHITE_BALANCE_MATCHING: u16 = 0x00B3;
+/// Canon.pm:1907 -- `%Canon::ColorBalance`, signed RGGB arrays; decoded
+/// through the generated table ([`generated_subtables`]).
+const CANON_COLOR_BALANCE: u16 = 0x00A9;
+/// Canon.pm:1921 -- `%Canon::ModifiedInfo`. The hand `binary_tables`
+/// transcription carries every field but the model-gated `ModifiedSharpness`
+/// and the `ValueConv` `ModifiedDigitalGain`; those two come from the
+/// generated table.
+const CANON_MODIFIED_INFO: u16 = 0x00B1;
 /// ExifTool Canon.pm:1965 — `0xe0 => { Name => 'SensorInfo', ... }`
 const CANON_SENSOR_INFO: u16 = 0x00E0;
 /// ExifTool Canon.pm:1652 — `0x1e => { Name => 'FirmwareRevision', Writable => 'int32u', ... }`
@@ -974,6 +1039,8 @@ const CAMERA_SETTINGS_MANUAL_FLASH_OUTPUT: usize = 41;
 const CAMERA_SETTINGS_COLOR_TONE: usize = 42;
 /// ExifTool `%Canon::CameraSettings` key 46 (Canon.pm:2664) — `SRAWQuality`.
 const CAMERA_SETTINGS_SRAW_QUALITY: usize = 46;
+/// ExifTool `%Canon::CameraSettings` key 52 (Canon.pm:2688) — `HDR-PQ`.
+const CAMERA_SETTINGS_HDR_PQ: usize = 52;
 
 // ShotInfo array (tag 0x0004) indices
 // Reference: ExifTool Canon.pm ShotInfo table
@@ -1058,6 +1125,8 @@ const FILE_INFO_FILTER_EFFECT: usize = 14;
 const FILE_INFO_TONING_EFFECT: usize = 15;
 /// ExifTool `%Canon::FileInfo` key 7 (Canon.pm:6934) — `RawJpgSize`.
 const FILE_INFO_RAW_JPG_SIZE: usize = 7;
+/// ExifTool `%Canon::FileInfo` key 6 (Canon.pm:6941) — `RawJpgQuality`.
+const FILE_INFO_RAW_JPG_QUALITY: usize = 6;
 /// ExifTool `%Canon::FileInfo` key 19 (Canon.pm:7003) — `LiveViewShooting`.
 const FILE_INFO_LIVE_VIEW_SHOOTING: usize = 19;
 /// ExifTool `%Canon::FileInfo` keys 20/21 (Canon.pm:7004-7005) — focus distance range.
@@ -5343,6 +5412,88 @@ fn parse_canon_makernote_directory(
                 );
             }
 
+            // Residual: 0x0094 `AFPointsInFocus1D` (Canon.pm:1824). The
+            // generated Canon::Main withholds it (`omitted.print_conv`,
+            // `Canon::PrintAFPoints1D`); forward-ported from main 8b91de9f.
+            // The sub reads `$val` as the raw bytes, which an `undef` entry
+            // is; any other storage type is left absent rather than guessed.
+            CANON_AF_POINTS_IN_FOCUS_1D => {
+                if entry.field_type == 7
+                    && let Some(bytes) =
+                        extract_canon_value_bytes(entry, ifd_data, byte_order, base)
+                {
+                    tags.insert(
+                        "Canon:AFPointsInFocus1D".to_string(),
+                        generated_subtables::af_points_in_focus_1d(&bytes),
+                    );
+                }
+            }
+
+            // Residual: the six `%longBin` rows (Canon.pm:1902-1905, 1938-1939),
+            // withheld by the generated Canon::Main as `omitted.value_conv`
+            // (`length($val) > 64 ? \$val : $val`). Forward-ported from main
+            // 8b91de9f. Declared `int16u` by the stored type, so only a SHORT
+            // entry is decoded.
+            CANON_TONE_CURVE_TABLE
+            | CANON_SHARPNESS_TABLE
+            | CANON_SHARPNESS_FREQ_TABLE
+            | CANON_WHITE_BALANCE_TABLE
+            | CANON_TONE_CURVE_MATCHING
+            | CANON_WHITE_BALANCE_MATCHING => {
+                if entry.field_type == 3
+                    && let Some(bytes) =
+                        extract_canon_value_bytes(entry, ifd_data, byte_order, base)
+                    && let Some(value) = generated_subtables::long_bin_u16(&bytes, byte_order)
+                {
+                    let name = match entry.tag_id {
+                        CANON_TONE_CURVE_TABLE => "ToneCurveTable",
+                        CANON_SHARPNESS_TABLE => "SharpnessTable",
+                        CANON_SHARPNESS_FREQ_TABLE => "SharpnessFreqTable",
+                        CANON_WHITE_BALANCE_TABLE => "WhiteBalanceTable",
+                        CANON_TONE_CURVE_MATCHING => "ToneCurveMatching",
+                        _ => "WhiteBalanceMatching",
+                    };
+                    tags.insert(format!("Canon:{name}"), value);
+                }
+            }
+
+            // FaceDetect2 (0x0025, Canon.pm:1704): `%Canon::FaceDetect2`
+            // through the generated table and the binary engine. `int8u`,
+            // unvalidated ("uses a 1-byte count"). From main 95d16186.
+            CANON_FACE_DETECT2 => {
+                if let Some(record) = extract_canon_value_bytes(entry, ifd_data, byte_order, base) {
+                    generated_subtables::insert_generated_rows(
+                        "FaceDetect2",
+                        &record,
+                        byte_order,
+                        self_model,
+                        None,
+                        &mut tags,
+                    );
+                }
+            }
+
+            // ColorBalance (0x00a9, Canon.pm:1906): `%Canon::ColorBalance`
+            // through the generated table, whose key-29 `_variants` pair
+            // carries the `/EOS D60\b/` Condition. The record is the same
+            // realigned 16-bit view every other length-prefixed Canon record
+            // gets here. From main 95d16186.
+            CANON_COLOR_BALANCE => {
+                if let Some(record) =
+                    extract_canon_i16_array_with_base(entry, ifd_data, byte_order, base)
+                        .map(realign_length_prefixed_record)
+                {
+                    generated_subtables::insert_generated_rows(
+                        "ColorBalance",
+                        &encode_i16_record(&record, byte_order),
+                        byte_order,
+                        self_model,
+                        None,
+                        &mut tags,
+                    );
+                }
+            }
+
             // FileNumber (tag 0x0008) - int32u, ExifTool Canon.pm:1260 renders it as
             // `directory-file` via `s/(\d+)(\d{4})/$1-$2/`.
             CANON_FILE_NUMBER => {
@@ -5812,6 +5963,20 @@ fn parse_canon_makernote_directory(
                                 .unwrap_or_else(|| format!("Unknown ({sraw_quality})"));
                         tags.insert("Canon:SRAWQuality".to_string(), rendered);
                     }
+
+                    // HDR-PQ (index 52). Canon.pm has no RawConv here: 0 and 1 are
+                    // Off/On and -1 prints through the table as n/a. From main
+                    // badda311.
+                    if let Some(&hdr_pq) = array.get(CAMERA_SETTINGS_HDR_PQ) {
+                        let rendered =
+                            crate::exiftool_tables::find_table("Canon", "CameraSettings")
+                                .and_then(|table| {
+                                    table.fields.iter().find(|field| field.name == "HDR-PQ")
+                                })
+                                .and_then(|field| field.print_conv.apply(i64::from(hdr_pq)))
+                                .unwrap_or_else(|| format!("Unknown ({hdr_pq})"));
+                        tags.insert("Canon:HDR-PQ".to_string(), rendered);
+                    }
                 }
             }
 
@@ -6258,12 +6423,16 @@ fn parse_canon_makernote_directory(
                 // reading the `self_model` the engine resolves 0x0096 with
                 // (`main_engine::canon_main_residual_emits_exactly_the_
                 // withheld_alternatives` pins the complement). SerialInfo
-                // itself has no producer yet: on those bodies the tag is
-                // absent rather than a Main string ExifTool does not report
-                // there under that name. Unconditional since landing 2: the
-                // engine-off branch no longer restores the pre-slice
-                // rendering on those bodies.
+                // is decoded through the generated `%Canon::SerialInfo` layout
+                // (`generated_subtables::insert_serial_info`, from main
+                // 95d16186) on those bodies, never as a Main string ExifTool
+                // does not report there under that name. Unconditional since
+                // landing 2: the engine-off branch no longer restores the
+                // pre-slice rendering on those bodies.
                 if !main_engine::internal_serial_is_main_value(self_model) {
+                    if let Some(record) = extract_canon_bytes_with_base(entry, ifd_data, base) {
+                        generated_subtables::insert_serial_info(record, byte_order, &mut tags);
+                    }
                     return;
                 }
                 if let Some(raw) = extract_canon_bytes_with_base(entry, ifd_data, base) {
@@ -6364,6 +6533,23 @@ fn parse_canon_makernote_directory(
                         tags.insert(
                             "Canon:BracketShotNumber".to_string(),
                             bracket_shot.to_string(),
+                        );
+                    }
+
+                    // RawJpgQuality (Perl key 6). `RawConv => '$val <= 0 ? undef :
+                    // $val'`: zero is absent, unlike RawJpgSize where it means Large.
+                    // From main badda311.
+                    if let Some(&raw_jpg_quality) = array.get(FILE_INFO_RAW_JPG_QUALITY)
+                        && raw_jpg_quality > 0
+                    {
+                        tags.insert(
+                            "Canon:RawJpgQuality".to_string(),
+                            decode_file_info_enum("RawJpgQuality", i64::from(raw_jpg_quality)),
+                        );
+                        record_canon_value(
+                            &mut value_forms,
+                            "Canon:RawJpgQuality",
+                            raw_jpg_quality,
                         );
                     }
 
@@ -6627,8 +6813,26 @@ fn parse_canon_makernote_directory(
                     let raw_bytes =
                         extract_canon_bytes_with_base(entry, ifd_data, base).unwrap_or_default();
                     binary_tables::parse_binary_table(
-                        tag, raw_bytes, &record, byte_order, &mut tags,
+                        tag, raw_bytes, &record, byte_order, self_model, &mut tags,
                     );
+
+                    // `%Canon::ModifiedInfo` keys 2 (`ModifiedSharpness`,
+                    // `Condition => '$$self{Model} =~ /\b(1D|5D)/'`) and 11
+                    // (`ModifiedDigitalGain`, `ValueConv => '$val / 10'`),
+                    // Canon.pm:7331-7369, which `binary_tables` leaves out: the
+                    // generated table carries both the Condition and the
+                    // compiled ValueConv, so they come from the binary engine
+                    // over the same record. From main 12a2b7d7.
+                    if tag == CANON_MODIFIED_INFO {
+                        generated_subtables::insert_generated_rows(
+                            "ModifiedInfo",
+                            &encode_i16_record(&record, byte_order),
+                            byte_order,
+                            self_model,
+                            Some(&["ModifiedSharpness", "ModifiedDigitalGain"]),
+                            &mut tags,
+                        );
+                    }
 
                     // TimeZone (`%Canon::TimeInfo` key 1, Canon.pm:6641) is the one
                     // TimeInfo field `binary_tables` leaves out -- its `PrintConv` is
