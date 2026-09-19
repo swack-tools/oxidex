@@ -108,7 +108,7 @@ class SkillMirrorTests(unittest.TestCase):
                 self.assertIn(phrase, checklist)
         for phrase in (
             "production-equivalent local",
-            "every rendered route",
+            "every reconciled inventory route",
             "browser automation",
             "human visual review",
             "`build_type: workflow`",
@@ -116,6 +116,26 @@ class SkillMirrorTests(unittest.TestCase):
         ):
             with self.subTest(path="docs-site.md", phrase=phrase):
                 self.assertIn(phrase, docs_site)
+
+    def test_docs_site_requires_all_route_browser_navigation(self):
+        text = " ".join(
+            (REPO / "docs/contributing/docs-site.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        self.assertIn(
+            "Use browser automation to navigate every reconciled inventory route",
+            text,
+        )
+        self.assertIn(
+            "capture console, page, request, network, and HTTP failures",
+            text,
+        )
+        self.assertIn("representative screenshot matrix", text)
+        self.assertIn(
+            "this matrix complements the exhaustive browser navigation",
+            text,
+        )
 
     def test_parity_markdown_has_no_bare_oracle_command(self):
         skill = REPO / ".claude/skills/exiftool-parity"

@@ -59,11 +59,13 @@ style.
 For a release, use `oxidex-release-documentation` against the frozen full
 candidate SHA. Its production-equivalent local deploy must include the real
 comparison report and the selected benchmark artifact, then reconcile the
-committed, generated, and rendered inventories. Crawl every rendered route,
-asset, and fragment, including pages absent from navigation. Use browser
-automation on the representative page matrix at desktop/mobile widths and in
-light/dark themes; retain screenshots and console, page, request, network, and
-HTTP failures, then record human visual review of those screenshots.
+committed, generated, and rendered inventories. Use browser automation to
+navigate every reconciled inventory route, including pages absent from
+navigation, and capture console, page, request, network, and HTTP failures.
+Check every referenced asset and fragment. Separately, retain responsive
+light/dark desktop/mobile screenshots for a representative screenshot matrix
+and record human visual review of those screenshots; this matrix complements
+the exhaustive browser navigation rather than replacing it.
 
 That exact-candidate local evidence can verify the documentation before it is
 published. Live Pages validation is optional operational confirmation. If the
