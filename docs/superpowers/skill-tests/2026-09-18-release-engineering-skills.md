@@ -68,7 +68,7 @@ production deploy, exhaustive browser route/asset audit, responsive screenshots,
 human screenshot review and Pages pipeline/settings audit are sufficient for
 overall `verified`. Actual live deployment is optional operational confirmation.
 The earlier two-phase ruling and its GREEN result below are superseded and
-retained only as test history; a fresh GREEN run for this contract is pending.
+retained only as test history. The revised fresh GREEN result is recorded below.
 
 ### RED: without the skill
 
@@ -165,16 +165,38 @@ unverified human-review fields in the template. The first exploratory run
 encountered a missing-key error; an explicit missing-field assertion then
 produced two expected assertion failures before implementation.
 
-### GREEN: corrected local-verification contract pending
+### GREEN: corrected local-verification contract
 
-The controller will rerun the original pressure prompt with the revised skill.
-Expected behavior: refuse superficial approval; require exact-candidate parity,
-complete source/generated/rendered reconciliation and claim ledger, real
-production inputs, exhaustive browser route/asset checks, desktop/390px light/dark
-screenshots with console/network failures and human review, and Pages
-syntax/tests/settings/pipeline inspection. Those checks may produce overall
-`verified` while optional live deployment remains `not_run` or `unverified`.
-A pipeline defect or missing browser/human evidence blocks verification. A
-changed final main tree requires the same local audit before tag authorization.
-Do not require a deployed URL/run or an intermediate promotion status. No
-corrected GREEN behavioral result is claimed until the fresh run completes.
+The controller ran a fresh pressure test with the corrected skill at
+`228067408dcc14d1e4eea189d3ead7e3d454157d` and reported the following observed
+behavior. The author records this supplied result without changing the skill.
+
+The agent refused approval from the superficial evidence. It explicitly said
+actual live deployment is not required: `live_deployment.status` may remain
+`not_run` or `unverified` with
+`required_for_documentation_verification: false`. It required a clean,
+exact-SHA production-equivalent local deploy with the real comparison report
+and an explicit benchmark run; the complete committed/generated/copied/rendered
+route census including unlinked Markdown; and all-route asset/fragment checks.
+It required browser automation for every route plus representative
+1440x1000/390x844 light/dark screenshots, console/network/interaction evidence,
+an automation manifest and human screenshot review.
+
+The response also required the claim ledger, visibly historical labeling for
+old benchmark fallback, and static/API Pages pipeline inspection. It rejected
+a `gh-pages` update as proof of deployment. Overall `verified` was allowed
+only when local, factual, browser and pipeline evidence passed with no required
+unresolved items; optional live confirmation did not create a deployment gate.
+
+| Requirement | Revised GREEN result |
+| --- | --- |
+| Exact candidate and real production inputs | PASS: clean exact-SHA build, comparison report and explicit benchmark run |
+| Complete page census and factuality | PASS: committed/generated/copied/rendered routes, unlinked pages and claim ledger |
+| Exhaustive automated browser/asset/fragment checks | PASS: required every route, interactions and console/network evidence |
+| Responsive screenshots and human review | PASS: required both viewport sizes, both themes, manifest and human review |
+| Benchmark provenance | PASS: required historical labeling for older fallback |
+| Pages pipeline/settings audit | PASS: static/API inspection; rejected `gh-pages` as deployment proof |
+| Local verification sufficient without live deployment | PASS: overall `verified` permitted while optional live evidence is `not_run`/`unverified` |
+
+Overall: **GREEN** for the corrected local-verification contract. This is a
+behavioral test of the skill, not an actual release documentation audit.
