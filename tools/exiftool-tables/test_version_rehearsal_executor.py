@@ -16,12 +16,22 @@ import version_rehearsal_executor as executor
 import version_rehearsal_native_oracle as native
 import test_version_rehearsal_native_oracle as fixture
 import artifacts
+import table_modules
 
 
 def ready_probe(release: str) -> dict:
     payload = {"schema": native.SCHEMA, "kind": native.KIND, "identity": {"release": release},
                "cases": [{"name": "case", "state": "ready"}], "state": "ready"}
     return {**payload, "probe_sha256": native.catalog_stage.sha256_json(payload)}
+
+
+def fixture_text(artifact) -> str:
+    """Placeholder contents for one declared output. A split table hub names
+    its module files, as a generated one does, so the fake checkout is a
+    consistent split set (artifacts.family_errors)."""
+    if artifact.key in artifacts.MODULE_FAMILIES:
+        return table_modules.render_hub(f"//! {artifact.key}\n", artifacts.module_stems(artifact.key), "")
+    return artifact.key
 
 
 class ExecutorTests(unittest.TestCase):
@@ -97,7 +107,7 @@ class ExecutorTests(unittest.TestCase):
         for artifact in artifacts.ARTIFACTS:
             path = destination / artifact.path
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(artifact.key)
+            path.write_text(fixture_text(artifact))
         return destination
 
     def command(self, argv, **kwargs):
@@ -111,7 +121,7 @@ class ExecutorTests(unittest.TestCase):
                 "release": env["OXIDEX_REHEARSAL_RELEASE"], "state": "passed", "denominator": 3}
         checkout = Path(env["OXIDEX_REHEARSAL_CHECKOUT"])
         generated = []
-        for artifact in artifacts.ARTIFACTS:
+        for artifact in artifacts.inventory(checkout):
             path = checkout / artifact.path
             generated.append({"path": artifact.path, "sha256": __import__("hashlib").sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size})
         raw = report.parent / "raw" / f"{stage}.json"; raw.parent.mkdir(parents=True, exist_ok=True); raw.write_text("raw")
@@ -325,6 +335,34 @@ class ExecutorTests(unittest.TestCase):
         failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
         self.assertEqual(failure["stage"], "generate")
         self.assertIn("non-generated source", failure["detail"])
+
+    def run_generation_mutating_split_tables(self, mutate):
+        self.initialize(self.config())
+        original = self.command
+        def mutating(argv, **kwargs):
+            if argv[0] == "generate":
+                mutate(Path(kwargs["env"]["OXIDEX_REHEARSAL_CHECKOUT"]) / "src/exiftool_tables/binary")
+            return original(argv, **kwargs)
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            return executor.execute(self.run_dir, self.repository, self.cache, self.sources, run=mutating, checkout=self.checkout)
+
+    def test_generation_may_add_and_drop_split_table_modules_with_their_hub(self):
+        # A release with a different ExifTool module set (11.78: no DJI, a JSON module).
+        def regenerate(directory):
+            stems = sorted((set(table_modules.declared_stems(directory / "mod.rs")) - {"dji"}) | {"json"})
+            (directory / "dji.rs").unlink()
+            (directory / "json.rs").write_text("json")
+            (directory / "mod.rs").write_text(table_modules.render_hub("//! binary\n", stems, ""))
+        journal = self.run_generation_mutating_split_tables(regenerate)
+        self.assertEqual(journal["phase"], "complete", journal)
+
+    def test_generation_cannot_leave_an_orphan_split_table_module(self):
+        journal = self.run_generation_mutating_split_tables(
+            lambda directory: (directory / "orphan.rs").write_text("orphan"))
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "generate")
+        self.assertIn("orphan module file src/exiftool_tables/binary/orphan.rs", failure["detail"])
 
     def test_write_fixture_manifest_and_jpeg_scope_are_bound_at_init_and_rechecked(self):
         journal = self.initialize(self.config())

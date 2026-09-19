@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 
 import quicktime_atom_tables as selector
 
@@ -209,6 +210,28 @@ def rust_string(value):
         else:
             escaped.append(char)
     return '"' + "".join(escaped) + '"'
+
+
+# The types generated_itemlist_specs.rs declares for its sibling spec files.
+ITEMLIST_SHARED_TYPES = ("EnumOperand", "ItemListSpec", "SourceFormat")
+_RUST_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+
+
+def itemlist_use(body: str) -> list[str]:
+    """The `use` line a sibling spec file needs for `body`: exactly the shared
+    types its code names, none when it names none.
+
+    An upgrade whose QuickTime contract changed refuses every row, and then no
+    `EnumOperand` or `SourceFormat` is rendered; importing them regardless is
+    an `unused_imports` warning that CI's `clippy -D warnings` rejects.
+    String literals are skipped, so a tag *named* after a type is not a use.
+    """
+    code = _RUST_STRING.sub('""', body)
+    used = [name for name in ITEMLIST_SHARED_TYPES if re.search(rf"\b{name}\b", code)]
+    if not used:
+        return []
+    names = used[0] if len(used) == 1 else "{" + ", ".join(used) + "}"
+    return [f"use super::generated_itemlist_specs::{names};"]
 
 
 def render_format(value):

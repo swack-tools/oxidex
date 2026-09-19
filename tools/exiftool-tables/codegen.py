@@ -4331,6 +4331,25 @@ REPORT = (
 )
 
 
+def garmin_fit_in_scope(requested_modules, doc, fit_protocol) -> bool:
+    """Whether this run compiles the Garmin FIT specs.
+
+    Scope is the caller's `--modules` selection, never the dump's own module
+    list: a release without Garmin.pm (11.78, 12.64) has no Garmin entry in
+    its dump, so a dump-derived list can never select it, and the
+    source-proven absence path in `garmin_fit_specs.generate` would never
+    run. With no explicit selection every module is in scope, including one
+    the release lacks. Within scope, a dump without the module still compiles
+    when a protocol fact was captured; `generate` then admits only a
+    `garmin_fit_module_absent_v1` fact proven from that release's source tree
+    and raises on anything else.
+    """
+    import garmin_fit_specs
+    if requested_modules and garmin_fit_specs.MODULE not in requested_modules:
+        return False
+    return garmin_fit_specs.MODULE in (doc.get("modules") or {}) or fit_protocol is not None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tables_json")
@@ -4456,8 +4475,7 @@ def main():
     # (zero FIT rows) and raises on anything else.
     fit_src, fit_ledger = (
         garmin_fit_specs.generate(doc, verified_exprs, fit_protocol)
-        if (names is None or garmin_fit_specs.MODULE in names)
-        and (garmin_fit_specs.MODULE in (doc.get("modules") or {}) or fit_protocol is not None)
+        if garmin_fit_in_scope(args.modules, doc, fit_protocol)
         else ("", None)
     )
 

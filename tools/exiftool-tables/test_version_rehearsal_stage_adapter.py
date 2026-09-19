@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import artifacts
+import table_modules
 import version_rehearsal_stage_adapter as adapter
 
 COMMIT = "a" * 40
@@ -36,6 +37,15 @@ class V4Target:
         return (f"{self.table_group0}:{self.name}", f"{self.physical_write_group}:{self.name}")
 
 
+def fixture_text(artifact) -> str:
+    """Placeholder contents for one declared output. A split table hub names
+    its module files, as a generated one does, so the fake checkout is a
+    consistent split set (artifacts.family_errors)."""
+    if artifact.key in artifacts.MODULE_FAMILIES:
+        return table_modules.render_hub(f"//! {artifact.key}\n", artifacts.module_stems(artifact.key), "")
+    return artifact.key
+
+
 class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(); self.addCleanup(self.temp.cleanup); self.root = Path(self.temp.name)
@@ -44,7 +54,7 @@ class AdapterTests(unittest.TestCase):
         (self.checkout / "tools/exiftool-tables").mkdir(parents=True)
         (self.checkout / "tools/exiftool-tables/regen-all.sh").write_text("#!/bin/sh\n")
         for item in artifacts.ARTIFACTS:
-            path = self.checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(item.key)
+            path = self.checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(fixture_text(item))
         self.target = self.root / "target"; self.target.mkdir(); self.reports = self.root / "reports"; self.reports.mkdir()
         self.native = self.root / "native"; (self.native / "lib/Image/ExifTool").mkdir(parents=True)
         (self.native / "lib/Image/ExifTool.pm").write_text("$VERSION = '11.78';\n")
@@ -530,6 +540,40 @@ class AdapterTests(unittest.TestCase):
             self.fail("process-group fallback left the late child live")
         import version_rehearsal_executor as executor
         with executor._HostLock(lock): pass
+
+
+class LiveInventoryProofTests(unittest.TestCase):
+    """The generate/build artifact proof hashes the release's regenerated
+    inventory, not the pinned release's module list (#823's split tables:
+    11.78 drops binary/dji.rs and adds ifd/json.rs)."""
+
+    def test_artifact_rows_hash_the_regenerated_module_set(self):
+        with TemporaryDirectory() as temp:
+            checkout = Path(temp)
+            for item in artifacts.ARTIFACTS:
+                path = checkout / item.path; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(fixture_text(item))
+            (checkout / "src/exiftool_tables/binary/dji.rs").unlink()
+            binary = [s for s in artifacts.module_stems("binary") if s != "dji"]
+            (checkout / "src/exiftool_tables/binary/mod.rs").write_text(table_modules.render_hub("//! binary\n", binary, ""))
+            (checkout / "src/exiftool_tables/ifd/json.rs").write_text("json")
+            ifd = sorted([*artifacts.module_stems("ifd"), "json"])
+            (checkout / "src/exiftool_tables/ifd/mod.rs").write_text(table_modules.render_hub("//! ifd\n", ifd, ""))
+            rows = adapter._artifact_rows(checkout)
+            paths = [row["path"] for row in rows]
+            self.assertEqual(paths, [item.path for item in artifacts.inventory(checkout)])
+            self.assertIn("src/exiftool_tables/ifd/json.rs", paths)
+            self.assertNotIn("src/exiftool_tables/binary/dji.rs", paths)
+            json_row = next(row for row in rows if row["path"] == "src/exiftool_tables/ifd/json.rs")
+            self.assertEqual(json_row["sha256"], hashlib.sha256(b"json").hexdigest())
+            self.assertEqual(adapter._validate_artifacts(checkout, rows), rows)
+            # A proof taken against the pinned (13.59) list does not validate here.
+            pinned = [{"path": item.path, "sha256": "0" * 64, "bytes": 0} for item in artifacts.ARTIFACTS]
+            with self.assertRaises(adapter.Refused):
+                adapter._validate_artifacts(checkout, pinned)
+            # And the proof binds content: a changed member no longer validates.
+            (checkout / "src/exiftool_tables/ifd/json.rs").write_text("changed")
+            with self.assertRaisesRegex(adapter.Refused, "no longer matches"):
+                adapter._validate_artifacts(checkout, rows)
 
 
 class CurrentGeneratedMatrixContractTests(unittest.TestCase):

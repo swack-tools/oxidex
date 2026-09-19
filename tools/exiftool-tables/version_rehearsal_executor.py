@@ -307,11 +307,20 @@ def _source_tree(checkout: Path) -> dict[str, Any]:
     return {"files": files, "sha256": _sha_json(files)}
 
 
-def _verify_source_transition(before: Mapping[str, Any], after: Mapping[str, Any], allowed: set[str]) -> None:
+def _verify_source_transition(before: Mapping[str, Any], after: Mapping[str, Any], allowed: set[str],
+                              *, split_tables: Path | None = None) -> None:
+    """`split_tables`: the checkout whose regenerated split table directories
+    may gain or lose module files (a release adds or drops ExifTool modules),
+    provided its hubs then name exactly the files present."""
     if not isinstance(before.get("files"), dict) or not isinstance(after.get("files"), dict):
         raise Refused("source tree snapshot is malformed")
     changed = {name for name in before["files"].keys() | after["files"].keys()
                if before["files"].get(name) != after["files"].get(name)}
+    if split_tables is not None:
+        errors = artifacts.family_errors(split_tables)
+        if errors:
+            raise Refused("regenerated split tables are inconsistent: " + "; ".join(errors))
+        changed = {name for name in changed if not artifacts.is_family_member(name)}
     unexpected = sorted(changed - allowed)
     if unexpected:
         raise Refused("stage changed non-generated source entries: " + ", ".join(unexpected))
@@ -325,7 +334,7 @@ def _require_source_proof(result: Mapping[str, Any], checkout: Path, source_comm
 
 def _require_generated_artifacts(result: Mapping[str, Any], checkout: Path) -> list[dict[str, Any]]:
     rows = result.get("generated_artifacts")
-    expected = [item.path for item in artifacts.ARTIFACTS]
+    expected = [item.path for item in artifacts.inventory(checkout)]
     if not isinstance(rows, list) or len(rows) != len(expected):
         raise Refused("stage result lacks complete sanctioned generated artifact proof")
     found: list[str] = []
@@ -755,8 +764,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
         if record["state"] != "ok":
             raise Refused(f"{stage} command {record['state']}")
         after_source = _source_tree(checkout)
-        allowed = {".exiftool-version", *(item.path for item in artifacts.ARTIFACTS)} if stage == "generate" else set()
-        _verify_source_transition(before_source, after_source, allowed)
+        allowed = {".exiftool-version", *(item.path for item in artifacts.inventory(checkout))} if stage == "generate" else set()
+        _verify_source_transition(before_source, after_source, allowed,
+                                  split_tables=checkout if stage == "generate" else None)
         _verify_checkout_head(checkout, config["execution_source_commit"], run)
         result = _stage_result(output, release, stage,
                                native_probe.get("probe_sha256") if stage in {"read", "write"} else None,

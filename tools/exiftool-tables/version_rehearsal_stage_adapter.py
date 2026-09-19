@@ -176,16 +176,16 @@ def _source_tree(checkout: Path) -> str:
 
 def _artifact_rows(checkout: Path) -> list[dict[str, Any]]:
     rows = []
-    for item in artifacts.ARTIFACTS:
+    for item in artifacts.inventory(checkout):
         path = _regular(checkout / item.path, f"generated artifact {item.path}")
         rows.append({"path": item.path, "sha256": _sha(path), "bytes": path.stat().st_size})
     return rows
 
 
 def _validate_artifacts(checkout: Path, rows: Any) -> list[dict[str, Any]]:
-    if not isinstance(rows, list) or len(rows) != len(artifacts.ARTIFACTS):
+    expected = [item.path for item in artifacts.inventory(checkout)]
+    if not isinstance(rows, list) or len(rows) != len(expected):
         raise Refused("generated artifact proof is incomplete")
-    expected = [item.path for item in artifacts.ARTIFACTS]
     found: list[str] = []
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("path"), str) or row["path"] not in expected:

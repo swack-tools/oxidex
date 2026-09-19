@@ -1406,10 +1406,34 @@ mod tests {
 
     // --- run-time typed conversions (Garmin FIT) --------------------------
 
-    const BPM: TypedConv = TypedConv {
-        expr: ExprId::ValBpm49633A,
-        domain: ConvDomain::Num,
-    };
+    /// Garmin.pm's `Record` (message 20) `HeartRate` row (field 3,
+    /// `PrintConv => '"$val bpm"'`), found by that source identity in the
+    /// generated FIT protocol rather than by naming its generated `ExprId`
+    /// variant: the variant exists only when a release ships Garmin.pm, so
+    /// naming it stops the test target compiling for 11.78 or 12.64 (upgrade
+    /// rehearsal F2). `None` only when the generator proved the module absent
+    /// from the release's source tree; with the module present a missing or
+    /// reshaped row still fails loudly.
+    fn record_heart_rate_conv() -> Option<TypedConv> {
+        use crate::exiftool_tables::fit_schema::{FitPrintConv, FitUnavailable};
+        use crate::exiftool_tables::fit_tables::FIT_PROTOCOL;
+        if let Some(FitUnavailable::ModuleAbsent { exiftool_version }) = FIT_PROTOCOL.refusal {
+            eprintln!("ExifTool {exiftool_version} ships no Garmin.pm: no FIT conversion to test");
+            return None;
+        }
+        let record = FIT_PROTOCOL.message(20).expect("Garmin::FIT message 20");
+        assert_eq!(record.name, "Record");
+        let field = record
+            .table
+            .and_then(|table| table.field(3))
+            .expect("Garmin::Record field 3");
+        assert_eq!(field.name, "HeartRate");
+        let FitPrintConv::Typed(conv) = field.print_conv else {
+            panic!("Record HeartRate PrintConv is not a typed conversion: {field:?}");
+        };
+        assert!(matches!(conv.domain, ConvDomain::Num), "{conv:?}");
+        Some(conv)
+    }
     const DATE: TypedConv = TypedConv {
         expr: ExprId::SelfConvertDateTimeVal7455B8,
         domain: ConvDomain::Str,
@@ -1417,18 +1441,6 @@ mod tests {
 
     #[test]
     fn typed_conversion_runs_only_in_its_compiled_domain() {
-        assert_eq!(
-            render_typed(BPM, &DecodedValue::Integer(87)),
-            Typed::Value("87 bpm".to_string())
-        );
-        // Perl would interpolate the joined list; the list domain is a
-        // separate compiler, so the numeric program must not run here.
-        let list = DecodedValue::Array(vec![DecodedValue::Integer(87), DecodedValue::Integer(88)]);
-        assert_eq!(render_typed(BPM, &list), Typed::DomainMismatch);
-        assert_eq!(
-            render_typed(BPM, &DecodedValue::StringBytes(b"87".to_vec())),
-            Typed::DomainMismatch
-        );
         assert_eq!(
             render_typed(
                 DATE,
@@ -1440,6 +1452,21 @@ mod tests {
             render_typed(DATE, &DecodedValue::Integer(1)),
             Typed::DomainMismatch
         );
+        let Some(bpm) = record_heart_rate_conv() else {
+            return;
+        };
+        assert_eq!(
+            render_typed(bpm, &DecodedValue::Integer(87)),
+            Typed::Value("87 bpm".to_string())
+        );
+        // Perl would interpolate the joined list; the list domain is a
+        // separate compiler, so the numeric program must not run here.
+        let list = DecodedValue::Array(vec![DecodedValue::Integer(87), DecodedValue::Integer(88)]);
+        assert_eq!(render_typed(bpm, &list), Typed::DomainMismatch);
+        assert_eq!(
+            render_typed(bpm, &DecodedValue::StringBytes(b"87".to_vec())),
+            Typed::DomainMismatch
+        );
     }
 
     #[test]
@@ -1447,14 +1474,17 @@ mod tests {
         // Perl interpolates a 64-bit IV as its exact digits; the compiled
         // numeric programs take f64 and print through %.15g, which switches
         // to exponent notation at 1e15. Below that bound both agree.
+        let Some(bpm) = record_heart_rate_conv() else {
+            return;
+        };
         let largest = DecodedValue::Integer(999_999_999_999_999);
         let first_divergent = DecodedValue::Integer(1_000_000_000_000_000);
         assert_eq!(
-            render_typed(BPM, &largest),
+            render_typed(bpm, &largest),
             Typed::Value("999999999999999 bpm".to_string())
         );
-        assert_eq!(render_typed(BPM, &first_divergent), Typed::DomainMismatch);
-        assert_eq!(apply_typed(BPM, &first_divergent), Typed::DomainMismatch);
+        assert_eq!(render_typed(bpm, &first_divergent), Typed::DomainMismatch);
+        assert_eq!(apply_typed(bpm, &first_divergent), Typed::DomainMismatch);
     }
 
     #[test]

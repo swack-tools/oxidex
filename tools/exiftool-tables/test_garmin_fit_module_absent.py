@@ -14,8 +14,9 @@ and a Rust protocol that extracts nothing. These tests pin that:
 * the pinned 13.59 artifacts are unchanged (see also test_garmin_fit_specs.py,
   which replays the committed ledger and Rust byte-for-byte).
 
-`testdata/garmin_fit_module_absent_11_78_fact.json` is the real capture of the
-11.78 source tree (Perl 5.38.2). Set OXIDEX_ABSENT_EXIFTOOL_LIB to an
+`testdata/garmin_fit_module_absent_11_78_fact.json` and
+`testdata/garmin_fit_module_absent_12_64_fact.json` are the real captures of
+the 11.78 and 12.64 source trees (Perl 5.38.2). Set OXIDEX_ABSENT_EXIFTOOL_LIB to an
 ExifTool lib without Garmin.pm (and EXIFTOOL_PERL) to recapture it live.
 """
 from __future__ import annotations
@@ -38,6 +39,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CAPTURE = HERE / "capture_garmin_fit_fact.pl"
 ABSENT_FACT = HERE / "testdata" / "garmin_fit_module_absent_11_78_fact.json"
+# Real captures of historical release trees without Garmin.pm, keyed by release.
+ABSENT_FACTS = {
+    "11.78": ABSENT_FACT,
+    "12.64": HERE / "testdata" / "garmin_fit_module_absent_12_64_fact.json",
+}
 BOUNDED = HERE / "fixtures" / "garmin_fit_source.json"
 LEDGER = HERE / "garmin_fit_ledger.json"
 RUST = ROOT / "src" / "exiftool_tables" / "fit_tables.rs"
@@ -159,6 +165,83 @@ class ModuleAbsentGenerationTests(unittest.TestCase):
     def test_no_fact_without_the_module_is_refused(self):
         with PinnedTo("11.78"), self.assertRaisesRegex(ValueError, "no Garmin::FIT table"):
             specs.generate(absent_dump(), set(), None)
+
+
+class CodegenScopeTests(unittest.TestCase):
+    """codegen.py's Garmin gate. The 11.78/12.64 upgrade rehearsal (F1/I1)
+    found the gate testing the dump-derived module list, which for a release
+    without Garmin.pm can never contain Garmin: the regeneration died at
+    `--fit-out requested but the dump has no Garmin module in scope` before
+    the proven-absent path could run. Scope is the caller's `--modules`
+    selection; absence is then proven by `generate` from the source fact."""
+
+    def test_scope_follows_the_explicit_selection_not_the_dump(self):
+        import codegen
+        fact = json.loads(ABSENT_FACT.read_text())
+        present = json.loads(BOUNDED.read_text())
+        cases = [
+            # (requested --modules, dump, fact, in scope)
+            (None, absent_dump(), fact, True),       # regen-all: no selection, release lacks Garmin.pm
+            ([], absent_dump(), fact, True),         # `--modules` with no names selects nothing narrower
+            (["Garmin"], absent_dump(), fact, True),
+            (["FITS"], absent_dump(), fact, False),  # explicitly out of scope
+            (None, absent_dump(), None, False),      # no module, no fact: nothing to compile
+            (None, present, None, True),             # module present: its strict loader decides
+            (["Canon"], present, None, False),
+        ]
+        for requested, dump, protocol, expected in cases:
+            with self.subTest(requested=requested, module=bool(dump["modules"].get("Garmin")),
+                              fact=protocol is not None):
+                self.assertIs(codegen.garmin_fit_in_scope(requested, dump, protocol), expected)
+
+    def run_codegen(self, release: str, fact_path: Path, extra=()):
+        """codegen.main() over a Garmin-less dump of `release`, exactly as
+        regen.sh invokes it (no --modules), with the repository pinned there."""
+        import codegen
+        directory = tempfile.TemporaryDirectory(prefix="oxidex-fit-codegen-")
+        self.addCleanup(directory.cleanup)
+        out = Path(directory.name)
+        (out / "binary").mkdir()
+        dump = out / "tables.json"
+        dump.write_text(json.dumps(absent_dump(release)))
+        argv = ["codegen.py", str(dump), "-o", str(out / "binary" / "mod.rs"),
+                "--fit-out", str(out / "fit.rs"), "--fit-ledger-out", str(out / "fit_ledger.json"),
+                "--fit-protocol-fact", str(fact_path), *extra]
+        with PinnedTo(release), patch("sys.argv", argv), patch("sys.stdout"):
+            codegen.main()
+        return (out / "fit.rs").read_text(), json.loads((out / "fit_ledger.json").read_text())
+
+    def test_release_without_garmin_takes_the_proven_absence_path(self):
+        for release, fact_path in ABSENT_FACTS.items():
+            fact = json.loads(fact_path.read_text())
+            with self.subTest(release=release):
+                self.assertEqual(fact["native_identity"]["exiftool_version"], release)
+                self.assertIs(fact["module_file_present"], False)
+                rust, ledger = self.run_codegen(release, fact_path)
+                self.assertEqual(ledger["module_state"], "absent")
+                self.assertEqual(ledger["module_absence"], fact)
+                self.assertEqual(ledger["counts"]["source_rows"], 0)
+                self.assertIn("refusal: Some(FitUnavailable::ModuleAbsent {", rust)
+                self.assertIn(f'exiftool_version: "{release}"', rust)
+                self.assertNotIn("FitField {", rust)
+
+    def test_absence_is_still_proven_not_assumed(self):
+        # In scope is not the same as admitted: a fact that does not prove
+        # absence for this release still refuses the whole regeneration.
+        fact = json.loads(ABSENT_FACTS["12.64"].read_text())
+        fact["garmin_references"] = [{"file": "Image/ExifTool.pm", "pattern": "table_reference"}]
+        with tempfile.TemporaryDirectory() as directory:
+            forged = Path(directory) / "fact.json"
+            forged.write_text(json.dumps(fact))
+            with self.assertRaisesRegex(ValueError, "absence is not proven: .*garmin_referenced_in_source"):
+                self.run_codegen("12.64", forged)
+        # And a fact captured from a different release does not bind.
+        with self.assertRaisesRegex(ValueError, "absence is not proven: .*release_differs_from_dump"):
+            self.run_codegen("12.64", ABSENT_FACTS["11.78"])
+
+    def test_explicit_selection_without_garmin_still_rejects_fit_out(self):
+        with self.assertRaisesRegex(SystemExit, "no Garmin module in scope"):
+            self.run_codegen("12.64", ABSENT_FACTS["12.64"], extra=("--modules", "FITS"))
 
 
 class CaptureFailureTests(unittest.TestCase):
