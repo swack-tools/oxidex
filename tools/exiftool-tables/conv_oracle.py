@@ -48,7 +48,7 @@ def discover_tables(root=REPO):
             Path(root) / "tools/exiftool-tables" / f"conv_{entry.stem}_ledger.json",
             Path(root) / "tools/exiftool-tables/testdata" / f"conv_{entry.stem}_outputs.json",
         )
-        for entry in CG.discover_registry(root)
+        for entry in CG.verify_emitted_registry(root)
     }
 
 

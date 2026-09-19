@@ -175,6 +175,28 @@ def discover_registry(root=REPO):
         raise ValueError(f"orphan conversion module(s): {orphan}")
     return entries
 
+
+def verify_emitted_registry(root=REPO):
+    """Require the emitted generated block to be exactly the deterministic
+    ledger-derived registry before any consumer trusts its identities."""
+    root = Path(root)
+    entries = discover_registry(root)
+    if not entries:
+        raise ValueError("generated conversion registry requires a nonempty ledger set")
+    hub = root / "src/exiftool_tables/conv/mod.rs"
+    if not hub.is_file():
+        raise ValueError("generated conversion registry hub is missing")
+    text = hub.read_text(encoding="utf-8")
+    if text.count(REGISTRY_BEGIN) != 1 or text.count(REGISTRY_END) != 1:
+        raise ValueError("generated conversion registry markers are missing or duplicated")
+    start = text.index(REGISTRY_BEGIN)
+    end = text.index(REGISTRY_END, start) + len(REGISTRY_END)
+    actual = text[start:end]
+    expected = render_registry(entries)
+    if actual != expected:
+        raise ValueError("generated conversion registry differs from ledger-derived rendering")
+    return entries
+
 # The #824 helper library, by fully qualified Perl sub: how the backend calls
 # each port. Only subs listed in helpers.rs's PORTS may appear here (checked
 # in `ported_helpers`). `kind` is the Rust call shape.

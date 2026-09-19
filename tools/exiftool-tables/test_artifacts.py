@@ -21,14 +21,14 @@ class ManifestTests(unittest.TestCase):
         self.assertTrue(artifacts.select(2))
         members = len(artifacts.BINARY_MODULE_STEMS) + len(artifacts.IFD_MODULE_STEMS)
         self.assertEqual(len(artifacts.STATIC_ARTIFACTS), 69)
-        self.assertEqual(len(all_items), 69 + members)
+        self.assertEqual(len(all_items), 70 + members)
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_keys_specs")},
                          {"quicktime-keys-specs", "quicktime-keys-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="quicktime_userdata_specs")},
                          {"quicktime-userdata-specs", "quicktime-userdata-ledger"})
         self.assertEqual({item.key for item in artifacts.select(producer="conv_codegen")},
-                         {"conv-exif-main", "conv-exif-main-ledger"})
-        self.assertEqual(len(artifacts.select(1)), 46 + members)
+                         {"conv-registry", "conv-exif-main", "conv-exif-main-ledger"})
+        self.assertEqual(len(artifacts.select(1)), 47 + members)
         self.assertEqual(len(artifacts.select(2)), 23)
         self.assertEqual(len(all_items), len(artifacts.select(1)) + len(artifacts.select(2)))
         self.assertEqual(set(all_items), set(artifacts.select(1) + artifacts.select(2)))
@@ -36,6 +36,13 @@ class ManifestTests(unittest.TestCase):
         for producer in {a.producer for a in all_items}:
             self.assertEqual(artifacts.select(producer=producer),
                              [a for a in all_items if a.producer == producer])
+
+    def test_single_table_conversion_registry_is_inventoried(self):
+        self.assertEqual(
+            [item.path for item in artifacts.inventory(REPO_ROOT)
+             if item.key == "conv-registry"],
+            ["src/exiftool_tables/conv/mod.rs"],
+        )
 
     def test_module_files_are_the_committed_hubs_module_lines(self):
         """The per-module entries are read from the hubs, so the inventory

@@ -191,14 +191,14 @@ def conversion_artifacts(root=REPO_ROOT):
     if not hub.is_file() or conv_codegen.REGISTRY_BEGIN not in hub.read_text(encoding="utf-8"):
         # Older-release rehearsal fixtures have no generated registry yet.
         return ()
+    entries = conv_codegen.discover_registry(root)
     extra = tuple(
-        entry for entry in conv_codegen.discover_registry(root)
+        entry for entry in entries
         if entry.identity != conv_codegen.DEFAULT_TABLE
     )
-    if not extra:
-        return ()
-    return (Artifact("conv-registry", 1, "conv_codegen",
-                     "src/exiftool_tables/conv/mod.rs"),) + tuple(
+    registry = (Artifact("conv-registry", 1, "conv_codegen",
+                         "src/exiftool_tables/conv/mod.rs"),)
+    return registry + tuple(
         artifact
         for entry in extra
         for artifact in (

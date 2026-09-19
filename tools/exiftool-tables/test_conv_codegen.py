@@ -253,8 +253,11 @@ class Registry(unittest.TestCase):
             tools = root / "tools/exiftool-tables"
             conv.mkdir(parents=True)
             (tools / "testdata").mkdir(parents=True)
-            (conv / "mod.rs").write_text(
-                f"{C.REGISTRY_BEGIN}\nold\n{C.REGISTRY_END}\n")
+            entries = [
+                self.entry("Exif", "Main"),
+                self.entry("Synthetic", "Second"),
+            ]
+            (conv / "mod.rs").write_text(C.render_registry(entries) + "\n")
             for module, table in (("Exif", "Main"), ("Synthetic", "Second")):
                 stem = C.table_stem(module, table)
                 (conv / f"{stem}.rs").write_text("// generated")
@@ -268,6 +271,67 @@ class Registry(unittest.TestCase):
                  "conv-synthetic_second-oracle"],
             )
             self.assertEqual(list(O.discover_tables(root)), ["Exif::Main", "Synthetic::Second"])
+
+    def test_single_table_inventory_owns_generated_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            tools = root / "tools/exiftool-tables"
+            conv.mkdir(parents=True)
+            tools.mkdir(parents=True)
+            entry = self.entry("Exif", "Main")
+            (conv / "mod.rs").write_text(C.render_registry([entry]) + "\n")
+            (conv / "exif_main.rs").write_text("// generated")
+            (tools / "conv_exif_main_ledger.json").write_text(json.dumps({
+                "schema": C.LEDGER_SCHEMA,
+                "table": "Exif::Main",
+            }))
+            self.assertEqual(
+                [a.key for a in A.conversion_artifacts(root)],
+                ["conv-registry"],
+            )
+
+    def test_oracle_discovery_refuses_invalid_emitted_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            tools = root / "tools/exiftool-tables"
+            conv.mkdir(parents=True)
+            tools.mkdir(parents=True)
+            entry = self.entry("Exif", "Main")
+            (conv / "exif_main.rs").write_text("// generated")
+            ledger = tools / "conv_exif_main_ledger.json"
+            ledger.write_text(json.dumps({"schema": C.LEDGER_SCHEMA, "table": "Exif::Main"}))
+            hub = conv / "mod.rs"
+            valid = C.render_registry([entry]) + "\n"
+            hub.write_text(valid)
+            self.assertEqual(list(O.discover_tables(root)), ["Exif::Main"])
+            invalid = {
+                "missing": "pub mod exif_main;\n",
+                "stale": valid.replace('table: "Main"', 'table: "Old"'),
+                "duplicate": valid + C.render_registry([entry]) + "\n",
+                "extra": valid.replace(C.REGISTRY_END,
+                    '    Entry { module: "Extra", table: "Main", '
+                    'decode: exif_main::decode, claims: exif_main::claims },\n'
+                    + C.REGISTRY_END),
+                "decode": valid.replace("decode: exif_main::decode", "decode: wrong::decode"),
+                "claims": valid.replace("claims: exif_main::claims", "claims: wrong::claims"),
+            }
+            for name, text in invalid.items():
+                with self.subTest(name=name):
+                    hub.write_text(text)
+                    with self.assertRaisesRegex(ValueError, "generated conversion registry"):
+                        O.discover_tables(root)
+
+    def test_oracle_discovery_refuses_empty_registry_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            (root / "tools/exiftool-tables").mkdir(parents=True)
+            conv.mkdir(parents=True)
+            (conv / "mod.rs").write_text(C.render_registry([]) + "\n")
+            with self.assertRaisesRegex(ValueError, "nonempty"):
+                O.discover_tables(root)
 
     def test_oracle_check_ignores_only_interpreter_install_path(self):
         want = {"capture": {"perl": "/old/perl", "exiftool_version": "13.59"}, "fields": {}}
