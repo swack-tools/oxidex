@@ -251,9 +251,23 @@ pub fn process_exif_segments(
                     )));
                 }
                 Ok(tags) => {
-                    // Process IFD0 tags and get sub-IFD offsets
-                    let (exif_ifd_offset, gps_ifd_offset) =
-                        process_ifd0_tags(&tags, byte_order, metadata, diagnostics);
+                    // Process IFD0 tags and get sub-IFD offsets. The
+                    // generated `Exif::Main` produces every ordinary entry it
+                    // reports (per-field mixed mode, slice v2-ifd0); the hand
+                    // arm keeps the rest, the pointers and the order.
+                    let mut engine = crate::core::exif_dir_engine::ifd0_walk(
+                        tiff_data, ifd_offset, byte_order, metadata,
+                    );
+                    let (exif_ifd_offset, gps_ifd_offset) = process_ifd0_tags(
+                        &tags,
+                        byte_order,
+                        engine.as_mut(),
+                        metadata,
+                        diagnostics,
+                    );
+                    if let Some(engine) = engine {
+                        engine.drain_ifd0(metadata);
+                    }
 
                     // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
                     // file position of the TIFF header, which ExifTool adds to
@@ -347,6 +361,9 @@ pub fn process_exif_segments(
 ///
 /// * `tags` - Parsed IFD tags
 /// * `byte_order` - Byte order for interpreting multi-byte values
+/// * `engine` - The generated `Exif::Main` walk of this IFD0
+///   (`exif_dir_engine::ifd0_walk`), asked first for every ordinary entry;
+///   `None` = the hand arm alone
 /// * `metadata` - MetadataMap to populate
 /// * `diagnostics` - Sink for problems that don't stop the read (an
 ///   unparseable embedded ICC profile is skipped, not fatal)
@@ -357,6 +374,7 @@ pub fn process_exif_segments(
 fn process_ifd0_tags(
     tags: &[(u16, u16, u32, std::borrow::Cow<[u8]>)],
     byte_order: ByteOrder,
+    mut engine: Option<&mut crate::core::exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
     diagnostics: &mut DiagnosticSink,
 ) -> (Option<u64>, Option<u64>) {
@@ -441,6 +459,14 @@ fn process_ifd0_tags(
             {
                 metadata.insert(tag_name, TagValue::new_string(value));
             }
+            continue;
+        }
+
+        // Slice v2-ifd0: the engine's row for this entry, at this entry's
+        // position, or the hand arm below when the engine leaves it.
+        if let Some(engine) = engine.as_deref_mut()
+            && engine.take_ifd0(*tag_id, metadata)
+        {
             continue;
         }
 
@@ -2873,6 +2899,7 @@ mod transfer_function_tests {
         process_ifd0_tags(
             &tags,
             ByteOrder::LittleEndian,
+            None,
             &mut metadata,
             &mut Vec::new(),
         );

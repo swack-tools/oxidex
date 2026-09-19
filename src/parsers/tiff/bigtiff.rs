@@ -117,7 +117,13 @@ pub fn parse_bigtiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         };
         // The exif/gps/makernote pointers this returns are deliberately not
         // followed -- see the module docs.
-        let _ = process_tiff_ifd_tags(&entries, get_ifd_name(index), byte_order, &mut metadata);
+        let _ = process_tiff_ifd_tags(
+            &entries,
+            get_ifd_name(index),
+            byte_order,
+            None,
+            &mut metadata,
+        );
         ifd_offset = next;
         index += 1;
     }

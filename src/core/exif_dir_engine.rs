@@ -119,8 +119,8 @@ pub(crate) struct DirEngineRows {
     /// (`ifd_engine::process_exif_decoded`).
     reads: Vec<EntryRead>,
     /// Engine-reported ids the caller keeps on its hand arms
-    /// ([`Self::keep_hand`]).
-    hand_kept: &'static [u16],
+    /// ([`Self::keep_hand`], every call's ids).
+    hand_kept: Vec<u16>,
     /// Names of rows the walk dropped because their `ValueConv` result is
     /// not a finite number (see [`walk`]): an absence of the engine's own.
     unrenderable: Vec<&'static str>,
@@ -138,7 +138,7 @@ impl DirEngineRows {
             refused_as_exiftool: false,
             ids: Vec::new(),
             reads: Vec::new(),
-            hand_kept: &[],
+            hand_kept: Vec::new(),
             unrenderable: Vec::new(),
             stored_forms: false,
         }
@@ -233,15 +233,15 @@ impl DirEngineRows {
     /// and their buffered rows are dropped so neither [`Self::replay`] nor
     /// [`Self::drain`] records one beside the hand row. A row is matched by
     /// the names the ids declare, so no id in `ids` may share a name with an
-    /// id the engine keeps (the caller's pin checks it).
-    pub(crate) fn keep_hand(mut self, ids: &'static [u16]) -> Self {
+    /// id the engine keeps (the caller's pin checks it). Calls accumulate.
+    pub(crate) fn keep_hand(mut self, ids: &[u16]) -> Self {
         let table = self.table;
         for row in &mut self.rows {
             if ids.iter().any(|&id| declares(table, id, row.name)) {
                 row.consumed = true;
             }
         }
-        self.hand_kept = ids;
+        self.hand_kept.extend_from_slice(ids);
         self
     }
 
@@ -312,6 +312,36 @@ impl DirEngineRows {
         }
     }
 
+    /// Records every row at `priority`, including the rows
+    /// [`Self::at_priority`] leaves at their own (`keeps_priority`): for a
+    /// directory whose hand arm recorded every entry at one priority (IFD0's
+    /// `insert()`), so moving an entry to the engine moves no `-TAG` winner.
+    pub(crate) fn at_uniform_priority(mut self, priority: u8) -> Self {
+        for row in &mut self.rows {
+            row.priority = priority;
+        }
+        self
+    }
+
+    /// The IFD0 hand walks' per-entry question (see [`ifd0_walk`]): whether
+    /// the engine produced entry `id` -- its row recorded now, at this
+    /// entry's position, as `IFD0:<name>` -- or vouches for its absence (an
+    /// absence ExifTool shares, see [`Self::undecoded`]). `false` means the
+    /// hand arm produces the entry, exactly as before the engine: an id the
+    /// engine does not report (withheld, a `SubDirectory` edge, `Unknown`,
+    /// untranscribed, [`IFD0_HAND_KEPT`]) or an absence that is the
+    /// engine's own (a generated arm declined a withheld field, an entry
+    /// `read_ifd` never saw).
+    pub(crate) fn take_ifd0(&mut self, id: u16, metadata: &mut MetadataMap) -> bool {
+        self.owner(id, false) == Owner::Engine
+            && (self.replay(id, metadata, ifd0_key, |_, _| true) || !self.undecoded(id))
+    }
+
+    /// [`Self::drain`] for IFD0: rows whose entry the hand walk never reached.
+    pub(crate) fn drain_ifd0(self, metadata: &mut MetadataMap) {
+        self.drain(metadata, ifd0_key, |_, _| true);
+    }
+
     /// The table this walk read.
     pub(crate) fn table(&self) -> &'static IfdTable {
         self.table
@@ -323,6 +353,72 @@ impl DirEngineRows {
     pub(crate) fn entries(&self) -> Option<usize> {
         self.entries
     }
+}
+
+/// IFD0 entries every hand walk consumes structurally before it would record
+/// a row, so the engine's row for them is never replayed nor drained: the
+/// IPTC-NAA block (0x83bb, parsed into `IPTC:*`), the GeoTIFF key directory
+/// and its parameter blocks (0x87af, 0x87b0, 0x87b1, parsed into GeoTIFF
+/// keys) and ModelTransform (0x85d8, printed as `EXIF:ModelTransform`), and
+/// PrintIM (0xc4a5, `PrintIM:PrintIMVersion`). Their hand treatment is not a
+/// conversion of the entry and stays as it is.
+///
+/// And the five Windows XP strings, 0x9c9b-0x9c9f XPTitle, XPComment,
+/// XPAuthor, XPKeywords, XPSubject (`ValueConv =>
+/// '$self->Decode($val,"UCS2","II")'`, Exif.pm): the generated backend
+/// refuses them (`Decode` has no proven port, `conv::exif_main::REFUSED`), and
+/// the static table's `exprs::decode_ucs2` keeps a leading U+0000 as a
+/// character where ExifTool's value ends at it -- FujiFilmFinePixZ100fd.jpg
+/// (and Z200fd, Z250fd), whose XPTitle is `00 00` then fifteen UCS-2 spaces,
+/// prints `""` under the pinned 13.59 (`-j`, `-b` empty) and fifteen spaces
+/// from the engine. The hand arm prints ExifTool's value. Sorted.
+pub(crate) const IFD0_HAND_KEPT: &[u16] = &[
+    0x83bb, 0x85d8, 0x87af, 0x87b0, 0x87b1, 0x9c9b, 0x9c9c, 0x9c9d, 0x9c9e, 0x9c9f, 0xc4a5,
+];
+
+/// The key an engine-produced IFD0 row is recorded under: ExifTool's family
+/// 1, as the hand walks key it (`lookup_tag_name(id, "IFD0")`).
+fn ifd0_key(name: &str) -> String {
+    format!("IFD0:{name}")
+}
+
+/// One engine walk of IFD0 (DirName `IFD0`, slice v2-ifd0) for the three
+/// hand walks of it -- `jpeg_helpers::process_ifd0_tags` (a JPEG's APP1),
+/// `tiff_helpers::process_tiff_ifd_tags` (a standalone TIFF's first
+/// directory) and `embedded::parse_embedded_exif_at` (PNG `eXIf`, PSD,
+/// HEIF, WebP, JXL). Each keeps its own walk, order, pointers and
+/// structural entries; for every ordinary entry it asks
+/// [`DirEngineRows::take_ifd0`] first and runs its hand arm only on `false`
+/// (per-field mixed mode, as the ExifIFD, InteropIFD and IFD1 walks).
+///
+/// * `tiff` is the TIFF block, byte 0 = the TIFF header (ExifTool's
+///   `DataPt`), and `ifd0` IFD0's offset in it.
+/// * Rows are recorded at the hand walks' own priority,
+///   [`SHIM_DEFAULT_PRIORITY`], every one of them
+///   ([`DirEngineRows::at_uniform_priority`]): IFD0's hand arm recorded
+///   every entry through `insert()`, and IFD0 is the directory a bare
+///   request answers from, so no winner moves.
+/// * `SubDirectory` edges are not silenced: IFD0's hand arm reports what it
+///   reported before (the ICC_Profile blob, the MakerNote row).
+///
+/// `None` when the generated `Exif::Main` is not in force (Gate A or the
+/// allowlist): then every entry is the hand arm's, as before the slice.
+pub(crate) fn ifd0_walk(
+    tiff: &[u8],
+    ifd0: u64,
+    order: ByteOrder,
+    metadata: &MetadataMap,
+) -> Option<DirEngineRows> {
+    // The lookup is spelled with literal arguments because
+    // `tools/exiftool-tables/reachability.py` counts literal call sites;
+    // `enabled()` re-checks Gate A and the allowlist at runtime.
+    let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").filter(|t| t.enabled())?;
+    Some(
+        walk(table, tiff, ifd0, order, "IFD0", metadata)
+            .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
+            .keep_hand(IFD0_HAND_KEPT)
+            .with_stored_forms(),
+    )
 }
 
 /// `<Dir>:<Name>` into the map the way `FoundTag` records it: the row's
@@ -1519,6 +1615,91 @@ mod tests {
         eprintln!("{checked} engine ExifIFD values, {} names", names.len());
     }
 
+    /// Slice v2-ifd0, the IFD0 counterpart of the test above: the output
+    /// layer's name-keyed rules leave every engine-rendered IFD0 value
+    /// alone (bar an unconverted zero-denominator rational, printed `undef`
+    /// / `inf` as ExifTool prints it). Real values: IFD0 of every pinned
+    /// t/images JPEG and of [`CORPUS_JPEGS`], walked by [`ifd0_walk`].
+    #[test]
+    fn output_rules_are_a_no_op_on_engine_ifd0_values() {
+        let mut paths: Vec<std::path::PathBuf> =
+            std::fs::read_dir("/tmp/oxidex-exiftool-cache/exiftool/t/images")
+                .map(|dir| {
+                    dir.filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
+                        .collect()
+                })
+                .unwrap_or_default();
+        let root = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT);
+        paths.extend(CORPUS_JPEGS.iter().map(|name| root.join(name)));
+        paths.sort();
+        let mut checked = 0;
+        let mut names = std::collections::BTreeSet::new();
+        let mut changed = Vec::new();
+        for path in &paths {
+            let Ok(jpeg) = std::fs::read(path) else {
+                continue;
+            };
+            let Some(tiff) = app1_tiff(&jpeg) else {
+                continue;
+            };
+            let order = match tiff.get(..2) {
+                Some(b"II") => ByteOrder::LittleEndian,
+                Some(b"MM") => ByteOrder::BigEndian,
+                _ => continue,
+            };
+            let word = |at: usize| -> Option<u32> {
+                let b: [u8; 4] = tiff.get(at..at + 4)?.try_into().ok()?;
+                Some(match order {
+                    ByteOrder::LittleEndian => u32::from_le_bytes(b),
+                    ByteOrder::BigEndian => u32::from_be_bytes(b),
+                })
+            };
+            let Some(ifd0) = word(4) else {
+                continue;
+            };
+            let Some(rows) = ifd0_walk(&tiff, u64::from(ifd0), order, &MetadataMap::new()) else {
+                eprintln!("skipping: Exif::Main is not in force");
+                return;
+            };
+            for row in rows.rows.iter().filter(|row| !row.consumed) {
+                let key = format!("IFD0:{}", row.name);
+                let shown =
+                    crate::core::exiftool_compat::format_tag_value_rules(&key, &row.display);
+                checked += 1;
+                names.insert(row.name);
+                let zero_denominator = match row.display {
+                    TagValue::Rational {
+                        numerator,
+                        denominator: 0,
+                    } => Some(if numerator == 0 { "undef" } else { "inf" }),
+                    _ => None,
+                };
+                if let Some(want) = zero_denominator {
+                    if shown != TagValue::new_string(want) {
+                        changed.push(format!("{}: {key} n/0 -> {shown:?}", path.display()));
+                    }
+                } else if shown != row.display {
+                    changed.push(format!(
+                        "{}: {key} {:?} -> {shown:?}",
+                        path.display(),
+                        row.display
+                    ));
+                }
+            }
+        }
+        if checked == 0 {
+            eprintln!("skipping: no pinned t/images or corpus JPEGs on this machine");
+            return;
+        }
+        assert!(
+            changed.is_empty(),
+            "{} re-converted: {changed:#?}",
+            changed.len()
+        );
+        eprintln!("{checked} engine IFD0 values, {} names", names.len());
+    }
+
     const CORPUS_JPEGS: &[&str] = &[
         "Apple/Apple_iPadPro10.5.jpg",
         "Apple/Apple_iPhone6.jpg",
@@ -1532,7 +1713,10 @@ mod tests {
         "Canon/CanonXL_H1.jpg",
         "DJI/DJI_FC300X.jpg",
         "DJI/DJI_XT2.jpg",
+        "FujiFilm/FujiFilmDS-10.jpg",
         "FujiFilm/FujiFilmFinePixHS35EXR.jpg",
+        "FujiFilm/FujiFilmFinePixZ100fd.jpg",
+        "GoPro/GoProHD2.jpg",
         "GoPro/GoProHERO10Black.jpg",
         "Google/GoogleNexusS.jpg",
         "Leica/LeicaM8.jpg",
@@ -1543,6 +1727,7 @@ mod tests {
         "Nikon/NikonSUPER_COOLSCAN4000ED.jpg",
         "Olympus/OlympusE-M10MarkIV.jpg",
         "Panasonic/PanasonicDMC-F7.jpg",
+        "Panasonic/PanasonicDMC-ZS19.jpg",
         "Samsung/SamsungAnycallSPH-A503.jpg",
         "Samsung/SamsungAnycallSPH-B6650.jpg",
         "Samsung/SamsungDigimax220SE.jpg",
@@ -1552,6 +1737,7 @@ mod tests {
         "Samsung/SamsungGalaxyA55_5G.jpg",
         "Samsung/SamsungHMX-H300.jpg",
         "Samsung/SamsungNX3000.jpg",
+        "Samsung/SamsungSGH-D980.jpg",
         "Samsung/SamsungSM-T800.jpg",
         "Samsung/SamsungSPH-A800.jpg",
         "Samsung/SamsungVP-D73.jpg",
@@ -1562,6 +1748,7 @@ mod tests {
         "Sony/SonyILCE-7CM2.jpg",
         "Sony/SonyILCE-7M4.jpg",
         "Sony/SonyILME-FX3.jpg",
+        "Sony/SonyMVC-CD1000.jpg",
     ];
 
     /// The TIFF block of a JPEG's first `Exif\0\0` APP1 segment.

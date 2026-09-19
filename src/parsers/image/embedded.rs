@@ -30,6 +30,13 @@ pub fn parse_embedded_exif(tiff_data: &[u8], metadata: &mut MetadataMap) -> bool
     parse_embedded_exif_at(tiff_data, 0, metadata)
 }
 
+/// IFD0 entries [`parse_embedded_exif_at`] keeps on its hand arm beside
+/// `exif_dir_engine::IFD0_HAND_KEPT`: SubfileType (0x00fe) and
+/// OldSubfileType (0x00ff), whose value marks the full-resolution IFD0, and
+/// ImageWidth (0x0100) and ImageHeight (0x0101), recorded at the priority
+/// that marker decides. Sorted.
+const EMBEDDED_IFD0_HAND_KEPT: &[u16] = &[0x00fe, 0x00ff, 0x0100, 0x0101];
+
 /// Parses a self-contained TIFF/EXIF block and inserts its tags.
 ///
 /// `tiff_data` must start at the TIFF header ("II"/"MM"), i.e. any
@@ -104,6 +111,13 @@ pub fn parse_embedded_exif_at(
     let mut gps_ifd_offset = None;
     let mut full_resolution_ifd0 = false;
 
+    // Slice v2-ifd0: the generated `Exif::Main` produces every ordinary IFD0
+    // entry it reports; the hand arm below keeps the rest, and
+    // `EMBEDDED_IFD0_HAND_KEPT`.
+    let mut engine =
+        crate::core::exif_dir_engine::ifd0_walk(tiff_data, ifd0_offset, byte_order, metadata)
+            .map(|engine| engine.keep_hand(EMBEDDED_IFD0_HAND_KEPT));
+
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
         let bytes = raw_bytes.as_ref();
 
@@ -114,6 +128,14 @@ pub fn parse_embedded_exif_at(
         }
         if *tag_id == GPS_IFD_POINTER && bytes.len() >= 4 {
             gps_ifd_offset = EndianReader::new(bytes, io_order).u32_at(0).map(u64::from);
+            continue;
+        }
+
+        // The engine's row for this entry, at this entry's position, or the
+        // hand arm below when the engine leaves it.
+        if let Some(engine) = engine.as_mut()
+            && engine.take_ifd0(*tag_id, metadata)
+        {
             continue;
         }
 
@@ -153,6 +175,10 @@ pub fn parse_embedded_exif_at(
         } else {
             metadata.insert(tag_name, tag_value);
         }
+    }
+
+    if let Some(engine) = engine {
+        engine.drain_ifd0(metadata);
     }
 
     if let Some(offset) = exif_ifd_offset {
