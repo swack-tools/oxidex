@@ -30,11 +30,16 @@ Use the actual `conformance.py` fields, preserving its comparator semantics:
 - `missing` (MISSING) = native occurrences lacking an OxiDex counterpart.
 - `value_diff` (VALUE) = paired names whose values disagree. Preserve the
   severity histogram (identity/structural/numeric/date_time/binary/display_only).
-- `renames` (RENAME) = inferred different names with a matching value and a
-  table-supported name relationship; retain the rename votes for review.
+- `renames` (RENAME) = heuristic votes from `infer_renames`: a normalized value
+  has a unique candidate in each direction among missing/extra occurrences,
+  and either the normalized name matches or the value is sufficiently
+  distinctive under `distinctive()`. This function does not consult a source
+  table. Retain votes for review; require a pinned-table investigation before
+  promoting a suggested rename to a confirmed mapping or implementing it.
 - `extra` (EXTRA) = unmatched OxiDex-only occurrences, reported separately.
 - Native scored denominator `N = matched + value_diff + missing + renames`.
-  Score = `matched / N`; rename ceiling = `(matched + renames) / N`.
+  Score = `matched / N`; rename ceiling = `(matched + renames) / N`, a
+  provisional estimate from heuristic votes, not confirmed or earned parity.
   EXTRA never enters this recall denominator.
 - This instrument's precision = `matched / (matched + extra)`, not a generic
   all-output correctness rate. Its empty-denominator convention is 1.0;

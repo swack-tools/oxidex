@@ -75,6 +75,34 @@ class SkillMirrorTests(unittest.TestCase):
             self.assertEqual(receipt[family]["status"], "unverified")
         self.assertNotIn("overall_parity_percent", receipt)
 
+    def test_parity_matrix_report_isolates_writes_and_checks_source(self):
+        text = canonical("exiftool-parity", "references/harnesses.md")
+        snippets = bash_snippets("exiftool-parity", "references/harnesses.md")
+        report = next((s for s in snippets if "report --check-baseline" in s), "")
+        self.assertTrue(report, "matrix report needs an executable isolation recipe")
+        for required in (
+            'TAGMATRIX_REPO="$PARITY_REPORT_ROOT"',
+            'git show "${PARITY_SHA}:docs/reference/jpeg-tag-baseline.json"',
+            'test -s "$PARITY_REPORT_BASELINE"',
+            'shasum -a 256 "$PARITY_REPORT_BASELINE"',
+            'test "$(git rev-parse \'HEAD^{commit}\')" = "$PARITY_SHA"',
+            'test -z "$(git status --porcelain)"',
+        ):
+            self.assertIn(required, report)
+        self.assertIn("Never revert", text)
+
+    def test_parity_generated_table_recipe_is_explicitly_blocked(self):
+        text = canonical("exiftool-parity", "references/harnesses.md")
+        self.assertNotIn("Run `just verify-tables`", text)
+        for required in ("Generated-table verification is blocked", "verify_subdirs.py", "/usr/bin/perl", "shebang"):
+            self.assertIn(required, text)
+
+    def test_parity_rename_votes_are_provisional_heuristics(self):
+        text = canonical("exiftool-parity", "references/release-metrics.md")
+        self.assertNotIn("table-supported name relationship", text)
+        for required in ("infer_renames", "unique", "normalized name", "distinctive", "pinned-table investigation", "provisional"):
+            self.assertIn(required, text)
+
     def test_shared_skill_allowlist_is_discovered(self):
         self.assertIn("exiftool-parity", sync.shared_skill_names(REPO))
 
