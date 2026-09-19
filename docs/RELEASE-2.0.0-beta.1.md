@@ -68,8 +68,12 @@ git tag -v v2.0.0-beta.1
 GIT_SSH_COMMAND="$SSH" git push origin "refs/tags/v2.0.0-beta.1"
 ```
 
-Don't use `just tag`/`just release`: that recipe makes an unsigned tag of
-`HEAD` and pushes it at once.
+Or, equivalently, `just tag 2.0.0-beta.1 "$SHA"`. It refuses a commit that is
+not on `origin/refactor/tag-machinery` or `origin/main`, a commit GitHub does
+not report as signed and verified, an existing tag, or a `Cargo.toml` version
+that differs; it then signs with `git tag -s`, verifies the signature locally,
+and only then pushes. `OXIDEX_TAG_DRY_RUN=1 just tag 2.0.0-beta.1` runs every
+check and the sign-and-verify step, then deletes the tag without pushing.
 
 ### What the push triggers
 
