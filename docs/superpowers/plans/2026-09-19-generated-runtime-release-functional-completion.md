@@ -10,11 +10,13 @@ manual code, and prove repeatable ExifTool version transitions before
 `v2.0.0-beta.1` promotion work begins.
 
 **Architecture:** One controller preserves each task in a local named worktree
-and a remote draft PR, then squash-merges reviewed, green PRs into
-`refactor/tag-machinery` and fast-forwards its integration mirror. Up to three
-Desktop subagents and six `codex --yolo exec` workers operate concurrently when
-their file leases do not overlap. Contract and engine work is serialized;
-vendor and container adapters fan out after those interfaces are frozen.
+and a remote draft PR, then squash-merges reviewed, green PRs into its
+single-writer `staging/beta1-functional-integration` branch and fast-forwards
+the integration mirror. A final requalified whole-branch PR lands into
+`refactor/tag-machinery`. Up to three Desktop subagents and six
+`codex --yolo exec` workers operate concurrently when their file leases do not
+overlap. Contract and engine work is serialized; vendor and container adapters
+fan out after those interfaces are frozen.
 
 **Tech Stack:** Rust, Python 3, Perl 5.38.2, ExifTool 13.59 and fixed rehearsal
 releases 11.78/12.64, Cargo, `uv`, `just`, Git worktrees, Codex Desktop
@@ -147,13 +149,22 @@ For every dispatch, the controller copies into the task PRD: this plan's
 Global Constraints, the complete task section, its resolved base SHA, the
 absolute worktree/target/evidence paths, prerequisite commit/receipt IDs, the
 file lease, the handoff cadence, and the exact launch command. The worker must
-first pass `tools/preflight.sh`, then run and retain `tools/preflight.sh
---upstream` even if only its known `origin/main` comparison is nonzero, and
-finally require the resolved task base with `git merge-base --is-ancestor
-"$task_base" HEAD` in its own worktree. The known `origin/main` divergence is
-recorded but is not that task's base-freshness gate. A PRD is not a
-pointer to this plan: it is the self-contained execution contract that lets a
-fresh CLI process resume without conversation history.
+run these literal freshness gates before its first edit:
+
+```bash
+tools/preflight.sh
+git fetch origin staging/beta1-functional-integration main refactor/tag-machinery
+test "$(git rev-parse HEAD)" = "$task_base"
+test "$(git rev-parse origin/staging/beta1-functional-integration)" = "$task_base"
+git rev-list --count HEAD..origin/main
+```
+
+No nonzero preflight result is tolerated. The final command records the known
+`origin/main` divergence but does not use it as a gate. On resume, the worker
+requires `git merge-base --is-ancestor "$task_base" HEAD`, while the controller
+reconciles any later integration movement. A PRD is not a pointer to this
+plan: it is the self-contained execution contract that lets a fresh CLI
+process resume without conversation history.
 
 The controller creates each task worktree with the branch, worktree, and base
 recorded in the task section and ledger:
@@ -254,8 +265,10 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | each Task 12-16 parser/test lease and distinct `runtime_ownership.d/TASK_SLUG.json` | 12-16 respectively | no shared dispatcher, engine, composite, or generated output edits |
 | `src/exiftool_tables/pipeline.rs`, `docs/reference/generated-runtime-walker-inventory.json`, `tests/generated_runtime_walker_contract.rs` | 17 | all Task 12-16 remotely merge first |
 | compatibility/deletion ledger paths created by Task 18 | 18 | all runtime and vendor migrations remotely merge first |
-| version-transition qualification files | 19 | Tasks 5, 6, and 18 merged first |
-| release TODO, public measurements, autogeneration docs, parity skill | 20 | candidate frozen; no runtime writer active |
+| version-transition implementation and receipt files | 19 | Tasks 5, 6, and 18 merged first |
+| `docs/UPGRADE-NEXT-STEPS.md`, `docs/reference/upgrade-rehearsal-11.78-12.64.md` | 19, then 20 | Task 19 remotely merges before Task 20 acquires the documentation lease |
+| `.agents/skills/exiftool-parity/SKILL.md` | 0, then 20 | Task 0 remotely merges before Task 20 acquires the skill lease |
+| release TODO, public measurements, and autogeneration docs | 20 | candidate frozen; no runtime writer active |
 
 ## Dependency and Dispatch Map
 
@@ -548,10 +561,11 @@ nohup codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
   > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl \
   2>&1 < /dev/null &
 worker_pid=$!
-printf 'pid=%s\n' "$worker_pid" \
+worker_start=$(ps -p "$worker_pid" -o lstart=)
+worker_command=$(ps -p "$worker_pid" -o command=)
+printf 'pid=%s\nstart_time=%s\ncommand=%s\n' \
+  "$worker_pid" "$worker_start" "$worker_command" \
   > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
-ps -p "$worker_pid" -o lstart= -o command= \
-  >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
 tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl &
 tail_pid=$!
 wait "$worker_pid"
@@ -563,10 +577,31 @@ printf 'exit_status=%s\n' "$worker_status" \
 
 If the supervisor dies, extract the exact session ID with
 `jq -r 'select(.type == "thread.started") | .thread_id'` from the persisted
-`thread.started` event, reconcile Task 0's worktree and remote branch, and
-resume only that session from the Task 0 worktree:
+`thread.started` event. A replacement first verifies PID, start time, and
+executable. A matching live process is watched, never resumed; an identity
+mismatch is a blocker and is never signaled. Only a confirmed-dead,
+incomplete process may resume:
 
 ```bash
+set -euo pipefail
+cd /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap
+process_file=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
+recorded_pid=$(sed -n 's/^pid=//p' "$process_file")
+recorded_start=$(sed -n 's/^start_time=//p' "$process_file")
+if kill -0 "$recorded_pid" 2>/dev/null; then
+  current_start=$(ps -p "$recorded_pid" -o lstart=)
+  current_command=$(ps -p "$recorded_pid" -o command=)
+  test "$current_start" = "$recorded_start"
+  printf '%s\n' "$current_command" | rg 'codex .*exec'
+  tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl
+  exit 0
+fi
+git status --short
+git log -1 --oneline
+if rg -q 'RETURN_TO_CONTROLLER' HANDOFF.md \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final.md; then
+  exit 0
+fi
 session_id=$(jq -r 'select(.type == "thread.started") | .thread_id' \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl | head -n 1)
 test -n "$session_id"
@@ -2638,12 +2673,21 @@ be recomputed from prose or formatted output.
 
 - [ ] **Step 1: Freeze and record the candidate**
 
-After Task 19 is remotely merged, fetch
+After Task 19 is remotely merged, stop all implementation workers and acquire
+the integration merge lease. Fetch both
 `origin/staging/beta1-functional-integration` and
-create the named Task 20 worktree and branch from that exact remote SHA. Record
-the full SHA, clean state, branch, binary path/hash, pin, pinned source hash,
-Perl hash/version, corpus roots/counts, and lock status. Stop all implementation
-workers. Do not run these gates in the controller integration mirror.
+`origin/refactor/tag-machinery`. Rebase the clean controller-owned integration
+branch onto the exact current `origin/refactor/tag-machinery` SHA, rerun its
+fast structural smoke tests, and update only that controller-owned remote with
+`--force-with-lease` against the previously recorded integration SHA. Record
+the target SHA as `qualified_target_sha`; do not create Task 20 until the
+updated local and remote integration SHAs agree.
+
+Create the named Task 20 worktree and branch from that exact synchronized
+integration SHA. Record the full SHA, `qualified_target_sha`, clean state,
+qualification round, branch, binary path/hash, pin, pinned source hash, Perl
+hash/version, corpus roots/counts, and lock status. Do not run these gates in
+the controller integration mirror.
 
 - [ ] **Step 2: Run clean full regeneration twice**
 
@@ -2813,10 +2857,22 @@ test "$atomic_guard" -eq 1
 ```
 
 If neither rule exists, record a blocker and do not merge; never substitute a
-check-then-merge shell sequence. With the guard present, mark the PR ready and
-use GitHub's protected merge/queue path with `--match-head-commit`. Fetch the
-resulting target SHA, verify the PR and merge commit, and only then record the
-functional program complete.
+check-then-merge shell sequence.
+
+Immediately before the final review package and again after required checks,
+fetch `origin/refactor/tag-machinery` and compare it to
+`qualified_target_sha`. If it changed, do not merge: increment the
+qualification round, rebase the controller-owned integration branch onto that
+exact target with a recorded `--force-with-lease`, create
+`staging/beta1/frozen-candidate-evidence-rN`, and repeat Task 20 Steps 1-12 in
+full. Prior corpus, transition, attribution, read-regression, documentation,
+and review receipts are stale for the combined tree and may not be reused.
+
+Only when the twice-checked target equals `qualified_target_sha` and the atomic
+guard is live may the controller mark the final PR ready and use GitHub's
+protected merge/queue path with `--match-head-commit`. Fetch the resulting
+target SHA, verify the PR and merge commit, and only then record the functional
+program complete.
 
 The result is ready for the separate `main` reconciliation, packaging, CI/CD,
 signing, notarization, and tagging portions of `TODO_RELEASE_BETA.md`. This plan

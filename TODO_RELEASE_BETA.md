@@ -66,8 +66,10 @@ jobs finish.
 - [ ] Keep every worktree, target, source cache, corpus, toolchain, log,
       receipt, and recovery file under `/Users/allen/git` or
       `/Users/allen/oxidex-ops`; reject ephemeral temporary-directory paths.
-- [ ] Run `tools/preflight.sh --upstream` before the first edit and before
-      remote operations.
+- [ ] Run `tools/preflight.sh` before the first edit and before remote
+      operations, then fetch and compare the task's literal base against its
+      controller-owned remote target. Record `origin/main` divergence
+      separately; never mask a preflight failure.
 - [ ] Preserve unrelated dirty files and worktrees; never rewrite the protected
       checkout in place.
 - [ ] Use the shared build lock for Cargo builds/tests/clippy and the exclusive
@@ -95,9 +97,10 @@ jobs finish.
       each task PR. Fetch and fast-forward the controller mirror to the remote
       merge before releasing dependent tasks.
 - [ ] Land the completed integration branch through one final reviewed PR into
-      `refactor/tag-machinery`; require a live strict up-to-date protection or
-      merge-queue rule before merging so target movement cannot race the
-      reviewed/tested base.
+      `refactor/tag-machinery`; rebase and rerun the complete frozen-candidate
+      qualification if that target moved, then require a live strict
+      up-to-date protection or merge-queue rule before merging so target
+      movement cannot race the reviewed/tested base.
 - [ ] Retain task worktrees and remote branches until the wave's post-merge
       gates pass and the PR, merge SHA, and resulting target SHA are recorded.
 

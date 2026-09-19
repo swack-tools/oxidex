@@ -392,6 +392,13 @@ its integration worktree to the resulting remote target before releasing
 dependent tasks. The task worktree remains available until the remote merge
 SHA and post-merge target SHA are recorded.
 
+Before final qualification, the controller rebases its single-writer
+integration branch onto the exact current `refactor/tag-machinery` SHA. Task 20
+authenticates that combined tree. If the target moves before the final merge,
+the integration branch is rebased again and every Task 20 gate, receipt,
+documentation update, and whole-branch review is rerun; strict protection or a
+merge queue then closes the last target-movement race.
+
 Generated outputs, central registries, artifact manifests, workspace manifests,
 lockfiles, `.exiftool-version`, and the integration ledger have one owner at a
 time. Parallel agents may produce local generated diffs as evidence but do not
