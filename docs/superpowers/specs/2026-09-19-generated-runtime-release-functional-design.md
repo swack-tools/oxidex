@@ -45,7 +45,9 @@ The functional program is complete when all of the following are true:
     command, and measurement floors.
 13. Every implementation task is preserved as local signed checkpoint commits
     and a remote draft PR, then lands through reviewed, green, squash-merged CI
-    into `refactor/tag-machinery`.
+    into the controller-owned `staging/beta1-functional-integration` branch.
+    One final whole-branch PR lands that branch into `refactor/tag-machinery`
+    only through a verified strict up-to-date or merge-queue guard.
 14. No release worktree, target, source cache, corpus, toolchain, receipt, log,
     ledger, or recovery artifact depends on an ephemeral temporary directory.
 
@@ -59,7 +61,8 @@ The functional program is complete when all of the following are true:
 - Approximating unsupported ExifTool conversions.
 - Editing `main` or `refactor/tag-machinery` directly.
 - Publishing a release, tagging, merging to `main`, or rewriting shared
-  history as part of this functional program. Reviewed task PRs into
+  history as part of this functional program. Reviewed task PRs into the
+  controller-owned integration branch and its final PR into
   `refactor/tag-machinery` are part of the program.
 - Running several agents against one worktree or one Cargo target directory.
 
@@ -98,10 +101,10 @@ The functional program is complete when all of the following are true:
   another live task.
 - The implementation plan assigns every task a literal slug and all three
   literal paths. Agents do not invent or reuse names.
-- Every task first passes `tools/preflight.sh`, then records
-  `tools/preflight.sh --upstream` and verifies its frozen base SHA explicitly.
-  The known `origin/main` divergence is evidence for later reconciliation, not
-  a false stale-base verdict for work based on `refactor/tag-machinery`.
+- Every task first passes `tools/preflight.sh`, fetches the controller-owned
+  remote integration ref, and verifies its frozen base SHA explicitly. No
+  preflight failure is masked. The known `origin/main` divergence is recorded
+  separately for later reconciliation, not treated as the task base.
 
 ### 4.3 Fleet capacity and speed
 
@@ -132,11 +135,13 @@ The functional program is complete when all of the following are true:
 ### 4.4 Codex CLI worker protocol
 
 The controller creates the named worktree, target directory, and a
-self-contained task PRD, then runs this command from that worktree:
+self-contained task PRD. Its durable `launch` command starts this argv with
+`subprocess.Popen(start_new_session=True)`, the PRD opened as stdin, and
+append-only JSONL/final-message files:
 
 ```bash
-codex --yolo exec --enable fast_mode --model gpt-5.6-terra - \
-  < /absolute/path/to/task-prd.md
+codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
+  -o /absolute/durable/process/final.md -C /absolute/task/worktree -
 ```
 
 `--yolo` is user-authorized so CLI workers do not stop for edit approvals. The
@@ -150,9 +155,12 @@ fix-loop, handoff, and integration requirements as Desktop subagents. Their
 terminal output is not the progress record; commits, reports, receipts, and
 `HANDOFF.md` are.
 
-If a worker dies, the controller runs the same command again in the same
-worktree; the replacement reads the PRD and `HANDOFF.md` and continues from the
-recorded next command. A quota or rate-limit response stops new dispatches.
+The detached worker survives controller-shell death. `monitor`, `status`, and
+`heartbeat` track it by PID, process start time, executable, and the
+`thread.started` session ID. If the worker dies, `resume` first reconciles the
+worktree and remote state, then runs `codex --yolo exec resume ... SESSION_ID
+-` with a durable recovery prompt; it never uses `--last`. A quota or
+rate-limit response stops new dispatches.
 
 ## 5. Current architectural facts
 
@@ -373,7 +381,7 @@ covering tests are rerun, and its review package is regenerated.
 
 Task branches may contain several signed checkpoint commits. After the first
 meaningful clean checkpoint, the controller pushes the branch and opens a
-draft PR against `refactor/tag-machinery`. It pushes later checkpoints and
+draft PR against `staging/beta1-functional-integration`. It pushes later checkpoints and
 updates the PR evidence summary so local and remote recovery state advance
 together.
 
@@ -450,7 +458,7 @@ The controller ledger maps every task to:
 - local checkpoint and remote merge commits;
 - evidence receipts;
 - remote branch, PR number/URL, latest pushed SHA, CI state, merge SHA, and
-  post-merge `origin/refactor/tag-machinery` SHA; and
+  post-merge `origin/staging/beta1-functional-integration` SHA; and
 - dependencies released by integration.
 
 For CLI workers the ledger also records PID plus process start time, Codex

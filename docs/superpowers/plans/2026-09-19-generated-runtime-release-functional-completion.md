@@ -91,17 +91,24 @@ After that PR lands, create the controller worktree from the remote target:
 
 ```bash
 git fetch origin refactor/tag-machinery main
-tools/preflight.sh
-tools/preflight.sh --upstream || true
 git worktree add -b staging/beta1-functional-integration \
   /Users/allen/git/oxidex-beta1-functional-integration \
   origin/refactor/tag-machinery
+cd /Users/allen/git/oxidex-beta1-functional-integration
+tools/preflight.sh
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/refactor/tag-machinery)"
+GIT_SSH_COMMAND="ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer" \
+  git push -u origin staging/beta1-functional-integration
+test "$(git rev-parse HEAD)" = \
+  "$(git ls-remote origin refs/heads/staging/beta1-functional-integration | cut -f1)"
 ```
 
-The preflight output is retained even when it returns nonzero for the known,
-intentional `origin/main` divergence. The new integration HEAD must equal
-`origin/refactor/tag-machinery`; any protected-branch, dirty-tree, fetch, or
-target freshness failure blocks setup.
+Run those commands from the new integration worktree. Do not mask any
+`preflight.sh` exit. The explicit SHA equality records the intentional
+`origin/main` divergence without weakening protected-branch, dirty-tree,
+fetch, or target-freshness checks. The remote
+`staging/beta1-functional-integration` branch is controller-owned: task PRs
+target it, only the controller merges into it, and no worker may push it.
 
 In the integration worktree, initialize the Superpowers workspace and controller
 handoff:
@@ -132,7 +139,7 @@ atomically advances the durable snapshot and appends an event. It then updates
 the integration `HANDOFF.md`. Remote branches and PR comments are the second
 recovery layer.
 
-The controller then creates each task branch/worktree from the current
+The controller then creates each task branch/worktree from the current remote
 integration HEAD and writes that resolved SHA into the task PRD and
 `HANDOFF.md`.
 
@@ -177,12 +184,12 @@ The controller copies the immutable PRD into the plan-specific Superpowers
 workspace before Desktop dispatch. The ledger stores both paths and the PRD
 SHA-256. A dispatch is refused when either copy is missing or hashes differ.
 
-For example, Task 5 launches from its named worktree as:
+For example, Task 5 launches through the durable controller as:
 
 ```bash
-codex --yolo exec --enable fast_mode --model gpt-5.6-terra \
-  -C /Users/allen/git/oxidex-beta1-upgrade-transaction - \
-  < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md
+python3 tools/release/fleet_controller.py launch \
+  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
+  --repo /Users/allen/git/oxidex-beta1-functional-integration --task 5
 ```
 
 The controller launches Desktop implementers with an isolated
@@ -194,36 +201,59 @@ before considering the task running. Reviewers use a distinct
 `beta1_review_NN_SLUG_rR` name and receive the PRD, report, review package,
 and verbatim Global Constraints.
 
-CLI launches use `codex --yolo exec --enable fast_mode --model ... -C ... -`
-from the canonical PRD. The controller captures the command, PID, process
-start time, Codex session/thread identifier when emitted, JSONL output, final
-message, and exit status under `controller/processes/TASK_NUMBER/`. On recovery it
-checks PID identity plus start time, reconciles the worktree and remote branch,
-and resumes the recorded Codex session when safe; it never infers liveness from
-a reused PID alone.
+CLI launches use `fleet_controller.py launch`. It validates dependencies and
+hashes, then starts `codex --yolo exec --enable fast_mode --model MODEL
+--json -o FINAL -C WORKTREE -` with the canonical PRD opened as stdin,
+`subprocess.Popen(..., start_new_session=True)`, and append-only JSONL stdout
+and stderr. The child therefore survives controller-shell death. The
+controller records the exact argv, PID, kernel process start time, Codex
+thread ID from the `thread.started` JSON event, log segment, final message,
+and exit status under `controller/processes/TASK_NUMBER/`.
 
-## Red-zone Ownership Matrix
+`monitor --task N --follow` tails new JSON events and advances a heartbeat;
+`status --task N` is nonblocking; `stop --task N --signal TERM` verifies PID,
+start time, executable, and task before signaling. `resume --task N` is
+allowed only after the recorded process is dead, the worktree/remote state is
+reconciled, and no unowned path changed. It starts this exact shape in the
+task worktree, writes a new JSONL segment, and increments `launch_count`:
+
+```bash
+codex --yolo exec resume --enable fast_mode --model MODEL --json \
+  -o FINAL SESSION_ID -
+```
+
+The resume prompt is a durable controller-generated file containing the PRD
+hash, last accepted checkpoint, current `git status`, failed/incomplete step,
+and exact next action. Recovery never uses `--last` and never infers liveness
+from a reused PID alone.
+
+## Red-zone Ownership Transition Matrix
 
 The materialized PRD may narrow a lease but may never widen this matrix.
 
-| Path or glob | Sole task owner | Release condition |
+| Path or glob | Sequential task owners | Release condition |
 |---|---:|---|
 | `justfile` | 0, then 1, then 18 | each prior owner remotely merged; no concurrent edits |
 | `tools/release/fleet_controller.py`, `tools/release/fleet-schema.json`, `tools/release/test_fleet_controller.py` | 0 | Task 0 only |
 | `tools/exiftool-tables/runtime_ownership.py`, `runtime_ownership.json`, `test_runtime_ownership.py` | 1 | Task 1 only; vendors own distinct fragment files |
 | `src/core/tag_occurrence.rs`, `src/core/tag_sink.rs`, `src/core/metadata_map.rs` | 2 | Task 2 remote merge before consumer/runtime work |
 | `src/cli/tag_resolution.rs`, `src/cli/output_formatter.rs`, `src/cli/batch_processor.rs`, `src/ffi/**`, `src/composite/mod.rs` | 3 | Task 3 only; Task 14 may not edit `src/composite/mod.rs` |
-| `tools/exiftool-tables/conv_codegen.py`, `conv_oracle.py`, conversion generated outputs and manifest | 4 | Task 4 only |
+| `tools/exiftool-tables/conv_codegen.py`, `conv_oracle.py`, conversion generated outputs and manifest | 4, then 10 | Task 4 remotely merges before Task 10 acquires the lease |
 | `tools/exiftool-tables/upgrade_transaction.py`, `test_upgrade_transaction.py`, version-rehearsal executor/adapter tests | 5 | Task 5 only; Task 3 may not edit them |
 | `tools/exiftool-tables/conformance.py`, `test_conformance.py` | 6 | Task 6 only; Task 8 explicitly denies these paths |
 | `src/exiftool_tables/session.rs`, `cond.rs` | 7 | Task 7 only |
 | `tools/exiftool-tables/genshare/**` | 8 | Task 8 only |
-| `src/exiftool_tables/conv/mod.rs`, `ifd_engine.rs`, `src/core/exif_dir_engine.rs`, `tiff_helpers.rs`, `jpeg_helpers.rs`, `src/exiftool_tables/enabled_ifd.rs` | 9 | Tasks 7 and 4 merge first; Task 9 owns the converged edit |
+| `src/exiftool_tables/conv/mod.rs` | 4, then 9 | Task 4 remotely merges before Task 9 acquires the lease |
+| `src/exiftool_tables/ifd_engine.rs` | 7, then 8, then 9, then 17, then 18 | every prior owner remotely merges before the next acquires the lease |
+| `src/core/exif_dir_engine.rs`, `src/core/tiff_helpers.rs`, `src/core/jpeg_helpers.rs` | 7, then 9, then 10, then 18 | every prior owner remotely merges before the next acquires the lease |
+| `src/exiftool_tables/enabled_ifd.rs` | 9 | Task 9 only |
+| `src/exiftool_tables/engine.rs`, `keyed_engine.rs`, `serial_engine.rs` | 8, then 17, then 18 | every prior owner remotely merges before the next acquires the lease |
+| `src/exiftool_tables/mod.rs` | 8, then 17 | Task 8 remotely merges before Task 17 acquires the lease |
 | `tools/exiftool-tables/conv_exif_main_ledger.json` and its exact refusal-closure inputs/outputs | 10 | Task 10 only |
 | `src/parsers/tiff/makernotes/olympus.rs`, `src/parsers/tiff/makernotes/olympus/**`, `runtime_ownership.d/olympus.json` | 11 | Task 11 only |
 | each Task 12-16 parser/test lease and distinct `runtime_ownership.d/TASK_SLUG.json` | 12-16 respectively | no shared dispatcher, engine, composite, or generated output edits |
-| `src/exiftool_tables/engine.rs`, `ifd_engine.rs`, `keyed_engine.rs`, `serial_engine.rs` | 17 | all Task 12-16 remote merges first |
-| compatibility/deletion ledger paths named by Task 18 | 18 | all runtime and vendor migrations merged first |
+| `src/exiftool_tables/pipeline.rs`, `docs/reference/generated-runtime-walker-inventory.json`, `tests/generated_runtime_walker_contract.rs` | 17 | all Task 12-16 remotely merge first |
+| compatibility/deletion ledger paths created by Task 18 | 18 | all runtime and vendor migrations remotely merge first |
 | version-transition qualification files | 19 | Tasks 5, 6, and 18 merged first |
 | release TODO, public measurements, autogeneration docs, parity skill | 20 | candidate frozen; no runtime writer active |
 
@@ -241,7 +271,7 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | 7 | `file-session` | Desktop / Sol | 2, 4 | 3, 5, 6 |
 | 8 | `generated-attribution` | CLI / Terra | 1, 3, 4, 7 | 5, 6 |
 | 9 | `exif-shared-pipeline` | Desktop / Sol | 2, 4, 7, 8 | 5, 6 |
-| 10 | `refusal-closure` | Desktop / Sol | 9 | 5, 6 |
+| 10 | `refusal-closure` | Desktop / Sol | 1, 4, 9 | 5, 6 |
 | 11 | `olympus-pilot` | Desktop / Sol | 3, 8, 10 | 5, 6 |
 | 12 | `nikon-port` | CLI / Terra | 11 | 13-16 |
 | 13 | `pentax-panasonic-port` | CLI / Terra | 11 | 12, 14-16 |
@@ -282,7 +312,7 @@ test -z "$(git -C "$task_worktree" status --short)"
 git -C "$task_worktree" cat-file -p HEAD | rg '^gpgsig '
 GIT_SSH_COMMAND="$GIT_SSH_COMMAND" git -C "$task_worktree" push -u origin "$task_branch"
 gh pr create --repo swack-tools/oxidex --draft \
-  --base refactor/tag-machinery --head "$task_branch" \
+  --base staging/beta1-functional-integration --head "$task_branch" \
   --title "$task_pr_title" --body-file "$task_pr_body"
 ```
 
@@ -307,12 +337,12 @@ bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/s
 ```
 4. Dispatch a fresh reviewer at the task's stated reviewer model.
 5. Complete the Superpowers fix loop and push every signed fix checkpoint.
-6. Fetch `origin/refactor/tag-machinery` and compare paths:
+6. Fetch `origin/staging/beta1-functional-integration` and compare paths:
 
 ```bash
 git -C "$task_worktree" diff --name-only "$task_base..$task_head" | sort -u
 git -C /Users/allen/git/oxidex-beta1-functional-integration \
-  diff --name-only "$task_base..origin/refactor/tag-machinery" | sort -u
+  diff --name-only "$task_base..origin/staging/beta1-functional-integration" | sort -u
 ```
 
 7. If the target advanced or path sets overlap, record the fetched target SHA
@@ -330,8 +360,8 @@ git -C /Users/allen/git/oxidex-beta1-functional-integration \
 ```bash
 gh pr ready "$task_pr" --repo swack-tools/oxidex
 gh pr checks "$task_pr" --repo swack-tools/oxidex --watch --fail-fast
-git -C "$task_worktree" fetch origin refactor/tag-machinery
-test "$(git -C "$task_worktree" rev-parse origin/refactor/tag-machinery)" = "$task_base"
+git -C "$task_worktree" fetch origin staging/beta1-functional-integration
+test "$(git -C "$task_worktree" rev-parse origin/staging/beta1-functional-integration)" = "$task_base"
 gh pr merge "$task_pr" --repo swack-tools/oxidex --squash \
   --match-head-commit "$task_head"
 ```
@@ -340,11 +370,21 @@ gh pr merge "$task_pr" --repo swack-tools/oxidex --squash \
    mirror:
 
 ```bash
-git -C /Users/allen/git/oxidex-beta1-functional-integration fetch origin refactor/tag-machinery
-git -C /Users/allen/git/oxidex-beta1-functional-integration merge --ff-only origin/refactor/tag-machinery
-gh pr view "$task_pr" --repo swack-tools/oxidex \
-  --json state,mergeCommit,headRefOid,url
+git -C /Users/allen/git/oxidex-beta1-functional-integration fetch origin staging/beta1-functional-integration
+git -C /Users/allen/git/oxidex-beta1-functional-integration merge --ff-only origin/staging/beta1-functional-integration
+task_merge=$(gh pr view "$task_pr" --repo swack-tools/oxidex \
+  --json mergeCommit --jq .mergeCommit.oid)
+git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse "$task_merge^1"
+test "$(git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse "$task_merge^1")" = "$task_base"
+gh pr view "$task_pr" --repo swack-tools/oxidex --json state,mergeCommit,headRefOid,url
 ```
+
+The dedicated integration target has one writer: this controller. It holds an
+exclusive durable merge lease from the final pre-merge fetch through the
+post-merge fetch and verifies that the returned squash commit's first parent
+equals `task_base`. Any unexpected target movement is a lease violation: stop
+all dispatch, preserve evidence, and do not classify the task merged. This
+single-writer target removes the check-then-merge race for Tasks 0-20.
 
 10. Record task base/head, latest pushed SHA, review verdict, CI checks, PR URL,
     merge SHA, post-merge target SHA, and receipts in the local controller
@@ -471,23 +511,75 @@ the task branch or opening/updating its draft PR.
 **Target:** `/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap`
 **Commit:** `build: make release execution state durable`
 
-**Launch:** Task 0 is the sole manual bootstrap. Create its `processes/00`
-directory first, then launch with `set -o pipefail` so the worker's JSONL,
-final message, terminal output, and true exit status survive the process:
+**Bootstrap PRD:** Task 0 is the sole manual bootstrap. Its canonical PRD is a
+byte-for-byte copy of the reviewed, merged plan, so creating it does not depend
+on the not-yet-implemented materializer:
+
+```bash
+task_base=$(git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse HEAD)
+git -C /Users/allen/git/oxidex-beta1-functional-integration worktree add \
+  -b staging/beta1/durable-controller-oracle-bootstrap \
+  /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
+  "$task_base"
+cd /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap
+tools/preflight.sh
+mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds
+cp docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md
+cmp docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md
+shasum -a 256 \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md
+```
+
+Record the merged plan commit and printed hash in `HANDOFF.md` before launch.
+The Task 0 worker is told to execute Task 0 only.
+
+**Launch:** Start Task 0 detached so it survives the supervising shell. Record
+`worker_pid` and `ps -p "$worker_pid" -o lstart= -o command=` immediately in
+`controller/processes/00/bootstrap-process.txt`, then watch the JSONL file:
 
 ```bash
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
-set -o pipefail
-codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
+nohup codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
   -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final.md \
-  -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap - \
-  < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md \
-  2>&1 | tee /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events.jsonl
+  -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
+  'Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER.' \
+  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl \
+  2>&1 < /dev/null &
+worker_pid=$!
+printf 'pid=%s\n' "$worker_pid" \
+  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
+ps -p "$worker_pid" -o lstart= -o command= \
+  >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
+tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl &
+tail_pid=$!
+wait "$worker_pid"
+worker_status=$?
+kill "$tail_pid"
+printf 'exit_status=%s\n' "$worker_status" \
+  >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
 ```
 
-The supervising session records the shell PID and process start time before
-launch, watches the live stream, checks the pipeline exit status, and writes a
-bootstrap event before relying on Task 0's controller for later launches.
+If the supervisor dies, extract the exact session ID with
+`jq -r 'select(.type == "thread.started") | .thread_id'` from the persisted
+`thread.started` event, reconcile Task 0's worktree and remote branch, and
+resume only that session from the Task 0 worktree:
+
+```bash
+session_id=$(jq -r 'select(.type == "thread.started") | .thread_id' \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl | head -n 1)
+test -n "$session_id"
+nohup codex --yolo exec resume --enable fast_mode --model gpt-5.6-terra --json \
+  -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final-resume.md \
+  "$session_id" \
+  'Continue Task 0 from its canonical PRD and HANDOFF.md. Reconcile the current worktree first; do not repeat completed external actions.' \
+  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-2.jsonl \
+  2>&1 < /dev/null &
+```
+
+The replacement supervisor appends output to a new numbered JSONL segment and
+refuses `--last`.
 
 **Files:**
 
@@ -517,16 +609,20 @@ bootstrap event before relying on Task 0's controller for later launches.
   Archive-Zip 1.68 SHA-256
   `65089896661884077a90a17515153a2108a6a86ba6d69b02632cc201345a277e`,
   and ExifTool tag object `2200871d9cef988051d2a99d67df3bda6cbb30a8`.
-- `fleet_controller.py init|materialize|event|checkpoint|reconcile|recover`
-  validates the task DAG and paths, writes atomic snapshots plus append-only
-  events, materializes self-contained PRDs, records local/remote checkpoints,
-  and reconstructs safe next actions after worker or controller death.
+- `fleet_controller.py init|materialize|event|checkpoint|reconcile|recover|
+  launch|monitor|status|heartbeat|resume|stop` validates the task DAG and
+  paths, writes atomic snapshots plus append-only events, materializes
+  self-contained PRDs, supervises detached CLI workers, records Desktop agent
+  identities/events supplied by the primary session, records local/remote
+  checkpoints, and reconstructs safe next actions after worker or controller
+  death.
 - `fleet-schema.json` requires schema version, plan/spec hashes, target ref/SHA,
   task number/slug, state history, dependencies, file lease, worker
   kind/model/effort/identity, PID/start-time/session ID when applicable, launch
   count, PRD/report/review hashes, base/head/pushed/merge/target SHAs,
   worktree/target/evidence paths, heartbeat, PR/CI state, receipt hashes,
-  ruling/blocker, and exact next command.
+  ruling/blocker, exclusive merge-lease identity, expected merge parent, and
+  exact next command.
 
 - [ ] **Step 1: Write failing durable-path, controller, and identity tests**
 
@@ -541,8 +637,12 @@ In `test_fleet_controller.py`, use a durable test root beneath
 and assert: invalid/outside paths are refused; state writes are atomic;
 events are append-only; dependencies block dispatch until remote merge;
 materialized PRD hashes reconcile; PID reuse does not imply liveness; repeated
-remote reconciliation is idempotent; and recovery after simulated worker and
-controller death produces one next action without duplicate dispatch.
+remote reconciliation is idempotent; detached CLI launch survives controller
+death; `monitor` parses the thread ID and heartbeat; `resume` uses the recorded
+ID rather than `--last`; only one controller can acquire the integration merge
+lease; an unexpected squash parent blocks dependency release; and recovery
+after simulated worker and controller death produces one next action without
+duplicate dispatch.
 
 - [ ] **Step 2: Run the focused tests red**
 
@@ -566,7 +666,7 @@ the last verified installation intact and a journal naming the failed stage.
 
 - [ ] **Step 4: Implement the durable fleet controller and path fence**
 
-Implement the six controller subcommands and JSON schema above. Every command
+Implement all controller subcommands and the JSON schema above. Every command
 resolves paths before use and accepts only descendants of `/Users/allen/git`
 or `/Users/allen/oxidex-ops`. `materialize` combines the plan's Global
 Constraints, complete task section, resolved base SHA, literal paths,
@@ -574,6 +674,12 @@ dependencies, exact file lease, handoff template, report contract, and launch
 command into the canonical PRD. `recover` reconciles the snapshot, append-only
 events, worktree commits, ignored `HANDOFF.md`, worker identity, pushed branch,
 PR, CI, and merge SHA without mutating a protected branch.
+
+`launch` uses `subprocess.Popen(start_new_session=True)` with the canonical
+PRD opened as stdin and durable JSONL/final-message files. `monitor`,
+`heartbeat`, `status`, `stop`, and `resume` implement the exact process and
+session rules in the Controller Workspace contract. Tests use a fake Codex
+executable and kill the controller parent to prove the worker remains alive.
 
 - [ ] **Step 5: Change repository defaults and add refusal fences**
 
@@ -595,7 +701,7 @@ python3 tools/release/fleet_controller.py init \
   --plan docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
   --spec docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md \
   --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
-  --target-ref origin/refactor/tag-machinery
+  --target-ref origin/staging/beta1-functional-integration
 python3 tools/release/fleet_controller.py recover \
   --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
   --repo /Users/allen/git/oxidex-beta1-functional-integration
@@ -873,7 +979,7 @@ conversion still living in `exiftool_compat.rs`, commit SHA, exact tests, and
 **Commit:** `refactor: project typed metadata values consistently`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-typed-consumers - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/03-typed-consumers.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 3`
 
 **Files:**
 
@@ -1089,7 +1195,7 @@ commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 **Commit:** `fix: regenerate both sides of ExifTool upgrades`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-upgrade-transaction - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 5`
 
 **Files:**
 
@@ -1169,7 +1275,7 @@ and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 **Commit:** `test: authenticate conformance occurrence totals`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-luna -C /Users/allen/git/oxidex-beta1-conformance-receipts - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/06-conformance-receipts.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 6`
 
 **Files:**
 
@@ -1342,7 +1448,7 @@ Record scope semantics, call-site inventory, tests, commit SHA, and
 **Commit:** `test: authenticate generated route attribution`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-generated-attribution - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/08-generated-attribution.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 8`
 
 **Files:**
 
@@ -1781,7 +1887,7 @@ The controller freezes the shared adapter interfaces after this task integrates.
 **Commit:** `feat: forward-port remaining Nikon metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-nikon-port - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/12-nikon-port.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 12`
 
 **Files:**
 
@@ -1848,7 +1954,7 @@ gate `lost 0`.
 **Commit:** `feat: forward-port Pentax and Panasonic metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-pentax-panasonic-port - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/13-pentax-panasonic-port.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 13`
 
 **Files:**
 
@@ -1921,7 +2027,7 @@ task values. Require zero lost reads and zero new VALUE rows.
 **Commit:** `feat: complete DJI and dependent metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-dji-composite-xmp-port - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/14-dji-composite-xmp-port.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 14`
 
 **Files:**
 
@@ -1992,7 +2098,7 @@ Require zero lost reads and zero new VALUE rows.
 **Commit:** `feat: forward-port legacy camera metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-legacy-camera-tail - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/15-legacy-camera-tail.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 15`
 
 **Files:**
 
@@ -2062,7 +2168,7 @@ measurement blocks with the literal legacy-camera task values.
 **Commit:** `feat: parse remaining metadata trailers`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-trailer-tail - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/16-trailer-tail.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 16`
 
 **Files:**
 
@@ -2334,7 +2440,7 @@ retained compatibility symbol with its reason.
 **Commit:** `test: prove reversible ExifTool version regeneration`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-sol -C /Users/allen/git/oxidex-beta1-version-transition-qualification - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/19-version-transition-qualification.md`
+`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 19`
 
 **Files:**
 
@@ -2532,7 +2638,8 @@ be recomputed from prose or formatted output.
 
 - [ ] **Step 1: Freeze and record the candidate**
 
-After Task 19 is remotely merged, fetch `origin/refactor/tag-machinery` and
+After Task 19 is remotely merged, fetch
+`origin/staging/beta1-functional-integration` and
 create the named Task 20 worktree and branch from that exact remote SHA. Record
 the full SHA, clean state, branch, binary path/hash, pin, pinned source hash,
 Perl hash/version, corpus roots/counts, and lock status. Stop all implementation
@@ -2680,12 +2787,36 @@ bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/s
 
 Apply the Local Checkpoint, Remote PR, and Integration Procedure to
 `staging/beta1/frozen-candidate-evidence`. Push the signed checkpoint, open the
-draft PR against `refactor/tag-machinery`, attach the authenticated receipt
+draft PR against `staging/beta1-functional-integration`, attach the authenticated receipt
 index, resolve the final Astra review, wait for every required CI check, and
 squash-merge. Fetch the merge and fast-forward the controller integration
-mirror before recording the functional program complete. Preserve the task
-worktree and remote branch until the post-merge evidence links and target SHA
-are recorded.
+mirror. Preserve the task worktree and remote branch until the post-merge
+evidence links and target SHA are recorded.
+
+- [ ] **Step 13: Land the reviewed integration branch into the protected target**
+
+Open one final PR from `staging/beta1-functional-integration` to
+`refactor/tag-machinery`, attach the complete receipt index, obtain a fresh
+whole-branch Astra review, and wait for every required check. Before marking it
+ready, require an atomic GitHub up-to-date guarantee: either strict required
+status checks on `refactor/tag-machinery` or an applicable merge-queue rule.
+The controller verifies one of them live:
+
+```bash
+set -o pipefail
+atomic_guard=0
+if gh api repos/swack-tools/oxidex/branches/refactor%2Ftag-machinery/protection/required_status_checks \
+  --jq .strict | rg -x true; then atomic_guard=1; fi
+if gh api repos/swack-tools/oxidex/rules/branches/refactor%2Ftag-machinery \
+  --jq '[.[] | select(.type == "merge_queue")] | length' | rg -v '^0$'; then atomic_guard=1; fi
+test "$atomic_guard" -eq 1
+```
+
+If neither rule exists, record a blocker and do not merge; never substitute a
+check-then-merge shell sequence. With the guard present, mark the PR ready and
+use GitHub's protected merge/queue path with `--match-head-commit`. Fetch the
+resulting target SHA, verify the PR and merge commit, and only then record the
+functional program complete.
 
 The result is ready for the separate `main` reconciliation, packaging, CI/CD,
 signing, notarization, and tagging portions of `TODO_RELEASE_BETA.md`. This plan
@@ -2707,7 +2838,7 @@ Use the controller model described in the spec:
 5. Preserve every meaningful clean checkpoint locally, then have the
    controller push it and update the task's draft PR.
 6. Rebase and re-review overlapping returns; require fresh review and all CI
-   before each squash merge into `refactor/tag-machinery`.
+   before each squash merge into `staging/beta1-functional-integration`.
 7. Fetch and fast-forward the controller mirror after every verified remote
    merge, then release dependent tasks.
 8. Persist every local and remote state transition in task handoffs, the

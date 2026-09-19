@@ -88,11 +88,16 @@ jobs finish.
       rehearse recovery after all controller and worker processes terminate.
 - [ ] Create signed local checkpoint commits at meaningful milestones. The
       controller—not workers—pushes each task branch and opens or updates its
-      draft PR against `refactor/tag-machinery` so recovery exists both locally
-      and remotely.
+      draft PR against the controller-owned
+      `staging/beta1-functional-integration` branch so recovery exists both
+      locally and remotely.
 - [ ] Require fresh review and all required CI checks before squash-merging
       each task PR. Fetch and fast-forward the controller mirror to the remote
       merge before releasing dependent tasks.
+- [ ] Land the completed integration branch through one final reviewed PR into
+      `refactor/tag-machinery`; require a live strict up-to-date protection or
+      merge-queue rule before merging so target movement cannot race the
+      reviewed/tested base.
 - [ ] Retain task worktrees and remote branches until the wave's post-merge
       gates pass and the PR, merge SHA, and resulting target SHA are recorded.
 
