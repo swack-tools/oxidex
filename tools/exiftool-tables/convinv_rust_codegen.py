@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from checkexif_recipes import RecipeMalformed, RecipeRefused
-from convinv_recipes import compile_convinv
+from convinv_recipes import _PROFILES, compile_convinv_profile
 from scalar_helper_codegen import rust_string
 
 
@@ -27,12 +27,20 @@ def generate(document: dict[str, Any]) -> tuple[str, dict[str, Any]]:
               "unsupported_branches": ["active conversions", "List splitting", "RawJoin",
                                        "WriteCheck", "unmodeled conversion type"]}
     try:
-        recipe = compile_convinv(helpers.get("conv_inv"))
+        recipe, profile = compile_convinv_profile(helpers.get("conv_inv"))
     except RecipeRefused as error:
         report["reason"] = str(error)
         return header + "pub(crate) const CONV_INV_RECIPE: Option<ConvInvRecipe> = None;\n", report
     report.update(emitted=True, recipe=asdict(recipe), provenance=asdict(recipe.provenance),
                   error_separator=recipe.error_separator)
+    # Only a body admitted by a non-pin profile is recorded, as
+    # verify_exprs.py records a non-13.59 helper_semantics choice: the pin's
+    # ledger keeps its exact shape, and a historical admission is never silent.
+    if profile is not _PROFILES[0]:
+        report["source_profile"] = {"template": profile.template,
+                                    "captured_from": profile.captured_from,
+                                    "operands": [name for name, _ in profile.operands],
+                                    "equivalences": list(profile.equivalences)}
     source = (header + "pub(crate) const CONV_INV_RECIPE: Option<ConvInvRecipe> = Some(ConvInvRecipe {\n"
               f"    default_type: {rust_string(recipe.default_type)},\n"
               f"    error_separator: {rust_string(recipe.error_separator)},\n"
