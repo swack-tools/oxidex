@@ -553,14 +553,14 @@ The Task 0 worker is told to execute Task 0 only.
 
 **Launch:** Start Task 0 detached so it survives the supervising shell. Record
 `worker_pid` and `ps -p "$worker_pid" -o lstart= -o command=` immediately in
-`controller/processes/00/bootstrap-process.txt`, then watch the JSONL file:
+`controller/processes/00/bootstrap-process-1.txt`, then watch the JSONL file:
 
 ```bash
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
 bootstrap_token=$(uuidgen)
 bootstrap_prompt="Bootstrap process token ${bootstrap_token}. Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER."
 nohup codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
-  -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final.md \
+  -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final-1.md \
   -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
   "$bootstrap_prompt" \
   > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl \
@@ -570,14 +570,14 @@ worker_start=$(ps -p "$worker_pid" -o lstart=)
 worker_command=$(ps -ww -p "$worker_pid" -o command=)
 printf 'pid=%s\nstart_time=%s\ntoken=%s\ncommand=%s\n' \
   "$worker_pid" "$worker_start" "$bootstrap_token" "$worker_command" \
-  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
+  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt
 tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl &
 tail_pid=$!
 wait "$worker_pid"
 worker_status=$?
 kill "$tail_pid"
 printf 'exit_status=%s\n' "$worker_status" \
-  >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
+  >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt
 ```
 
 If the supervisor dies, extract the exact session ID with
@@ -590,7 +590,9 @@ incomplete process may resume:
 ```bash
 set -euo pipefail
 cd /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap
-process_file=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
+process_root=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
+process_file=$(printf '%s\n' "$process_root"/bootstrap-process-*.txt | sort -V | tail -n 1)
+segment=$(basename "$process_file" .txt | sed 's/^bootstrap-process-//')
 recorded_pid=$(sed -n 's/^pid=//p' "$process_file")
 recorded_start=$(sed -n 's/^start_time=//p' "$process_file")
 recorded_token=$(sed -n 's/^token=//p' "$process_file")
@@ -603,29 +605,45 @@ if kill -0 "$recorded_pid" 2>/dev/null; then
   printf '%s\n' "$current_command" | rg -F "$recorded_token"
   printf '%s\n' "$current_command" | rg -F '/Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap'
   printf '%s\n' "$current_command" | rg -F 'gpt-5.6-terra'
-  printf '%s\n' "$current_command" | rg -F 'controller/processes/00/final.md'
-  tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl
+  printf '%s\n' "$current_command" | rg -F "controller/processes/00/final-${segment}.md"
+  tail -F "$process_root/events-${segment}.jsonl"
   exit 0
 fi
 git status --short
 git log -1 --oneline
-if rg -q 'RETURN_TO_CONTROLLER' HANDOFF.md \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final.md; then
+if rg -q 'RETURN_TO_CONTROLLER' HANDOFF.md "$process_root"/final-*.md; then
   exit 0
 fi
 session_id=$(jq -r 'select(.type == "thread.started") | .thread_id' \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl | head -n 1)
+  "$process_root"/events-*.jsonl | head -n 1)
 test -n "$session_id"
+next_segment=$((segment + 1))
+resume_token=$(uuidgen)
+resume_prompt="Bootstrap process token ${resume_token}. Continue Task 0 from its canonical PRD and HANDOFF.md. Reconcile the current worktree first; do not repeat completed external actions."
 nohup codex --yolo exec resume --enable fast_mode --model gpt-5.6-terra --json \
-  -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final-resume.md \
+  -o "$process_root/final-${next_segment}.md" \
   "$session_id" \
-  'Continue Task 0 from its canonical PRD and HANDOFF.md. Reconcile the current worktree first; do not repeat completed external actions.' \
-  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-2.jsonl \
+  "$resume_prompt" \
+  > "$process_root/events-${next_segment}.jsonl" \
   2>&1 < /dev/null &
+worker_pid=$!
+worker_start=$(ps -p "$worker_pid" -o lstart=)
+worker_command=$(ps -ww -p "$worker_pid" -o command=)
+printf 'pid=%s\nstart_time=%s\ntoken=%s\ncommand=%s\n' \
+  "$worker_pid" "$worker_start" "$resume_token" "$worker_command" \
+  > "$process_root/bootstrap-process-${next_segment}.txt"
+tail -F "$process_root/events-${next_segment}.jsonl" &
+tail_pid=$!
+wait "$worker_pid"
+worker_status=$?
+kill "$tail_pid"
+printf 'exit_status=%s\n' "$worker_status" \
+  >> "$process_root/bootstrap-process-${next_segment}.txt"
 ```
 
-The replacement supervisor appends output to a new numbered JSONL segment and
-refuses `--last`.
+Every replacement uses the next numbered process, JSONL, and final-message
+segment with a fresh token and the same liveness protocol. Recovery always
+selects the newest process record and refuses `--last`.
 
 **Files:**
 
@@ -786,7 +804,10 @@ Desktop agent, and one dependency-blocked task. Terminate the fixture
 controller, invoke `recover` in a fresh process, and require the same task
 states, no duplicate launch, the correct remote reconciliation actions, and
 one exact next command per nonterminal task. Preserve the JSONL and recovery
-receipt below the controller test root.
+receipt below the controller test root. Also terminate two successive Task 0
+bootstrap supervisors while their detached workers remain live; each recovery
+must select the newest numbered record, watch the matching token-bearing argv,
+and create no duplicate resume.
 
 - [ ] **Step 9: Update handoff and return for controller PR integration**
 
