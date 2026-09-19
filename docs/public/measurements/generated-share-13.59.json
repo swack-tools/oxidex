@@ -1,0 +1,382 @@
+{
+  "commit": "2d8ff7750507e15445e46c74114fb8e6b0b04424",
+  "corpus": {
+    "files": 4238,
+    "path": "/tmp/oxidex-exiftool-cache/combined-samples"
+  },
+  "current": {
+    "all_generated": {
+      "rows": 203394,
+      "share": "43.43%"
+    },
+    "commit": "2d8ff7750507e15445e46c74114fb8e6b0b04424",
+    "composite_cascade": {
+      "rows": 26456,
+      "share": "5.65%"
+    },
+    "control_matched": 468294,
+    "direct": {
+      "rows": 175686,
+      "share": "37.52%"
+    },
+    "direct_by_group": {
+      "APE": 7,
+      "APP2": 22,
+      "APP4": 38,
+      "APP5": 10,
+      "APP6": 4,
+      "APP7": 6,
+      "APP8": 4,
+      "APP9": 14,
+      "CanonVRD": 65,
+      "Composite": 6,
+      "DICOM": 98,
+      "EXIF": 126565,
+      "FITS": 8,
+      "File": 12666,
+      "Font": 24,
+      "GeoTiff": 15,
+      "H264": 1,
+      "ICC_Profile": 2176,
+      "ITC": 2,
+      "Jpeg2000": 7,
+      "MOI": 3,
+      "MakerNotes": 33504,
+      "PSP": 8,
+      "Palm": 8,
+      "PhotoCD": 3,
+      "Red": 3
+    },
+    "engine_alone": {
+      "rows": 180951,
+      "share": "38.64%"
+    },
+    "label": "#838: Exif::Main v2 conversions",
+    "other_cascade": {
+      "rows": 1245,
+      "share": "0.27%"
+    },
+    "provenance": {
+      "census_started_utc": "2026-09-19T01:32:32Z",
+      "census_totals": {
+        "control": "TOTAL 4238 468294 18 322 12135 1495 97.4% 97.4% 99.7%",
+        "engine": "TOTAL 4238 287343 37 4078 189311 1461 59.8% 59.8% 99.5%",
+        "engine,legacy-l1,legacy-l2,producers": "TOTAL 4238 264900 25 4066 211778 1466 55.1% 55.1% 99.4%"
+      },
+      "control_binary_sha256": "1d0a31f3a3cb2e3b49408dcf39e764c13250f4b37a8a7dc27ef1ae9aa4623e52",
+      "control_commit": "2d8ff775",
+      "inertness": {
+        "differ": 0,
+        "differing_files": [],
+        "files": 4238
+      },
+      "oracle": "ExifTool 13.59, perl 5.38.2, -ver and OOXML.docx->DOCX asserted",
+      "probe_binary_sha256": "b51a13cfbd51f5451ae05b8be7aa57f0a3afab093dc4cb7bea46d413ee470eb3",
+      "probe_commit": "3b4e00cc",
+      "trees_dirty": 0
+    },
+    "rename_delta": 7
+  },
+  "date": "2026-09-18",
+  "delta_vs_first": {
+    "all_generated_pts": 5.1,
+    "engine_alone_pts": 5.1,
+    "from": "72eae8a5906fcbea7d825c39db55c636dec0d0ef"
+  },
+  "exiftool": "13.59",
+  "instrument": {
+    "attribution": "tools/exiftool-tables/genshare/attribute.py",
+    "bound": "floor",
+    "census": "tools/exiftool-tables/conformance.py --recursive --json-out, once per OXIDEX_PROBE_SILENCE token (tools/exiftool-tables/genshare/census.sh)",
+    "class_index": [
+      "tools/exiftool-tables/genshare/class-names-eadb5884.json",
+      "tools/exiftool-tables/genshare/class-names-addendum-838.json"
+    ],
+    "engine_token": "engine",
+    "probe": "tools/exiftool-tables/genshare/probe.patch (never landed)",
+    "union_token": "engine,legacy-l1,legacy-l2,producers"
+  },
+  "method_version": "genshare-probe/1",
+  "points": [
+    {
+      "all_generated": {
+        "rows": 179451,
+        "share": "38.34%"
+      },
+      "commit": "72eae8a5906fcbea7d825c39db55c636dec0d0ef",
+      "composite_cascade": {
+        "rows": 25776,
+        "share": "5.51%"
+      },
+      "control_matched": 468086,
+      "direct": {
+        "rows": 152424,
+        "share": "32.56%"
+      },
+      "direct_by_group": {
+        "APE": 7,
+        "APP2": 22,
+        "APP4": 38,
+        "APP5": 10,
+        "APP6": 4,
+        "APP7": 6,
+        "APP8": 4,
+        "APP9": 14,
+        "CanonVRD": 65,
+        "Composite": 6,
+        "DICOM": 98,
+        "EXIF": 103650,
+        "FITS": 8,
+        "File": 12666,
+        "Font": 24,
+        "GeoTiff": 15,
+        "H264": 1,
+        "ICC_Profile": 2176,
+        "ITC": 2,
+        "Jpeg2000": 7,
+        "MOI": 3,
+        "MakerNotes": 33188,
+        "PSP": 8,
+        "Palm": 8,
+        "PhotoCD": 3,
+        "Red": 3
+      },
+      "engine_alone": {
+        "rows": 157006,
+        "share": "33.54%"
+      },
+      "label": "previous figure, reproduced",
+      "other_cascade": {
+        "rows": 1245,
+        "share": "0.27%"
+      },
+      "provenance": {
+        "census_started_utc": "2026-09-19T00:31:26Z",
+        "census_totals": {
+          "control": "TOTAL 4238 468086 22 421 12240 1560 97.4% 97.4% 99.7%",
+          "engine": "TOTAL 4238 311080 40 4839 164810 1530 64.7% 64.7% 99.5%",
+          "engine,legacy-l1,legacy-l2,producers": "TOTAL 4238 288635 28 4818 187288 1535 60.0% 60.0% 99.5%"
+        },
+        "control_binary_sha256": "b282416e70907d1d8866a08c640d0e83561577d2ca341130e64b5836fdee457d",
+        "control_commit": "72eae8a5",
+        "inertness": {
+          "differ": 1,
+          "differing_files": [
+            "Pentax/PentaxK100D.jpg"
+          ],
+          "files": 4238,
+          "note": "the control binary itself is nondeterministic on this file (duplicate Pentax:PentaxModelID order; 2 distinct outputs in 6 runs of the control)"
+        },
+        "oracle": "ExifTool 13.59, perl 5.38.2, -ver and OOXML.docx->DOCX asserted",
+        "probe_binary_sha256": "89114f45f51696a9a97ecdc00cc65f3ce53899192f1b23982edc5f9a1e4da511",
+        "probe_commit": "887bf764",
+        "reproduces": {
+          "recorded": "probe census 2026-09-13 on the i7 (probe 887bf764): control 468,086, union 288,635, engine 311,080",
+          "reproduced": "identical TOTAL lines for control, union and engine; LOST 179,451 and 157,006 exactly",
+          "split_note": "the direct/Composite-cascade split differs by 28 rows from the recorded 152,452/25,748: attribute.py's group tie-break followed PYTHONHASHSEED (recorded run = seed 2); now deterministic"
+        },
+        "trees_dirty": 0
+      },
+      "rename_delta": 6
+    },
+    {
+      "all_generated": {
+        "rows": 179451,
+        "share": "38.33%"
+      },
+      "commit": "8cceb4a7e2d598b670a5b895d34c6bc8b27ab705",
+      "composite_cascade": {
+        "rows": 25776,
+        "share": "5.51%"
+      },
+      "control_matched": 468172,
+      "direct": {
+        "rows": 152424,
+        "share": "32.56%"
+      },
+      "direct_by_group": {
+        "APE": 7,
+        "APP2": 22,
+        "APP4": 38,
+        "APP5": 10,
+        "APP6": 4,
+        "APP7": 6,
+        "APP8": 4,
+        "APP9": 14,
+        "CanonVRD": 65,
+        "Composite": 6,
+        "DICOM": 98,
+        "EXIF": 103650,
+        "FITS": 8,
+        "File": 12666,
+        "Font": 24,
+        "GeoTiff": 15,
+        "H264": 1,
+        "ICC_Profile": 2176,
+        "ITC": 2,
+        "Jpeg2000": 7,
+        "MOI": 3,
+        "MakerNotes": 33188,
+        "PSP": 8,
+        "Palm": 8,
+        "PhotoCD": 3,
+        "Red": 3
+      },
+      "engine_alone": {
+        "rows": 157006,
+        "share": "33.54%"
+      },
+      "label": "parent of #838",
+      "other_cascade": {
+        "rows": 1245,
+        "share": "0.27%"
+      },
+      "provenance": {
+        "census_started_utc": "2026-09-19T01:20:48Z",
+        "census_totals": {
+          "control": "TOTAL 4238 468172 18 420 12159 1507 97.4% 97.4% 99.7%",
+          "engine": "TOTAL 4238 311166 36 4838 164729 1477 64.7% 64.7% 99.5%",
+          "engine,legacy-l1,legacy-l2,producers": "TOTAL 4238 288721 24 4817 187207 1482 60.1% 60.1% 99.5%"
+        },
+        "control_binary_sha256": "8112f7c2df1935b7d4c1382e23676b14d6c181487a84be49a5d6dde5c977ae26",
+        "control_commit": "8cceb4a7",
+        "inertness": {
+          "differ": 0,
+          "differing_files": [],
+          "files": 4238
+        },
+        "oracle": "ExifTool 13.59, perl 5.38.2, -ver and OOXML.docx->DOCX asserted",
+        "probe_binary_sha256": "3c04c3a42f95d569f146060501ba0ce28b566f53aa06e7eebafad398730bf483",
+        "probe_commit": "360933c3",
+        "trees_dirty": 0
+      },
+      "rename_delta": 6
+    },
+    {
+      "all_generated": {
+        "rows": 203394,
+        "share": "43.43%"
+      },
+      "commit": "2d8ff7750507e15445e46c74114fb8e6b0b04424",
+      "composite_cascade": {
+        "rows": 26456,
+        "share": "5.65%"
+      },
+      "control_matched": 468294,
+      "direct": {
+        "rows": 175686,
+        "share": "37.52%"
+      },
+      "direct_by_group": {
+        "APE": 7,
+        "APP2": 22,
+        "APP4": 38,
+        "APP5": 10,
+        "APP6": 4,
+        "APP7": 6,
+        "APP8": 4,
+        "APP9": 14,
+        "CanonVRD": 65,
+        "Composite": 6,
+        "DICOM": 98,
+        "EXIF": 126565,
+        "FITS": 8,
+        "File": 12666,
+        "Font": 24,
+        "GeoTiff": 15,
+        "H264": 1,
+        "ICC_Profile": 2176,
+        "ITC": 2,
+        "Jpeg2000": 7,
+        "MOI": 3,
+        "MakerNotes": 33504,
+        "PSP": 8,
+        "Palm": 8,
+        "PhotoCD": 3,
+        "Red": 3
+      },
+      "engine_alone": {
+        "rows": 180951,
+        "share": "38.64%"
+      },
+      "label": "#838: Exif::Main v2 conversions",
+      "other_cascade": {
+        "rows": 1245,
+        "share": "0.27%"
+      },
+      "provenance": {
+        "census_started_utc": "2026-09-19T01:32:32Z",
+        "census_totals": {
+          "control": "TOTAL 4238 468294 18 322 12135 1495 97.4% 97.4% 99.7%",
+          "engine": "TOTAL 4238 287343 37 4078 189311 1461 59.8% 59.8% 99.5%",
+          "engine,legacy-l1,legacy-l2,producers": "TOTAL 4238 264900 25 4066 211778 1466 55.1% 55.1% 99.4%"
+        },
+        "control_binary_sha256": "1d0a31f3a3cb2e3b49408dcf39e764c13250f4b37a8a7dc27ef1ae9aa4623e52",
+        "control_commit": "2d8ff775",
+        "inertness": {
+          "differ": 0,
+          "differing_files": [],
+          "files": 4238
+        },
+        "oracle": "ExifTool 13.59, perl 5.38.2, -ver and OOXML.docx->DOCX asserted",
+        "probe_binary_sha256": "b51a13cfbd51f5451ae05b8be7aa57f0a3afab093dc4cb7bea46d413ee470eb3",
+        "probe_commit": "3b4e00cc",
+        "trees_dirty": 0
+      },
+      "rename_delta": 7
+    }
+  ],
+  "schema": "oxidex-generated-share/1",
+  "steps": [
+    {
+      "all_generated": {
+        "pts": -0.01,
+        "rows": 0
+      },
+      "composite_cascade": {
+        "pts": 0.0,
+        "rows": 0
+      },
+      "control_matched": 86,
+      "direct": {
+        "pts": -0.01,
+        "rows": 0
+      },
+      "engine_alone": {
+        "pts": -0.01,
+        "rows": 0
+      },
+      "from": "72eae8a5906fcbea7d825c39db55c636dec0d0ef",
+      "other_cascade": {
+        "pts": 0.0,
+        "rows": 0
+      },
+      "to": "8cceb4a7e2d598b670a5b895d34c6bc8b27ab705"
+    },
+    {
+      "all_generated": {
+        "pts": 5.1,
+        "rows": 23943
+      },
+      "composite_cascade": {
+        "pts": 0.14,
+        "rows": 680
+      },
+      "control_matched": 122,
+      "direct": {
+        "pts": 4.96,
+        "rows": 23262
+      },
+      "engine_alone": {
+        "pts": 5.1,
+        "rows": 23945
+      },
+      "from": "8cceb4a7e2d598b670a5b895d34c6bc8b27ab705",
+      "other_cascade": {
+        "pts": 0.0,
+        "rows": 0
+      },
+      "to": "2d8ff7750507e15445e46c74114fb8e6b0b04424"
+    }
+  ]
+}

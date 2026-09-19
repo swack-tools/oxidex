@@ -28,7 +28,8 @@ value:
     tools/exiftool-tables/artifacts.py  (the `paths` inventory)    generated outputs
     oxidex-tags-*/src/*.yaml  (scripts/generate_tag_coverage.py)   tag definitions
     docs/reference/upgrade-rehearsal-11.78-12.64.md                upgrade rehearsal
-    docs/AUTOGENERATION-PLAN.md                                    the stale generated share
+    docs/public/measurements/generated-share-13.59.json           generated share
+    docs/AUTOGENERATION-PLAN.md                                    (its row must agree)
 
 A missing source, a missing key, or a Markdown row that no longer matches its
 anchored pattern is an ERROR, never a zero or a blank. A status page that
@@ -78,13 +79,15 @@ ARTIFACTS = "tools/exiftool-tables/artifacts.py"
 REHEARSAL = "docs/reference/upgrade-rehearsal-11.78-12.64.md"
 PLAN = "docs/AUTOGENERATION-PLAN.md"
 PROGRESS = "docs/AUTOGENERATION-PROGRESS.md"
+GENSHARE = "docs/public/measurements/generated-share-13.59.json"
+GENSHARE_TOOL = "tools/exiftool-tables/genshare"
 DESIGN = "docs/AUTOGENERATION-V2-DESIGN.md"
 PIN = ".exiftool-version"
 TAG_COUNTER = "scripts/generate_tag_coverage.py"
 
 # Machine-readable sources are hashed onto the page, so ANY change to them --
 # even one that moves no number shown here -- requires a re-render.
-HASHED = (OBSERVED, JOIN, FLOORS)
+HASHED = (OBSERVED, JOIN, FLOORS, GENSHARE)
 
 READER_STATES = (
     ("generated_reader_declaration_unobserved",
@@ -469,26 +472,54 @@ def collect_artifacts(root):
 
 
 def collect_generated_share(root):
+    """The probe census result committed by tools/exiftool-tables/genshare.
+
+    The plan quotes the same figure; its row must name this file's share and
+    commit, so the plan and the page cannot drift apart.
+    """
+    doc = read_json(root, GENSHARE)
+    cur = get(doc, "current", GENSHARE)
+    commit = get(doc, "commit", GENSHARE)
+    if get(cur, "commit", GENSHARE) != commit:
+        raise SourceError(f"{GENSHARE}: `commit` and `current.commit` disagree")
+    share = get(cur, "all_generated.share", GENSHARE)
     plan = read_text(root, PLAN)
     line = one(r"^\| Generated share of correct output \|.*$", plan, PLAN, re.M).group(0)
-    m = one(r"\*\*(\d+\.\d+)%\*\* of ([\d,]+) matched values \(engine alone ([\d.]+)%\)",
-            line, PLAN)
-    c = one(r"probe census, `([0-9a-f]{7,40})` \((\d{4}-\d{2}-\d{2})\)", line, PLAN)
-    if "**Stale**" not in line:
-        raise SourceError(f"{PLAN}: the generated-share row no longer says **Stale**; if it "
-                          f"was re-measured, commit the census data and read it from there")
-    step = one(r"^\| \*\*3\. (Re-measure the generated share\.)\*\* \| ([^|]+) \| ([^|]+) \|$",
-               plan, PLAN, re.M)
+    if f"**{share}**" not in line or f"`{commit[:8]}`" not in line:
+        raise SourceError(f"{PLAN}: the generated-share row does not quote {GENSHARE} "
+                          f"({share} at {commit[:8]}); update the row from the committed result")
+    if "**Stale**" in line:
+        raise SourceError(f"{PLAN}: the generated-share row still says **Stale** although "
+                          f"{GENSHARE} is the current measurement")
+    points = []
+    for p in get(doc, "points", GENSHARE):
+        points.append({
+            "commit": get(p, "commit", GENSHARE),
+            "label": p.get("label", ""),
+            "control_matched": count(p, "control_matched", GENSHARE),
+            "share": get(p, "all_generated.share", GENSHARE),
+            "engine_alone": get(p, "engine_alone.share", GENSHARE),
+            "direct": get(p, "direct.share", GENSHARE),
+            "composite_cascade": get(p, "composite_cascade.share", GENSHARE),
+        })
     return {
-        "share": m.group(1) + "%",
-        "matched_values": num(m.group(2), PLAN),
-        "engine_alone": m.group(3) + "%",
-        "commit": c.group(1),
-        "date": c.group(2),
-        "stale": True,
-        "remeasure_step": "3. " + step.group(1),
-        "remeasure_how": step.group(2).strip(),
-        "remeasure_evidence": step.group(3).strip(),
+        "share": share,
+        "rows": count(cur, "all_generated.rows", GENSHARE),
+        "matched_values": count(cur, "control_matched", GENSHARE),
+        "engine_alone": get(cur, "engine_alone.share", GENSHARE),
+        "direct": get(cur, "direct.share", GENSHARE),
+        "composite_cascade": get(cur, "composite_cascade.share", GENSHARE),
+        "other_cascade": get(cur, "other_cascade.share", GENSHARE),
+        "commit": commit,
+        "date": get(doc, "date", GENSHARE),
+        "method_version": get(doc, "method_version", GENSHARE),
+        "bound": get(doc, "instrument.bound", GENSHARE),
+        "corpus_files": count(doc, "corpus.files", GENSHARE),
+        "delta_from": get(doc, "delta_vs_first.from", GENSHARE),
+        "delta_pts": get(doc, "delta_vs_first.all_generated_pts", GENSHARE),
+        "engine_delta_pts": get(doc, "delta_vs_first.engine_alone_pts", GENSHARE),
+        "points": points,
+        "stale": False,
     }
 
 
@@ -697,8 +728,9 @@ def render_markdown(s: dict) -> str:
               f"with the {se['measured_with_ports']} v2 helper ports, same denominator"),
         meter("Helper subs ported", len(ex["ports"]), ex["helper_subs"],
               "helpers.rs PORTS / distinct helper subs the tables call"),
-        meter("Generated share of correct output", share_pct, 100,
-              f"STALE: measured {gs['date']} at {gs['commit'][:8]}; see below", stale=True),
+        meter("Generated share of correct output (a floor)", share_pct, 100,
+              f"probe census at {gs['commit'][:8]} on {gs['date']}; engine alone "
+              f"{gs['engine_alone']}"),
     ))
     w("")
 
@@ -895,15 +927,28 @@ def render_markdown(s: dict) -> str:
     # -- 5. generated share ------------------------------------------------
     w("## Generated share of correct output")
     w("")
-    w("::: danger STALE: not a current figure")
     w(f"**{gs['share']}** of {n(gs['matched_values'])} matched values came from generated "
-      f"code (engine alone {gs['engine_alone']}). This was measured by a probe census at "
-      f"`{gs['commit']}` on {gs['date']}. The census data is not committed, so the "
-      "figure is quoted from the plan and has not been re-measured since.")
+      f"code at {commit_link(gs['commit'])}, measured on {gs['date']} over "
+      f"{n(gs['corpus_files'])} corpus files ({gs['direct']} directly, {gs['composite_cascade']} "
+      f"as Composite values computed from generated rows, {gs['other_cascade']} other cascade). "
+      f"The generic table engine alone accounts for {gs['engine_alone']}. That is "
+      f"{gs['delta_pts']:+.2f} points since `{gs['delta_from'][:8]}` "
+      f"(engine alone {gs['engine_delta_pts']:+.2f}).")
     w("")
-    w(f"It is re-measured by plan step **{gs['remeasure_step']}** {gs['remeasure_how']} "
-      f"Done when: {gs['remeasure_evidence']}")
-    w(":::")
+    w(f"The figure is a **{gs['bound']}**. A probe build drops the rows each generated route "
+      "emits, and a pinned-oracle census counts the correct rows lost. A row that hand code "
+      "also writes under the same key survives the probe and counts as hand. Generated "
+      "conversion lookups inside hand walkers are not counted at all. Method "
+      f"`{gs['method_version']}`; instrument, probe patch and caveats: "
+      f"{src(GENSHARE_TOOL + '/README.md', 'genshare/README.md')}; result: "
+      f"{src(GENSHARE, 'generated-share-13.59.json')}.")
+    w("")
+    w(table(["Commit", "What", "Share ", "Direct ", "Composite cascade ", "Engine alone ",
+             "Matched values "], [
+        [commit_link(p["commit"]), p["label"], p["share"], p["direct"],
+         p["composite_cascade"], p["engine_alone"], n(p["control_matched"])]
+        for p in gs["points"]
+    ]))
     w("")
 
     # -- 6. rehearsal ------------------------------------------------------

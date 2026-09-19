@@ -26,7 +26,7 @@ Where these numbers are going, and the rules for what counts as progress: [Autog
 <StatusMeter label="Expression uses today's translators accept" :value="9068" :total="13290" note="exprs.py and conds.py, every expression in the dump" />
 <StatusMeter label="Reachable with Session + ported helpers" :value="12513" :total="13290" note="with the 19 v2 helper ports, same denominator" />
 <StatusMeter label="Helper subs ported" :value="19" :total="157" note="helpers.rs PORTS / distinct helper subs the tables call" />
-<StatusMeter label="Generated share of correct output" :value="38.34" :total="100" note="STALE: measured 2026-09-13 at 72eae8a5; see below" stale />
+<StatusMeter label="Generated share of correct output (a floor)" :value="43.43" :total="100" note="probe census at 2d8ff775 on 2026-09-18; engine alone 38.64%" />
 </div>
 
 ## Catalog size
@@ -147,11 +147,15 @@ Explicitly refused, with a recorded reason (4): `InverseDateTime`, `ValidateImag
 
 ## Generated share of correct output
 
-::: danger STALE: not a current figure
-**38.34%** of 468,086 matched values came from generated code (engine alone 33.5%). This was measured by a probe census at `72eae8a5` on 2026-09-13. The census data is not committed, so the figure is quoted from the plan and has not been re-measured since.
+**43.43%** of 468,294 matched values came from generated code at [`2d8ff775`](https://github.com/swack-tools/oxidex/commit/2d8ff7750507e15445e46c74114fb8e6b0b04424), measured on 2026-09-18 over 4,238 corpus files (37.52% directly, 5.65% as Composite values computed from generated rows, 0.27% other cascade). The generic table engine alone accounts for 38.64%. That is +5.10 points since `72eae8a5` (engine alone +5.10).
 
-It is re-measured by plan step **3. Re-measure the generated share.** Run the probe census on the same corpus and control method as `72eae8a5`. Done when: A fresh generated-share figure at a named commit; the delta attributed to step 2. If the share does not move, the architecture is not yet validated and step 4 does not start.
-:::
+The figure is a **floor**. A probe build drops the rows each generated route emits, and a pinned-oracle census counts the correct rows lost. A row that hand code also writes under the same key survives the probe and counts as hand. Generated conversion lookups inside hand walkers are not counted at all. Method `genshare-probe/1`; instrument, probe patch and caveats: [`genshare/README.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/genshare/README.md); result: [`generated-share-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/generated-share-13.59.json).
+
+| Commit | What | Share | Direct | Composite cascade | Engine alone | Matched values |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| [`72eae8a5`](https://github.com/swack-tools/oxidex/commit/72eae8a5906fcbea7d825c39db55c636dec0d0ef) | previous figure, reproduced | 38.34% | 32.56% | 5.51% | 33.54% | 468,086 |
+| [`8cceb4a7`](https://github.com/swack-tools/oxidex/commit/8cceb4a7e2d598b670a5b895d34c6bc8b27ab705) | parent of #838 | 38.33% | 32.56% | 5.51% | 33.54% | 468,172 |
+| [`2d8ff775`](https://github.com/swack-tools/oxidex/commit/2d8ff7750507e15445e46c74114fb8e6b0b04424) | #838: Exif::Main v2 conversions | 43.43% | 37.52% | 5.65% | 38.64% | 468,294 |
 
 ## Upgrade rehearsal
 
@@ -217,6 +221,7 @@ The machine-readable form of this page is [`/measurements/status.json`](/measure
 | --- | --- |
 | [`docs/public/measurements/catalog-corpus-observed-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-corpus-observed-13.59.json) | `033e4094bf409c89` |
 | [`docs/public/measurements/catalog-hydrated-join-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/catalog-hydrated-join-13.59.json) | `5fe7878f5c20358a` |
+| [`docs/public/measurements/generated-share-13.59.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/public/measurements/generated-share-13.59.json) | `81e3168524d85cd1` |
 | [`tools/ci/parity_floors.json`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/ci/parity_floors.json) | `92505e25021bfbd4` |
 
 Also read: [`tools/exiftool-tables/spike/COVERAGE.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/spike/COVERAGE.md), [`tools/exiftool-tables/spike/SESSION_HELPER_COVERAGE.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/spike/SESSION_HELPER_COVERAGE.md), [`src/exiftool_tables/helpers.rs`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/src/exiftool_tables/helpers.rs), [`tools/exiftool-tables/artifacts.py`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/tools/exiftool-tables/artifacts.py), [`docs/reference/upgrade-rehearsal-11.78-12.64.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/reference/upgrade-rehearsal-11.78-12.64.md), [`docs/AUTOGENERATION-PLAN.md`](https://github.com/swack-tools/oxidex/blob/refactor/tag-machinery/docs/AUTOGENERATION-PLAN.md), and the `oxidex-tags-*` YAML databases.

@@ -56,8 +56,9 @@ class StatusPageIsCurrent(unittest.TestCase):
         status = json.loads(self.outputs[render_status.STATUS_JSON])
         self.assertIn(':value="%d" :total="%d"' % (
             status["read"]["observed_matched_read"], status["catalog"]["catalog_entries"]), page)
-        self.assertIn("STALE", page)
-        self.assertTrue(status["generated_share"]["stale"])
+        self.assertFalse(status["generated_share"]["stale"])
+        self.assertNotIn("STALE", page)
+        self.assertIn(':value="%s"' % status["generated_share"]["share"].rstrip("%"), page)
 
     def test_three_read_buckets_partition_the_catalog(self):
         status = json.loads(self.outputs[render_status.STATUS_JSON])
@@ -76,7 +77,7 @@ class SourcesFailLoudly(unittest.TestCase):
                     render_status.RATCHET, render_status.COVERAGE, render_status.SESSION,
                     render_status.HELPERS_RS, render_status.ARTIFACTS, render_status.REHEARSAL,
                     render_status.PLAN, render_status.PROGRESS, render_status.DESIGN,
-                    render_status.PIN):
+                    render_status.PIN, render_status.GENSHARE):
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / rel, root / rel)
         # artifacts.py validates against the committed hub files it lists.
@@ -115,6 +116,25 @@ class SourcesFailLoudly(unittest.TestCase):
                 "| Generated share of correct output |", "| Generated share |"),
                 encoding="utf-8")
             with self.assertRaisesRegex(render_status.SourceError, "matched 0 times"):
+                render_status.render(root, committed_definitions())
+
+    def test_plan_row_that_disagrees_with_the_result_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_tree(tmp)
+            result = json.loads((root / render_status.GENSHARE).read_text(encoding="utf-8"))
+            plan = root / render_status.PLAN
+            plan.write_text(plan.read_text(encoding="utf-8").replace(
+                "**" + result["current"]["all_generated"]["share"] + "**", "**1.00%**"),
+                encoding="utf-8")
+            with self.assertRaisesRegex(render_status.SourceError, "does not quote"):
+                render_status.render(root, committed_definitions())
+
+    def test_missing_generated_share_result_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_tree(tmp)
+            (root / render_status.GENSHARE).unlink()
+            with self.assertRaisesRegex(render_status.SourceError,
+                                        "source not found: " + render_status.GENSHARE):
                 render_status.render(root, committed_definitions())
 
     def test_missing_count_is_an_error(self):

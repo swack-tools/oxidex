@@ -43,7 +43,7 @@ unexercised behaviour.
 | Read parity, catalog entries proven | **2,378 of 33,487** (7.10%); of those ExifTool reads in the corpus, **55.69% of 4,270**; 0 lost since the previous snapshot | published `catalog-corpus-observed-13.59.json`, evidence at `6ada109b` (#822), rebound to the split layout in #823 |
 | Read parity, corpus identities | **3,089** `Group1:TagName` identities matched in both print and raw modes; 2,766 credited source coordinates | `corpus_read_receipt.py`, 194 files, locked in by the ratchet in #822 |
 | Write parity | **19 of 14,169** writable entries observed (0.13%); 1020/1020 public-API scalar write operations matched | `generated_tiff_write_matrix.py --route public-api`, joined at `7547ec5b` (#797) |
-| Generated share of correct output | **38.34%** of 468,086 matched values (engine alone 33.5%) | probe census, `72eae8a5` (2026-09-13). **Stale**: 27 `src/` commits since; re-measure after the first v2 family lands |
+| Generated share of correct output | **43.43%** of 468,294 matched values, a floor: 37.52% direct, 5.65% Composite values computed from generated rows, 0.27% other cascade; engine alone 38.64%. Up 5.10 points from 38.34% at `72eae8a5` (reproduced exactly), and all of the rise comes from #838: `8cceb4a7` → `2d8ff775` adds 23,943 rows (engine +23,945) | probe census `genshare-probe/1` (`tools/exiftool-tables/genshare/`), `2d8ff775` (2026-09-18), 4,238 files against pinned 13.59; result in `docs/public/measurements/generated-share-13.59.json` |
 | Generated reader declarations | 3,666 catalog entries strict (10.9%); 5,363 loose (16.0%). 80.11% of proven reads (1,905 of 2,378) sit on rows with no usable generated declaration (recomputed by `tools/docs/render_status.py` from the committed snapshot; the earlier ~82% was an estimate) | `catalog-hydrated-join-13.59.json` counts, `0f92071b` |
 | Expression coverage | `exprs.py` translates **75.4%** of expression uses; a real grammar parses **99.7%**; session + top 22 helpers reaches **95%**; 157 helper subs, 10 complete + 4 partial ports today | coverage spike `run_spike.py`, `07d808a0` (#817), byte-identical under `PYTHONHASHSEED=1,2,3` |
 | Generated artifacts | **255** manifest outputs after the per-module split (was 66 as two monoliths, not 44 as previously written) | `artifacts.py paths`, #823 |
@@ -138,7 +138,9 @@ refresh (#821, #825), the coverage spike (#817) and step 1's first slice
      release's own ExifTool does not emit); only generated code follows the
      release. This is measured evidence for step 2's retirement of hand
      parsers, and a rehearsal metric to drive to zero.
-4. Re-measure the generated share (step 3) once `Exif::Main` lands.
+4. ~~Re-measure the generated share (step 3) once `Exif::Main` lands.~~ Done
+   at `2d8ff775`: 38.33% → 43.43% across #838 (+5.10 points, engine alone
+   +5.10). The share moved, so under step 3's rule step 4 may start.
 
 We do not yet have an evidence-based date for 100%. Record the effort for
 step 1 and the first expansion batch before forecasting the rest; unusual
