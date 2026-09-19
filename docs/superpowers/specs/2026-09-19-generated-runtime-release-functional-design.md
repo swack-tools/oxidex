@@ -136,12 +136,13 @@ The functional program is complete when all of the following are true:
 
 The controller creates the named worktree, target directory, and a
 self-contained task PRD. Its durable `launch` command starts this argv with
-`subprocess.Popen(start_new_session=True)`, the PRD opened as stdin, and
-append-only JSONL/final-message files:
+`subprocess.Popen(start_new_session=True)`, a unique process token and PRD path
+in the prompt argv, and append-only JSONL/final-message files:
 
 ```bash
 codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
-  -o /absolute/durable/process/final.md -C /absolute/task/worktree -
+  -o /absolute/durable/process/final.md -C /absolute/task/worktree \
+  "Process token TOKEN. Execute the canonical PRD at /absolute/path/to/task-prd.md"
 ```
 
 `--yolo` is user-authorized so CLI workers do not stop for edit approvals. The
@@ -157,7 +158,8 @@ terminal output is not the progress record; commits, reports, receipts, and
 
 The detached worker survives controller-shell death. `monitor`, `status`, and
 `heartbeat` track it by PID, process start time, executable, and the
-`thread.started` session ID. If the worker dies, `resume` first reconciles the
+exact token-bearing argv plus `thread.started` session ID. If the worker dies,
+`resume` first reconciles the
 worktree and remote state, then runs `codex --yolo exec resume ... SESSION_ID
 -` with a durable recovery prompt; it never uses `--last`. A quota or
 rate-limit response stops new dispatches.

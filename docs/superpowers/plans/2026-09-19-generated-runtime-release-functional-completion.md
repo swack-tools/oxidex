@@ -213,13 +213,16 @@ before considering the task running. Reviewers use a distinct
 and verbatim Global Constraints.
 
 CLI launches use `fleet_controller.py launch`. It validates dependencies and
-hashes, then starts `codex --yolo exec --enable fast_mode --model MODEL
---json -o FINAL -C WORKTREE -` with the canonical PRD opened as stdin,
-`subprocess.Popen(..., start_new_session=True)`, and append-only JSONL stdout
-and stderr. The child therefore survives controller-shell death. The
-controller records the exact argv, PID, kernel process start time, Codex
-thread ID from the `thread.started` JSON event, log segment, final message,
-and exit status under `controller/processes/TASK_NUMBER/`.
+hashes, generates a unique launch token, then starts `codex --yolo exec
+--enable fast_mode --model MODEL --json -o FINAL -C WORKTREE "Process token
+TOKEN. Execute the canonical PRD at PRD_PATH"` with
+`subprocess.Popen(..., start_new_session=True)` and append-only JSONL stdout
+and stderr. The token and absolute PRD path are therefore visible in the exact
+process argv without recording the process environment. The child survives
+controller-shell death. The controller records the exact argv, PID, kernel
+process start time, token, Codex thread ID from the `thread.started` JSON
+event, log segment, final message, and exit status under
+`controller/processes/TASK_NUMBER/`.
 
 `monitor --task N --follow` tails new JSON events and advances a heartbeat;
 `status --task N` is nonblocking; `stop --task N --signal TERM` verifies PID,
@@ -230,7 +233,7 @@ task worktree, writes a new JSONL segment, and increments `launch_count`:
 
 ```bash
 codex --yolo exec resume --enable fast_mode --model MODEL --json \
-  -o FINAL SESSION_ID -
+  -o FINAL SESSION_ID "Process token TOKEN. Continue from RECOVERY_PROMPT_PATH"
 ```
 
 The resume prompt is a durable controller-generated file containing the PRD
@@ -554,17 +557,19 @@ The Task 0 worker is told to execute Task 0 only.
 
 ```bash
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
+bootstrap_token=$(uuidgen)
+bootstrap_prompt="Bootstrap process token ${bootstrap_token}. Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER."
 nohup codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
   -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final.md \
   -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
-  'Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER.' \
+  "$bootstrap_prompt" \
   > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl \
   2>&1 < /dev/null &
 worker_pid=$!
 worker_start=$(ps -p "$worker_pid" -o lstart=)
-worker_command=$(ps -p "$worker_pid" -o command=)
-printf 'pid=%s\nstart_time=%s\ncommand=%s\n' \
-  "$worker_pid" "$worker_start" "$worker_command" \
+worker_command=$(ps -ww -p "$worker_pid" -o command=)
+printf 'pid=%s\nstart_time=%s\ntoken=%s\ncommand=%s\n' \
+  "$worker_pid" "$worker_start" "$bootstrap_token" "$worker_command" \
   > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
 tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl &
 tail_pid=$!
@@ -588,11 +593,17 @@ cd /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap
 process_file=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process.txt
 recorded_pid=$(sed -n 's/^pid=//p' "$process_file")
 recorded_start=$(sed -n 's/^start_time=//p' "$process_file")
+recorded_token=$(sed -n 's/^token=//p' "$process_file")
+recorded_command=$(sed -n 's/^command=//p' "$process_file")
 if kill -0 "$recorded_pid" 2>/dev/null; then
   current_start=$(ps -p "$recorded_pid" -o lstart=)
-  current_command=$(ps -p "$recorded_pid" -o command=)
+  current_command=$(ps -ww -p "$recorded_pid" -o command=)
   test "$current_start" = "$recorded_start"
-  printf '%s\n' "$current_command" | rg 'codex .*exec'
+  test "$current_command" = "$recorded_command"
+  printf '%s\n' "$current_command" | rg -F "$recorded_token"
+  printf '%s\n' "$current_command" | rg -F '/Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap'
+  printf '%s\n' "$current_command" | rg -F 'gpt-5.6-terra'
+  printf '%s\n' "$current_command" | rg -F 'controller/processes/00/final.md'
   tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl
   exit 0
 fi
@@ -653,8 +664,9 @@ refuses `--last`.
   death.
 - `fleet-schema.json` requires schema version, plan/spec hashes, target ref/SHA,
   task number/slug, state history, dependencies, file lease, worker
-  kind/model/effort/identity, PID/start-time/session ID when applicable, launch
-  count, PRD/report/review hashes, base/head/pushed/merge/target SHAs,
+  kind/model/effort/identity, PID/start-time/unique launch token/exact argv and
+  session ID when applicable, launch count, PRD/report/review hashes,
+  base/head/pushed/merge/target SHAs,
   worktree/target/evidence paths, heartbeat, PR/CI state, receipt hashes,
   ruling/blocker, exclusive merge-lease identity, expected merge parent, and
   exact next command.
@@ -675,9 +687,10 @@ materialized PRD hashes reconcile; PID reuse does not imply liveness; repeated
 remote reconciliation is idempotent; detached CLI launch survives controller
 death; `monitor` parses the thread ID and heartbeat; `resume` uses the recorded
 ID rather than `--last`; only one controller can acquire the integration merge
-lease; an unexpected squash parent blocks dependency release; and recovery
-after simulated worker and controller death produces one next action without
-duplicate dispatch.
+lease; PID reuse with a different token-bearing exact argv is rejected;
+Task 20 round paths never collide or overwrite prior receipts; an unexpected
+squash parent blocks dependency release; and recovery after simulated worker
+and controller death produces one next action without duplicate dispatch.
 
 - [ ] **Step 2: Run the focused tests red**
 
@@ -710,8 +723,9 @@ command into the canonical PRD. `recover` reconciles the snapshot, append-only
 events, worktree commits, ignored `HANDOFF.md`, worker identity, pushed branch,
 PR, CI, and merge SHA without mutating a protected branch.
 
-`launch` uses `subprocess.Popen(start_new_session=True)` with the canonical
-PRD opened as stdin and durable JSONL/final-message files. `monitor`,
+`launch` uses `subprocess.Popen(start_new_session=True)` with a unique token
+and canonical PRD path in the prompt argv plus durable JSONL/final-message
+files. `monitor`,
 `heartbeat`, `status`, `stop`, and `resume` implement the exact process and
 session rules in the Controller Workspace contract. Tests use a fake Codex
 executable and kill the controller parent to prove the worker remains alive.
@@ -2640,12 +2654,12 @@ The source tree must end at its original pin and clean state.
 
 ### Task 20: Freeze and Qualify the Functional Candidate
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-r1.md`
 **Worker:** Controller-owned; no implementation worker
 **Reviewer:** `gpt-6-astra`, fast mode
-**Branch:** `staging/beta1/frozen-candidate-evidence`
-**Worktree:** `/Users/allen/git/oxidex-beta1-frozen-candidate-evidence`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/final`
+**Branch:** `staging/beta1/frozen-candidate-evidence-r1`
+**Worktree:** `/Users/allen/git/oxidex-beta1-frozen-candidate-evidence-r1`
+**Target:** `/Users/allen/git/oxidex-beta1-targets/final-r1`
 **Commit:** `docs: record beta functional qualification evidence`
 
 **Files:**
@@ -2689,19 +2703,40 @@ qualification round, branch, binary path/hash, pin, pinned source hash, Perl
 hash/version, corpus roots/counts, and lock status. Do not run these gates in
 the controller integration mirror.
 
+Round 1 uses the literal paths in this task header and commands. For every
+later positive integer `N`, the controller materializes all of these before
+launch and refuses a collision:
+
+```text
+branch:    staging/beta1/frozen-candidate-evidence-rN
+worktree:  /Users/allen/git/oxidex-beta1-frozen-candidate-evidence-rN
+target:    /Users/allen/git/oxidex-beta1-targets/final-rN
+evidence:  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-rN/
+PRD:       /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-rN.md
+report:    /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reports/20-frozen-candidate-evidence-rN.md
+review:    /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reviews/20-frozen-candidate-evidence-rN/
+process:   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/20-rN/
+receipts:  receipt-index.json key task-20/round-N
+```
+
+The materializer replaces `N` with the ledger's next integer in every command,
+including `task_slug=final-rN`. Prior-round worktrees, targets, logs, PRDs,
+reports, reviews, and receipts become read-only `superseded` evidence; they are
+never deleted, reused, or overwritten before the release is complete.
+
 - [ ] **Step 2: Run clean full regeneration twice**
 
 ```bash
-mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final
+mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1
 test -z "$(git status --short)"
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
+CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/regen-1.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/regen-1.log -- \
   tools/exiftool-tables/regen-all.sh
 python3 tools/exiftool-tables/artifacts.py diff --tier all
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
+CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/regen-2.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/regen-2.log -- \
   tools/exiftool-tables/regen-all.sh
 python3 tools/exiftool-tables/artifacts.py diff --tier all
 test -z "$(git status --short)"
@@ -2716,17 +2751,17 @@ the shared lock. Store separate logs and exit statuses:
 
 ```bash
 cargo fmt --check
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
+CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/ci.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/ci.log -- \
   just ci
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
+CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/ignored.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/ignored.log -- \
   cargo test --release --workspace --all-features -- --include-ignored
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
+CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/doc.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/doc.log -- \
   cargo test --doc --workspace --all-features
 ```
 
@@ -2736,9 +2771,9 @@ Run the normal/`-n` oracle matrix, runtime ownership verifier, no-new-manual
 knowledge gate, and deletion ledger verifier:
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
+CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/typed-values.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/typed-values.log -- \
   cargo test --test typed_value_projection_tests
 uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 uv run python tools/exiftool-tables/runtime_deletion_ledger.py verify --root .
@@ -2752,9 +2787,9 @@ recipe name is `verify-runtime-deletions`.
 Run the Standard Candidate Acceptance conformance block with:
 
 ```bash
-task_slug=final
-task_target=/Users/allen/git/oxidex-beta1-targets/final
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final
+task_slug=final-r1
+task_target=/Users/allen/git/oxidex-beta1-targets/final-r1
+task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1
 ```
 
 Record matched, MISSING, VALUE, EXTRA, RENAME, ceiling, files, and raw oracle
@@ -2768,11 +2803,11 @@ above, then:
 
 ```bash
 python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/genshare.log -- \
+  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/genshare.log -- \
   tools/exiftool-tables/genshare/census.sh \
-    --repository /Users/allen/git/oxidex-beta1-frozen-candidate-evidence \
-    --target-dir /Users/allen/git/oxidex-beta1-targets/final \
-    --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/genshare \
+    --repository /Users/allen/git/oxidex-beta1-frozen-candidate-evidence-r1 \
+    --target-dir /Users/allen/git/oxidex-beta1-targets/final-r1 \
+    --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/genshare \
     --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
     --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
     --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
@@ -2830,7 +2865,7 @@ bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/s
 - [ ] **Step 12: Land the frozen-candidate evidence through its remote PR**
 
 Apply the Local Checkpoint, Remote PR, and Integration Procedure to
-`staging/beta1/frozen-candidate-evidence`. Push the signed checkpoint, open the
+`staging/beta1/frozen-candidate-evidence-r1`. Push the signed checkpoint, open the
 draft PR against `staging/beta1-functional-integration`, attach the authenticated receipt
 index, resolve the final Astra review, wait for every required CI check, and
 squash-merge. Fetch the merge and fast-forward the controller integration
