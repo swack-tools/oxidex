@@ -477,11 +477,59 @@ log:
 # Tag management
 # -------------
 
-# Create and push a new version tag
-tag version:
-    @echo "Creating tag: v{{version}}"
-    git tag -a "v{{version}}" -m "Release v{{version}}"
-    git push origin "v{{version}}"
+# Create and push a SIGNED release tag. Refuses anything it cannot prove:
+#   - the commit must be on origin/refactor/tag-machinery or origin/main
+#     (so it has been pushed and reviewed), and GitHub must report the
+#     commit's own signature as verified;
+#   - Cargo.toml at that commit must carry exactly `version`;
+#   - the tag is created with `git tag -s` (your configured signing key)
+#     and its signature is verified locally before anything is pushed.
+# Usage: just tag 2.0.0-beta.1 [<commit-sha>]   (default: origin/refactor/tag-machinery)
+# OXIDEX_TAG_DRY_RUN=1 runs every check and signs + verifies, then deletes the tag instead of pushing.
+tag version commit="origin/refactor/tag-machinery":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TAG="v{{version}}"
+    git fetch -q origin --tags
+    SHA=$(git rev-parse --verify "{{commit}}^{commit}")
+    echo "tag $TAG -> $SHA"
+    if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+      echo "refusing: tag $TAG already exists" >&2; exit 1
+    fi
+    if ! git merge-base --is-ancestor "$SHA" origin/refactor/tag-machinery \
+       && ! git merge-base --is-ancestor "$SHA" origin/main; then
+      echo "refusing: $SHA is not on origin/refactor/tag-machinery or origin/main" >&2; exit 1
+    fi
+    REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+    VERIFIED=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.verification.verified')
+    if [ "$VERIFIED" != "true" ]; then
+      echo "refusing: GitHub does not report commit $SHA as signed and verified" >&2; exit 1
+    fi
+    CARGO_VERSION=$(git show "$SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+    if [ "$CARGO_VERSION" != "{{version}}" ]; then
+      echo "refusing: Cargo.toml at $SHA says $CARGO_VERSION, not {{version}}" >&2; exit 1
+    fi
+    git tag -s "$TAG" -m "OxiDex $TAG" "$SHA"
+    # Verify the new tag's signature before it leaves this machine.
+    if [ "$(git config --get gpg.format)" = "ssh" ]; then
+      KEY=$(git config --get user.signingkey)
+      [ -f "$KEY" ] && KEY=$(cat "$KEY")
+      SIGNERS=$(mktemp); trap 'rm -f "$SIGNERS"' EXIT
+      echo "$(git config --get user.email) $KEY" > "$SIGNERS"
+      VERIFY=(git -c gpg.ssh.allowedSignersFile="$SIGNERS" tag -v "$TAG")
+    else
+      VERIFY=(git tag -v "$TAG")
+    fi
+    if ! "${VERIFY[@]}" >/dev/null 2>&1; then
+      git tag -d "$TAG" >/dev/null
+      echo "refusing: the new tag's signature did not verify; tag deleted locally" >&2; exit 1
+    fi
+    if [ "${OXIDEX_TAG_DRY_RUN:-0}" = 1 ]; then
+      git tag -d "$TAG" >/dev/null
+      echo "dry run: signature verified; $TAG deleted locally, nothing pushed"; exit 0
+    fi
+    echo "signature verified; pushing $TAG"
+    git push origin "refs/tags/$TAG"
 
 # Delete a tag locally and remotely
 untag version:
