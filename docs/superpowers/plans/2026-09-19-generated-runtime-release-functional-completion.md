@@ -28,6 +28,11 @@ subagents, Codex CLI fast mode.
 - Never edit `main` or `refactor/tag-machinery` directly.
 - One task owns one branch, one named worktree, one absolute
   `CARGO_TARGET_DIR`, one file lease, and one root `HANDOFF.md`.
+- A file lease is a literal path or an explicitly bounded directory glob in
+  the task's Files section. Words such as `relevant`, `related`, `selected`,
+  `minimum`, `only when required`, `family files`, `registries`, `dispatch`,
+  and `source-required` do not grant an edit lease. Resolve them to literal
+  paths in the materialized PRD before dispatch or do not launch the task.
 - Use
   `/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2` and
   `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool`; never invoke bare
@@ -41,7 +46,7 @@ subagents, Codex CLI fast mode.
 - Never approximate a conversion. Derive it from the selected ExifTool source
   or refuse it with a machine-readable reason.
 - Use
-  `python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared`
+  `python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared`
   for Cargo builds, tests, and Clippy. Use the same wrapper without `--shared`
   for corpus, read/write, transition, and timing gates.
 - Every agent and CLI worker uses fast mode. When two models are adequate,
@@ -108,9 +113,24 @@ tools/preflight.sh
 ```
 
 The controller records the resolved plan workspace printed by
-`sdd-workspace`. Its `progress.md` begins with the plan path, integration
-branch/worktree, and the literal output of `git rev-parse HEAD`. Do not copy a
-symbolic ref where the resolved SHA belongs.
+`sdd-workspace`. Its short-lived `progress.md` begins with the plan path,
+integration branch/worktree, and the literal output of `git rev-parse HEAD`.
+Do not copy a symbolic ref where the resolved SHA belongs.
+
+The durable controller root is:
+
+```text
+/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/
+```
+
+It contains `fleet-state.json`, append-only `fleet-events.jsonl`,
+`receipt-index.json`, `prds/`, `reports/`, `reviews/`, and `processes/`. The
+ignored Superpowers workspace is a working cache, never the sole recovery
+record. Before dispatch and after every worker message, process exit, signal,
+checkpoint, push, PR/CI transition, merge, ruling, or blocker, the controller
+atomically advances the durable snapshot and appends an event. It then updates
+the integration `HANDOFF.md`. Remote branches and PR comments are the second
+recovery layer.
 
 The controller then creates each task branch/worktree from the current
 integration HEAD and writes that resolved SHA into the task PRD and
@@ -147,24 +167,71 @@ Every task uses a child directory named exactly after its task slug under:
 /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/
 ```
 
-Every CLI task PRD lives under:
+The canonical task PRDs live under:
 
 ```text
-/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/
+/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/
 ```
+
+The controller copies the immutable PRD into the plan-specific Superpowers
+workspace before Desktop dispatch. The ledger stores both paths and the PRD
+SHA-256. A dispatch is refused when either copy is missing or hashes differ.
 
 For example, Task 5 launches from its named worktree as:
 
 ```bash
-codex --yolo exec --enable fast_mode --model gpt-5.6-terra - \
-  < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/05-upgrade-transaction.md
+codex --yolo exec --enable fast_mode --model gpt-5.6-terra \
+  -C /Users/allen/git/oxidex-beta1-upgrade-transaction - \
+  < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md
 ```
+
+The controller launches Desktop implementers with an isolated
+`collaboration.spawn_agent` request: `fork_turns: "none"`, the task's literal
+model and reasoning effort, a stable `task_name` of `beta1_task_NN_SLUG`, and
+a message containing only the task context sentence, canonical PRD path,
+worktree, report path, and no-subagents rule. It records the returned agent ID
+before considering the task running. Reviewers use a distinct
+`beta1_review_NN_SLUG_rR` name and receive the PRD, report, review package,
+and verbatim Global Constraints.
+
+CLI launches use `codex --yolo exec --enable fast_mode --model ... -C ... -`
+from the canonical PRD. The controller captures the command, PID, process
+start time, Codex session/thread identifier when emitted, JSONL output, final
+message, and exit status under `controller/processes/TASK_NUMBER/`. On recovery it
+checks PID identity plus start time, reconciles the worktree and remote branch,
+and resumes the recorded Codex session when safe; it never infers liveness from
+a reused PID alone.
+
+## Red-zone Ownership Matrix
+
+The materialized PRD may narrow a lease but may never widen this matrix.
+
+| Path or glob | Sole task owner | Release condition |
+|---|---:|---|
+| `justfile` | 0, then 1, then 18 | each prior owner remotely merged; no concurrent edits |
+| `tools/release/fleet_controller.py`, `tools/release/fleet-schema.json`, `tools/release/test_fleet_controller.py` | 0 | Task 0 only |
+| `tools/exiftool-tables/runtime_ownership.py`, `runtime_ownership.json`, `test_runtime_ownership.py` | 1 | Task 1 only; vendors own distinct fragment files |
+| `src/core/tag_occurrence.rs`, `src/core/tag_sink.rs`, `src/core/metadata_map.rs` | 2 | Task 2 remote merge before consumer/runtime work |
+| `src/cli/tag_resolution.rs`, `src/cli/output_formatter.rs`, `src/cli/batch_processor.rs`, `src/ffi/**`, `src/composite/mod.rs` | 3 | Task 3 only; Task 14 may not edit `src/composite/mod.rs` |
+| `tools/exiftool-tables/conv_codegen.py`, `conv_oracle.py`, conversion generated outputs and manifest | 4 | Task 4 only |
+| `tools/exiftool-tables/upgrade_transaction.py`, `test_upgrade_transaction.py`, version-rehearsal executor/adapter tests | 5 | Task 5 only; Task 3 may not edit them |
+| `tools/exiftool-tables/conformance.py`, `test_conformance.py` | 6 | Task 6 only; Task 8 explicitly denies these paths |
+| `src/exiftool_tables/session.rs`, `cond.rs` | 7 | Task 7 only |
+| `tools/exiftool-tables/genshare/**` | 8 | Task 8 only |
+| `src/exiftool_tables/conv/mod.rs`, `ifd_engine.rs`, `src/core/exif_dir_engine.rs`, `tiff_helpers.rs`, `jpeg_helpers.rs`, `src/exiftool_tables/enabled_ifd.rs` | 9 | Tasks 7 and 4 merge first; Task 9 owns the converged edit |
+| `tools/exiftool-tables/conv_exif_main_ledger.json` and its exact refusal-closure inputs/outputs | 10 | Task 10 only |
+| `src/parsers/tiff/makernotes/olympus.rs`, `src/parsers/tiff/makernotes/olympus/**`, `runtime_ownership.d/olympus.json` | 11 | Task 11 only |
+| each Task 12-16 parser/test lease and distinct `runtime_ownership.d/TASK_SLUG.json` | 12-16 respectively | no shared dispatcher, engine, composite, or generated output edits |
+| `src/exiftool_tables/engine.rs`, `ifd_engine.rs`, `keyed_engine.rs`, `serial_engine.rs` | 17 | all Task 12-16 remote merges first |
+| compatibility/deletion ledger paths named by Task 18 | 18 | all runtime and vendor migrations merged first |
+| version-transition qualification files | 19 | Tasks 5, 6, and 18 merged first |
+| release TODO, public measurements, autogeneration docs, parity skill | 20 | candidate frozen; no runtime writer active |
 
 ## Dependency and Dispatch Map
 
 | Task | Slug | Worker/model | Depends on | May run with |
 |---:|---|---|---|---|
-| 0 | `durable-oracle-bootstrap` | CLI / Terra | controller setup | none |
+| 0 | `durable-controller-oracle-bootstrap` | CLI / Terra | controller setup | none |
 | 1 | `ownership-inventory` | Desktop / Terra | 0 | 2, 4, 5 |
 | 2 | `typed-occurrence-core` | Desktop / Sol | 0 | 1, 4, 5 |
 | 3 | `typed-consumers` | CLI / Terra | 2 | 4, 5, 6 |
@@ -178,10 +245,10 @@ codex --yolo exec --enable fast_mode --model gpt-5.6-terra - \
 | 11 | `olympus-pilot` | Desktop / Sol | 3, 8, 10 | 5, 6 |
 | 12 | `nikon-port` | CLI / Terra | 11 | 13-16 |
 | 13 | `pentax-panasonic-port` | CLI / Terra | 11 | 12, 14-16 |
-| 14 | `dji-composite-xmp-port` | CLI / Terra | 11 | 12, 13, 15, 16 |
+| 14 | `dji-composite-xmp-port` | CLI / Terra | 11, 13 | 12, 15, 16 |
 | 15 | `legacy-camera-tail` | CLI / Terra | 11 | 12-14, 16 |
 | 16 | `trailer-tail` | CLI / Terra | 11 | 12-15 |
-| 17 | `walker-engine-consolidation` | Desktop / Sol | 9, 11 | reviewed vendor tasks that do not touch engines |
+| 17 | `walker-engine-consolidation` | Desktop / Sol | 9, 11, 12-16 | none; vendors are remotely merged first |
 | 18 | `proven-deletion` | Desktop / Sol | 8, 10-17 | documentation-only work |
 | 19 | `version-transition-qualification` | CLI / Sol | 5, 6, 18 | documentation-only work |
 | 20 | `frozen-candidate-evidence` | controller + Astra review | all prior tasks | none; writers frozen |
@@ -231,8 +298,13 @@ For final integration, load `task_worktree`, `task_base`, `task_head`,
 1. Read the task `HANDOFF.md`, local commits, draft PR, and current checks.
 2. Verify `git -C "$task_worktree" status --short` is empty and local HEAD
    equals the latest pushed branch SHA.
-3. Create a review package from `$task_base..$task_head` using the Superpowers
-   `review-package` script.
+3. Create a review package from `$task_base..$task_head` using:
+
+```bash
+bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package \
+  docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
+  "$task_base" "$task_head"
+```
 4. Dispatch a fresh reviewer at the task's stated reviewer model.
 5. Complete the Superpowers fix loop and push every signed fix checkpoint.
 6. Fetch `origin/refactor/tag-machinery` and compare paths:
@@ -243,17 +315,25 @@ git -C /Users/allen/git/oxidex-beta1-functional-integration \
   diff --name-only "$task_base..origin/refactor/tag-machinery" | sort -u
 ```
 
-7. If the target advanced or path sets overlap, rebase the task in its own
-   worktree onto `origin/refactor/tag-machinery`, rerun covering tests,
-   regenerate the review package, and push with `--force-with-lease` against
-   the recorded prior task-branch SHA. Never rewrite the protected target.
-8. Update the PR body with final receipts, mark it ready, wait for every
-   required check, and squash-merge it:
+7. If the target advanced or path sets overlap, record the fetched target SHA
+   as `rebase_target`, rebase the task in its own worktree onto that exact SHA,
+   set `task_base=$rebase_target` and `task_head=$(git rev-parse HEAD)`, and
+   write both to the ledger and task `HANDOFF.md`. Rerun covering tests, create
+   the review package strictly from the new `$task_base..$task_head`, obtain a
+   fresh review, and push with `--force-with-lease` against the recorded prior
+   task-branch SHA. Never rewrite the protected target.
+8. Update the PR body with final receipts, mark it ready, and wait for every
+   required check. Fetch the target again after checks complete. If its SHA
+   differs from the reviewed `task_base`, return to step 7. Otherwise record
+   the exact pre-merge target SHA and squash-merge only the reviewed head:
 
 ```bash
 gh pr ready "$task_pr" --repo swack-tools/oxidex
 gh pr checks "$task_pr" --repo swack-tools/oxidex --watch --fail-fast
-gh pr merge "$task_pr" --repo swack-tools/oxidex --squash
+git -C "$task_worktree" fetch origin refactor/tag-machinery
+test "$(git -C "$task_worktree" rev-parse origin/refactor/tag-machinery)" = "$task_base"
+gh pr merge "$task_pr" --repo swack-tools/oxidex --squash \
+  --match-head-commit "$task_head"
 ```
 
 9. Fetch the target, read the PR merge SHA, and fast-forward the controller
@@ -293,15 +373,15 @@ mkdir -p "$task_target" "$task_evidence"
 
 cargo fmt --check
 CARGO_TARGET_DIR="$task_target" \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   "$task_evidence/cargo-test.log" -- \
   cargo test --workspace --all-features
 CARGO_TARGET_DIR="$task_target" \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   "$task_evidence/clippy.log" -- \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 CARGO_TARGET_DIR="$task_target" \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   "$task_evidence/release-build.log" -- \
   cargo build --release --bin oxidex
 ```
@@ -310,7 +390,7 @@ After committing the candidate and proving `git status --short` is empty, run
 the combined-corpus receipt under the exclusive lock:
 
 ```bash
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/conformance.log" -- \
   python3 tools/exiftool-tables/conformance.py \
     /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
@@ -326,11 +406,11 @@ exclusive measurement lock:
 
 ```bash
 CARGO_TARGET_DIR="$task_target" \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   "$task_evidence/read-build.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py build \
     --output "$task_evidence/read-build"
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/read-observe.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py observe \
     --build-proof "$task_evidence/read-build/build-proof.json" \
@@ -338,11 +418,11 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
     --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
     --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/t/images \
     --output "$task_evidence/read-observe"
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/read-verify.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py verify \
     --receipt "$task_evidence/read-observe/receipt.json"
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   "$task_evidence/read-gate.log" -- \
   python3 tools/ci/read_regression_gate.py \
     --receipt "$task_evidence/read-observe/receipt.json"
@@ -354,30 +434,74 @@ require zero previously matched occurrences lost, zero new VALUE rows, and
 read-regression `lost 0`. Targeted gains are asserted by the task's named
 carrier tests, not by grepping formatted conformance output.
 
+## Required Final Checkpoint in Every Materialized PRD
+
+Task 0's `materialize` command appends this as the final action of every task,
+with all variables replaced by literals from that task section:
+
+```bash
+git diff --check
+git diff --name-only | sort -u
+git diff --cached --name-only | sort -u
+git ls-files --others --exclude-standard | sort -u
+# Controller verifies every changed path is inside the exact lease.
+git add -- "$TASK_FILE_1" "$TASK_FILE_2"
+git commit -S -m "$TASK_COMMIT_MESSAGE"
+git cat-file -p HEAD | rg '^gpgsig '
+test -z "$(git status --short)"
+```
+
+The worker then writes `HANDOFF.md` with task/base/head, completed steps,
+exact commands and results, receipt paths/hashes, blockers/rulings, and
+`RETURN_TO_CONTROLLER` as the exact next action. It writes the report at the
+canonical controller report path and returns only status, commit SHA, one-line
+test summary, and concerns. The controller records the event before pushing
+the task branch or opening/updating its draft PR.
+
 ---
 
-### Task 0: Durable Oracle and Corpus Bootstrap
+### Task 0: Durable Controller, Oracle, and Corpus Bootstrap
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/00-durable-oracle-bootstrap.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
-**Branch:** `staging/beta1/durable-oracle-bootstrap`
-**Worktree:** `/Users/allen/git/oxidex-beta1-durable-oracle-bootstrap`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/durable-oracle-bootstrap`
-**Commit:** `build: make release oracle storage durable`
+**Branch:** `staging/beta1/durable-controller-oracle-bootstrap`
+**Worktree:** `/Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap`
+**Target:** `/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap`
+**Commit:** `build: make release execution state durable`
 
-**Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/00-durable-oracle-bootstrap.md`
+**Launch:** Task 0 is the sole manual bootstrap. Create its `processes/00`
+directory first, then launch with `set -o pipefail` so the worker's JSONL,
+final message, terminal output, and true exit status survive the process:
+
+```bash
+mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
+set -o pipefail
+codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
+  -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final.md \
+  -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap - \
+  < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md \
+  2>&1 | tee /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events.jsonl
+```
+
+The supervising session records the shell PID and process start time before
+launch, watches the live stream, checks the pipeline exit status, and writes a
+bootstrap event before relying on Task 0's controller for later launches.
 
 **Files:**
 
 - Create: `tools/release/bootstrap_oracle.py`
 - Create: `tools/release/oracle-lock.json`
 - Create: `tools/release/test_bootstrap_oracle.py`
+- Create: `tools/release/fleet_controller.py`
+- Create: `tools/release/fleet-schema.json`
+- Create: `tools/release/test_fleet_controller.py`
 - Create: `docs/reference/durable-release-storage.md`
+- Create: `docs/reference/beta-fleet-controller.md`
 - Modify: `scripts/exiftool_oracle.py`
-- Modify: relevant ExifTool cache/corpus defaults in `justfile`
+- Modify: `justfile` recipes `docs-coverage`, `duplicate-loss-scan`,
+  `compare-exiftool-full`, and `compare-exiftool-full-update`
 - Modify: `.agents/skills/exiftool-parity/SKILL.md`
 - Do not commit downloaded sources, corpora, Perl installations, or secrets
 
@@ -393,21 +517,42 @@ carrier tests, not by grepping formatted conformance output.
   Archive-Zip 1.68 SHA-256
   `65089896661884077a90a17515153a2108a6a86ba6d69b02632cc201345a277e`,
   and ExifTool tag object `2200871d9cef988051d2a99d67df3bda6cbb30a8`.
+- `fleet_controller.py init|materialize|event|checkpoint|reconcile|recover`
+  validates the task DAG and paths, writes atomic snapshots plus append-only
+  events, materializes self-contained PRDs, records local/remote checkpoints,
+  and reconstructs safe next actions after worker or controller death.
+- `fleet-schema.json` requires schema version, plan/spec hashes, target ref/SHA,
+  task number/slug, state history, dependencies, file lease, worker
+  kind/model/effort/identity, PID/start-time/session ID when applicable, launch
+  count, PRD/report/review hashes, base/head/pushed/merge/target SHAs,
+  worktree/target/evidence paths, heartbeat, PR/CI state, receipt hashes,
+  ruling/blocker, and exact next command.
 
-- [ ] **Step 1: Write failing durable-path and identity tests**
+- [ ] **Step 1: Write failing durable-path, controller, and identity tests**
 
-Test that the resolver rejects `tempfile.gettempdir()`, a symlink escaping the
+In `test_bootstrap_oracle.py`, test that the resolver rejects the resolved
+system temporary-directory root, `$TMPDIR`, a symlink escaping the
 durable root, missing hashes, wrong Perl/Archive-Zip versions, the wrong
 ExifTool tag object, a corpus below 4,000 files, and a DOCX probe other than
 `DOCX`. Assert the exact durable paths used by the remainder of this plan.
+
+In `test_fleet_controller.py`, use a durable test root beneath
+`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller-tests`
+and assert: invalid/outside paths are refused; state writes are atomic;
+events are append-only; dependencies block dispatch until remote merge;
+materialized PRD hashes reconcile; PID reuse does not imply liveness; repeated
+remote reconciliation is idempotent; and recovery after simulated worker and
+controller death produces one next action without duplicate dispatch.
 
 - [ ] **Step 2: Run the focused tests red**
 
 ```bash
 uv run python -m unittest tools/release/test_bootstrap_oracle.py -v
+uv run python -m unittest tools/release/test_fleet_controller.py -v
 ```
 
-Expected: import failure because `bootstrap_oracle.py` does not exist.
+Expected: import failures because `bootstrap_oracle.py` and
+`fleet_controller.py` do not exist.
 
 - [ ] **Step 3: Implement idempotent durable provisioning**
 
@@ -419,42 +564,76 @@ combined corpus under `/Users/allen/oxidex-ops/cache/exiftool/13.59`, and use
 atomic rename within the same durable filesystem. An interrupted run leaves
 the last verified installation intact and a journal naming the failed stage.
 
-- [ ] **Step 4: Change repository defaults and add refusal fences**
+- [ ] **Step 4: Implement the durable fleet controller and path fence**
 
-Set `scripts/exiftool_oracle.py` and relevant `justfile` recipes to the durable
-cache root. Explicit environment overrides remain supported only when their
-resolved paths are under `/Users/allen/oxidex-ops`. Add a repository test that
-fails if release tooling introduces a system temporary-directory default.
+Implement the six controller subcommands and JSON schema above. Every command
+resolves paths before use and accepts only descendants of `/Users/allen/git`
+or `/Users/allen/oxidex-ops`. `materialize` combines the plan's Global
+Constraints, complete task section, resolved base SHA, literal paths,
+dependencies, exact file lease, handoff template, report contract, and launch
+command into the canonical PRD. `recover` reconciles the snapshot, append-only
+events, worktree commits, ignored `HANDOFF.md`, worker identity, pushed branch,
+PR, CI, and merge SHA without mutating a protected branch.
 
-- [ ] **Step 5: Provision and verify the durable installation**
+- [ ] **Step 5: Change repository defaults and add refusal fences**
+
+Set `scripts/exiftool_oracle.py` and the four named `justfile` recipes to the
+durable cache/evidence roots. Explicit environment overrides remain supported
+only when their resolved paths are under `/Users/allen/oxidex-ops`. Add a
+repository test that fails if release tooling introduces a system
+temporary-directory default.
+
+- [ ] **Step 6: Provision and verify the durable installation and controller**
 
 ```bash
 python3 tools/release/bootstrap_oracle.py provision \
   --root /Users/allen/oxidex-ops
 python3 tools/release/bootstrap_oracle.py verify \
   --root /Users/allen/oxidex-ops --pin 13.59 \
-  --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-oracle-bootstrap/storage-manifest.json
+  --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json
+python3 tools/release/fleet_controller.py init \
+  --plan docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
+  --spec docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md \
+  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
+  --target-ref origin/refactor/tag-machinery
+python3 tools/release/fleet_controller.py recover \
+  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
+  --repo /Users/allen/git/oxidex-beta1-functional-integration
 ```
 
 Require Perl `v5.38.2`, Archive::Zip `1.68`, ExifTool `13.59`, DOCX detection,
 at least 4,000 combined-corpus files, and recorded hashes for every archive,
-source tree, corpus manifest, and executable.
+source tree, corpus manifest, and executable. The controller must report Task 0
+as the only launchable task and an idempotent recovery action.
 
-- [ ] **Step 6: Run tests, documentation checks, and commit locally**
+- [ ] **Step 7: Run tests, documentation checks, and commit locally**
 
 ```bash
 uv run python -m unittest tools/release/test_bootstrap_oracle.py -v
+uv run python -m unittest tools/release/test_fleet_controller.py -v
 EXIFTOOL_CACHE_DIR=/Users/allen/oxidex-ops/cache/exiftool/13.59 \
 EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
   python3 scripts/exiftool_oracle.py
 typos tools/release scripts/exiftool_oracle.py \
-  docs/reference/durable-release-storage.md .agents/skills/exiftool-parity/SKILL.md
+  docs/reference/durable-release-storage.md docs/reference/beta-fleet-controller.md \
+  .agents/skills/exiftool-parity/SKILL.md
 git add tools/release scripts/exiftool_oracle.py justfile \
-  docs/reference/durable-release-storage.md .agents/skills/exiftool-parity/SKILL.md
-git commit -S -m "build: make release oracle storage durable"
+  docs/reference/durable-release-storage.md docs/reference/beta-fleet-controller.md \
+  .agents/skills/exiftool-parity/SKILL.md
+git commit -S -m "build: make release execution state durable"
 ```
 
-- [ ] **Step 7: Update handoff and return for controller PR integration**
+- [ ] **Step 8: Rehearse total process loss and recovery**
+
+Run the controller's fixture mode with one completed task, one clean committed
+but unpushed task, one pushed draft PR task, one dead CLI PID, one missing
+Desktop agent, and one dependency-blocked task. Terminate the fixture
+controller, invoke `recover` in a fresh process, and require the same task
+states, no duplicate launch, the correct remote reconciliation actions, and
+one exact next command per nonterminal task. Preserve the JSONL and recovery
+receipt below the controller test root.
+
+- [ ] **Step 9: Update handoff and return for controller PR integration**
 
 The controller pushes the checkpoint, opens the draft PR, runs review/CI, and
 squash-merges Task 0 before creating any other task worktree.
@@ -463,7 +642,7 @@ squash-merges Task 0 before creating any other task worktree.
 
 ### Task 1: Ownership Inventory and Duplicate-Owner Verifier
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/01-ownership-inventory.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/01-ownership-inventory.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -491,6 +670,14 @@ squash-merges Task 0 before creating any other task worktree.
   enabled field has exactly one owner and every residual symbol still exists.
 - Consumes existing conversion ledgers, enabled-table registries, and explicit
   hand-residual arrays without assigning observation credit.
+- Defines `StableFieldId(module: str, table: str, kind: Literal["numeric",
+  "name", "index"], value: str)`, `load_rows(root: Path) -> list[dict]`, and
+  `verify_rows(rows: Sequence[dict]) -> Verification`; `Refused` messages
+  include the stable identity and both competing/missing owners.
+- `runtime_ownership.json` has `schema: 1`, sorted `rows`, source release and
+  source-tree hash, category totals, and a SHA-256 over all deterministic
+  fragment inputs. Each row requires exactly one of `generated`,
+  `walker-owned`, `residual`, `refused`, or `not-applicable`.
 
 - [ ] **Step 1: Write failing schema and duplicate-owner tests**
 
@@ -548,15 +735,25 @@ silently categorized as residual.
 Add `just verify-runtime-ownership`, then run the test and recipe. Expected:
 all synthetic controls pass and the repository inventory reconciles.
 
-- [ ] **Step 6: Update handoff, commit, and report**
+- [ ] **Step 6: Commit, update handoff, and report**
 
-Record counts by owner category and every intentionally unresolved refusal.
+```bash
+git add tools/exiftool-tables/runtime_ownership.py \
+  tools/exiftool-tables/runtime_ownership.json \
+  tools/exiftool-tables/runtime_ownership.d \
+  tools/exiftool-tables/test_runtime_ownership.py justfile
+git commit -S -m "feat: verify generated and residual field ownership"
+```
+
+Record counts by owner category, every intentionally unresolved refusal,
+commit SHA, exact tests, and `RETURN_TO_CONTROLLER` as the next action in
+`HANDOFF.md`.
 
 ---
 
 ### Task 2: Canonical Typed-Occurrence Core
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/02-typed-occurrence-core.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/02-typed-occurrence-core.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -576,10 +773,14 @@ Record counts by owner category and every intentionally unresolved refusal.
 **Interfaces:**
 
 - Produces `ValueChannel::{Stored, ValueConv, PrintConv}`.
-- Produces `TagOccurrence::project(channel) -> TagValue` with explicit fallback
-  rules.
-- Produces winner/occurrence projection APIs on `TagSink` and `MetadataMap` for
-  downstream Task 3.
+- Produces `TagOccurrence::project(&self, channel: ValueChannel) -> &TagValue`
+  with explicit fallback rules and keeps existing `value_conv()` as the
+  compatibility wrapper during this task.
+- Produces `TagSink::winner_projected(&self, key: &str, channel:
+  ValueChannel) -> Option<&TagValue>` and
+  `MetadataMap::project_occurrences(&self, channel: ValueChannel) ->
+  impl Iterator<Item = (&str, &TagOccurrence, &TagValue)>` without collapsing
+  duplicate instances.
 
 - [ ] **Step 1: Write failing channel tests**
 
@@ -591,16 +792,20 @@ assert_eq!(occ.project(ValueChannel::ValueConv), typed);
 assert_eq!(occ.project(ValueChannel::PrintConv), printed);
 ```
 
-Also test fallbacks, `undef`, byte strings, binary display, signed zero, lists,
-duplicate winners, tombstones, and instance-specific winners.
+Name the inline tests
+`tag_occurrence::tests::value_channel_projection_matrix`,
+`tag_sink::tests::winner_projection_preserves_instances`, and
+`metadata_map::tests::project_occurrences_keeps_duplicate_order`. Cover
+fallbacks, `undef`, byte strings, binary display, signed zero, lists, duplicate
+winners, tombstones, and instance-specific winners.
 
 - [ ] **Step 2: Run the focused library tests and observe failure**
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-occurrence-core/red.log -- \
-cargo test --lib core::
+cargo test --lib projection
 ```
 
 Expected: compile failure because `ValueChannel` and `project` do not exist.
@@ -634,25 +839,31 @@ Clippy warnings:
 ```bash
 cargo fmt --check
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-occurrence-core/test.log -- \
   cargo test --lib core::
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-occurrence-core/clippy.log -- \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **Step 6: Update handoff, commit, and report**
+- [ ] **Step 6: Commit, update handoff, and report**
 
-The report lists every fallback rule and any compatibility conversion still
-living in `exiftool_compat.rs`.
+```bash
+git add src/core/tag_occurrence.rs src/core/tag_sink.rs src/core/metadata_map.rs
+git commit -S -m "refactor: define canonical metadata value channels"
+```
+
+The report and `HANDOFF.md` list every fallback rule, any compatibility
+conversion still living in `exiftool_compat.rs`, commit SHA, exact tests, and
+`RETURN_TO_CONTROLLER` as the next action.
 
 ---
 
 ### Task 3: Migrate Typed-Occurrence Consumers
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/03-typed-consumers.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/03-typed-consumers.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -662,20 +873,33 @@ living in `exiftool_compat.rs`.
 **Commit:** `refactor: project typed metadata values consistently`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/03-typed-consumers.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-typed-consumers - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/03-typed-consumers.md`
 
 **Files:**
 
 - Modify: `src/cli/tag_resolution.rs`
-- Modify: CLI JSON/output formatter modules selected by call-site search
-- Modify: `src/ffi/**`
+- Modify: `src/cli/output_formatter.rs`
+- Modify: `src/cli/batch_processor.rs`
+- Modify: `src/ffi/read_tags.rs`
+- Modify: `src/ffi/write_tags.rs`
+- Modify: `src/ffi/context.rs`
+- Modify: `src/ffi/lifecycle.rs`
+- Modify: `src/ffi/mod.rs`
 - Modify: `src/composite/compute.rs`
-- Modify writer/copy call sites that consume occurrences
+- Modify: `src/composite/mod.rs`
+- Modify: `src/core/operations.rs`
 - Add: `tests/typed_value_projection_tests.rs`
 - Add: `tools/exiftool-tables/fixtures/typed_value_projection.json`
 - Do not modify Task 2 core files or generated/engine files
 
-**Interfaces:** Consumes Task 2's `ValueChannel` and projection APIs.
+**Interfaces:** Consumes Task 2's `ValueChannel`,
+`TagOccurrence::project`, `TagSink::winner_projected`, and
+`MetadataMap::project_occurrences`. Keeps the exported C ABI layout unchanged;
+new FFI channel selection is an explicit enum/entry point, while existing
+entry points retain their documented default. `copy_metadata` selects
+`Stored`; `composite::compute` receives `ValueConv`; CLI
+`resolved_display_value(occurrence, no_print_conv)` delegates to the canonical
+projection rather than reimplementing fallback.
 
 - [ ] **Step 1: Add a normal/`-n` characterization matrix**
 
@@ -690,7 +914,7 @@ Run the focused integration test under the shared lock:
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-consumers \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-consumers/red.log -- \
   cargo test --test typed_value_projection_tests -- --nocapture
 ```
@@ -728,13 +952,25 @@ task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-c
 Run formatting and Clippy before the signed task commit. Run the conformance
 and read-receipt blocks only after that commit leaves the worktree clean.
 
-- [ ] **Step 6: Update handoff and report**
+- [ ] **Step 6: Commit, update handoff, and report**
+
+```bash
+git add src/cli/tag_resolution.rs src/cli/output_formatter.rs \
+  src/cli/batch_processor.rs src/ffi src/composite/compute.rs \
+  src/composite/mod.rs src/core/operations.rs \
+  tests/typed_value_projection_tests.rs \
+  tools/exiftool-tables/fixtures/typed_value_projection.json
+git commit -S -m "refactor: project typed metadata values consistently"
+```
+
+Write the commit SHA, tests, receipt hashes, remaining source-proven reparsing
+allowlist, and `RETURN_TO_CONTROLLER` next action to `HANDOFF.md`.
 
 ---
 
 ### Task 4: Generalize the Generated Conversion Registry
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/04-conv-registry.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/04-conv-registry.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -747,16 +983,21 @@ and read-receipt blocks only after that commit leaves the worktree clean.
 
 - Modify: `tools/exiftool-tables/conv_codegen.py`
 - Modify: `tools/exiftool-tables/conv_oracle.py`
-- Modify: related conversion codegen tests and artifact manifest
+- Modify: `tools/exiftool-tables/test_conv_codegen.py`
+- Modify: `tools/exiftool-tables/artifacts.py`
 - Modify: `src/exiftool_tables/conv/mod.rs`
 - Create generated registry/modules under `src/exiftool_tables/conv/`
 - Modify: `src/exiftool_tables/conv/tests.rs`
 - Do not modify IFD/session/core occurrence files
 
-**Interfaces:** Produces table-identity registry entries containing decoder and
-table-local claim function. Keeps `RawConv`, `ValueConv`, and `PrintConv`
+**Interfaces:** Preserves `Decode = fn(&mut Session, u16, &MemberVal) -> Arm`.
+Produces `Entry { module: &'static str, table: &'static str, decode: Decode,
+claims: fn(u16) -> bool }`, with `decoder(table: &IfdTable) -> Option<Decode>`
+and `claims(table: &IfdTable, tag: &IfdTag) -> bool` both resolved through the
+same generated table identity. Keeps `RawConv`, `ValueConv`, and `PrintConv`
 distinct. Extends `conv_oracle.py` with `--all`, which checks every emitted
-registry entry in deterministic identity order.
+registry entry in deterministic identity order. Task 4 explicitly denies
+`justfile`.
 
 - [ ] **Step 1: Add failing multi-table registry tests**
 
@@ -769,7 +1010,7 @@ duplicate table identity controls.
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_conv_codegen.py -v
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/red.log -- \
   cargo test --lib exiftool_tables::conv::tests
 ```
@@ -810,24 +1051,35 @@ uv run python tools/exiftool-tables/conv_oracle.py --check --all \
   --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
   --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/regen-1.log -- \
   tools/exiftool-tables/regen-all.sh
 git add src/exiftool_tables/conv tools/exiftool-tables
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/regen-2.log -- \
   tools/exiftool-tables/regen-all.sh
 git diff --exit-code -- src/exiftool_tables/conv tools/exiftool-tables
 ```
 
-- [ ] **Step 6: Run Rust tests, fmt, Clippy, handoff, commit, and report**
+- [ ] **Step 6: Run Rust tests, fmt, Clippy, commit, handoff, and report**
+
+```bash
+git add tools/exiftool-tables/conv_codegen.py \
+  tools/exiftool-tables/conv_oracle.py \
+  tools/exiftool-tables/test_conv_codegen.py \
+  tools/exiftool-tables/artifacts.py src/exiftool_tables/conv
+git commit -S -m "feat: generate conversion registry for enabled tables"
+```
+
+Record generated modules/ledgers, source hashes, test and oracle receipts,
+commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ---
 
 ### Task 5: Fresh BEFORE/AFTER Upgrade Transaction
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/05-upgrade-transaction.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -837,15 +1089,22 @@ git diff --exit-code -- src/exiftool_tables/conv tools/exiftool-tables
 **Commit:** `fix: regenerate both sides of ExifTool upgrades`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/05-upgrade-transaction.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-upgrade-transaction - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md`
 
 **Files:**
 
 - Modify: `tools/exiftool-tables/upgrade_transaction.py`
 - Modify: `tools/exiftool-tables/test_upgrade_transaction.py`
-- Modify only when tests require it: version-rehearsal stage/executor files and
-  their focused tests
+- Do not modify version-rehearsal executor/adapter files; Task 19 owns them
 - Do not modify `.exiftool-version` or generated artifacts
+
+**Interfaces:** Preserves `Transaction.sources`, `identities`, `grade`,
+`promote`, `execute`, module `recover`, `recovery_state`, and
+`validate_conformance`. Changes `Transaction.variant(label, version,
+regenerate)` so both `before` and `after` variants always regenerate from their
+selected immutable source tree, even when the version equals the committed
+pin. Variant receipts include source hash, generator hash, output hashes, and
+clean-tree proof.
 
 - [ ] **Step 1: Add the same-pin stale-artifact regression test**
 
@@ -881,22 +1140,26 @@ Save command/output in the task evidence directory:
 ```bash
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/upgrade-transaction
 set -o pipefail
-uv run python -m unittest \
-  tools/exiftool-tables/test_upgrade_transaction.py \
-  tools/exiftool-tables/test_version_rehearsal.py -v \
+uv run python -m unittest tools/exiftool-tables/test_upgrade_transaction.py -v \
   2>&1 | tee /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/upgrade-transaction/tests.log
 ```
 
-If `test_version_rehearsal.py` does not exist at the task base, create it in
-Step 1 rather than omitting that test target.
+- [ ] **Step 6: Commit, update handoff, and report**
 
-- [ ] **Step 6: Update handoff, commit, and report**
+```bash
+git add tools/exiftool-tables/upgrade_transaction.py \
+  tools/exiftool-tables/test_upgrade_transaction.py
+git commit -S -m "fix: regenerate both sides of ExifTool upgrades"
+```
+
+Record before/after source and output hashes, recovery controls, commit SHA,
+and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ---
 
 ### Task 6: Complete Occurrence-Aware Conformance Receipts
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/06-conformance-receipts.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/06-conformance-receipts.md`
 
 **Worker:** Codex CLI, `gpt-5.6-luna`, fast mode
 **Reviewer:** `gpt-5.6-terra`, fast mode
@@ -906,13 +1169,23 @@ Step 1 rather than omitting that test target.
 **Commit:** `test: authenticate conformance occurrence totals`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-luna - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/06-conformance-receipts.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-luna -C /Users/allen/git/oxidex-beta1-conformance-receipts - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/06-conformance-receipts.md`
 
 **Files:**
 
 - Modify: `tools/exiftool-tables/conformance.py`
 - Modify: `tools/exiftool-tables/test_conformance.py`
 - Do not modify parsers, runtime, or generated files
+
+**Interfaces:** Extends schema 1 JSON with `oracle_occurrences`,
+`candidate_occurrences`, `matched_occurrences`, and complete instrument
+identity. Requires
+`oracle_occurrences = matched_occurrences + missing_occurrences +
+value_occurrences + rename_source_occurrences` and
+`candidate_occurrences = matched_occurrences + extra_occurrences +
+value_occurrences + rename_target_occurrences`; duplicate instances remain
+separate. Preserves `run_exiftool`, `run_oxidex`, `compare`, and matching
+behavior.
 
 - [ ] **Step 1: Add a failing JSON receipt test**
 
@@ -938,18 +1211,24 @@ byte-identical JSON under different hash seeds.
 Reject missing floors, changed binary after measurement, and totals that do not
 reconcile.
 
-- [ ] **Step 5: Run `test_conformance.py`, typos, handoff, commit, and report**
+- [ ] **Step 5: Run tests, commit, update handoff, and report**
 
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_conformance.py -v
 typos tools/exiftool-tables/conformance.py tools/exiftool-tables/test_conformance.py
+git add tools/exiftool-tables/conformance.py \
+  tools/exiftool-tables/test_conformance.py
+git commit -S -m "test: authenticate conformance occurrence totals"
 ```
+
+Record schema/reconciliation totals, test output, commit SHA, and
+`RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ---
 
 ### Task 7: Make Session File-Scoped
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/07-file-session.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/07-file-session.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -977,6 +1256,12 @@ typos tools/exiftool-tables/conformance.py tools/exiftool-tables/test_conformanc
 - Directory scope reset/restore covers `DIR_NAME`, `Compression`,
   `SubfileType`, byte order, count, and format while preserving file members,
   values, options, warnings, and processed state.
+- Reconciles the existing cross-walk `cond::Ctx` and conversion `Session`:
+  `process_exif` and `process_exif_decoded` accept `&mut Session`; the
+  file-entry bridge owns one Session, and directory walks enter a
+  `DirectoryScope` guard whose `Drop` restores directory-local fields on every
+  return path. Existing `Session::{member,set_member,remove_member}` and
+  warnings/options remain file-scoped.
 
 - [ ] **Step 1: Write failing cross-directory state tests**
 
@@ -995,7 +1280,7 @@ duplicate-occurrence controls.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/file-session \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/file-session/red.log -- \
   cargo test --test generated_file_session -- --nocapture
 ```
@@ -1021,22 +1306,33 @@ Use the shared lock. Require no ordering, group, or warning regression:
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/file-session \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/file-session/test.log -- \
   cargo test --lib
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/file-session \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/file-session/integration.log -- \
   cargo test --test generated_file_session
 ```
 
-- [ ] **Step 6: Run fmt, Clippy, handoff, commit, and report**
+- [ ] **Step 6: Run fmt and Clippy, commit, update handoff, and report**
+
+```bash
+git add src/exiftool_tables/session.rs src/exiftool_tables/ifd_engine.rs \
+  src/exiftool_tables/cond.rs src/core/exif_dir_engine.rs \
+  src/core/tiff_helpers.rs src/core/jpeg_helpers.rs \
+  tests/generated_file_session.rs
+git commit -S -m "refactor: retain ExifTool session state for each file"
+```
+
+Record scope semantics, call-site inventory, tests, commit SHA, and
+`RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ---
 
 ### Task 8: Validate Generated-On/Generated-Off Attribution
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/08-generated-attribution.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/08-generated-attribution.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -1046,7 +1342,7 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
 **Commit:** `test: authenticate generated route attribution`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/08-generated-attribution.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-generated-attribution - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/08-generated-attribution.md`
 
 **Files:**
 
@@ -1054,10 +1350,20 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
 - Modify: `tools/exiftool-tables/genshare/census.sh`
 - Replace or update: `tools/exiftool-tables/genshare/probe.patch`
 - Modify: `tools/exiftool-tables/genshare/README.md`
-- Add: focused Python/shell tests under `tools/exiftool-tables/genshare/`
-- Modify the minimum outward-boundary Rust seams needed for a maintained test
-  hook; no behavior when the hook is disabled
+- Add: `tools/exiftool-tables/genshare/test_attribute.py`
+- Add: `tools/exiftool-tables/genshare/test_census.py`
+- Add: `tools/exiftool-tables/genshare/testdata/bounded-corpus.txt`
+- Create: `src/exiftool_tables/attribution.rs`
+- Modify: `src/exiftool_tables/mod.rs`
+- Modify: `src/exiftool_tables/engine.rs`
+- Modify: `src/exiftool_tables/ifd_engine.rs`
+- Modify: `src/exiftool_tables/keyed_engine.rs`
+- Modify: `src/exiftool_tables/serial_engine.rs`
+- Modify: `src/exiftool_tables/runtime.rs`
 - Do not change tag conversion semantics
+- Do not modify: `tools/exiftool-tables/conformance.py`,
+  `tools/exiftool-tables/test_conformance.py`, any vendor parser, or generated
+  table output
 
 **Interfaces:** Produces an authenticated paired control/probe receipt consumed
 by Tasks 11 and 18. Replaces positional worktree arguments with this maintained
@@ -1074,10 +1380,18 @@ tools/exiftool-tables/genshare/census.sh \
   --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
-The script builds one maintained binary whose unset/empty hook is the control,
+The script builds one maintained binary whose unset/empty
+`OXIDEX_GENSHARE_SILENCE` hook is the control,
 then runs each explicit token as a probe. It writes `receipt.json` and exits
 nonzero on a refused token, process failure, floor miss, inertness difference,
 hash mismatch, or attribution reconciliation failure.
+
+`attribution::Token::{Engine,LegacyL1,LegacyL2,Producers,Serial,Keyed}` parses
+the comma-separated environment once. `silenced(token) -> bool` is false when
+the variable is absent/empty. Engine guards drop only the outward emission
+after stateful work succeeds; disabled-hook behavior must remain byte-identical
+on the bounded corpus. Unknown tokens and the unsafe `conv` token exit 2 before
+corpus traversal.
 
 - [ ] **Step 1: Add failing receipt-authentication tests**
 
@@ -1124,13 +1438,24 @@ Run the Python/shell tests, Rust tests for the maintained seam, formatting, and
 Clippy first. Commit the signed task candidate and require a clean worktree.
 Then run the full command above through the exclusive lock.
 
-- [ ] **Step 6: Update handoff and report**
+- [ ] **Step 6: Commit, update handoff, and report**
+
+```bash
+git add tools/exiftool-tables/genshare src/exiftool_tables/attribution.rs \
+  src/exiftool_tables/mod.rs src/exiftool_tables/engine.rs \
+  src/exiftool_tables/ifd_engine.rs src/exiftool_tables/keyed_engine.rs \
+  src/exiftool_tables/serial_engine.rs src/exiftool_tables/runtime.rs
+git commit -S -m "test: authenticate generated route attribution"
+```
+
+Record the control/probe receipt hashes, token reconciliation, commit SHA, and
+`RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ---
 
 ### Task 9: Exact-Once Exif Shared Pipeline
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/09-exif-shared-pipeline.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/09-exif-shared-pipeline.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -1151,9 +1476,13 @@ Then run the full command above through the exclusive lock.
 - Add: `tests/exif_shared_pipeline.rs`
 - Do not edit vendor parser directories or delete compatibility branches
 
-**Interfaces:** Consumes Tasks 2, 4, and 7. Produces one execution result with
-staged session effects and one exact-once route for IFD0, IFD1, ExifIFD, and
-InteropIFD.
+**Interfaces:** Consumes Tasks 2, 4, 7, and 8. Preserves
+`conv::Arm::{Report(Report), Suppress, Decline(&'static str)}` and introduces a
+`StagedEffects` guard around the mutable `Session`. The guard exposes
+`commit(self, session: &mut Session)` and `discard(self)`; residual dispatch
+occurs only after discard. Produces one exact-once route for IFD0, IFD1,
+ExifIFD, and InteropIFD through `exif_dir_engine::walk`, with one named
+`Owner::{Engine, Hand, Silent}` decision and at most one residual invocation.
 
 - [ ] **Step 1: Add failing side-effect and exact-once tests**
 
@@ -1172,7 +1501,7 @@ and a non-UTF-8 reported scalar that currently declines at the text boundary.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/exif-shared-pipeline \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-shared-pipeline/red.log -- \
   cargo test --test exif_shared_pipeline -- --nocapture
 ```
@@ -1210,15 +1539,25 @@ task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-sh
 Commit the signed task candidate after tests/formatting/Clippy and before the
 conformance/read-receipt portions of the standard commands.
 
-- [ ] **Step 7: Update handoff and report**
+- [ ] **Step 7: Commit, update handoff, and report**
 
-The report lists every remaining replay/drain/yield/residual path and its owner.
+```bash
+git add src/exiftool_tables/conv/mod.rs src/exiftool_tables/ifd_engine.rs \
+  src/exiftool_tables/enabled_ifd.rs src/core/exif_dir_engine.rs \
+  src/core/tiff_helpers.rs src/core/jpeg_helpers.rs \
+  tests/exif_shared_pipeline.rs
+git commit -S -m "refactor: route Exif directories through one tag pipeline"
+```
+
+The report and `HANDOFF.md` list every remaining replay/drain/yield/residual
+path and its owner, test and receipt hashes, commit SHA, and
+`RETURN_TO_CONTROLLER`.
 
 ---
 
 ### Task 10: Close or Classify the 17 Exif::Main Refusals
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/10-refusal-closure.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/10-refusal-closure.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -1229,14 +1568,31 @@ The report lists every remaining replay/drain/yield/residual path and its owner.
 
 **Files:**
 
-- Modify conversion grammar/codegen/runtime/helper files required by the 17
-  rows
+- Create: `tools/exiftool-tables/exif_main_refusal_worklist.json`
 - Add: `tools/exiftool-tables/test_exif_main_refusal_closure.py`
 - Add: `tests/exif_main_refusal_closure.rs`
-- Modify focused conversion oracle captures and tests
-- Modify ownership inventory entries
-- Modify named residual handlers only for rows proven residual-owned
+- Modify: `tools/exiftool-tables/conv_codegen.py`
+- Modify: `tools/exiftool-tables/test_conv_codegen.py`
+- Modify: `tools/exiftool-tables/conv_oracle.py`
+- Modify: `tools/exiftool-tables/helper_oracle.py`
+- Modify: `tools/exiftool-tables/conv_exif_main_ledger.json`
+- Modify generated: `src/exiftool_tables/conv/exif_main.rs`
+- Modify: `src/exiftool_tables/conv/rt.rs`
+- Modify: `src/core/tag_conversion.rs`
+- Modify: `src/core/formatters/composite_image_exposure_times.rs`
+- Modify: `src/core/tiff_helpers.rs`
+- Modify: `src/core/jpeg_helpers.rs`
+- Modify: `tests/learning_opt_out_in.rs`
+- Create/modify: `tools/exiftool-tables/runtime_ownership.d/exif-main-refusals.json`
 - Do not perform broad compatibility deletion
+
+**Interfaces:** Consumes Task 1 stable ownership IDs, Task 4 generated
+conversion registry, and Task 9 structural-edge ownership. The checked
+worklist enumerates the 17 current `refused` rows from
+`conv_exif_main_ledger.json` with source body/hash, current reason, probes,
+target owner, implementation file, and named test. Its verifier requires each
+row to remain refused or move to exactly one generated, walker, or residual
+owner; count drift without an explicit worklist update fails.
 
 - [ ] **Step 1: Generate a checked refusal worklist**
 
@@ -1277,7 +1633,7 @@ uv run python tools/exiftool-tables/conv_oracle.py --check --all \
   --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool
 uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/refusal-closure \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/refusal-closure/test.log -- \
   cargo test --test exif_main_refusal_closure
 ```
@@ -1287,13 +1643,31 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
 Run `tools/exiftool-tables/regen-all.sh`, stage intended generated changes,
 run it again, and require `git diff --exit-code` to show no unstaged drift.
 
-- [ ] **Step 7: Run fmt, Clippy, handoff, commit, and report**
+- [ ] **Step 7: Run fmt and Clippy, commit, update handoff, and report**
+
+```bash
+git add tools/exiftool-tables/exif_main_refusal_worklist.json \
+  tools/exiftool-tables/test_exif_main_refusal_closure.py \
+  tools/exiftool-tables/conv_codegen.py tools/exiftool-tables/test_conv_codegen.py \
+  tools/exiftool-tables/conv_oracle.py tools/exiftool-tables/helper_oracle.py \
+  tools/exiftool-tables/conv_exif_main_ledger.json \
+  tools/exiftool-tables/runtime_ownership.d/exif-main-refusals.json \
+  src/exiftool_tables/conv/exif_main.rs src/exiftool_tables/conv/rt.rs \
+  src/core/tag_conversion.rs \
+  src/core/formatters/composite_image_exposure_times.rs \
+  src/core/tiff_helpers.rs src/core/jpeg_helpers.rs \
+  tests/learning_opt_out_in.rs tests/exif_main_refusal_closure.rs
+git commit -S -m "feat: close Exif conversion refusal ownership"
+```
+
+Record the before/after 17-row classification, oracle receipts, ownership
+verification, commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ---
 
 ### Task 11: Olympus End-to-End Pilot
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/11-olympus-pilot.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/11-olympus-pilot.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -1305,14 +1679,27 @@ run it again, and require `git diff --exit-code` to show no unstaged drift.
 **Files:**
 
 - Modify: `src/parsers/tiff/makernotes/olympus.rs`
-- Modify: `src/parsers/tiff/makernotes/olympus/**`
-- Modify: Olympus entries in generated/enabled table sources through the
-  generator, never by hand-editing generated tables
-- Modify: Olympus integration and pinned-oracle tests
+- Modify: `src/parsers/tiff/makernotes/olympus/tables.rs`
+- Modify: `src/parsers/tiff/makernotes/olympus/lookups.rs`
+- Modify: `src/parsers/tiff/makernotes/olympus/text_info.rs`
+- Regenerate only: `src/exiftool_tables/ifd/olympus.rs`
+- Regenerate only: `src/exiftool_tables/binary/olympus.rs`
+- Modify: `tests/olympus_main_ifd_table.rs`
+- Modify: `tests/olympus_main_info_camera_type.rs`
+- Modify: `tests/olympus_sub_tables_ifd.rs`
+- Modify: `tests/integration/olympus_makernotes_tests.rs`
 - Add: `tests/olympus_main_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/olympus.json`
-- Modify: Olympus deletion ledger entries
+- Create: `tools/exiftool-tables/runtime_ownership.d/olympus-deletion-candidates.json`
 - Do not modify unrelated vendor parsers
+
+**Interfaces:** Consumes the frozen Task 9 exact-once pipeline and Task 8
+attribution receipt. Preserves Olympus `walk_main_through_engine`,
+`main_info_directory`, `parse_camera_type_and_quality`, and subtable entry
+points while moving source-expressible rows to the generated path. The
+deletion-candidates fragment records old symbol, new owner, fixture, and
+attribution receipt but authorizes no deletion; Task 18 alone owns the final
+deletion ledger.
 
 - [ ] **Step 1: Reproduce the remaining Olympus gaps**
 
@@ -1332,10 +1719,12 @@ Use source-derived tables, conditions, and conversions. Retain only the three
 documented structural/post-pass cases that the generated schema cannot express,
 each with an ownership record.
 
-- [ ] **Step 4: Delete only Olympus-local paths replaced in this task**
+- [ ] **Step 4: Record Olympus-local deletion candidates without deleting**
 
-Require a deletion ledger row, passing attribution, and occurrence-aware oracle
-comparison for each symbol. Do not touch central compatibility code.
+Require an ownership candidate row, passing attribution, and occurrence-aware
+oracle comparison for each symbol. Do not delete central or Olympus-local
+compatibility code in this task; Task 18 performs deletion after the full
+vendor wave.
 
 - [ ] **Step 5: Test, format, verify generation, and commit the candidate**
 
@@ -1344,13 +1733,27 @@ new VALUE rows, and read-regression `lost 0`. Run the focused carrier suite:
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/olympus-pilot \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/olympus-pilot/focused.log -- \
   cargo test --test olympus_main_forward_port -- --include-ignored --nocapture
 ```
 
 Run generator verification, formatting, and Clippy, then create the signed
-task commit and require a clean worktree.
+task commit and require a clean worktree:
+
+```bash
+git add src/parsers/tiff/makernotes/olympus.rs \
+  src/parsers/tiff/makernotes/olympus \
+  src/exiftool_tables/ifd/olympus.rs \
+  src/exiftool_tables/binary/olympus.rs \
+  tests/olympus_main_ifd_table.rs tests/olympus_main_info_camera_type.rs \
+  tests/olympus_sub_tables_ifd.rs \
+  tests/integration/olympus_makernotes_tests.rs \
+  tests/olympus_main_forward_port.rs \
+  tools/exiftool-tables/runtime_ownership.d/olympus.json \
+  tools/exiftool-tables/runtime_ownership.d/olympus-deletion-candidates.json
+git commit -S -m "feat: complete Olympus generated runtime migration"
+```
 
 - [ ] **Step 6: Run exclusive measurements, update handoff, and report**
 
@@ -1368,7 +1771,7 @@ The controller freezes the shared adapter interfaces after this task integrates.
 
 ### Task 12: Nikon Forward-Port on the Frozen Pipeline
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/12-nikon-port.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/12-nikon-port.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -1378,16 +1781,23 @@ The controller freezes the shared adapter interfaces after this task integrates.
 **Commit:** `feat: forward-port remaining Nikon metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/12-nikon-port.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-nikon-port - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/12-nikon-port.md`
 
 **Files:**
 
-- Modify only: `src/parsers/tiff/makernotes/nikon.rs` and
-  `src/parsers/tiff/makernotes/nikon/**`
-- Modify Nikon-specific tests/fixtures
+- Modify: `src/parsers/tiff/makernotes/nikon.rs`
+- Modify only beneath: `src/parsers/tiff/makernotes/nikon/`
+- Modify: `tests/integration/nikon_makernotes_tests.rs`
+- Modify: `tests/integration/makernote_integration.rs` only for Nikon cases
 - Add: `tests/nikon_main_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/nikon.json`
 - Do not modify shared engines, helpers, central registries, or generated output
+
+**Interfaces:** Consumes the frozen Task 11 vendor adapter/pipeline contract.
+Preserves `NikonParser` entry points and Nikon encrypted state; all new output
+is emitted as canonical occurrences through the shared pipeline. The ownership
+fragment enumerates each touched stable field identity and its concrete parser
+symbol.
 
 - [ ] **Step 1: Re-measure Nikon gaps at the task base**
 
@@ -1410,7 +1820,7 @@ spine task. Do not copy a vendor-local approximation.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/nikon-port \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/nikon-port/focused.log -- \
   cargo test --test nikon_main_forward_port -- --include-ignored --nocapture
 ```
@@ -1428,7 +1838,7 @@ gate `lost 0`.
 
 ### Task 13: Pentax and Panasonic Forward-Port
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/13-pentax-panasonic-port.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/13-pentax-panasonic-port.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -1438,18 +1848,32 @@ gate `lost 0`.
 **Commit:** `feat: forward-port Pentax and Panasonic metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/13-pentax-panasonic-port.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-pentax-panasonic-port - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/13-pentax-panasonic-port.md`
 
 **Files:**
 
-- Modify: `src/parsers/tiff/makernotes/pentax.rs` and Pentax submodules
-- Modify: `src/parsers/tiff/makernotes/panasonic.rs` and Panasonic submodules
+- Modify: `src/parsers/tiff/makernotes/pentax.rs`
+- Modify only beneath: `src/parsers/tiff/makernotes/pentax/`
+- Modify: `src/parsers/tiff/makernotes/pentax_supplement.rs`
+- Modify: `src/parsers/tiff/makernotes/pentax_lens_database.rs`
+- Modify: `src/parsers/tiff/makernotes/panasonic.rs`
+- Modify only beneath: `src/parsers/tiff/makernotes/panasonic/`
 - Modify only the Panasonic `LensType` composite arm in
   `src/composite/compute.rs`
-- Modify family-specific tests/fixtures
+- Modify: `tests/integration/pentax_makernotes_tests.rs`
+- Modify: `tests/integration/panasonic_makernotes_tests.rs`
+- Modify: `tools/exiftool-tables/fixtures/pentax_iso.json`
+- Modify: `tools/exiftool-tables/fixtures/pentax_flash_mode.json`
+- Modify: `tools/exiftool-tables/fixtures/pentax_af_point_selected.json`
 - Add: `tests/pentax_panasonic_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/pentax-panasonic.json`
 - Do not modify shared engines or registries
+
+**Interfaces:** Consumes the Task 3 typed composite input contract and frozen
+Task 11 adapter contract. Pentax and Panasonic parser entry points remain
+unchanged. Only the Panasonic `LensType` match arm in
+`src/composite/compute.rs` may change; Task 14 waits for this PR to merge and
+may not edit that file.
 
 - [ ] **Step 1: Re-measure family gaps**
 
@@ -1470,7 +1894,7 @@ Keep family edits within the lease. Escalate shared helper needs.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/pentax-panasonic-port \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/pentax-panasonic-port/focused.log -- \
   cargo test --test pentax_panasonic_forward_port -- --include-ignored --nocapture
 ```
@@ -1487,7 +1911,7 @@ task values. Require zero lost reads and zero new VALUE rows.
 
 ### Task 14: Remaining DJI, Composite, and XMP Forward-Port
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/14-dji-composite-xmp-port.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/14-dji-composite-xmp-port.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -1497,18 +1921,31 @@ task values. Require zero lost reads and zero new VALUE rows.
 **Commit:** `feat: complete DJI and dependent metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/14-dji-composite-xmp-port.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-dji-composite-xmp-port - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/14-dji-composite-xmp-port.md`
 
 **Files:**
 
-- Modify: DJI MakerNote/debug parser files
-- Modify: current XMP family/group implementation, not deleted
-  `namespace_mapping.rs`
-- Modify: only directly source-required composite arms
-- Modify family-specific tests/fixtures
+- Modify: `src/parsers/tiff/makernotes/dji.rs`
+- Modify: `src/parsers/tiff/makernotes/registries/dji.rs`
+- Modify: `src/parsers/jpeg/app_segments/dji_dbg.rs`
+- Modify only beneath: `src/parsers/xmp/`
+- Modify: `src/parsers/jpeg/xmp_parser.rs`
+- Modify: `src/parsers/pdf/xmp_extractor.rs`
+- Modify: `src/composite/generated_compute.rs`
+- Modify: `tests/integration/dji_app4_tests.rs`
+- Modify: `tests/dji_app7_sensor_id.rs`
+- Modify: `tests/dji_main_float_fields.rs`
 - Add: `tests/dji_main_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/dji-composite-xmp.json`
 - Do not re-port already landed DJI float rows
+- Do not modify: `src/core/format_dispatch.rs`, `src/parsers/mod.rs`,
+  `src/parsers/tiff/makernotes/mod.rs`, `src/composite/mod.rs`, or
+  `src/composite/compute.rs`
+
+**Interfaces:** Consumes the Task 3 typed projection contract, Task 11 frozen
+adapter contract, and Task 13 merged composite ownership. Preserves existing
+XMP parser entry points and the family-1 group model. Generated composite arms
+receive typed inputs and return the existing `Computed` shape.
 
 - [ ] **Step 1: Re-measure remaining DJI/XMP/composite gaps**
 
@@ -1528,7 +1965,7 @@ an old commit.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/dji-composite-xmp-port \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/dji-composite-xmp-port/focused.log -- \
   cargo test --test dji_main_forward_port -- --include-ignored --nocapture
 ```
@@ -1545,7 +1982,7 @@ Require zero lost reads and zero new VALUE rows.
 
 ### Task 15: Legacy Camera Long Tail
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/15-legacy-camera-tail.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/15-legacy-camera-tail.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -1555,15 +1992,27 @@ Require zero lost reads and zero new VALUE rows.
 **Commit:** `feat: forward-port legacy camera metadata parity`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/15-legacy-camera-tail.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-legacy-camera-tail - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/15-legacy-camera-tail.md`
 
 **Files:**
 
-- Modify only family files for Kodak, Casio, HP, Ricoh, and JVC
-- Modify their registries/tests/fixtures
+- Modify: `src/parsers/tiff/makernotes/kodak.rs`
+- Modify: `src/parsers/tiff/makernotes/casio.rs`
+- Modify: `src/parsers/tiff/makernotes/hp.rs`
+- Modify: `src/parsers/tiff/makernotes/ricoh.rs`
+- Modify: `src/parsers/tiff/makernotes/jvc.rs`
+- Modify: `src/parsers/tiff/makernotes/registries/kodak.rs`
+- Modify: `src/parsers/tiff/makernotes/registries/casio.rs`
+- Modify: `src/parsers/tiff/makernotes/registries/hp.rs`
+- Modify: `src/parsers/tiff/makernotes/registries/ricoh.rs`
+- Modify: `src/parsers/tiff/makernotes/registries/jvc.rs`
 - Add: `tests/legacy_camera_tail_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/legacy-camera-tail.json`
 - Do not modify shared engines or unrelated vendor files
+
+**Interfaces:** Consumes the frozen Task 11 adapter contract. Each family
+retains its existing MakerNote parser/registry entry point and emits canonical
+occurrences. No central dispatcher or registry module is in this lease.
 
 - [ ] **Step 1: Re-measure exact remaining rows**
 
@@ -1572,13 +2021,23 @@ HP CameraDateTime/ISO, Ricoh make/model, and JVC CPUVersions/Quality.
 
 - [ ] **Step 2: Add one real-carrier failing test per family**
 
+In `tests/legacy_camera_tail_forward_port.rs`, add tests named
+`kodak_remaining_rows`, `casio_remaining_rows`, `hp_remaining_rows`,
+`ricoh_remaining_rows`, and `jvc_remaining_rows`. Each test requires its named
+durable carrier and pins tag, group, raw/typed/print forms, and duplicate count
+from the pinned oracle.
+
 - [ ] **Step 3: Port source-derived values and routing**
+
+Implement only source expressions and registry rows pinned by Step 2. If a
+shared helper or central dispatch edit is required, record that slice blocked
+instead of widening the lease.
 
 - [ ] **Step 4: Run family tests, fmt, Clippy, and commit the candidate**
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/legacy-camera-tail \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/legacy-camera-tail/focused.log -- \
   cargo test --test legacy_camera_tail_forward_port -- --include-ignored --nocapture
 ```
@@ -1593,7 +2052,7 @@ measurement blocks with the literal legacy-camera task values.
 
 ### Task 16: Samsung, MediaJukebox, and Vivo Trailers
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/16-trailer-tail.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/16-trailer-tail.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
 **Reviewer:** `gpt-5.6-sol`, fast mode
@@ -1603,15 +2062,26 @@ measurement blocks with the literal legacy-camera task values.
 **Commit:** `feat: parse remaining metadata trailers`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-terra - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/16-trailer-tail.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-terra -C /Users/allen/git/oxidex-beta1-trailer-tail - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/16-trailer-tail.md`
 
 **Files:**
 
-- Modify/create Samsung/MediaJukebox/Vivo parser modules and dispatch only
-- Modify family tests/fixtures
+- Modify: `src/parsers/tiff/makernotes/samsung.rs`
+- Modify only beneath: `src/parsers/tiff/makernotes/samsung/`
+- Modify: `src/parsers/trailer.rs`
+- Modify: `src/parsers/audio/ape.rs`
+- Modify: `tests/integration/samsung_makernotes_tests.rs`
+- Modify: `tests/integration/samsung_app5_tests.rs`
+- Modify: `tests/integration/exif_makernotes_tests.rs`
 - Add: `tests/trailer_tail_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/trailer-tail.json`
 - Do not modify shared engines, tag comparison harnesses, or unrelated parsers
+
+**Interfaces:** Preserves `SamsungParser`, the existing trailer scan in
+`src/parsers/trailer.rs`, and the APE item parser. Adds bounded MediaJukebox
+and Vivo decoding inside those owners; no central format dispatcher change is
+allowed. Truncated/invalid input emits no trailer occurrence and does not
+consume bytes belonging to the next trailer.
 
 - [ ] **Step 1: Re-measure trailer detection and rows**
 
@@ -1632,7 +2102,7 @@ identity tags.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/trailer-tail \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/trailer-tail/focused.log -- \
   cargo test --test trailer_tail_forward_port -- --include-ignored --nocapture
 ```
@@ -1649,7 +2119,7 @@ values. Require zero lost reads and zero new VALUE rows.
 
 ### Task 17: Consolidate Walker Conversion Stages
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/17-walker-engine-consolidation.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/17-walker-engine-consolidation.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -1664,16 +2134,20 @@ values. Require zero lost reads and zero new VALUE rows.
 - Modify: `src/exiftool_tables/ifd_engine.rs`
 - Modify: `src/exiftool_tables/keyed_engine.rs`
 - Modify: `src/exiftool_tables/serial_engine.rs`
-- Create focused shared pipeline module if needed
-- Modify adapter call sites named in the walker inventory only after their
-  owning vendor task has integrated; never edit a live Task 12-16 worktree
+- Create: `src/exiftool_tables/pipeline.rs`
+- Modify: `src/exiftool_tables/mod.rs`
 - Create: `docs/reference/generated-runtime-walker-inventory.json`
 - Add: `tests/generated_runtime_walker_contract.rs`
 - Do not delete compatibility code in this task
 
-**Interfaces:** Acquisition adapters produce a stable field identity, stored
-value, groups/provenance, and session reference; one shared pipeline owns
-condition and conversion stages.
+**Interfaces:** Acquisition adapters produce
+`PipelineInput { identity: StableFieldIdentity, stored: MemberVal, groups:
+Groups, provenance: Provenance }` plus `&mut Session`; `pipeline::execute`
+owns condition, RawConv, ValueConv, and PrintConv stages and returns the
+existing engine-specific emitted shape through an adapter callback. Numeric,
+keyed-name, and serial-index identities remain distinct. This task may not
+edit vendor adapter files; all Tasks 12-16 are remotely merged before it
+starts, and only the four engine modules call the new shared pipeline.
 
 - [ ] **Step 1: Inventory walkers, duplicated stages, and adapter contracts**
 
@@ -1690,7 +2164,7 @@ the same occurrence shape through the shared contract.
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/walker-engine-consolidation \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/walker-engine-consolidation/red.log -- \
   cargo test --test generated_runtime_walker_contract -- --nocapture
 ```
@@ -1704,10 +2178,10 @@ identity without coercing it to an IFD ID.
 
 - [ ] **Step 4: Convert engines one at a time**
 
-After each adapter, run its focused tests. Keep each intermediate commit
-buildable for review even though integration will squash the task. If a
-Task 12-16 vendor branch still owns an adapter call site, record it as queued
-in both handoffs and wait for controller integration before editing it.
+After each engine adapter, run its focused tests. Keep each intermediate commit
+buildable for review even though integration will squash the task. If an
+engine requires a vendor-local edit, record the missing adapter and return that
+slice to the controller rather than widening this lease.
 
 - [ ] **Step 5: Add route-level detected-versus-parsed controls**
 
@@ -1737,7 +2211,7 @@ the shared stage.
 
 ### Task 18: Delete Proven-Replaced Compatibility Code
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/18-proven-deletion.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/18-proven-deletion.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -1749,14 +2223,25 @@ the shared stage.
 **Files:**
 
 - Modify: `src/core/exiftool_compat.rs`
-- Modify: residual arrays and replay/drain/yield code in Exif directory helpers
-- Modify: duplicate tag/enum/lens/conversion maps proven replaced
-- Modify: engine code only to remove now-unused duplicate stages
+- Modify: `src/core/exif_dir_engine.rs`
+- Modify: `src/core/tiff_helpers.rs`
+- Modify: `src/core/jpeg_helpers.rs`
+- Modify: `src/exiftool_tables/engine.rs`
+- Modify: `src/exiftool_tables/ifd_engine.rs`
+- Modify: `src/exiftool_tables/keyed_engine.rs`
+- Modify: `src/exiftool_tables/serial_engine.rs`
 - Create: `docs/reference/generated-runtime-deletion-ledger.json`
 - Create: `tools/exiftool-tables/runtime_deletion_ledger.py`
 - Create: `tools/exiftool-tables/test_runtime_deletion_ledger.py`
 - Add: `tests/generated_runtime_deletion_controls.rs`
-- Add deletion-verifier CI/just recipe
+- Modify: `justfile` to add `verify-runtime-deletions`
+
+**Interfaces:** Consumes Task 1 ownership rows, Task 8 generated-on/off
+receipts, Task 10 refusal closure, Task 11 deletion candidates, Tasks 12-16
+vendor ownership fragments, and Task 17 shared pipeline. The deletion verifier
+accepts only literal `path::symbol` entries whose new owner exists and whose
+authenticated candidate/source/binary hashes match the current clean commit.
+It produces `verify-runtime-deletions` and refuses structural traversal owners.
 
 - [ ] **Step 1: Generate the deletion candidate ledger**
 
@@ -1783,7 +2268,7 @@ source fields, or a still-live duplicate owner. Run:
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_runtime_deletion_ledger.py -v
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/proven-deletion \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/proven-deletion/red.log -- \
   cargo test --test generated_runtime_deletion_controls -- --nocapture
 ```
@@ -1839,7 +2324,7 @@ retained compatibility symbol with its reason.
 
 ### Task 19: Qualify ExifTool Version Transitions
 
-**PRD:** `/Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/19-version-transition-qualification.md`
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/19-version-transition-qualification.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`, fast mode
 **Reviewer:** `gpt-6-astra`, fast mode
@@ -1849,19 +2334,54 @@ retained compatibility symbol with its reason.
 **Commit:** `test: prove reversible ExifTool version regeneration`
 
 **Launch:**
-`codex --yolo exec --enable fast_mode --model gpt-5.6-sol - < /Users/allen/git/oxidex-beta1-functional-integration/.superpowers/fleet/prds/19-version-transition-qualification.md`
+`codex --yolo exec --enable fast_mode --model gpt-5.6-sol -C /Users/allen/git/oxidex-beta1-version-transition-qualification - < /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/19-version-transition-qualification.md`
 
 **Files:**
 
 - Create: `tools/exiftool-tables/version_transition_qualification.py`
 - Create: `tools/exiftool-tables/test_version_transition_qualification.py`
 - Create: `tools/exiftool-tables/version_transition_matrix.json`
-- Modify version-rehearsal fixtures/configuration and focused tests
-- Modify release-aware source facts and write/readback expectations
-- Modify upgrade/rehearsal documentation with actual receipt paths
+- Modify: `tools/exiftool-tables/version_rehearsal.py`
+- Modify: `tools/exiftool-tables/version_rehearsal_executor.py`
+- Modify: `tools/exiftool-tables/version_rehearsal_stage_adapter.py`
+- Modify: `tools/exiftool-tables/version_rehearsal_native_oracle.py`
+- Modify: `tools/exiftool-tables/version_rehearsal_catalog.py`
+- Modify: `tools/exiftool-tables/test_version_rehearsal.py`
+- Modify: `tools/exiftool-tables/test_version_rehearsal_executor.py`
+- Modify: `tools/exiftool-tables/test_version_rehearsal_stage_adapter.py`
+- Modify: `tools/exiftool-tables/test_version_rehearsal_native_oracle.py`
+- Modify: `tools/exiftool-tables/test_version_rehearsal_catalog.py`
+- Modify: `docs/reference/upgrade-rehearsal-11.78-12.64.md`
+- Modify: `docs/UPGRADE-NEXT-STEPS.md`
 - Do not manually edit generated artifacts or change the release pin permanently
 
-- [ ] **Step 1: Add concrete rehearsal configurations**
+**Interfaces:** Wraps the existing rehearsal planner, executor, stage adapter,
+native oracle, and catalog modules without duplicating their stage logic. The
+matrix schema requires `id`, `before_version`, `after_version`, immutable
+source identities, read fixture manifest, mandatory write fixture/readback
+manifest, artifact manifest, target directory, and durable output directory.
+Every result records restoration of `.exiftool-version`, generated artifacts,
+and caller cleanliness.
+
+- [ ] **Step 1: Write failing matrix and restoration tests**
+
+In `test_version_transition_qualification.py`, require all three matrix rows,
+fresh generation on both sides, mandatory native write/readback, distinct
+targets, immutable source hashes, interrupted-stage recovery, original pin
+restoration, and an empty tracked diff. Use fakes for unit tests; no network or
+full corpus run belongs in the red/green loop.
+
+- [ ] **Step 2: Run the qualification tests red**
+
+```bash
+uv run python -m unittest \
+  tools/exiftool-tables/test_version_transition_qualification.py -v
+```
+
+Expected: import failure because the qualification module and matrix do not
+exist.
+
+- [ ] **Step 3: Add concrete rehearsal configurations**
 
 Create checked configurations for:
 
@@ -1886,19 +2406,19 @@ It calls the existing planner/executor/stage adapter, refuses an unclean
 caller, runs all three matrix rows, and restores/verifies the caller without a
 promotion action.
 
-- [ ] **Step 2: Make tests release-aware**
+- [ ] **Step 4: Make tests release-aware**
 
 Replace hard-coded 13.59 facts responsible for the historical 113 failures on
 11.78 and 79 failures on 12.64 with pinned per-release facts. Do not weaken a
 generic assertion to accommodate drift.
 
-- [ ] **Step 3: Add hand-behavior retention controls**
+- [ ] **Step 5: Add hand-behavior retention controls**
 
 An older-release run fails if newer hand behavior silently retains tags absent
 from that release. Generated refusal is acceptable only when explicit and
 counted.
 
-- [ ] **Step 4: Commit a clean candidate and run same-pin exclusively**
+- [ ] **Step 6: Commit a clean candidate and run same-pin exclusively**
 
 Require both variants freshly generated, second regeneration clean, identical
 pin/artifact manifest, and no tracked caller diff. Invoke the qualification
@@ -1913,7 +2433,7 @@ git add tools/exiftool-tables/version_transition_qualification.py \
   docs/reference/upgrade-rehearsal-11.78-12.64.md
 git commit -S -m "test: prove reversible ExifTool version regeneration"
 test -z "$(git status --short)"
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification/same-pin.lock.log -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
@@ -1925,14 +2445,14 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
 If the worktree is not clean after the signed commit, do not start the
 rehearsal.
 
-- [ ] **Step 5: Run 11.78 -> 12.64 without intervention**
+- [ ] **Step 7: Run 11.78 -> 12.64 without intervention**
 
 Require generation, verification, native read conformance, write/readback,
 manifest delta, and recovery controls. No code or fixture edit is allowed after
 the run starts. Invoke the same entry point with `--only 11.78-to-12.64`.
 
 ```bash
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification/forward.lock.log -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
@@ -1941,13 +2461,13 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
     --only 11.78-to-12.64
 ```
 
-- [ ] **Step 6: Run 12.64 -> 11.78 without intervention**
+- [ ] **Step 8: Run 12.64 -> 11.78 without intervention**
 
 Apply the same gates and prove removed artifacts are handled only by manifest
 delta. Invoke the same entry point with `--only 12.64-to-11.78`.
 
 ```bash
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification/reverse.lock.log -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
@@ -1956,7 +2476,7 @@ python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
     --only 12.64-to-11.78
 ```
 
-- [ ] **Step 7: Restore/verify the 13.59 caller and run all rehearsal tests**
+- [ ] **Step 9: Restore/verify the 13.59 caller and run all rehearsal tests**
 
 ```bash
 uv run python -m unittest \
@@ -1971,7 +2491,7 @@ git diff --exit-code
 test "$(tr -d '\n' < .exiftool-version)" = "13.59"
 ```
 
-- [ ] **Step 8: Update handoff, commit receipts/documentation, and report**
+- [ ] **Step 10: Update handoff, commit receipts/documentation, and report**
 
 The source tree must end at its original pin and clean state.
 
@@ -1979,7 +2499,8 @@ The source tree must end at its original pin and clean state.
 
 ### Task 20: Freeze and Qualify the Functional Candidate
 
-**PRD:** Controller-owned; no implementation worker
+**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence.md`
+**Worker:** Controller-owned; no implementation worker
 **Reviewer:** `gpt-6-astra`, fast mode
 **Branch:** `staging/beta1/frozen-candidate-evidence`
 **Worktree:** `/Users/allen/git/oxidex-beta1-frozen-candidate-evidence`
@@ -1989,11 +2510,25 @@ The source tree must end at its original pin and clean state.
 **Files:**
 
 - Modify only after gates pass: `TODO_RELEASE_BETA.md`
-- Modify: autogeneration/upgrade documentation and ExifTool parity skill to
-  match implemented commands and facts
-- Add/update machine-readable public measurements only from authenticated
-  receipts
+- Modify: `docs/AUTOGENERATION-PLAN.md`
+- Modify: `docs/AUTOGENERATION-V2-DESIGN.md`
+- Modify: `docs/UPGRADE-NEXT-STEPS.md`
+- Modify: `docs/reference/upgrade-rehearsal-11.78-12.64.md`
+- Modify: `docs/reference/main-divergence-2026-09-18.md`
+- Modify: `docs/reference/tag-coverage-analysis.md`
+- Modify: `docs/reference/parity-rollup-review-20260914.md`
+- Modify: `docs/contributing/measuring-coverage.md`
+- Modify: `docs/guide/exiftool-parity.md`
+- Modify: `.agents/skills/exiftool-parity/SKILL.md`
+- Modify only authenticated outputs beneath: `docs/public/measurements/`
 - No runtime writer may change the frozen candidate during this task
+
+**Interfaces:** Consumes the controller `receipt-index.json`, Tasks 1/18
+ownership/deletion verifiers, Task 6 conformance schema, Task 8 attribution
+receipt, Task 19 transition receipts, and the exact frozen candidate SHA. It
+produces factual documentation only; public measurement JSON must retain the
+instrument/source/binary/corpus hashes from authenticated receipts and may not
+be recomputed from prose or formatted output.
 
 - [ ] **Step 1: Freeze and record the candidate**
 
@@ -2009,12 +2544,12 @@ workers. Do not run these gates in the controller integration mirror.
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final
 test -z "$(git status --short)"
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/regen-1.log -- \
   tools/exiftool-tables/regen-all.sh
 python3 tools/exiftool-tables/artifacts.py diff --tier all
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/regen-2.log -- \
   tools/exiftool-tables/regen-all.sh
 python3 tools/exiftool-tables/artifacts.py diff --tier all
@@ -2031,15 +2566,15 @@ the shared lock. Store separate logs and exit statuses:
 ```bash
 cargo fmt --check
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/ci.log -- \
   just ci
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/ignored.log -- \
   cargo test --release --workspace --all-features -- --include-ignored
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/doc.log -- \
   cargo test --doc --workspace --all-features
 ```
@@ -2051,7 +2586,7 @@ knowledge gate, and deletion ledger verifier:
 
 ```bash
 CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final \
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/typed-values.log -- \
   cargo test --test typed_value_projection_tests
 uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
@@ -2081,7 +2616,7 @@ Run the Standard Candidate Acceptance read-receipt block using the final values
 above, then:
 
 ```bash
-python3 ~/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final/genshare.log -- \
   tools/exiftool-tables/genshare/census.sh \
     --repository /Users/allen/git/oxidex-beta1-frozen-candidate-evidence \
@@ -2135,6 +2670,12 @@ findings remain. Any runtime fix invalidates Steps 1-8 and requires a complete
 rerun; a documentation-only fix reruns formatting, typos, links, and the
 scoped review.
 
+```bash
+bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package \
+  docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
+  "$task_base" "$(git rev-parse HEAD)"
+```
+
 - [ ] **Step 12: Land the frozen-candidate evidence through its remote PR**
 
 Apply the Local Checkpoint, Remote PR, and Integration Procedure to
@@ -2158,8 +2699,9 @@ Use the controller model described in the spec:
    `refactor/tag-machinery`.
 2. Create the integration worktree and controller ledger from the verified
    remote target.
-3. Execute, review, push, and remotely merge Task 0; require its durable oracle
-   verification before creating any other task worktree.
+3. Manually bootstrap Task 0, then execute, supervise, review, push, and
+   remotely merge it; require its durable controller/oracle verification and
+   total-process-loss rehearsal before creating any other task worktree.
 4. Dispatch the initial five implementation tasks exactly as listed, keeping
    at most three Desktop and six CLI workers active.
 5. Preserve every meaningful clean checkpoint locally, then have the
@@ -2169,7 +2711,9 @@ Use the controller model described in the spec:
 7. Fetch and fast-forward the controller mirror after every verified remote
    merge, then release dependent tasks.
 8. Persist every local and remote state transition in task handoffs, the
-   controller ledger, and durable evidence storage.
+   durable controller ledger/event stream, remote branches/PRs, and receipt
+   index. Watch CLI PID/start-time/session/log/heartbeat state and resume or
+   reconcile any dead/quota-exhausted worker before releasing dependencies.
 9. Do not merge to `main`, publish, or tag until the separate release phase is
    authorized and all remaining `TODO_RELEASE_BETA.md` gates are satisfied.
 

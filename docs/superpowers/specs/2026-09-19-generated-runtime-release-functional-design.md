@@ -427,6 +427,12 @@ The integration worktree contains:
   state; and
 - `TODO_RELEASE_BETA.md` for release-level milestones and durable evidence.
 
+The authoritative controller snapshot, append-only event stream, canonical
+PRDs, process records, reports, reviews, and receipt index live below
+`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/`.
+The ignored Superpowers workspace and root `HANDOFF.md` are working views, not
+the only recovery copy.
+
 The controller updates its state after every dispatch, worker message, worker
 completion, review verdict, fix round, local checkpoint, remote push, PR/CI
 transition, squash merge, gate result, blocker, and model escalation. During a
@@ -446,6 +452,12 @@ The controller ledger maps every task to:
 - remote branch, PR number/URL, latest pushed SHA, CI state, merge SHA, and
   post-merge `origin/refactor/tag-machinery` SHA; and
 - dependencies released by integration.
+
+For CLI workers the ledger also records PID plus process start time, Codex
+session/thread identifier, launch count, PRD hash, stdout/stderr/JSONL paths,
+heartbeat, exit status, and exact resume command. Recovery verifies process
+identity, reconciles worktree and remote state, and never treats PID reuse or a
+missing agent panel entry as proof that work must be dispatched again.
 
 Local commits and durable receipts are authoritative for detailed recovery.
 The pushed task branch, draft PR, PR comments/checks, and merged target SHA are
@@ -574,6 +586,9 @@ The implementation plan derived from this specification must:
 - include the per-task `HANDOFF.md` contract in every worker brief;
 - provide controller ledger entries for dispatch, review, integration, and
   recovery;
+- define an executable path-policy fence, atomic snapshot/event protocol,
+  canonical PRD materialization, CLI/Desktop process tracking, and a tested
+  total-process-loss recovery path;
 - specify local checkpoint, remote draft-PR, CI, squash-merge, and post-merge
   synchronization steps for every task; and
 - end with the frozen-candidate evidence sequence and release-TODO update.

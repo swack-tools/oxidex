@@ -81,6 +81,11 @@ jobs finish.
       metric floors.
 - [ ] Update `HANDOFF.md` at each meaningful milestone with the exact next
       command and current PR/CI state.
+- [ ] Keep the authoritative fleet snapshot, append-only event stream,
+      canonical PRDs, process/session records, reports, reviews, and receipt
+      index under
+      `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/`;
+      rehearse recovery after all controller and worker processes terminate.
 - [ ] Create signed local checkpoint commits at meaningful milestones. The
       controller—not workers—pushes each task branch and opens or updates its
       draft PR against `refactor/tag-machinery` so recovery exists both locally
