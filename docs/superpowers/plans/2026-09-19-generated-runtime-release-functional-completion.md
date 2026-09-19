@@ -573,9 +573,12 @@ printf 'pid=%s\nstart_time=%s\ntoken=%s\ncommand=%s\n' \
   > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt
 tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl &
 tail_pid=$!
-wait "$worker_pid"
-worker_status=$?
-kill "$tail_pid"
+if wait "$worker_pid"; then
+  worker_status=0
+else
+  worker_status=$?
+fi
+if kill "$tail_pid" 2>/dev/null; then :; fi
 printf 'exit_status=%s\n' "$worker_status" \
   >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt
 ```
@@ -634,9 +637,12 @@ printf 'pid=%s\nstart_time=%s\ntoken=%s\ncommand=%s\n' \
   > "$process_root/bootstrap-process-${next_segment}.txt"
 tail -F "$process_root/events-${next_segment}.jsonl" &
 tail_pid=$!
-wait "$worker_pid"
-worker_status=$?
-kill "$tail_pid"
+if wait "$worker_pid"; then
+  worker_status=0
+else
+  worker_status=$?
+fi
+if kill "$tail_pid" 2>/dev/null; then :; fi
 printf 'exit_status=%s\n' "$worker_status" \
   >> "$process_root/bootstrap-process-${next_segment}.txt"
 ```
