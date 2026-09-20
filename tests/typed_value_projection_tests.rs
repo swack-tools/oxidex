@@ -284,6 +284,72 @@ fn ffi_read_only_accessors_are_safe_to_call_concurrently_on_one_handle() {
     exiftool_destroy(handle);
 }
 
+#[test]
+fn ffi_handle_owned_strings_survive_later_concurrent_getters() {
+    let file = tempfile::NamedTempFile::new().expect("creates JPEG fixture");
+    std::fs::write(file.path(), interop_index_jpeg()).expect("writes JPEG fixture");
+    let handle = exiftool_create();
+    assert!(!handle.is_null());
+    let path = CString::new(file.path().to_string_lossy().as_bytes()).expect("valid path");
+    assert_eq!(exiftool_read_file(handle, path.as_ptr()), 0);
+
+    let tag = CString::new("InteropIFD:InteropIndex").expect("valid tag name");
+    let name = exiftool_get_tag_name_at(handle, 0);
+    let legacy = exiftool_get_tag_string(handle, tag.as_ptr());
+    let channel =
+        exiftool_get_tag_string_in_channel(handle, tag.as_ptr(), EXIFTOOL_VALUE_CHANNEL_VALUE_CONV);
+    assert!(!name.is_null());
+    assert!(!legacy.is_null());
+    assert!(!channel.is_null());
+
+    let expected_name = unsafe { CStr::from_ptr(name) }.to_bytes().to_owned();
+    let expected_legacy = unsafe { CStr::from_ptr(legacy) }.to_bytes().to_owned();
+    let expected_channel = unsafe { CStr::from_ptr(channel) }.to_bytes().to_owned();
+    let saved_pointers = (name as usize, legacy as usize, channel as usize);
+    let handle_address = handle as usize;
+
+    let threads = (0..8)
+        .map(|_| {
+            std::thread::spawn(move || {
+                let handle = handle_address as *const ExifToolHandle;
+                let tag = CString::new("InteropIFD:InteropIndex").expect("valid tag name");
+                for _ in 0..128 {
+                    assert!(!exiftool_get_tag_name_at(handle, 0).is_null());
+                    assert!(!exiftool_get_tag_string(handle, tag.as_ptr()).is_null());
+                    assert!(
+                        !exiftool_get_tag_string_in_channel(
+                            handle,
+                            tag.as_ptr(),
+                            EXIFTOOL_VALUE_CHANNEL_VALUE_CONV,
+                        )
+                        .is_null()
+                    );
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for thread in threads {
+        thread.join().expect("read-only FFI accessor thread");
+    }
+
+    let (name, legacy, channel) = (
+        saved_pointers.0 as *const std::ffi::c_char,
+        saved_pointers.1 as *const std::ffi::c_char,
+        saved_pointers.2 as *const std::ffi::c_char,
+    );
+    assert_eq!(unsafe { CStr::from_ptr(name) }.to_bytes(), expected_name);
+    assert_eq!(
+        unsafe { CStr::from_ptr(legacy) }.to_bytes(),
+        expected_legacy
+    );
+    assert_eq!(
+        unsafe { CStr::from_ptr(channel) }.to_bytes(),
+        expected_channel
+    );
+
+    exiftool_destroy(handle);
+}
+
 fn interop_index_jpeg() -> Vec<u8> {
     let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x46];
     jpeg.extend_from_slice(b"Exif\0\0II\x2a\0\x08\0\0\0");

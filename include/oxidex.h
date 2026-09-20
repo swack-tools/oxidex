@@ -1360,9 +1360,7 @@ uintptr_t exiftool_get_tag_count(const struct ExifToolHandle *handle);
  - NULL if index is out of bounds or handle is NULL
 
  # String Lifetime
- Returned string is valid until:
- - Next API call on same handle
- - Handle destruction
+ The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 
  # Thread Safety
  Thread-safe for read-only access.
@@ -1397,9 +1395,7 @@ int exiftool_has_tag(const struct ExifToolHandle *handle, const char *tag_name);
  - NULL if tag doesn't exist or is not a String type
 
  # String Lifetime
- Returned string is valid until:
- - Next API call on same handle
- - Handle destruction
+ The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 
  # Thread Safety
  Thread-safe for read-only access.
@@ -1420,8 +1416,7 @@ const char *exiftool_get_tag_string(const struct ExifToolHandle *handle, const c
    is invalid
 
  # String Lifetime
- Returned string is valid until the next API call on the same handle or handle
- destruction.
+ The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 
  # Thread Safety
  Thread-safe for read-only access. Mutating operations and handle destruction
@@ -1559,7 +1554,9 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  - `EXIFTOOL_ERR_INVALID_TAG_VALUE`: Metadata validation failed
 
  # Thread Safety
- Thread-safe for read-only access to handle.
+ Not thread-safe with respect to the handle. Do not call concurrently with
+ any other operation on the same handle, including getters, mutations, or
+ destruction.
  */
 int exiftool_write_file(const struct ExifToolHandle *handle, const char *filepath);
 
