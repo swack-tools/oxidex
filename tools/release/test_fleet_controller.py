@@ -1387,9 +1387,15 @@ class FleetControllerTests(unittest.TestCase):
         plan = self.root / "plan.md"
         plan.write_text(
             "# Plan\n\n## Global Constraints\n\n- Durable.\n\n"
-            "### Task 0: CLI task\n\ncli body\n\n"
-            "### Task 1: Desktop task\n\ndesktop body\n\n"
-            "### Task 2: Controller task\n\ncontroller body\n\n"
+            "### Task 0: CLI task\n\n"
+            "**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode\n\n"
+            "cli body\n\n"
+            "### Task 1: Desktop task\n\n"
+            "**Worker:** Desktop subagent, `gpt-5.6-terra`\n\n"
+            "desktop body\n\n"
+            "### Task 2: Controller task\n\n"
+            "**Worker:** Controller-owned; no implementation worker\n\n"
+            "controller body\n\n"
             "## Execution Handoff\nend\n",
             encoding="utf-8",
         )
@@ -1406,6 +1412,54 @@ class FleetControllerTests(unittest.TestCase):
         self.assertIn("Controller-owned task; do not launch an implementation worker", controller_text)
         self.assertNotIn("fleet_controller.py launch", controller_text)
         self.assertNotIn("collaboration.spawn_agent", controller_text)
+
+    def test_materialize_refreshes_worker_policy_from_current_plan_before_launch(self) -> None:
+        store = fleet.StateStore(self.root)
+        current = task(8)
+        current["worker"]["identity"] = "stale-worker-identity"
+        store.write_snapshot(state(current))
+        plan = self.root / "plan.md"
+        plan.write_text(
+            "# Plan\n\n## Global Constraints\n\n- Durable.\n\n"
+            "### Task 8: Generated attribution\n\n"
+            "**Worker:** Codex CLI, `gpt-5.6-terra`\n\n"
+            "attribute generated tables without enabling fast mode\n\n"
+            "## Execution Handoff\nend\n",
+            encoding="utf-8",
+        )
+
+        prd = fleet.materialize_prd(store, plan, 8, SHA_A)
+
+        materialized = store.read_snapshot()["tasks"]["8"]
+        self.assertEqual(materialized["worker"]["kind"], "CLI")
+        self.assertEqual(materialized["worker"]["model"], "gpt-5.6-terra")
+        self.assertEqual(materialized["worker"]["effort"], "medium")
+        self.assertIsNone(materialized["worker"]["identity"])
+        content = prd.read_text(encoding="utf-8")
+        self.assertIn("Worker policy: `CLI` / `gpt-5.6-terra` / `medium`", content)
+        self.assertNotIn("--enable fast_mode", content)
+
+    def test_materialize_preserves_identity_when_worker_policy_is_unchanged(self) -> None:
+        store = fleet.StateStore(self.root)
+        current = task(0)
+        current["worker"]["identity"] = "live-worker-identity"
+        current["worker"]["effort"] = "medium"
+        store.write_snapshot(state(current))
+        plan = self.root / "plan.md"
+        plan.write_text(
+            "# Plan\n\n## Global Constraints\n\n- Durable.\n\n"
+            "### Task 0: Zero\n\n"
+            "**Worker:** Codex CLI, `gpt-5.6-terra`\n\n"
+            "body\n\n## Execution Handoff\nend\n",
+            encoding="utf-8",
+        )
+
+        fleet.materialize_prd(store, plan, 0, SHA_A)
+
+        self.assertEqual(
+            store.read_snapshot()["tasks"]["0"]["worker"]["identity"],
+            "live-worker-identity",
+        )
 
     def test_event_checkpoint_and_reconcile_are_idempotent(self) -> None:
         repository = self.root / "repository"
@@ -1497,6 +1551,26 @@ class FleetControllerTests(unittest.TestCase):
         (worktree / "rogue.txt").write_text("outside lease\n", encoding="utf-8")
         with self.assertRaisesRegex(fleet.Blocked, "outside file lease"):
             fleet.inspect_worktree(current)
+
+    def test_recovery_ignores_preserved_edits_in_terminal_worktree(self) -> None:
+        worktree = self.root / "terminal-worktree"
+        initialize_git_repository(worktree)
+        (worktree / "post-merge-edit.txt").write_text("preserved\n", encoding="utf-8")
+        terminal = task(0, "merged")
+        terminal["merge_sha"] = SHA_B
+        terminal["paths"]["worktree"] = str(worktree)
+        terminal["file_lease"] = ["owned.txt"]
+        store = fleet.StateStore(self.root / "controller")
+        store.write_snapshot(state(terminal))
+
+        recovered = fleet.recover_controller_for_test(
+            store,
+            self.root,
+            {"target_sha": SHA_A, "tasks": {}},
+        )
+
+        self.assertNotIn("0", recovered["actions"])
+        self.assertEqual(store.read_snapshot()["tasks"]["0"]["state"], "merged")
 
     def test_recover_reconciles_remote_branch_pr_ci_and_merge_read_only(self) -> None:
         repository = self.root / "repository"
