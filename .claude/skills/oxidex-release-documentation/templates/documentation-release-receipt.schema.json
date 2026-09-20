@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oxidex.net/schemas/documentation-release-receipt.schema.json",
+  "title": "OxiDex documentation release receipt",
+  "type": "object",
+  "required": [
+    "schema_version", "version", "candidate_sha", "candidate_tree",
+    "parity_receipt", "claims", "pages", "benchmarks", "local_build",
+    "visual_review", "pages_pipeline", "live_deployment", "status", "unresolved"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": ["string", "null"]},
+    "candidate_sha": {"type": ["string", "null"]},
+    "status": {"enum": ["unverified", "blocked", "verified"]},
+    "unresolved": {"type": "array"}
+  },
+  "additionalProperties": true
+}

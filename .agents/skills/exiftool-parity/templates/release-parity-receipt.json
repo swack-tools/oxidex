@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "version": null,
   "oxidex_sha": null,
   "oxidex_tree": null,
   "source_dirty": null,
@@ -48,6 +49,7 @@
     "verification_runs": [],
     "metric_c": null,
     "native_occurrence_floor": null,
+    "native_occurrence_floor_evidence": null,
     "credited_coordinates_artifact": null,
     "published_read_gate": {
       "status": "unverified", "exit_code": null, "log": null,

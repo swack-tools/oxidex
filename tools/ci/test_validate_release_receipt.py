@@ -76,6 +76,11 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         payload["authenticated_reads"]["metric_c"] = 7999
         self.assert_invalid("parity", payload, "authenticated_reads.metric_c")
         payload = fixture("parity")
+        payload["authenticated_reads"]["native_occurrence_floor_evidence"] = None
+        self.assert_invalid(
+            "parity", payload, "authenticated_reads.native_occurrence_floor_evidence"
+        )
+        payload = fixture("parity")
         payload["refusals"] = ["oracle fallback"]
         self.assert_invalid("parity", payload, "refusals")
 

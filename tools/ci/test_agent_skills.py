@@ -169,6 +169,50 @@ class SkillMirrorTests(unittest.TestCase):
             self.assertEqual(receipt[family]["status"], "unverified")
         self.assertNotIn("overall_parity_percent", receipt)
 
+    def test_release_receipts_have_schemas_and_validate_as_templates(self):
+        from tools.ci import validate_release_receipt
+
+        entries = (
+            (
+                "parity",
+                REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json",
+                REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.schema.json",
+            ),
+            (
+                "documentation",
+                REPO / ".claude/skills/oxidex-release-documentation/templates/documentation-release-receipt.json",
+                REPO / ".claude/skills/oxidex-release-documentation/templates/documentation-release-receipt.schema.json",
+            ),
+            (
+                "finalization",
+                REPO / ".claude/skills/oxidex-release-finalization/templates/release-finalization-receipt.json",
+                REPO / ".claude/skills/oxidex-release-finalization/templates/release-finalization-receipt.schema.json",
+            ),
+        )
+        for kind, template_path, schema_path in entries:
+            with self.subTest(kind=kind):
+                template = json.loads(template_path.read_text(encoding="utf-8"))
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
+                self.assertEqual(schema["title"], f"OxiDex {kind} release receipt")
+                self.assertEqual(
+                    validate_release_receipt.validate_receipt(kind, template, template=True),
+                    [],
+                )
+
+    def test_finalization_template_has_explicit_release_evidence_slots(self):
+        receipt = json.loads(canonical(
+            "oxidex-release-finalization", "templates/release-finalization-receipt.json"
+        ))
+        for field in (
+            "candidate_tree", "main_tree", "receipts", "packaging", "promotion",
+            "authorization", "tag_verification",
+        ):
+            self.assertIn(field, receipt)
+        self.assertIn("review_threads_evidence", receipt["promotion"])
+        self.assertIn("expected_developer_id", receipt["macos_verification"])
+        self.assertIn("expected_team_identifier", receipt["macos_verification"])
+
     def test_parity_matrix_report_isolates_writes_and_checks_source(self):
         text = canonical("exiftool-parity", "references/harnesses.md")
         snippets = bash_snippets("exiftool-parity", "references/harnesses.md")

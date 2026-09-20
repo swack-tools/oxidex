@@ -2,10 +2,43 @@
   "schema_version": 1,
   "version": "2.0.0-beta.1",
   "tag": "v2.0.0-beta.1",
-  "candidate_sha": "full-commit-sha",
+  "candidate_sha": null,
+  "candidate_tree": null,
   "candidate_cargo_target_dir": null,
+  "main_sha": null,
+  "main_tree": null,
+  "receipts": {
+    "parity": {"path": null, "sha256": null, "status": "unverified"},
+    "documentation": {"path": null, "sha256": null, "status": "unverified"}
+  },
+  "packaging": {
+    "prerelease": true,
+    "latest": false,
+    "targets": []
+  },
   "version_inventory": [],
-  "main_sha": "full-main-commit-sha",
+  "promotion": {
+    "pr_url": null,
+    "review_decision": null,
+    "required_checks_status": null,
+    "unresolved_actionable_threads": null,
+    "review_threads_evidence": null
+  },
+  "authorization": {
+    "authorized_by": null,
+    "authorized_at": null,
+    "version": null,
+    "tag": null,
+    "main_sha": null,
+    "evidence_path": null
+  },
+  "tag_verification": {
+    "status": "unverified",
+    "tag": null,
+    "target_sha": null,
+    "signature": null,
+    "evidence_path": null
+  },
   "gates": [],
   "workflows": [],
   "artifacts": [],
@@ -13,11 +46,17 @@
     "status": "unverified",
     "release_run_id": null,
     "run_artifact_manifest": null,
+    "expected_developer_id": null,
+    "expected_team_identifier": null,
+    "observed_developer_id": null,
+    "observed_team_identifier": null,
     "raw_binary_sha256": null,
     "dmg_sha256": null,
     "dmg_payload_sha256": null,
     "payload_match": false,
     "reported_version": null,
+    "gatekeeper_status": "unverified",
+    "stapler_status": "unverified",
     "cleanup_status": "unverified",
     "evidence": []
   },

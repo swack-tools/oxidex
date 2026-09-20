@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oxidex.net/schemas/release-parity-receipt.schema.json",
+  "title": "OxiDex parity release receipt",
+  "type": "object",
+  "required": [
+    "schema_version", "version", "oxidex_sha", "oxidex_tree", "source_dirty",
+    "exiftool_version", "binary", "oracle", "corpora", "runs", "conformance",
+    "authenticated_reads", "generated_catalog", "write_matrix", "regressions",
+    "status", "refusals", "unresolved"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": ["string", "null"]},
+    "oxidex_sha": {"type": ["string", "null"]},
+    "status": {"enum": ["unverified", "blocked", "verified"]},
+    "refusals": {"type": "array"},
+    "unresolved": {"type": "array"}
+  },
+  "additionalProperties": true
+}

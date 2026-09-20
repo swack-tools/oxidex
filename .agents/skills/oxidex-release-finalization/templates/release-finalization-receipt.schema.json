@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oxidex.net/schemas/release-finalization-receipt.schema.json",
+  "title": "OxiDex finalization release receipt",
+  "type": "object",
+  "required": [
+    "schema_version", "version", "tag", "candidate_sha", "candidate_tree",
+    "main_sha", "main_tree", "receipts", "packaging", "version_inventory",
+    "promotion", "authorization", "tag_verification", "gates", "workflows",
+    "artifacts", "macos_verification", "status", "next_action"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": ["string", "null"]},
+    "tag": {"type": ["string", "null"]},
+    "candidate_sha": {"type": ["string", "null"]},
+    "status": {"enum": ["unverified", "blocked", "verified"]}
+  },
+  "additionalProperties": true
+}

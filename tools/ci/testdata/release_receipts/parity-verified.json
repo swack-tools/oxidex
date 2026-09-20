@@ -34,6 +34,7 @@
     "verification_runs": ["/evidence/read-verify.log"],
     "metric_c": 9000,
     "native_occurrence_floor": 8000,
+    "native_occurrence_floor_evidence": "/evidence/native-occurrence-floor.json",
     "credited_coordinates_artifact": "/evidence/coordinates.json",
     "published_read_gate": {"status": "verified", "lost_reads": 0}
   },
