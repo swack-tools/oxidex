@@ -3,20 +3,26 @@
 [![CI](https://github.com/swack-tools/oxidex/workflows/CI/badge.svg)](https://github.com/swack-tools/oxidex/actions)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
-A high-performance Rust implementation of [ExifTool](https://exiftool.org/) for metadata extraction and manipulation.
+A Rust reimplementation of [ExifTool](https://exiftool.org/) for metadata extraction and manipulation.
 
 ## What is OxiDex?
 
-OxiDex is a memory-safe, drop-in replacement for the Perl-based ExifTool. It defines 16,684 metadata tags across 140+ formats (see [Tag Coverage](https://oxidex.net/reference/tag-coverage-analysis) for the measured extraction-conformance score), with significantly better performance through Rust's zero-cost abstractions and parallel processing.
+OxiDex is a memory-safe Rust reimplementation of the Perl-based ExifTool. The
+current development snapshot contains 16,684 generated metadata tag
+definitions. Source inspection maps 131 formats for detection and 129 to a
+parser; an identified format is not necessarily parsed. See [Supported
+formats](https://oxidex.net/reference/formats/) for those scopes and [Tag
+Coverage](https://oxidex.net/reference/tag-coverage-analysis) for separately
+labelled historical measurements.
 
 ## Why OxiDex?
 
-- **Compiled, parallel Rust** - the published speed comparison against Perl ExifTool is stale and being re-measured against the pinned 13.59 ([status](https://oxidex.net/performance/))
+- **Compiled Rust with parallel directory processing** - candidate performance has not been measured for this beta; see the [performance status](https://oxidex.net/performance/)
 - **Memory safe** - No buffer overflows, use-after-free, or data races
-- **Drop-in compatible** - Same CLI arguments as original ExifTool
-- **Cross-platform** - Static binaries for Linux, macOS, and Windows
+- **ExifTool-style CLI** - familiar arguments with documented differences
+- **Cross-platform** - Prebuilt binaries for Linux, macOS, and Windows
 - **Library + CLI** - Use as a Rust crate or standalone binary
-- **AI-powered detection (optional)** - Magika deep learning model for enhanced file type detection (`--features magika`)
+- **Optional Magika detection** - use the Magika model for file-type identification (`--features magika`)
 
 ## Quick Start
 
@@ -48,9 +54,10 @@ oxidex -json photo.jpg
 
 ### Optional: Magika AI-Powered Detection
 
-Build with the `magika` feature to enable Google's deep learning model for
-enhanced file type identification (~99% accuracy across 200+ formats),
-selectable at runtime with `--detector=magika`:
+Build with the `magika` feature to enable Google's Magika model for file-type
+identification, selectable at runtime with `--detector=magika`. This page does
+not make an accuracy or performance claim for Magika; no beta-bound receipt for
+either measurement is published here:
 
 ```bash
 cargo build --release --features magika

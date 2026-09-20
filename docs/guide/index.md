@@ -30,10 +30,11 @@ Perl subroutine at a time. See [Architecture](/architecture/).
 - ✅ 16,684 metadata tag definitions, synced from ExifTool's own tag database
   in this development snapshot. A definition says a tag exists, not that
   OxiDex reads it; it is not a v2.0.0-beta.1 parity receipt.
-- 🔶 **Reading.** Development-state source inspection maps 129 detectable
-  formats to a parser, among them camera RAW with 36 sub-formats. Candidate
-  read coverage remains pending the parity receipt. Many more types are
-  identified but not parsed. See [Supported formats](/reference/formats/).
+- 🔶 **Reading.** Development-state source inspection maps 131 formats for
+  detection, of which 129 map to a parser, including camera RAW with 36
+  sub-formats. Candidate read coverage remains pending the parity receipt.
+  Many more types are identified but not parsed. See [Supported
+  formats](/reference/formats/).
 - 🔶 **Release parity pending.** The v2.0.0-beta.1 parity receipt has not yet
   been recorded. The regression gate is a safeguard, not a release-coverage
   claim; see [ExifTool parity](/guide/exiftool-parity) and the
