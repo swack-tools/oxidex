@@ -326,6 +326,64 @@ pub fn parse_file_info(
     }
 }
 
+/// `Nikon::MakerNotes0x56` (Main tag 0x0056), the Z-series burst record.
+///
+/// The packed word at offset four is meaningful only when non-zero; ExifTool
+/// uses it as the condition for the burst fields. The final word remains an
+/// independently reported pixel-shift flag.
+pub fn parse_maker_notes_0x56(data: &[u8], order: ByteOrder, tags: &mut HashMap<String, String>) {
+    if data.len() < 4 {
+        return;
+    }
+    let firmware = ascii_value(&data[..4]);
+    if firmware.len() == 4 && firmware.as_bytes().iter().all(u8::is_ascii_digit) {
+        tags.insert(
+            "Nikon:FirmwareVersion56".to_string(),
+            format!("{}.{}", &firmware[..2], &firmware[2..]),
+        );
+    }
+
+    let burst = read_u32(data, 4, order).unwrap_or(0);
+    if burst != 0 {
+        tags.insert(
+            "Nikon:BurstStartSlotNumber".to_string(),
+            (((burst & 0x2000_0000) >> 29) + 1).to_string(),
+        );
+        tags.insert(
+            "Nikon:BurstStartFolderNumber".to_string(),
+            ((burst & 0x1ff8_0000) >> 19).to_string(),
+        );
+        tags.insert(
+            "Nikon:BurstStartImageNumber".to_string(),
+            ((burst & 0x0007_ffe0) >> 5).to_string(),
+        );
+        if let Some(kind) = match burst & 0x1f {
+            0 => Some("JPG"),
+            2 => Some("NEF"),
+            3 => Some("TIF"),
+            4 => Some("NDF"),
+            5 => Some("MOV"),
+            6 => Some("NEV"),
+            7 => Some("MP4"),
+            _ => None,
+        } {
+            tags.insert("Nikon:BurstStartImageType".to_string(), kind.to_string());
+        }
+        if let Some(number) = read_u32(data, 8, order) {
+            tags.insert("Nikon:BurstShotNumber".to_string(), number.to_string());
+        }
+    }
+    if let Some(active) = read_u32(data, 12, order) {
+        if let Some(printed) = match active {
+            0 => Some("No"),
+            1 => Some("Yes"),
+            _ => None,
+        } {
+            tags.insert("Nikon:PixelShiftActive".to_string(), printed.to_string());
+        }
+    }
+}
+
 /// `Nikon::AFTune` (`Nikon::Main` 0x00b9).
 pub fn parse_af_tune(data: &[u8], tags: &mut HashMap<String, String>) {
     const AF_FINE_TUNE: &[(u8, &str)] =

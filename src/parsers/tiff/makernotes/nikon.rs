@@ -72,6 +72,8 @@ const NIKON_ISO_SELECTION: u16 = 0x000F;
 const NIKON_PREVIEW_IFD: u16 = 0x0011;
 /// `NikonSettings`: the user-settings directory (`NikonSettings::Main`).
 const NIKON_SETTINGS: u16 = 0x004E;
+/// `Nikon::MakerNotes0x56`, a Z-series burst and pixel-shift record.
+const NIKON_MAKER_NOTES_0X56: u16 = 0x0056;
 /// `Nikon::FaceDetect`.
 const NIKON_FACE_DETECT: u16 = 0x0021;
 /// `Nikon::DistortInfo`.
@@ -980,6 +982,12 @@ impl NikonParser {
                 NIKON_SETTINGS => {
                     if let Some(bytes) = bytes_of(entry) {
                         settings::parse_nikon_settings(&bytes, order, model, tags);
+                    }
+                }
+
+                NIKON_MAKER_NOTES_0X56 => {
+                    if let Some(bytes) = bytes_of(entry) {
+                        sub_tables::parse_maker_notes_0x56(&bytes, order, tags);
                     }
                 }
 
