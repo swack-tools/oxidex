@@ -1209,6 +1209,100 @@ class SeverityTests(unittest.TestCase):
         self.assertEqual(conformance.classify_severity("Canon", "Nikon"), "structural")
 
 
+class MeasurementTranscriptTests(unittest.TestCase):
+    def test_volatile_file_tags_do_not_invalidate_a_stable_scored_row(self):
+        path = "/corpus/AAC.aac"
+        oracle_before = {
+            "File:System:FileAccessDate": "2026:09:20 14:35:18-07:00",
+            "AAC:AAC:AudioObjectType": "LC (Low Complexity)",
+        }
+        candidate_before = {
+            "File:FileAccessDate": "2026:09:20 14:35:18-07:00",
+            "AAC:AudioObjectType": "LC (Low Complexity)",
+        }
+        oracle_after = {
+            **oracle_before,
+            "File:System:FileAccessDate": "2026:09:20 14:36:42-07:00",
+        }
+        candidate_after = {
+            **candidate_before,
+            "File:FileAccessDate": "2026:09:20 14:36:42-07:00",
+        }
+
+        before = conformance.transcript_row(
+            path,
+            oracle_before,
+            candidate_before,
+            conformance.compare(oracle_before, candidate_before),
+        )
+        after = conformance.transcript_row(
+            path,
+            oracle_after,
+            candidate_after,
+            conformance.compare(oracle_after, candidate_after),
+        )
+
+        self.assertEqual(before, after)
+
+        changed_oracle = {
+            **oracle_after,
+            "AAC:AAC:AudioObjectType": "Main",
+        }
+        changed_candidate = {
+            **candidate_after,
+            "AAC:AudioObjectType": "Main",
+        }
+        changed = conformance.transcript_row(
+            path,
+            changed_oracle,
+            changed_candidate,
+            conformance.compare(changed_oracle, changed_candidate),
+        )
+
+        stable_counters = {
+            key: value
+            for key, value in after.items()
+            if key not in {"oracle_sha256", "candidate_sha256"}
+        }
+        changed_counters = {
+            key: value
+            for key, value in changed.items()
+            if key not in {"oracle_sha256", "candidate_sha256"}
+        }
+        self.assertEqual(stable_counters, changed_counters)
+        self.assertNotEqual(after["oracle_sha256"], changed["oracle_sha256"])
+        self.assertNotEqual(after["candidate_sha256"], changed["candidate_sha256"])
+
+    def test_transcript_filter_preserves_raw_keys_duplicates_and_candidate_colons(self):
+        oracle = {
+            "EXIF:IFD0:Copy1:Make": "Canon",
+            "EXIF:IFD0:Copy2:Make": "Canon",
+            "File:System:FileAccessDate": "volatile",
+        }
+        candidate = {
+            "IFD0:Make": "Canon",
+            "IFD1:Make": "Canon",
+            "OOXML:Custom:FileAccessDate": "must remain authenticated",
+            "File:FileAccessDate": "volatile",
+        }
+
+        self.assertEqual(
+            conformance.transcript_tags(oracle, conformance.split_oracle_key),
+            {
+                "EXIF:IFD0:Copy1:Make": "Canon",
+                "EXIF:IFD0:Copy2:Make": "Canon",
+            },
+        )
+        self.assertEqual(
+            conformance.transcript_tags(candidate, conformance.split_oxidex_key),
+            {
+                "IFD0:Make": "Canon",
+                "IFD1:Make": "Canon",
+                "OOXML:Custom:FileAccessDate": "must remain authenticated",
+            },
+        )
+
+
 class ReceiptValidationTests(unittest.TestCase):
     @staticmethod
     def _receipt(tmp):
