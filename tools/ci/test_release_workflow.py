@@ -175,6 +175,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('xcrun stapler validate "$DMG_PATH"', block)
         self.assertIn('spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"', block)
 
+    def test_macos_signing_identity_is_bound_to_declared_team(self):
+        block = job_block(self.text, "build-macos")
+        self.assertIn('grep -F "($DEVELOPMENT_TEAM)"', block)
+
     def test_release_assets_have_a_checksum_manifest(self):
         block = job_block(self.text, "create-release")
         self.assertIn('shasum -a 256', block)

@@ -211,14 +211,18 @@ jobs:
       - name: Sign binary
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
         run: |
           : "${KEYCHAIN_PASSWORD:?missing KEYCHAIN_PASSWORD}"
+          : "${DEVELOPMENT_TEAM:?missing DEVELOPMENT_TEAM}"
           APP_PATH="artifacts/oxidex-universal-apple-darwin"
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
 
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           IDENTITY_LINES=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -F 'Developer ID Application:' \
+            | grep -F "($DEVELOPMENT_TEAM)" \
             | sed -n 's/^[[:space:]]*[0-9]*) \([0-9A-F]*\) "Developer ID Application:.*"$/\1/p')
           IDENTITY_COUNT=$(printf '%s\n' "$IDENTITY_LINES" | sed '/^$/d' | wc -l | tr -d '[:space:]')
           if [ "$IDENTITY_COUNT" -ne 1 ]; then
