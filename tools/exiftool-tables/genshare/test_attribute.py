@@ -99,6 +99,34 @@ class ParsingAndProjectionTests(unittest.TestCase):
         self.assertEqual(normalized[1]["value"], "must-not-change")
         self.assertEqual(normalized[2]["value"], "must-not-change")
 
+    def test_stable_output_normalizes_only_each_sides_exact_access_date_key(self):
+        oracle = {
+            "File:System:FileAccessDate": "volatile",
+            "System:FileAccessDate": "must-not-change",
+            "File:System:FileModifyDate": "must-not-change",
+        }
+        candidate = {
+            "System:FileAccessDate": "volatile",
+            "File:System:FileAccessDate": "must-not-change",
+            "System:FileModifyDate": "must-not-change",
+        }
+
+        stable_oracle = attribute.normalize_access_date_output(oracle, oracle=True)
+        stable_candidate = attribute.normalize_access_date_output(candidate, oracle=False)
+
+        self.assertEqual(
+            stable_oracle["File:System:FileAccessDate"],
+            "<NORMALIZED:FileAccessDate>",
+        )
+        self.assertEqual(stable_oracle["System:FileAccessDate"], "must-not-change")
+        self.assertEqual(
+            stable_candidate["System:FileAccessDate"],
+            "<NORMALIZED:FileAccessDate>",
+        )
+        self.assertEqual(
+            stable_candidate["File:System:FileAccessDate"], "must-not-change"
+        )
+
     def test_each_child_retains_rc_stdout_stderr_and_parsed_output(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             child = pathlib.Path(td)

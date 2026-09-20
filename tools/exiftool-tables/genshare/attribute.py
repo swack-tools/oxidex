@@ -331,6 +331,17 @@ def occurrence_sequence(candidate: dict, *, normalize_access_date: bool) -> list
     return rows
 
 
+def normalize_access_date_output(document: dict, *, oracle: bool) -> dict:
+    """Normalize only the volatile logical System:FileAccessDate value."""
+    access_key = "File:System:FileAccessDate" if oracle else "System:FileAccessDate"
+    return {
+        raw_key: (
+            "<NORMALIZED:FileAccessDate>" if raw_key == access_key else original
+        )
+        for raw_key, original in document.items()
+    }
+
+
 def _artifact_record(path: Path) -> dict:
     return {"path": str(path.resolve()), **_file_identity(path)}
 
@@ -1149,6 +1160,7 @@ def _run_mode(
     children = []
     per_file = {}
     oracle_hashes = {}
+    oracle_stable_hashes = {}
     started = utc_now()
     for number, entry in enumerate(selection["ordered_manifest"], 1):
         relative = entry["relative_path"]
@@ -1182,7 +1194,10 @@ def _run_mode(
         oracle = _load_parsed(oracle_record)
         candidate = _load_parsed(candidate_record)
         oracle_hashes[relative] = canonical_sha256(oracle)
-        per_file[relative] = project_file(oracle, candidate)
+        stable_oracle = normalize_access_date_output(oracle, oracle=True)
+        stable_candidate = normalize_access_date_output(candidate, oracle=False)
+        oracle_stable_hashes[relative] = canonical_sha256(stable_oracle)
+        per_file[relative] = project_file(stable_oracle, stable_candidate)
         raw_occurrences = occurrence_sequence(candidate, normalize_access_date=False)
         normalized_occurrences = occurrence_sequence(candidate, normalize_access_date=True)
         process = {
@@ -1195,6 +1210,9 @@ def _run_mode(
             "candidate_occurrences": normalized_occurrences,
             "raw_occurrences_sha256": canonical_sha256(raw_occurrences),
             "normalized_occurrences_sha256": canonical_sha256(normalized_occurrences),
+            "oracle_normalization_count": sum(
+                oracle[key] != value for key, value in stable_oracle.items()
+            ),
             "normalization_count": sum(
                 raw["value"] != normalized["value"]
                 for raw, normalized in zip(raw_occurrences, normalized_occurrences)
@@ -1222,6 +1240,7 @@ def _run_mode(
         "candidate_path_set_sha256": path_set_sha256([row["relative_path"] for row in children]),
         "scored_path_set_sha256": path_set_sha256(list(per_file)),
         "oracle_parsed_sha256": oracle_hashes,
+        "oracle_stable_sha256": oracle_stable_hashes,
         "children": children,
     }
     mode_path = mode_root / "mode.json"
@@ -1644,9 +1663,9 @@ def census_main(argv: list[str]) -> int:
             }
             if hashes != {exact_path_hash}:
                 raise ReceiptError(f"selected/oracle/candidate/scored path sets differ in {mode}")
-        baseline_oracles = runs["control-empty"]["oracle_parsed_sha256"]
-        if any(run["oracle_parsed_sha256"] != baseline_oracles for run in runs.values()):
-            raise ReceiptError("oracle parsed output changed between modes")
+        baseline_oracles = runs["control-empty"]["oracle_stable_sha256"]
+        if any(run["oracle_stable_sha256"] != baseline_oracles for run in runs.values()):
+            raise ReceiptError("oracle normalized output changed between modes")
         aggregate = projections["control-empty"]["aggregate"]
         if aggregate["oracle_occurrences"] < args.min_tags:
             raise ReceiptError(
