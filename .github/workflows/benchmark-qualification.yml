@@ -1,0 +1,93 @@
+name: Candidate benchmark qualification preflight
+
+# This is deliberately distinct from benchmarks.yml.  The latter is an
+# indicative, non-blocking 3-warmup/20-run shared-runner signal.  This manual
+# path prepares the candidate-bound receipt required before a 5-warmup/30-run
+# shipped-profile measurement; it never invokes hyperfine or a timing script.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full immutable candidate commit SHA to build and bind
+        required: true
+        type: string
+      run_id:
+        description: New durable qualification run identity (not historical)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-qualification-${{ inputs.candidate_sha }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Candidate-bound qualification preflight (no timings)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      QUALIFICATION_RUN_ID: ${{ inputs.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+      - name: Verify selected clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain=v1)"
+      - name: Run qualification contract tests
+        shell: bash
+        run: python3 -m unittest benches/test_benchmark_qualification.py -v
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Build the selected shipped-profile binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/oxidex-benchmark-qualification-target"
+          cargo build --release --locked --bin oxidex
+          QUALIFICATION_BINARY="$CARGO_TARGET_DIR/release/oxidex"
+          test -x "$QUALIFICATION_BINARY"
+          {
+            echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+            echo "QUALIFICATION_BINARY=$QUALIFICATION_BINARY"
+            echo "QUALIFICATION_BINARY_SHA256=$(sha256sum "$QUALIFICATION_BINARY" | awk '{print $1}')"
+          } >> "$GITHUB_ENV"
+      - id: exiftool
+        uses: ./.github/actions/pinned-exiftool
+      - id: prepare
+        name: Prepare fail-closed qualification receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVIDENCE_ROOT="$RUNNER_TEMP/benchmark-qualification"
+          mkdir -p "$EVIDENCE_ROOT"
+          python3 benches/benchmark_qualification.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --binary "$QUALIFICATION_BINARY" \
+            --binary-sha256 "$QUALIFICATION_BINARY_SHA256" \
+            --target-dir "$CARGO_TARGET_DIR" \
+            --perl "$OXIDEX_TABLES_PERL" \
+            --exiftool-dir "$EXIFTOOL_SOURCE" \
+            --docx "$EXIFTOOL_SOURCE/t/images/OOXML.docx" \
+            --corpus "$EXIFTOOL_SOURCE/t/images" \
+            --evidence-dir "$EVIDENCE_ROOT" \
+            --run-id "$QUALIFICATION_RUN_ID" \
+            --warmups 5 \
+            --runs 30
+          echo "qualification_dir=$EVIDENCE_ROOT/$QUALIFICATION_RUN_ID" >> "$GITHUB_OUTPUT"
+      - name: Upload qualification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-qualification-preflight
+          path: ${{ steps.prepare.outputs.qualification_dir }}
+          if-no-files-found: error
+          retention-days: 90

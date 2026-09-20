@@ -42,6 +42,7 @@ EXPECTED_SCENARIOS = (
 )
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,96}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GIT_OBJECT_ID_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 class Refused(ValueError):
@@ -222,7 +223,7 @@ def _run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | N
 
 def git_identity(repository: Path, candidate_sha: str) -> dict[str, Any]:
     commit = _run(["git", "rev-parse", "HEAD"], cwd=repository)
-    if not SHA256_RE.fullmatch(candidate_sha) or candidate_sha != commit:
+    if not GIT_OBJECT_ID_RE.fullmatch(candidate_sha) or candidate_sha != commit:
         raise Refused("requested candidate SHA does not exactly match repository HEAD")
     dirty = bool(_run(["git", "status", "--porcelain=v1"], cwd=repository))
     if dirty:
