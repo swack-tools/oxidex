@@ -62,7 +62,7 @@ pub struct MetadataMap {
     /// until Step 22, which consumes the occurrence winner view anyway").
     /// This is Step 22: [`MetadataMap::set_value_form`]/[`MetadataMap::
     /// value_form`] below now read and write `TagOccurrence.value` via
-    /// [`TagSink::set_winner_value`] instead of a second map, so serde
+    /// [`TagSink::set_winner_display_value`] instead of a second map, so serde
     /// skipping it is automatic (occurrences were never serialized to begin
     /// with -- only the winner projection's `raw` form is, via
     /// `Serialize for MetadataMap` below) rather than a field the old
@@ -536,7 +536,7 @@ impl MetadataMap {
     pub(crate) fn set_value_form<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         let key = key.into();
         self.sink
-            .set_winner_value(&key, TagValue::new_string(value.into()));
+            .set_winner_display_value(&key, TagValue::new_string(value.into()));
     }
 
     /// Returns the full-precision value form attached to `key`, if any.

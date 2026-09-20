@@ -183,10 +183,10 @@ pub(super) fn f(v: Option<&str>) -> Option<f64> {
         return None;
     }
     if let Some((n, d)) = s.split_once('/') {
-        let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
+        let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?); // typed-value-projection: reparse rational_parts
         return if d == 0.0 { None } else { Some(n / d) };
     }
-    s[..to_float_run_end(s)].parse::<f64>().ok()
+    s[..to_float_run_end(s)].parse::<f64>().ok() // typed-value-projection: reparse to_float_prefix
 }
 
 /// [`f`], plus the infinities that ExifTool's `ToFloat` nulls.
@@ -220,15 +220,18 @@ fn perl_truthy(value: Option<&str>) -> bool {
 }
 
 fn printed_integer(value: &str) -> Option<i64> {
-    value.trim().parse().ok().or_else(|| {
-        // typed-value-projection: reparse printed_integer
-        value
-            .trim()
-            .strip_prefix("Unknown (")?
-            .strip_suffix(')')?
-            .parse() // typed-value-projection: reparse printed_integer
-            .ok()
-    })
+    value
+        .trim()
+        .parse() // typed-value-projection: reparse printed_integer_direct
+        .ok()
+        .or_else(|| {
+            value
+                .trim()
+                .strip_prefix("Unknown (")?
+                .strip_suffix(')')?
+                .parse() // typed-value-projection: reparse printed_integer_unknown
+                .ok()
+        })
 }
 
 fn canon_exposure_mode(value: &str) -> Option<i64> {
@@ -785,7 +788,7 @@ fn olympus_extender_status(extender: &str, lens_type: &str, max_aperture: f64) -
             .find(|c: char| !(c.is_ascii_digit() || c == '.'))
             .unwrap_or(rest.len());
         // A bare "." or a trailing "." is not what the Perl regex accepts.
-        rest[..end].parse::<f64>().ok()
+        rest[..end].parse::<f64>().ok() // typed-value-projection: reparse olympus_lens_aperture
     }) else {
         return Some(1);
     };
@@ -820,8 +823,8 @@ fn print_cfa_pattern(value: &str) -> String {
         return "<truncated data>".to_string();
     }
     let (Some(rows), Some(cols)) = (
-        a[0].parse::<usize>().ok().filter(|n| *n != 0),
-        a[1].parse::<usize>().ok().filter(|n| *n != 0),
+        a[0].parse::<usize>().ok().filter(|n| *n != 0), // typed-value-projection: reparse cfa_rows
+        a[1].parse::<usize>().ok().filter(|n| *n != 0), // typed-value-projection: reparse cfa_columns
     ) else {
         return "<zero pattern size>".to_string();
     };
@@ -833,7 +836,7 @@ fn print_cfa_pattern(value: &str) -> String {
     let mut pos = 2;
     loop {
         let color = a[pos]
-            .parse::<usize>()
+            .parse::<usize>() // typed-value-projection: reparse cfa_color
             .ok()
             .and_then(|n| COLORS.get(n).copied())
             .unwrap_or("Unknown");
@@ -984,8 +987,8 @@ fn subsec_date_time(i: Inputs<'_>) -> Option<String> {
             && let Some(colon) = offset.find(':')
             && (2..=3).contains(&colon)
         {
-            let hours = offset[1..colon].parse::<u8>().ok()?;
-            let minutes = offset.get(colon + 1..colon + 3)?.parse::<u8>().ok()?;
+            let hours = offset[1..colon].parse::<u8>().ok()?; // typed-value-projection: reparse timezone_hours
+            let minutes = offset.get(colon + 1..colon + 3)?.parse::<u8>().ok()?; // typed-value-projection: reparse timezone_minutes
             let base = value.get_or_insert_with(|| date.to_string());
             base.push(bytes[0] as char);
             base.push_str(&format!("{hours:02}:{minutes:02}"));
@@ -1310,7 +1313,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             let mut nums = s
                 .split(|c: char| !c.is_ascii_digit())
                 .filter(|t| !t.is_empty())
-                .filter_map(|t| t.parse::<f64>().ok());
+                .filter_map(|t| t.parse::<f64>().ok()); // typed-value-projection: reparse megapixels_dimensions
             let (w, h) = (nums.next()?, nums.next()?);
             let mp = w * h / 1_000_000.0;
             Computed::new(mp.to_string(), fmt_megapixels(mp))
@@ -1595,7 +1598,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                 let sens_y = get(i, 4).and_then(|s| {
                     s.rsplit(|c: char| !(c.is_ascii_digit() || c == '.'))
                         .find(|t| !t.is_empty())
-                        .and_then(|t| t.parse::<f64>().ok())
+                        .and_then(|t| t.parse::<f64>().ok()) // typed-value-projection: reparse sensor_size_trailing_dimension
                 });
                 match (sens, sens_y) {
                     (Some(s), Some(y)) if s > 0.0 && y > 0.0 => {
@@ -1742,7 +1745,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
                         && camera_iso != "0"
                         && camera_iso.bytes().all(|byte| byte.is_ascii_digit()) =>
                 {
-                    camera_iso.parse::<f64>().ok()?
+                    camera_iso.parse::<f64>().ok()? // typed-value-projection: reparse canon_camera_iso
                 }
                 _ => {
                     let base = f(get(i, 1)).filter(|value| *value != 0.0)?;
@@ -1922,8 +1925,8 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             let pattern: Vec<&str> = get(i, 1)?.split(' ').collect();
             let expected = dim
                 .first()
-                .and_then(|v| v.parse::<usize>().ok())
-                .zip(dim.get(1).and_then(|v| v.parse::<usize>().ok()))
+                .and_then(|v| v.parse::<usize>().ok()) // typed-value-projection: reparse cfa_pattern_rows
+                .zip(dim.get(1).and_then(|v| v.parse::<usize>().ok())) // typed-value-projection: reparse cfa_pattern_columns
                 .map(|(rows, cols)| rows * cols);
             if dim.len() != 2 || expected != Some(pattern.len()) {
                 // ExifTool's own literal `'?'` -- an emitted tag, so it is
@@ -2260,7 +2263,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             // degrees. A value that is not wholly a number (an unconverted XMP
             // `DD,MM.mmN` string) must not be truncated to its leading digits,
             // which silently drops minutes and the hemisphere.
-            let whole = |v: Option<&str>| v?.trim().parse::<f64>().ok();
+            let whole = |v: Option<&str>| v?.trim().parse::<f64>().ok(); // typed-value-projection: reparse gps_position_degrees
             let (latitude, longitude) = (whole(get(i, 0))?, whole(get(i, 1))?);
             if get(i, 0)?.is_empty() && get(i, 1)?.is_empty() {
                 return None;

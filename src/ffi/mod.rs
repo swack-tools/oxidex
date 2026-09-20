@@ -30,22 +30,18 @@ use crate::core::tag_occurrence::ValueChannel;
 /// Existing accessors retain their legacy PrintConv-default behavior. New
 /// accessors accept the discriminant as `c_int` so invalid values can return a
 /// normal FFI error instead of crossing the boundary as an invalid Rust enum.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExifToolValueChannel {
-    Stored = 0,
-    ValueConv = 1,
-    PrintConv = 2,
-}
+pub type ExifToolValueChannel = c_int;
 
-impl ExifToolValueChannel {
-    pub(crate) fn parse(value: c_int) -> Option<ValueChannel> {
-        match value {
-            0 => Some(ValueChannel::Stored),
-            1 => Some(ValueChannel::ValueConv),
-            2 => Some(ValueChannel::PrintConv),
-            _ => None,
-        }
+pub const EXIFTOOL_VALUE_CHANNEL_STORED: ExifToolValueChannel = 0;
+pub const EXIFTOOL_VALUE_CHANNEL_VALUE_CONV: ExifToolValueChannel = 1;
+pub const EXIFTOOL_VALUE_CHANNEL_PRINT_CONV: ExifToolValueChannel = 2;
+
+pub(crate) fn parse_value_channel(value: ExifToolValueChannel) -> Option<ValueChannel> {
+    match value {
+        EXIFTOOL_VALUE_CHANNEL_STORED => Some(ValueChannel::Stored),
+        EXIFTOOL_VALUE_CHANNEL_VALUE_CONV => Some(ValueChannel::ValueConv),
+        EXIFTOOL_VALUE_CHANNEL_PRINT_CONV => Some(ValueChannel::PrintConv),
+        _ => None,
     }
 }
 

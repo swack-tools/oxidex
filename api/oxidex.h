@@ -4161,6 +4161,21 @@ typedef struct ExifToolHandle {
     uint8_t _private[0];
 } ExifToolHandle;
 
+/*
+ Selects one ExifTool value stage for the additive channel-aware C accessors.
+
+ Existing accessors retain their legacy PrintConv-default behavior. New
+ accessors accept the discriminant as `c_int` so invalid values can return a
+ normal FFI error instead of crossing the boundary as an invalid Rust enum.
+ */
+typedef int ExifToolValueChannel;
+
+#define EXIFTOOL_VALUE_CHANNEL_STORED 0
+
+#define EXIFTOOL_VALUE_CHANNEL_VALUE_CONV 1
+
+#define EXIFTOOL_VALUE_CHANNEL_PRINT_CONV 2
+
 
 
 
@@ -4331,12 +4346,16 @@ const char *exiftool_get_tag_string(const struct ExifToolHandle *handle, const c
 
  This additive entry point leaves [`exiftool_get_tag_string`] unchanged:
  callers of the old ABI still observe its PrintConv-default map view.
- `channel` is an [`ExifToolValueChannel`] discriminant; an unknown value
- returns NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+ `channel` is an `ExifToolValueChannel` value; an unknown integer returns
+ NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+
+ # Thread Safety
+ Thread-safe for read-only access. Mutating operations and handle
+ destruction remain non-concurrent on the same handle.
  */
 const char *exiftool_get_tag_string_in_channel(const struct ExifToolHandle *handle,
                                                const char *tag_name,
-                                               int channel);
+                                               ExifToolValueChannel channel);
 
 /*
  Retrieves tag value as a 64-bit integer.

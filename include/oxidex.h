@@ -1256,14 +1256,14 @@ typedef struct ExifToolHandle {
 /*
  Selects the value stage returned by exiftool_get_tag_string_in_channel.
 
- Existing tag accessors retain their legacy default. Use this enum only with
- the additive channel-selecting accessor.
+ Existing tag accessors retain their legacy default. Use this named integer
+ type and its constants only with the additive channel-selecting accessor.
  */
-typedef enum ExifToolValueChannel {
-    EXIFTOOL_VALUE_CHANNEL_STORED = 0,
-    EXIFTOOL_VALUE_CHANNEL_VALUE_CONV = 1,
-    EXIFTOOL_VALUE_CHANNEL_PRINT_CONV = 2,
-} ExifToolValueChannel;
+typedef int ExifToolValueChannel;
+
+#define EXIFTOOL_VALUE_CHANNEL_STORED 0
+#define EXIFTOOL_VALUE_CHANNEL_VALUE_CONV 1
+#define EXIFTOOL_VALUE_CHANNEL_PRINT_CONV 2
 
 /*
  Retrieves the last error message.
@@ -1422,10 +1422,14 @@ const char *exiftool_get_tag_string(const struct ExifToolHandle *handle, const c
  # String Lifetime
  Returned string is valid until the next API call on the same handle or handle
  destruction.
+
+ # Thread Safety
+ Thread-safe for read-only access. Mutating operations and handle destruction
+ remain non-concurrent on the same handle.
  */
 const char *exiftool_get_tag_string_in_channel(const struct ExifToolHandle *handle,
                                                const char *tag_name,
-                                               enum ExifToolValueChannel channel);
+                                               ExifToolValueChannel channel);
 
 /*
  Retrieves tag value as a 64-bit integer.
