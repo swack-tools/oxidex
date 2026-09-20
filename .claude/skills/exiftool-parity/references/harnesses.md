@@ -46,8 +46,8 @@ export CARGO_TARGET_DIR=/absolute/dedicated/parity-target
 : "${PARITY_LOCK:?Set the absolute lock controller path}"
 test -f "$PARITY_LOCK"
 PARITY_PIN=$(tr -d '\r\n' < .exiftool-version)
-: "${EXIFTOOL_PERL:=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2}"
-: "${EXIFTOOL_CACHE_DIR:=/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN}"
+EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2
+EXIFTOOL_CACHE_DIR="/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN"
 PARITY_PERL="$EXIFTOOL_PERL"
 PARITY_ET_TREE="$EXIFTOOL_CACHE_DIR/exiftool"
 export EXIFTOOL_PERL="$PARITY_PERL"
@@ -64,8 +64,11 @@ python3 tools/ci/release_oracle.py --repo . --perl "$PARITY_PERL" \
 ```
 
 Stop on any nonzero command, recording that exit and the failing prerequisite
-in the receipt. Do not continue a partially executed shell recipe. Record
-interpreter/script SHA-256 and the deterministic library-path/file-count/
+in the receipt. Do not continue a partially executed shell recipe. The canonical
+path assignments above intentionally override inherited
+`EXIFTOOL_PERL` and `EXIFTOOL_CACHE_DIR` so the capability probe, bootstrap
+verification, manifest hashing and measurement all select the same installation.
+Record interpreter/script SHA-256 and the deterministic library-path/file-count/
 fingerprint fields emitted by `release_oracle.py`; map those exact fields into
 the release receipt rather than reconstructing them by hand. The shared Python
 resolver obeys `EXIFTOOL_PERL`; its generic
@@ -117,9 +120,11 @@ before measuring, apply them equally to base/head, and retain the manifest.
 set -euo pipefail
 : "${PARITY_MIN_FILES:?Set the approved file floor}"
 : "${PARITY_MIN_TAGS:?Set the approved native occurrence floor}"
-python3 tools/release/bootstrap_oracle.py verify \
-  --root /Users/allen/oxidex-ops --pin "$PARITY_PIN" \
-  --manifest "$PARITY_EVIDENCE/bootstrap-oracle.json"
+PARITY_BOOTSTRAP_MANIFEST=$(python3 tools/release/bootstrap_oracle.py verify \
+  --root /Users/allen/oxidex-ops --pin "$PARITY_PIN")
+cp "$PARITY_BOOTSTRAP_MANIFEST" "$PARITY_EVIDENCE/bootstrap-oracle.json"
+shasum -a 256 "$PARITY_EVIDENCE/bootstrap-oracle.json" \
+  > "$PARITY_EVIDENCE/bootstrap-oracle.sha256"
 shasum -a 256 "$EXIFTOOL_CACHE_DIR/combined-samples.manifest" \
   > "$PARITY_EVIDENCE/combined-samples-manifest.sha256"
 PARITY_CORPORA=("$PARITY_ET_TREE/t/images" "$EXIFTOOL_CACHE_DIR/combined-samples")
@@ -133,6 +138,10 @@ test -z "$(git status --porcelain)"
 ```
 
 The lock writes `.status.jsonl` beside each log with actual argv/cwd/exit.
+Bootstrap verification writes only its canonical root-derived storage manifest;
+its stdout names that file. The recipe copies and hashes those verified bytes
+into this run's evidence directory. Do not pass a per-run `--manifest` path:
+that option validates the canonical destination, not an alternate output path.
 Also hash the binary before/after and keep the source, corpus and tool
 manifests: the conformance JSON alone does not contain full provenance.
 Its `per_format` and `per_file` data are the source of summary counts, not
