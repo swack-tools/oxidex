@@ -235,10 +235,17 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
         self.assertEqual(before['source_sha256'],tx.digest(self.base/'exiftool-13.59/exiftool'))
         self.assertEqual(before['generator_sha256'],tx.digest(self.root/'tools/exiftool-tables/regen-all.sh'))
         self.assertTrue(before['clean_tree']['clean'])
+        self.assertEqual(before['clean_tree']['status'],'')
+        self.assertEqual(before['clean_tree']['head'],self.before['identity']['head'])
         self.assertIn(tx.PIN,before['output_sha256'])
         self.assertTrue(before['output_sha256'])
         self.assertEqual(self.report()['phase'],'dry-run-passed')
         self.assertEqual(len(self.git('worktree','list','--porcelain').split(b'worktree '))-1,1)
+
+    def test_variant_refuses_a_request_to_skip_regeneration(self):
+        transaction=object.__new__(tx.Transaction)
+        with self.assertRaisesRegex(tx.Refused,'must always regenerate'):
+            transaction.variant('before','13.59',False)
 
     def test_before_generation_controls_preserve_caller_and_accept_split_module_changes(self):
         for fail in ('generate-before','changed-helper','undeclared'):
@@ -338,6 +345,14 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
         self.assertEqual((self.root/tx.PIN).read_text(),'13.60\n')
         self.assertEqual(self.report()['phase'],'promoted')
         for a in artifacts.select():self.assertEqual((self.root/a.path).read_text(),output_text('13.60',a))
+
+    def test_live_promotion_refuses_split_module_set_changes_without_partial_write(self):
+        for fail in ('added-module','removed-module'):
+            with self.subTest(fail=fail):
+                result=self.run_bump(fail=fail)
+                self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertIn('generated artifact path set changed',result.stderr)
+                self.unchanged()
 
     def prepared(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)
