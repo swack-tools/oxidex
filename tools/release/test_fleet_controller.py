@@ -993,6 +993,75 @@ class FleetControllerTests(unittest.TestCase):
         self.assertEqual(reconciled["pushed_sha"], head_sha)
         self.assertIsNone(store.read_snapshot()["tasks"]["5"]["pr_ci_state"])
 
+    def test_reconcile_known_task_pr_uses_direct_view_not_inventory_listing(self) -> None:
+        """A recorded task PR is reconciled without fetching unrelated PR history."""
+        repository = self.root / "repository"
+        head_sha = initialize_git_repository(repository)
+        remote = self.root / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        git(repository, "remote", "add", "origin", str(remote))
+        for branch in (
+            "staging/beta1-functional-integration",
+            "staging/beta1/task-6",
+        ):
+            git(repository, "branch", branch, head_sha)
+            git(repository, "push", "-q", "origin", f"{branch}:{branch}")
+        pull_request = {
+            "number": 875,
+            "url": "https://example.invalid/pr/875",
+            "state": "MERGED",
+            "isDraft": False,
+            "headRefName": "staging/beta1/task-6",
+            "headRefOid": head_sha,
+            "baseRefName": "staging/beta1-functional-integration",
+            "baseRefOid": head_sha,
+            "mergeCommit": {"oid": head_sha},
+            "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}],
+        }
+        fake_gh = self.root / "fake-gh"
+        fake_gh.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import sys\n"
+            f"payload = {pull_request!r}\n"
+            "if sys.argv[1:3] != ['pr', 'view'] or sys.argv[3] != '875':\n"
+            "    raise SystemExit('task-scoped reconcile must use gh pr view 875')\n"
+            "print(json.dumps(payload))\n",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+        store = fleet.StateStore(self.root / "controller")
+        recorded = task(6, "pushed")
+        recorded["pr_ci_state"] = {"pr": 875, "ci": "pending"}
+        recorded["expected_merge_parent"] = head_sha
+        controller_state = state(recorded)
+        controller_state["target_sha"] = head_sha
+        store.write_snapshot(controller_state)
+        args = fleet.build_parser().parse_args(
+            [
+                "reconcile",
+                "--root",
+                str(store.root),
+                "--task",
+                "6",
+                "--repo",
+                str(repository),
+            ]
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_GH_EXECUTABLE": str(fake_gh),
+                "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+            },
+            clear=False,
+        ):
+            reconciled = fleet.dispatch(args)
+
+        self.assertEqual(reconciled["state"], "merged")
+        self.assertEqual(reconciled["pr_ci_state"]["pr"], 875)
+        self.assertEqual(reconciled["merge_sha"], head_sha)
+
     def test_identity_requires_pid_start_token_executable_task_and_exact_argv(self) -> None:
         record = {
             "pid": 7,
