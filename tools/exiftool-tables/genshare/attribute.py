@@ -1386,10 +1386,26 @@ def _fixture_observations(
     )
     if icc_delta["added"] or icc_delta["changed_or_reordered"]:
         raise ReceiptError("ICC engine observation added, changed, or reordered surviving output")
-    for mode in [*TOKENS, "union"]:
+    for mode in [token for token in TOKENS if token != "producers"]:
         baseline = _candidate_sequence(control, "AAC.aac")
         if _candidate_sequence(runs[mode], "AAC.aac") != baseline:
             raise ReceiptError(f"AAC hand-only control changed under {mode}")
+    producer_aac_delta = sequence_delta(
+        _candidate_sequence(control, "AAC.aac"),
+        _candidate_sequence(runs["producers"], "AAC.aac"),
+    )
+    expected_identity_keys = ["File:FileType", "File:FileTypeExtension", "File:MIMEType"]
+    if (
+        [row["raw_key"] for row in producer_aac_delta["removed"]]
+        != expected_identity_keys
+        or producer_aac_delta["added"]
+        or producer_aac_delta["changed_or_reordered"]
+    ):
+        raise ReceiptError("AAC producers control did not remove exactly the identity trio")
+    if _candidate_sequence(runs["union"], "AAC.aac") != _candidate_sequence(
+        runs["producers"], "AAC.aac"
+    ):
+        raise ReceiptError("AAC union differs from its sole exercised producers boundary")
     keyed_deltas = {
         relative: sequence_delta(
             _candidate_sequence(control, relative),
@@ -1408,6 +1424,7 @@ def _fixture_observations(
         "token_observations": observations,
         "icc_engine": engine_icc,
         "icc_engine_sequence_delta": icc_delta,
+        "aac_producers_sequence_delta": producer_aac_delta,
         "keyed_sequence_deltas": keyed_deltas,
         "exact_loss_expectations": None,
     }

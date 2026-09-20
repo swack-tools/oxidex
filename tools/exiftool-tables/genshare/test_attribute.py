@@ -258,20 +258,21 @@ class ArtifactValidationTests(unittest.TestCase):
             for mode in (
                 "pre-seam-control", "control-unset", "control-empty", *attribute.TOKENS, "union"
             ):
-                oracle_json = json.dumps([{
+                oracle_document = {
                     "File:System:FileAccessDate": f"oracle-{mode}",
                     "File:FileType": "ICC",
+                    "File:FileTypeExtension": "icc",
+                    "File:MIMEType": "application/vnd.iccprofile",
                     "ICC_Profile:Header": "abc",
-                }])
-                full_json = json.dumps([{
+                }
+                oracle_json = json.dumps([oracle_document])
+                full_document = {
                     "System:FileAccessDate": f"candidate-{mode}",
                     "File:FileType": "ICC",
+                    "File:FileTypeExtension": "icc",
+                    "File:MIMEType": "application/vnd.iccprofile",
                     "ICC-header:Header": "abc",
-                }])
-                drop_json = json.dumps([{
-                    "System:FileAccessDate": f"candidate-{mode}",
-                    "File:FileType": "ICC",
-                }])
+                }
                 children = []
                 per_file = {}
                 for number, relative in enumerate(relative_paths, 1):
@@ -283,9 +284,15 @@ class ArtifactValidationTests(unittest.TestCase):
                         "oracle",
                         {},
                     )
-                    candidate_text = (
-                        drop_json if mode == "engine" and relative == "ICC_Profile.icc" else full_json
-                    )
+                    candidate_document = dict(full_document)
+                    if mode in ("producers", "union"):
+                        for key in (
+                            "File:FileType", "File:FileTypeExtension", "File:MIMEType"
+                        ):
+                            candidate_document.pop(key)
+                    if mode in ("engine", "union") and relative == "ICC_Profile.icc":
+                        candidate_document.pop("ICC-header:Header")
+                    candidate_text = json.dumps([candidate_document])
                     candidate = attribute.capture_process(
                         [sys.executable, "-c", f"print({candidate_text!r})"],
                         root,
