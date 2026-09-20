@@ -430,9 +430,11 @@ class Transaction:
         source = Path(self.doc["sources"]["old" if label == "before" else "new"]["tree"])
         self.command(f"clone-{label}", ["git", "clone", "--no-local", "--no-checkout", self.root, tree])
         self.command(f"checkout-{label}", ["git", "checkout", "--detach", self.start["identity"]["head"]], tree)
-        clean_tree = {"head": git(tree, "rev-parse", "HEAD").decode().strip(),
-                      "status": git(tree, "status", "--porcelain", "--untracked-files=all").decode(),
-                      "clean": True}
+        clean_tree = {
+            "head": git(tree, "rev-parse", "HEAD").decode().strip(),
+            "status": git(tree, "status", "--porcelain", "--untracked-files=all").decode(),
+            "clean": True,
+        }
         if clean_tree["status"]:
             raise Refused(f"{label}: cloned variant is not clean")
         cache.mkdir()
