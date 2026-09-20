@@ -153,21 +153,28 @@ def verify_assets(args: argparse.Namespace) -> None:
     if any(manifest.get(field) != value for field, value in expected_manifest.items()) \
             or manifest.get("payloads") != list(payload_names):
         raise ReleaseAssetError("provenance identity does not match this workflow run")
-    sbom = manifest.get("sbom")
+    manifest_sbom = manifest.get("sbom")
     source = manifest.get("source")
-    if not isinstance(sbom, dict) or sbom.get("name") != sbom_name(args.version) \
-            or not isinstance(sbom.get("sha256"), str) \
+    if not isinstance(manifest_sbom, dict) \
+            or manifest_sbom.get("name") != sbom_name(args.version) \
+            or not isinstance(manifest_sbom.get("sha256"), str) \
             or not isinstance(source, dict) \
             or not isinstance(source.get("cargo_lock_sha256"), str):
         raise ReleaseAssetError("provenance SBOM binding is invalid")
     sbom_path = assets / sbom_name(args.version)
-    if sha256(sbom_path) != sbom["sha256"]:
+    released_sbom = json.loads(sbom_path.read_text())
+    if sha256(sbom_path) != manifest_sbom["sha256"]:
         raise ReleaseAssetError("released SBOM differs from run provenance")
     expected_checksums = (provenance / "SHA256SUMS").read_text()
     if (assets / "SHA256SUMS").read_text() != expected_checksums:
         raise ReleaseAssetError("released SHA256SUMS differs from run provenance")
     if checksum_text(assets, (*payload_names, sbom_path.name)) != expected_checksums:
         raise ReleaseAssetError("released asset digest differs from run provenance")
+    expected_sbom = sbom_document(args, assets)
+    if source["cargo_lock_sha256"] != expected_sbom["metadata"]["properties"][0]["value"]:
+        raise ReleaseAssetError("released SBOM source digest differs from checked-out Cargo.lock")
+    if released_sbom != expected_sbom:
+        raise ReleaseAssetError("released SBOM semantics do not match source and payloads")
     print(f"verified {len(expected_names)} exact release assets")
 
 
@@ -212,7 +219,10 @@ def verify_release(args: argparse.Namespace) -> None:
         latest = json.loads(pathlib.Path(args.latest_json).read_text())
         if not isinstance(latest, dict):
             raise ReleaseAssetError("latest API response must be an object")
-        if args.prerelease:
+        if latest.get("status") == 404:
+            if not args.prerelease:
+                raise ReleaseAssetError("stable release has no GitHub Latest record")
+        elif args.prerelease:
             if latest.get("tag_name") == args.tag or latest.get("draft") is not False \
                     or latest.get("prerelease") is not False:
                 raise ReleaseAssetError("prerelease must not become GitHub Latest")
@@ -235,7 +245,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--head-sha", required=True)
         command.add_argument("--run-id", required=True)
         command.add_argument("--run-attempt", required=True)
-        if name == "create-provenance":
+        if name in ("create-provenance", "verify-assets"):
             command.add_argument("--source-root", required=True)
     release = subcommands.add_parser("verify-release")
     release.add_argument("--release-json", required=True)

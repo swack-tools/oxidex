@@ -10,6 +10,7 @@ text (no YAML dependency: this suite runs on a bare `python3`) and pin the
 exact expressions, so loosening any of them is a visible diff to this file.
 """
 import importlib.util
+import hashlib
 import json
 import os
 import pathlib
@@ -166,6 +167,9 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
     def source_args(self) -> list[str]:
         return ["--source-root", str(REPO)]
 
+    def verify_source_args(self, source: pathlib.Path) -> list[str]:
+        return ["--source-root", str(source)]
+
     def test_independent_provenance_verifies_exact_release_assets(self):
         """Removing independent manifest generation must make verification fail."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -186,7 +190,8 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
 
             verified = self.run_assets(
                 "verify-assets", "--assets", str(assets),
-                "--provenance", str(provenance), *self.identity_args())
+                "--provenance", str(provenance), *self.identity_args(),
+                *self.verify_source_args(REPO))
             self.assertEqual(verified.returncode, 0, verified.stderr)
             self.assertIn("verified 7 exact release assets", verified.stdout)
 
@@ -223,6 +228,8 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 {"alpha", *self.PAYLOAD_NAMES},
             )
 
+            (source / "Cargo.lock").write_text(
+                'version = 4\n\n[[package]]\nname = "alpha"\nversion = "1.0.1"\n')
             (assets / self.SBOM_NAME).unlink()
             (assets / "SHA256SUMS").unlink()
             provenance_2 = root / "provenance-2"
@@ -230,14 +237,70 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 "create-provenance", "--assets", str(assets),
                 "--provenance", str(provenance_2), *self.identity_args(), *args)
             self.assertEqual(created_again.returncode, 0, created_again.stderr)
-            self.assertEqual((assets / self.SBOM_NAME).read_bytes(), first)
+            self.assertNotEqual((assets / self.SBOM_NAME).read_bytes(), first)
 
             (assets / self.PAYLOAD_NAMES[0]).write_bytes(b"changed payload\n")
             verified = self.run_assets(
                 "verify-assets", "--assets", str(assets),
-                "--provenance", str(provenance), *self.identity_args())
+                "--provenance", str(provenance), *self.identity_args(),
+                *self.verify_source_args(source))
             self.assertNotEqual(verified.returncode, 0)
             self.assertIn("differs from run provenance", verified.stderr)
+
+    def test_verify_assets_rejects_self_consistent_sbom_semantic_mutations(self):
+        """SBOM hashes alone must not make a wrong source/payload inventory pass."""
+        for mutation in ("lock-digest", "library-component", "payload-hash"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                assets = root / "release-assets"
+                provenance = root / "provenance"
+                source = root / "source"
+                source.mkdir()
+                (source / "Cargo.toml").write_text(
+                    '[package]\nname = "oxidex"\nversion = "2.0.0-beta.1"\n')
+                (source / "Cargo.lock").write_text(
+                    'version = 4\n\n[[package]]\nname = "alpha"\nversion = "1.0.0"\n')
+                self.create_payloads(assets)
+                created = self.run_assets(
+                    "create-provenance", "--assets", str(assets),
+                    "--provenance", str(provenance), *self.identity_args(),
+                    "--source-root", str(source))
+                self.assertEqual(created.returncode, 0, created.stderr)
+
+                sbom_path = assets / self.SBOM_NAME
+                sbom = json.loads(sbom_path.read_text())
+                if mutation == "lock-digest":
+                    sbom["metadata"]["properties"][0]["value"] = "0" * 64
+                elif mutation == "library-component":
+                    sbom["components"] = [
+                        component for component in sbom["components"]
+                        if component.get("name") != "alpha"
+                    ]
+                else:
+                    payload = next(component for component in sbom["components"]
+                                    if component.get("name") == self.PAYLOAD_NAMES[0])
+                    payload["hashes"][0]["content"] = "0" * 64
+                sbom_path.write_text(
+                    json.dumps(sbom, sort_keys=True, separators=(",", ":")) + "\n")
+
+                manifest_path = provenance / "provenance.json"
+                manifest = json.loads(manifest_path.read_text())
+                manifest["sbom"]["sha256"] = hashlib.sha256(
+                    sbom_path.read_bytes()).hexdigest()
+                manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+                checksum_names = (*self.PAYLOAD_NAMES, self.SBOM_NAME)
+                checksums = "".join(
+                    f"{hashlib.sha256((assets / name).read_bytes()).hexdigest()}  {name}\n"
+                    for name in sorted(checksum_names))
+                (assets / "SHA256SUMS").write_text(checksums)
+                (provenance / "SHA256SUMS").write_text(checksums)
+
+                verified = self.run_assets(
+                    "verify-assets", "--assets", str(assets),
+                    "--provenance", str(provenance), *self.identity_args(),
+                    "--source-root", str(source))
+                self.assertNotEqual(verified.returncode, 0)
+                self.assertIn("SBOM", verified.stderr)
 
     def test_release_json_binds_exact_id_state_commit_and_asset_set(self):
         """Accepting a different release ID or state must make publication fail."""
@@ -288,7 +351,8 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
 
             verified = self.run_assets(
                 "verify-assets", "--assets", str(assets),
-                "--provenance", str(provenance), *self.identity_args())
+                "--provenance", str(provenance), *self.identity_args(),
+                "--source-root", str(REPO))
             self.assertNotEqual(verified.returncode, 0)
             self.assertIn("differs from run provenance", verified.stderr)
 
@@ -346,6 +410,15 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 "--draft", "false", "--prerelease", "true",
                 "--resolved-target", self.SHA, *self.identity_args())
             self.assertEqual(beta_ok.returncode, 0, beta_ok.stderr)
+
+            latest_json.write_text(json.dumps({"status": 404}))
+            beta_without_stable_latest = self.run_assets(
+                "verify-release", "--release-json", str(release_json),
+                "--latest-json", str(latest_json), "--release-id", "987",
+                "--draft", "false", "--prerelease", "true",
+                "--resolved-target", self.SHA, *self.identity_args())
+            self.assertEqual(beta_without_stable_latest.returncode, 0,
+                             beta_without_stable_latest.stderr)
 
             latest_json.write_text(json.dumps({
                 "tag_name": self.TAG, "draft": False, "prerelease": True,
@@ -598,6 +671,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('run-id: ${{ github.run_id }}', verify)
         self.assertIn('python3 tools/ci/release_assets.py verify-assets', verify)
         self.assertIn('python3 tools/ci/release_assets.py verify-release', verify)
+        self.assertIn('--source-root "$GITHUB_WORKSPACE"', verify)
         self.assertIn('gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME"', verify)
         self.assertIn('--resolved-target "$RESOLVED_TARGET"', verify)
         self.assertIn('gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"', verify)
@@ -605,12 +679,76 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("verify-release-assets", job_needs(publish))
         self.assertIn('python3 tools/ci/release_assets.py verify-assets', publish)
         self.assertIn('python3 tools/ci/release_assets.py verify-release', publish)
+        self.assertIn('--source-root "$GITHUB_WORKSPACE"', publish)
         self.assertIn('--method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"', publish)
 
     def test_published_release_verification_reads_fail_closed_latest_api_evidence(self):
         publish = job_block(self.text, "publish-release")
         self.assertIn('repos/$GITHUB_REPOSITORY/releases/latest', publish)
         self.assertIn('--latest-json latest-release.json', publish)
+
+    def run_latest_poll(self, mode: str, prerelease: bool, max_attempts: int = 3):
+        script = step_run(job_block(self.text, "publish-release"),
+                          "Poll Latest release projection")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            count_file = root / "count"
+            gh = fake_bin / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "count=0; test -f \"$COUNT_FILE\" && count=$(cat \"$COUNT_FILE\")\n"
+                "count=$((count + 1)); printf '%s' \"$count\" > \"$COUNT_FILE\"\n"
+                "case \"$POLL_MODE\" in\n"
+                "  stale-then-current) if [ \"$count\" -eq 1 ]; then "
+                "echo '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}'; "
+                "else echo '{\"tag_name\":\"v2.0.0\",\"draft\":false,\"prerelease\":false}'; fi;;\n"
+                "  stale) echo '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}';;\n"
+                "  not-found) echo 'HTTP 404: Not Found' >&2; exit 1;;\n"
+                "esac\n")
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update({
+                "PATH": f"{fake_bin}:{env['PATH']}",
+                "COUNT_FILE": str(count_file),
+                "POLL_MODE": mode,
+                "LATEST_MAX_ATTEMPTS": str(max_attempts),
+                "LATEST_POLL_DELAY": "0",
+                "PRERELEASE": "true" if prerelease else "false",
+                "GITHUB_REF_NAME": "v2.0.0-beta.1" if prerelease else "v2.0.0",
+                "GITHUB_REPOSITORY": "owner/repo",
+            })
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", script], cwd=root, env=env,
+                text=True, capture_output=True, check=False)
+            latest = (root / "latest-release.json").read_text() \
+                if (root / "latest-release.json").exists() else ""
+            history = (root / "latest-release-attempts.jsonl").read_text() \
+                if (root / "latest-release-attempts.jsonl").exists() else ""
+            count = int(count_file.read_text()) if count_file.exists() else 0
+            return result, latest, history, count
+
+    def test_latest_poll_retries_stale_projection_until_current(self):
+        result, latest, history, count = self.run_latest_poll("stale-then-current", False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(count, 2)
+        self.assertEqual(json.loads(latest)["tag_name"], "v2.0.0")
+        self.assertEqual(len(history.splitlines()), 2)
+
+    def test_latest_poll_fails_after_bounded_stale_projection(self):
+        result, _latest, history, count = self.run_latest_poll("stale", False, max_attempts=2)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(count, 2)
+        self.assertEqual(len(history.splitlines()), 2)
+
+    def test_latest_poll_accepts_prerelease_without_any_stable_release(self):
+        result, latest, history, count = self.run_latest_poll("not-found", True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(count, 1)
+        self.assertEqual(json.loads(latest), {"status": 404})
+        self.assertEqual(len(history.splitlines()), 1)
 
     def test_release_is_bound_to_exact_id_and_fails_closed_on_rerun(self):
         create = job_block(self.text, "create-release")
