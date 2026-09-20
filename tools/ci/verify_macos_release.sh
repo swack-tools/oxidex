@@ -43,7 +43,21 @@ verify_signature() {
   printf '%s\n' "$details" | grep -F 'Timestamp=' >/dev/null
 }
 
-test "$(lipo -archs "$MAC_BIN")" = "aarch64 x86_64"
+verify_universal_architectures() {
+  local executable=$1
+  local archs normalized_archs
+  archs=$(lipo -archs "$executable")
+  normalized_archs=$(printf '%s\n' "$archs" \
+    | awk '{ for (i = 1; i <= NF; i++) print $i }' \
+    | LC_ALL=C sort | paste -sd ' ' -)
+  if [ "$normalized_archs" != "arm64 x86_64" ]; then
+    printf 'refusing non-universal macOS executable %s: expected exactly arm64 x86_64, got %s\n' \
+      "$executable" "$archs" >&2
+    return 1
+  fi
+}
+
+verify_universal_architectures "$MAC_BIN"
 verify_signature "$MAC_BIN"
 spctl --assess --type execute --verbose=4 "$MAC_BIN"
 test "$("$MAC_BIN" --version)" = "oxidex $VERSION"
@@ -62,7 +76,7 @@ test "$MAC_DMG_PAYLOAD" = "$MOUNT_DIR/oxidex"
 test -x "$MAC_DMG_PAYLOAD"
 cmp "$MAC_BIN" "$MAC_DMG_PAYLOAD"
 
-test "$(lipo -archs "$MAC_DMG_PAYLOAD")" = "aarch64 x86_64"
+verify_universal_architectures "$MAC_DMG_PAYLOAD"
 verify_signature "$MAC_DMG_PAYLOAD"
 spctl --assess --type execute --verbose=4 "$MAC_DMG_PAYLOAD"
 test "$("$MAC_DMG_PAYLOAD" --version)" = "oxidex $VERSION"
