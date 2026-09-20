@@ -33,6 +33,10 @@ def result_row(command: str, *, candidate: bool = False) -> dict:
 
 
 def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
+    source_hash = qualification.build_corpus_manifest(corpus, expected_count=2)["manifest_sha256"]
+    evidence = corpus.parent / "evidence" / "run-20260920-a"
+    evidence.parent.mkdir(exist_ok=True)
+    evidence.mkdir(exist_ok=True)
     commands = {
         "single_file": ["single-file-oracle", binary],
         "single_canon": ["single-canon-oracle", binary],
@@ -45,9 +49,9 @@ def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
                            binary + " " + " ".join(str(corpus / name) for name in ("a", "b"))],
     }
     return {
-        "identity": {"run_id": "run-20260920-a", "evidence_path": "/evidence/run-20260920-a",
+        "identity": {"run_id": "run-20260920-a", "evidence_path": str(evidence),
                       "cache_policy": "warm-cache", "result_artifact_sha256": "f" * 64,
-                      "source_artifact_sha256": "e" * 64},
+                      "source_artifact_sha256": source_hash},
         "instrument": {
             "commit": commit,
             "dirty": False,
@@ -117,6 +121,22 @@ class ResultValidationTests(unittest.TestCase):
                     binary_path=Path("/fresh-target/release/oxidex"), binary_sha256=BINARY_SHA,
                     cargo_version="2.0.0-beta.1", exiftool_version="13.59", corpus_manifest=manifest,
                     warmups=5, runs=30, expected_corpus_count=2)
+
+    def test_canonical_artifact_hash_is_constructible_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = self._valid(root)
+            path = root.parent / "evidence" / "run-20260920-a" / "result.json"
+            document["identity"]["result_artifact_path"] = str(path.resolve())
+            document["identity"]["result_artifact_sha256"] = qualification.canonical_result_sha256(document)
+            path.write_bytes(qualification._canonical_json(document))
+            # Canonical hash excludes only the binding field, so serialization is constructible.
+            result = qualification.validate_result_artifact(
+                path, candidate_sha=SHA, binary_path=Path("/fresh-target/release/oxidex"),
+                binary_sha256=BINARY_SHA, cargo_version="2.0.0-beta.1", exiftool_version="13.59",
+                corpus_manifest=qualification.build_corpus_manifest(root, expected_count=2),
+                warmups=5, runs=30, expected_corpus_count=2)
+            self.assertEqual(result["benchmark_status"], "observed-input-validated")
     def test_exact_seven_scenarios_and_two_30_sample_rows_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             corpus = Path(directory)

@@ -51,6 +51,15 @@ def _canonical_json(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def canonical_result_sha256(document: dict[str, Any]) -> str:
+    """Hash the result with its external artifact binding removed."""
+    copy = json.loads(json.dumps(document))
+    identity = copy.get("identity")
+    if isinstance(identity, dict):
+        identity.pop("result_artifact_sha256", None)
+    return hashlib.sha256(_canonical_json(copy)).hexdigest()
+
+
 def load_json_rejecting_duplicates(path: Path) -> dict[str, Any]:
     """Load an artifact without allowing JSON object keys to be overwritten."""
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -310,11 +319,18 @@ def validate_result_document(
     identity = document.get("identity")
     if not isinstance(identity, dict):
         raise Refused("result has no bound run identity")
-    for key in ("run_id", "evidence_path", "cache_policy", "result_artifact_sha256", "source_artifact_sha256"):
+    for key in ("run_id", "evidence_path", "cache_policy", "source_artifact_sha256"):
         if not identity.get(key):
             raise Refused(f"result identity missing {key}")
     if identity["cache_policy"] != cache_policy:
         raise Refused("result cache policy is not bound to the requested policy")
+    if not RUN_ID_RE.fullmatch(str(identity["run_id"])) or "historical" in str(identity["run_id"]).lower():
+        raise Refused("result run_id is invalid or historical")
+    evidence = Path(str(identity["evidence_path"])).resolve()
+    if not evidence.is_dir() or evidence.name != identity["run_id"]:
+        raise Refused("result evidence path is not the durable run directory")
+    if identity["source_artifact_sha256"] != trusted_manifest["manifest_sha256"]:
+        raise Refused("result source artifact is not the trusted corpus manifest")
     row_count = 0
     for name in EXPECTED_SCENARIOS:
         scenario = document.get(name)
@@ -350,8 +366,8 @@ def validate_result_document(
             for key, value in expected.items():
                 if not isinstance(summary.get(key), (int, float)) or not math.isclose(summary[key], value, rel_tol=1e-9, abs_tol=1e-12):
                     raise Refused(f"scenario {name} summary {key} does not match samples")
-            if name in ("corpus", "corpus_1thread") and not all(path in row["command"] for path in expected_corpus_paths):
-                raise Refused(f"scenario {name} does not use every manifest file")
+            if name in ("corpus", "corpus_1thread") and not all(path in argv for path in expected_corpus_paths):
+                raise Refused(f"scenario {name} does not use every manifest file as an exact argv token")
             row_count += 1
         if candidate_rows != 1:
             raise Refused(f"scenario {name} does not identify exactly one candidate command")
@@ -368,8 +384,10 @@ def validate_result_artifact(path: Path, **kwargs: Any) -> dict[str, Any]:
     document = load_json_rejecting_duplicates(path)
     digest = sha256_file(path)
     identity = document.get("identity")
-    if not isinstance(identity, dict) or identity.get("result_artifact_sha256") != digest:
-        raise Refused("result artifact hash is missing or does not match bytes")
+    if not isinstance(identity, dict) or identity.get("result_artifact_sha256") != canonical_result_sha256(document):
+        raise Refused("result artifact canonical hash is missing or does not match content")
+    if identity.get("result_artifact_path") != str(Path(path).resolve()):
+        raise Refused("result artifact path is not bound to the input artifact")
     return validate_result_document(document, **kwargs)
 
 
