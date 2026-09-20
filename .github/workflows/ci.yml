@@ -107,6 +107,14 @@ jobs:
           cache-on-failure: true
           shared-key: lint
       - run: cargo fmt --all -- --check
+      # Release recipe tests render the real justfile and execute the rendered
+      # shell against controlled fake git/gh commands. Keep that behavioral
+      # coverage active on Linux instead of silently depending on a developer's
+      # locally installed `just` binary.
+      - name: Install just for release recipe tests
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: just
       # Pure-Python, no build: catches a test reading the pinned sample corpus
       # without gating on its presence. Such a test passes locally (the corpus
       # is a developer cache) and panics on NotFound in CI, and because nextest

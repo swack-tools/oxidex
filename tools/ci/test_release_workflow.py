@@ -590,6 +590,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "#!/usr/bin/env bash\nset -u\nprintf 'codesign %s\\n' \"$*\" >> \"$TOOL_LOG\"\n"
                 "if [ \"${1:-}\" = --sign ]; then exit 9; fi\n")
             codesign.chmod(0o755)
+            base64 = fake_bin / "base64"
+            base64.write_text(
+                "#!/usr/bin/env bash\nset -eu\n"
+                "test \"${1:-}\" = --decode\n"
+                "test \"${2:-}\" = -o\n"
+                "test -n \"${3:-}\"\n"
+                "cat > \"$3\"\n")
+            base64.chmod(0o755)
             env = os.environ.copy()
             env.update({
                 "PATH": f"{fake_bin}:{env['PATH']}", "TOOL_LOG": str(log),
