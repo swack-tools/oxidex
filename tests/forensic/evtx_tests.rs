@@ -9,10 +9,7 @@
 //! - Event timeline information
 //! - Corruption detection via checksums
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::evtx::parse_evtx_metadata;
 

@@ -6,10 +6,7 @@
 //! - Hive purpose inference from names
 //! - All major hive types (NTUSER, SYSTEM, SOFTWARE, SECURITY, DEFAULT, SAM)
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::registry::parse_registry_metadata;
 
@@ -228,7 +225,7 @@ fn test_registry_all_hive_types() {
         let data = create_registry_header(1, 1, name, 0);
         let reader = TestReader::new(data);
         let metadata = parse_registry_metadata(&reader)
-            .expect(&format!("parse_registry_metadata failed for {}", name));
+            .unwrap_or_else(|_| panic!("parse_registry_metadata failed for {}", name));
 
         // Verify hive name is recorded
         assert_eq!(

@@ -176,15 +176,15 @@ fn get_oxidex_output(file_path: &Path) -> Result<String, String> {
 fn extract_value(val: &Value) -> Value {
     if let Some(obj) = val.as_object() {
         // Check if this looks like a TagValue enum wrapper (single key-value pair)
-        if obj.len() == 1 {
-            if let Some((key, inner_val)) = obj.iter().next() {
-                // Common TagValue variants: String, Integer, Float, Rational, etc.
-                if matches!(
-                    key.as_str(),
-                    "String" | "Integer" | "Float" | "Rational" | "DateTime" | "Binary"
-                ) {
-                    return inner_val.clone();
-                }
+        if obj.len() == 1
+            && let Some((key, inner_val)) = obj.iter().next()
+        {
+            // Common TagValue variants: String, Integer, Float, Rational, etc.
+            if matches!(
+                key.as_str(),
+                "String" | "Integer" | "Float" | "Rational" | "DateTime" | "Binary"
+            ) {
+                return inner_val.clone();
             }
         }
     }
@@ -368,15 +368,15 @@ fn values_match(perl_val: &Value, rust_val: &Value) -> bool {
         // Allow string-to-number comparison (e.g., "1" == 1)
         (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => {
             // Try to parse string as integer or float
-            if let Some(ni) = n.as_i64() {
-                if let Ok(si) = s.parse::<i64>() {
-                    return ni == si;
-                }
+            if let Some(ni) = n.as_i64()
+                && let Ok(si) = s.parse::<i64>()
+            {
+                return ni == si;
             }
-            if let Some(nf) = n.as_f64() {
-                if let Ok(sf) = s.parse::<f64>() {
-                    return (nf - sf).abs() < 0.0001;
-                }
+            if let Some(nf) = n.as_f64()
+                && let Ok(sf) = s.parse::<f64>()
+            {
+                return (nf - sf).abs() < 0.0001;
             }
             false
         }
@@ -1057,13 +1057,12 @@ fn test_rename_file_pattern() {
 
     let metadata_json: Vec<HashMap<String, Value>> =
         serde_json::from_str(&metadata_check).expect("Failed to parse metadata JSON");
-    if !metadata_json.is_empty() {
-        if let Some(datetime) = metadata_json[0]
+    if !metadata_json.is_empty()
+        && let Some(datetime) = metadata_json[0]
             .get("EXIF:DateTimeOriginal")
             .or_else(|| metadata_json[0].get("DateTimeOriginal"))
-        {
-            println!("  DateTimeOriginal: {:?}", datetime);
-        }
+    {
+        println!("  DateTimeOriginal: {:?}", datetime);
     }
 
     // Use Perl ExifTool to rename based on DateTimeOriginal

@@ -35,7 +35,7 @@ fn test_magika_detection(file_path: &str, expected_tags: &[&str]) {
             // Verify expected tags are present
             for tag in expected_tags {
                 assert!(
-                    metadata.contains_key(*tag),
+                    metadata.contains_key(tag),
                     "Expected tag '{}' not found in metadata from {}",
                     tag,
                     file_path
@@ -127,8 +127,8 @@ fn test_magika_vs_signature_equivalence() {
                 // File system tags should be identical
                 for tag in &["File:FileName", "File:FileSize"] {
                     assert_eq!(
-                        sig_meta.get(*tag),
-                        mag_meta.get(*tag),
+                        sig_meta.get(tag),
+                        mag_meta.get(tag),
                         "Tag '{}' differs between detection modes for {}",
                         tag,
                         file_path

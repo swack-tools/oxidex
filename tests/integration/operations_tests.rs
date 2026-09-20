@@ -129,11 +129,11 @@ fn test_read_jpeg_type_coercion() {
     // Find all integer tags and verify they can be accessed
     let mut integer_count = 0;
     for (name, value) in metadata.iter() {
-        if value.is_integer() {
-            if let Some(int_val) = metadata.get_integer(name) {
-                println!("Integer tag {}: {}", name, int_val);
-                integer_count += 1;
-            }
+        if value.is_integer()
+            && let Some(int_val) = metadata.get_integer(name)
+        {
+            println!("Integer tag {}: {}", name, int_val);
+            integer_count += 1;
         }
     }
 

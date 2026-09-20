@@ -2,10 +2,7 @@
 //!
 //! These tests verify PNG metadata extraction with real PNG files.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::parsers::png::parse_png_metadata;
 
 /// PNG signature

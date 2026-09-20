@@ -3,10 +3,7 @@
 //! This test validates the entire parsing pipeline from file reading through
 //! format detection, segment parsing, and EXIF tag extraction.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::core::{FileFormat, FileReader};
 use oxidex::io::MMapReader;
 use oxidex::parsers::detection::detect_format;
@@ -371,7 +368,7 @@ fn test_jpeg_exif_extraction_end_to_end() {
     println!("  ✓ Found APP1 segment at offset {}", app1_segment.offset);
     println!(
         "    EXIF identifier: {:?}",
-        &app1_segment.data[0..6]
+        app1_segment.data[0..6]
             .iter()
             .map(|b| format!("{:02X}", b))
             .collect::<Vec<_>>()
