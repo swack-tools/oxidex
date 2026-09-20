@@ -53,6 +53,18 @@ class RuntimeOwnershipTests(unittest.TestCase):
         _, fragments = self.ownership._fragment_digest(self.root / "tools/exiftool-tables/runtime_ownership.d")
         self.assertEqual(self.ownership._canonical(fragments), self.ownership._canonical(self.ownership._expected_residual_rows(self.root)))
 
+    def test_residual_fragment_provenance_matches_live_carriers(self):
+        _, fragments = self.ownership._fragment_digest(self.root / "tools/exiftool-tables/runtime_ownership.d")
+        expected = {
+            row["field"]["value"]: row["source_sha256"]
+            for row in self.ownership._expected_residual_rows(self.root)
+        }
+        actual = {
+            row["field"]["value"]: row["source_sha256"]
+            for row in fragments
+        }
+        self.assertEqual(actual, expected)
+
     def test_missing_fixture_symbol_and_malformed_provenance_refuse(self):
         row = dict(self.generated_row)
         row["fixture"] = "src/DOES_NOT_EXIST.rs"
