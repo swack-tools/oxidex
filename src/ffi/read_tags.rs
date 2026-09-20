@@ -133,9 +133,7 @@ pub extern "C" fn exiftool_get_tag_count(handle: *const ExifToolHandle) -> usize
 /// - NULL if index is out of bounds or handle is NULL
 ///
 /// # String Lifetime
-/// Returned string is valid until:
-/// - Next API call on same handle
-/// - Handle destruction
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access.
@@ -228,9 +226,7 @@ pub extern "C" fn exiftool_has_tag(
 /// - NULL if tag doesn't exist or is not a String type
 ///
 /// # String Lifetime
-/// Returned string is valid until:
-/// - Next API call on same handle
-/// - Handle destruction
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access.
@@ -276,6 +272,9 @@ pub extern "C" fn exiftool_get_tag_string(
 /// callers of the old ABI still observe its PrintConv-default map view.
 /// `channel` is an `ExifToolValueChannel` value; an unknown integer returns
 /// NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+///
+/// # String Lifetime
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access. Mutating operations and handle
@@ -470,5 +469,55 @@ pub extern "C" fn exiftool_get_tag_float(
             set_last_error("Internal error: unexpected panic".to_string());
             EXIFTOOL_ERR_INTERNAL
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{CStr, CString};
+    use std::thread;
+
+    use super::{ExifToolHandle, exiftool_get_tag_name_at, exiftool_get_tag_string};
+    use crate::ffi::error::EXIFTOOL_OK;
+    use crate::ffi::lifecycle::{exiftool_create, exiftool_destroy};
+    use crate::ffi::write_tags::exiftool_set_tag_string;
+
+    #[test]
+    fn const_string_getters_are_safe_for_concurrent_calls() {
+        let handle = exiftool_create();
+        assert!(!handle.is_null());
+
+        let tag_name = CString::new("EXIF:Make").unwrap();
+        let tag_value = CString::new("Test Camera").unwrap();
+        assert_eq!(
+            exiftool_set_tag_string(handle, tag_name.as_ptr(), tag_value.as_ptr()),
+            EXIFTOOL_OK
+        );
+
+        let shared_handle = handle as usize;
+        thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    let handle = shared_handle as *const ExifToolHandle;
+                    for _ in 0..128 {
+                        let value = exiftool_get_tag_string(handle, tag_name.as_ptr());
+                        assert!(!value.is_null());
+                        assert_eq!(
+                            unsafe { CStr::from_ptr(value) }.to_str().unwrap(),
+                            "Test Camera"
+                        );
+
+                        let name = exiftool_get_tag_name_at(handle, 0);
+                        assert!(!name.is_null());
+                        assert_eq!(
+                            unsafe { CStr::from_ptr(name) }.to_str().unwrap(),
+                            "EXIF:Make"
+                        );
+                    }
+                });
+            }
+        });
+
+        exiftool_destroy(handle);
     }
 }
