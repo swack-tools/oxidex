@@ -185,6 +185,7 @@ def write_repair_manifest(path: Path, manifest: dict) -> str:
 def repair_fixture(root: Path) -> dict:
     repository = root / "repository"
     current = initialize_git_repository(repository)
+    initial_target = current
     remote = root / "remote.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
     git(repository, "remote", "add", "origin", str(remote))
@@ -236,8 +237,14 @@ def repair_fixture(root: Path) -> dict:
             ],
         }
     git(repository, "update-ref", f"refs/heads/{target_name}", current)
-    for _number, (_pr, _slug, branch) in task_metadata.items():
+    for number, (pr, _slug, branch) in task_metadata.items():
         git(repository, "push", "-q", "origin", f"{branch}:{branch}")
+        git(
+            remote,
+            "update-ref",
+            f"refs/pull/{pr}/head",
+            facts[number]["head_sha"],
+        )
     git(repository, "push", "-q", "origin", f"{target_name}:{target_name}")
 
     unrelated = task(9, "blocked", [8])
@@ -258,16 +265,17 @@ def repair_fixture(root: Path) -> dict:
             "fleet_events_sha256": fleet.sha256_file(store.events_path),
             "receipt_index_sha256": fleet.sha256_file(store.receipt_index_path),
         },
-        "tasks": [
-            {key: value for key, value in facts[number].items() if key != "head_sha"}
-            for number in sorted(facts)
-        ],
+        "old_target_sha": current,
+        "target_sha": current,
+        "tasks": [dict(facts[number]) for number in sorted(facts)],
     }
     manifest_path = root / "repair-manifest.json"
     manifest_sha256 = write_repair_manifest(manifest_path, manifest)
     return {
         "store": store,
         "repository": repository,
+        "remote": remote,
+        "initial_target": initial_target,
         "facts": facts,
         "pull_requests": pull_requests,
         "manifest": manifest,
@@ -398,6 +406,8 @@ class FleetControllerTests(unittest.TestCase):
                 "expected_merge_parent": fixture["facts"][4]["old_expected_merge_parent"],
                 "pr": None,
                 "remote_branch": None,
+                "head_sha": fixture["facts"][4]["head_sha"],
+                "pushed_sha": None,
             },
         )
         self.assertEqual(
@@ -406,6 +416,8 @@ class FleetControllerTests(unittest.TestCase):
                 "expected_merge_parent": fixture["facts"][4]["github_base_sha"],
                 "pr": 883,
                 "remote_branch": "staging/beta1/conv-registry-integration-proof",
+                "head_sha": fixture["facts"][4]["head_sha"],
+                "pushed_sha": fixture["facts"][4]["head_sha"],
             },
         )
         index = store.read_receipt_index()
@@ -439,6 +451,55 @@ class FleetControllerTests(unittest.TestCase):
                 self.assertEqual(
                     reconciled["merge_sha"], fixture["facts"][number]["merge_sha"]
                 )
+
+    def test_repair_merge_receipts_uses_pull_ref_after_branch_deletion_and_repairs_heads(self) -> None:
+        fixture = repair_fixture(self.root)
+        snapshot = fixture["store"].read_snapshot()
+        snapshot["target_sha"] = fixture["initial_target"]
+        for number, facts in fixture["facts"].items():
+            git(
+                fixture["remote"],
+                "update-ref",
+                "-d",
+                f"refs/heads/{facts['remote_branch']}",
+            )
+            snapshot["tasks"][str(number)]["head_sha"] = None
+            snapshot["tasks"][str(number)]["pushed_sha"] = (
+                None if number % 2 else "f" * 40
+            )
+        fixture["store"].write_snapshot(snapshot)
+        fixture["manifest"]["old_target_sha"] = fixture["initial_target"]
+        fixture["manifest"]["before"]["fleet_state_sha256"] = fleet.sha256_file(
+            fixture["store"].snapshot_path
+        )
+        manifest_sha256 = write_repair_manifest(
+            fixture["manifest_path"], fixture["manifest"]
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+                "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+            },
+            clear=False,
+        ):
+            fleet.repair_merge_receipts(
+                fixture["store"],
+                fixture["repository"],
+                fixture["manifest_path"],
+                manifest_sha256,
+            )
+
+        repaired = fixture["store"].read_snapshot()
+        self.assertEqual(repaired["target_sha"], fixture["manifest"]["target_sha"])
+        for number, facts in fixture["facts"].items():
+            self.assertEqual(
+                repaired["tasks"][str(number)]["head_sha"], facts["head_sha"]
+            )
+            self.assertEqual(
+                repaired["tasks"][str(number)]["pushed_sha"], facts["head_sha"]
+            )
 
     def test_repair_merge_receipts_replay_is_exactly_idempotent(self) -> None:
         fixture = repair_fixture(self.root)
@@ -974,9 +1035,12 @@ class FleetControllerTests(unittest.TestCase):
             "pr",
             "head",
             "head-oid",
+            "remote-head",
             "base",
             "merge",
             "parent",
+            "old-target",
+            "target",
             "old-parent",
             "cross-task-pr",
             "cross-task-branch",
@@ -992,13 +1056,13 @@ class FleetControllerTests(unittest.TestCase):
                 elif case == "head":
                     pull_requests[pr]["headRefName"] = "staging/beta1/wrong-head"
                 elif case == "head-oid":
-                    snapshot = fixture["store"].read_snapshot()
-                    snapshot["tasks"]["4"]["head_sha"] = fixture["facts"][3][
-                        "head_sha"
-                    ]
-                    fixture["store"].write_snapshot(snapshot)
-                    manifest["before"]["fleet_state_sha256"] = fleet.sha256_file(
-                        fixture["store"].snapshot_path
+                    second["head_sha"] = fixture["facts"][3]["head_sha"]
+                elif case == "remote-head":
+                    git(
+                        fixture["remote"],
+                        "update-ref",
+                        f"refs/heads/{second['remote_branch']}",
+                        fixture["facts"][3]["head_sha"],
                     )
                 elif case == "base":
                     pull_requests[pr]["baseRefOid"] = fixture["facts"][3][
@@ -1011,6 +1075,10 @@ class FleetControllerTests(unittest.TestCase):
                 elif case == "parent":
                     second["github_base_sha"] = fixture["facts"][4]["head_sha"]
                     pull_requests[pr]["baseRefOid"] = second["github_base_sha"]
+                elif case == "old-target":
+                    manifest["old_target_sha"] = "e" * 40
+                elif case == "target":
+                    manifest["target_sha"] = fixture["initial_target"]
                 else:
                     if case == "old-parent":
                         second["old_expected_merge_parent"] = "e" * 40

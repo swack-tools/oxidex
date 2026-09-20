@@ -1141,7 +1141,14 @@ def _load_repair_manifest(path: Path, supplied_hash: str) -> tuple[Path, dict[st
         raise Refused("repair manifest is not valid JSON") from exc
     if not isinstance(value, Mapping):
         raise Refused("repair manifest must be an object")
-    if set(value) != {"schema_version", "transaction", "before", "tasks"}:
+    if set(value) != {
+        "schema_version",
+        "transaction",
+        "before",
+        "old_target_sha",
+        "target_sha",
+        "tasks",
+    }:
         raise Refused("repair manifest has missing or unsupported top-level fields")
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
         raise Refused("repair manifest schema_version must be 1")
@@ -1159,6 +1166,11 @@ def _load_repair_manifest(path: Path, supplied_hash: str) -> tuple[Path, dict[st
         if not isinstance(before[field], str):
             raise Refused(f"before.{field} must be a string")
         require_hash(before[field], f"before.{field}")
+    for field in ("old_target_sha", "target_sha"):
+        if not isinstance(value[field], str):
+            raise Refused(f"repair manifest {field} must be a string")
+    old_target_sha = require_sha(value["old_target_sha"], "old target SHA")
+    target_sha = require_sha(value["target_sha"], "target SHA")
     entries = value["tasks"]
     if not isinstance(entries, list) or not entries:
         raise Refused("repair manifest tasks must be a non-empty array")
@@ -1168,6 +1180,7 @@ def _load_repair_manifest(path: Path, supplied_hash: str) -> tuple[Path, dict[st
         "pr",
         "remote_branch",
         "github_base_sha",
+        "head_sha",
         "merge_sha",
     }
     seen_tasks: set[int] = set()
@@ -1188,6 +1201,7 @@ def _load_repair_manifest(path: Path, supplied_hash: str) -> tuple[Path, dict[st
         for field in (
             "old_expected_merge_parent",
             "github_base_sha",
+            "head_sha",
             "merge_sha",
         ):
             if not isinstance(raw[field], str):
@@ -1198,6 +1212,7 @@ def _load_repair_manifest(path: Path, supplied_hash: str) -> tuple[Path, dict[st
         entry["github_base_sha"] = require_sha(
             raw["github_base_sha"], "GitHub base SHA"
         )
+        entry["head_sha"] = require_sha(raw["head_sha"], "head SHA")
         entry["merge_sha"] = require_sha(raw["merge_sha"], "merge SHA")
         if number in seen_tasks or pr in seen_prs or branch in seen_branches:
             raise Refused("repair manifest task, PR, and remote branch bindings must be unique")
@@ -1209,6 +1224,8 @@ def _load_repair_manifest(path: Path, supplied_hash: str) -> tuple[Path, dict[st
         "schema_version": 1,
         "transaction": "repair-merge-receipts",
         "before": dict(before),
+        "old_target_sha": old_target_sha,
+        "target_sha": target_sha,
         "tasks": normalized_entries,
     }
 
@@ -1274,6 +1291,8 @@ def _verify_repair_replay(
         "manifest_sha256"
     ) != manifest_hash:
         raise Refused("existing repair receipt does not match this durable manifest")
+    if state.get("target_sha") != receipt.get("target_sha"):
+        raise Refused("existing repair receipt target does not match controller state")
     changes = receipt.get("tasks")
     if not isinstance(changes, Mapping) or not changes:
         raise Refused("existing repair receipt has no authenticated task bindings")
@@ -1288,6 +1307,8 @@ def _verify_repair_replay(
             task.get("expected_merge_parent") != new.get("expected_merge_parent")
             or task.get("remote_branch") != new.get("remote_branch")
             or _recorded_pr(task) != new.get("pr")
+            or task.get("head_sha") != new.get("head_sha")
+            or task.get("pushed_sha") != new.get("pushed_sha")
             or (
                 task.get("merge_sha") is not None
                 and task.get("merge_sha") != raw_change.get("merge_sha")
@@ -1320,6 +1341,7 @@ def _authenticate_repair_entry(
     store: StateStore,
     state: Mapping[str, Any],
     entry: Mapping[str, Any],
+    target_sha: str,
 ) -> dict[str, Any]:
     number = int(entry["task"])
     task = _task(store, dict(state), number)
@@ -1354,30 +1376,37 @@ def _authenticate_repair_entry(
     if _ci_state(github.get("statusCheckRollup")) != "success":
         raise Blocked(f"Task {number} GitHub required checks are not successful")
     head_sha = require_sha(str(github.get("headRefOid", "")), "GitHub head SHA")
-    durable_head = task.get("head_sha")
-    if not isinstance(durable_head, str) or require_sha(
-        durable_head, f"Task {number} durable head SHA"
-    ) != head_sha:
-        raise Blocked(f"Task {number} GitHub head SHA does not match durable head")
-    durable_pushed = task.get("pushed_sha")
-    if durable_pushed is not None and (
-        not isinstance(durable_pushed, str)
-        or require_sha(durable_pushed, f"Task {number} durable pushed SHA")
-        != head_sha
-    ):
-        raise Blocked(f"Task {number} GitHub head SHA does not match durable pushed head")
-    remote_head = _git(
-        repository, "ls-remote", "--heads", "origin", f"refs/heads/{branch}"
+    if head_sha != entry["head_sha"]:
+        raise Blocked(f"Task {number} GitHub head SHA identity mismatch")
+    for field in ("head_sha", "pushed_sha"):
+        durable = task.get(field)
+        if durable is not None:
+            if not isinstance(durable, str):
+                raise Refused(f"Task {number} durable {field} must be a SHA or null")
+            require_sha(durable, f"Task {number} durable {field}")
+    head_ref = f"refs/heads/{branch}"
+    pull_ref = f"refs/pull/{pr}/head"
+    remote_lines = _git(
+        repository, "ls-remote", "origin", head_ref, pull_ref
     ).splitlines()
-    if len(remote_head) != 1 or remote_head[0].split() != [
-        head_sha,
-        f"refs/heads/{branch}",
-    ]:
-        raise Blocked(f"Task {number} retained remote head branch identity mismatch")
+    remote_refs = {
+        fields[1]: require_sha(fields[0], f"Task {number} remote head SHA")
+        for line in remote_lines
+        if len(fields := line.split()) == 2
+    }
+    witnesses = {
+        ref: remote_refs[ref]
+        for ref in (head_ref, pull_ref)
+        if ref in remote_refs
+    }
+    if not witnesses or any(observed != head_sha for observed in witnesses.values()):
+        raise Blocked(
+            f"Task {number} remote branch/pull head identity mismatch"
+        )
     for name, commit in (
         ("GitHub base", base_sha),
         ("merge", merge_sha),
-        ("controller target", str(state["target_sha"])),
+        ("controller target", target_sha),
     ):
         try:
             _git(repository, "cat-file", "-e", f"{commit}^{{commit}}")
@@ -1392,7 +1421,7 @@ def _authenticate_repair_entry(
             "merge-base",
             "--is-ancestor",
             merge_sha,
-            str(state["target_sha"]),
+            target_sha,
         )
     except Blocked as exc:
         raise Blocked(
@@ -1402,13 +1431,49 @@ def _authenticate_repair_entry(
         "expected_merge_parent": task.get("expected_merge_parent"),
         "pr": _recorded_pr(task),
         "remote_branch": task.get("remote_branch"),
+        "head_sha": task.get("head_sha"),
+        "pushed_sha": task.get("pushed_sha"),
     }
     new = {
         "expected_merge_parent": base_sha,
         "pr": pr,
         "remote_branch": branch,
+        "head_sha": head_sha,
+        "pushed_sha": head_sha,
     }
     return {"old": old, "new": new, "merge_sha": merge_sha}
+
+
+def _authenticate_repair_target(
+    repository: Path,
+    state: Mapping[str, Any],
+    transaction: Mapping[str, Any],
+) -> str:
+    old_target_sha = str(transaction["old_target_sha"])
+    if state.get("target_sha") != old_target_sha:
+        raise Refused("repair old target SHA does not match controller state")
+    target_ref = str(state["target_ref"])
+    target_name = target_ref.removeprefix("origin/")
+    if target_name == target_ref or not target_name:
+        raise Refused("controller target_ref must name an origin branch")
+    target_sha = str(transaction["target_sha"])
+    remote = _git(
+        repository,
+        "ls-remote",
+        "--heads",
+        "origin",
+        f"refs/heads/{target_name}",
+    ).splitlines()
+    if len(remote) != 1 or remote[0].split() != [
+        target_sha,
+        f"refs/heads/{target_name}",
+    ]:
+        raise Blocked("repair target SHA does not match the remote integration ref")
+    try:
+        _git(repository, "cat-file", "-e", f"{target_sha}^{{commit}}")
+    except Blocked as exc:
+        raise Blocked("repair target commit is unavailable locally") from exc
+    return target_sha
 
 
 def repair_transaction_path(store: StateStore, manifest_hash: str) -> Path:
@@ -1428,6 +1493,7 @@ def _apply_repair_changes(
     store: StateStore,
     state: dict[str, Any],
     changes: Mapping[str, Any],
+    target_sha: str,
 ) -> None:
     for key, raw_change in changes.items():
         if not isinstance(raw_change, Mapping):
@@ -1441,12 +1507,17 @@ def _apply_repair_changes(
             "expected_merge_parent": task.get("expected_merge_parent"),
             "pr": _recorded_pr(task),
             "remote_branch": task.get("remote_branch"),
+            "head_sha": task.get("head_sha"),
+            "pushed_sha": task.get("pushed_sha"),
         }
         if current != old:
             raise Refused(f"Task {key} no longer matches repair journal before binding")
         task["expected_merge_parent"] = new["expected_merge_parent"]
         task["remote_branch"] = new["remote_branch"]
+        task["head_sha"] = new["head_sha"]
+        task["pushed_sha"] = new["pushed_sha"]
         task["pr_ci_state"] = {"pr": new["pr"]}
+    state["target_sha"] = target_sha
     validate_state(state)
 
 
@@ -1465,6 +1536,7 @@ def _validate_repair_journal(
         "after",
         "events_before_size",
         "outputs",
+        "target_sha",
         "tasks",
         "event",
         "receipt",
@@ -1482,6 +1554,8 @@ def _validate_repair_journal(
         raise Refused("merge-receipt repair journal manifest identity mismatch")
     if journal.get("before") != transaction["before"]:
         raise Refused("merge-receipt repair journal before hashes mismatch")
+    if journal.get("target_sha") != transaction["target_sha"]:
+        raise Refused("merge-receipt repair journal target SHA mismatch")
     after = journal.get("after")
     after_fields = {
         "fleet_state_sha256",
@@ -1518,8 +1592,13 @@ def _validate_repair_journal(
             "expected_merge_parent": entry["github_base_sha"],
             "pr": entry["pr"],
             "remote_branch": entry["remote_branch"],
+            "head_sha": entry["head_sha"],
+            "pushed_sha": entry["head_sha"],
         } or change.get("merge_sha") != entry["merge_sha"]:
             raise Refused("repair journal new binding mismatches manifest")
+        if new.get("head_sha") != new.get("pushed_sha"):
+            raise Refused("repair journal authenticated head bindings mismatch")
+        require_sha(str(new.get("head_sha", "")), "repair journal head SHA")
     event = journal.get("event")
     receipt = journal.get("receipt")
     if not isinstance(event, Mapping) or not isinstance(receipt, Mapping):
@@ -1531,6 +1610,7 @@ def _validate_repair_journal(
         or event.get("manifest") != str(manifest_path)
         or event.get("manifest_sha256") != manifest_hash
         or event.get("before") != transaction["before"]
+        or event.get("target_sha") != transaction["target_sha"]
         or event.get("tasks") != changes
     ):
         raise Refused("repair journal append-only event is malformed")
@@ -1539,6 +1619,7 @@ def _validate_repair_journal(
         "manifest_sha256": manifest_hash,
         "event_sequence": event["sequence"],
         "timestamp": event["timestamp"],
+        "target_sha": transaction["target_sha"],
         "tasks": changes,
     }
     if receipt != expected_receipt:
@@ -1554,6 +1635,8 @@ def _validate_repair_journal(
     if not isinstance(snapshot, Mapping) or not isinstance(receipt_index, Mapping):
         raise Refused("repair journal exact outputs must be objects")
     validate_state(snapshot)
+    if snapshot.get("target_sha") != transaction["target_sha"]:
+        raise Refused("repair journal planned snapshot target mismatch")
     if _bytes_hash(_json_document_bytes(snapshot)) != after["fleet_state_sha256"]:
         raise Refused("repair journal planned snapshot hash mismatch")
     for key, change in changes.items():
@@ -1565,6 +1648,8 @@ def _validate_repair_journal(
             task.get("expected_merge_parent") != new["expected_merge_parent"]
             or task.get("remote_branch") != new["remote_branch"]
             or _recorded_pr(task) != new["pr"]
+            or task.get("head_sha") != new["head_sha"]
+            or task.get("pushed_sha") != new["pushed_sha"]
         ):
             raise Refused("repair journal planned snapshot identity mismatch")
     if _bytes_hash(_json_document_bytes(receipt_index)) != after[
@@ -1593,7 +1678,9 @@ def _validate_repair_replay(
     if state_hash == before["fleet_state_sha256"]:
         state = store.read_snapshot()
         planned_state = json.loads(json.dumps(state))
-        _apply_repair_changes(store, planned_state, journal["tasks"])
+        _apply_repair_changes(
+            store, planned_state, journal["tasks"], journal["target_sha"]
+        )
         if planned_state != snapshot_output:
             raise Refused("repair planned snapshot identity mismatch")
         write_snapshot = True
@@ -1692,8 +1779,9 @@ def _prepare_repair_journal(
     manifest_path: Path,
     manifest_hash: str,
     changes: Mapping[str, Any],
+    target_sha: str,
 ) -> dict[str, Any]:
-    _apply_repair_changes(store, state, changes)
+    _apply_repair_changes(store, state, changes, target_sha)
     state_after_hash = _bytes_hash(_json_document_bytes(state))
     events_before = store.events_path.read_bytes()
     if events_before and not events_before.endswith(b"\n"):
@@ -1706,6 +1794,7 @@ def _prepare_repair_journal(
         "manifest": str(manifest_path),
         "manifest_sha256": manifest_hash,
         "before": transaction["before"],
+        "target_sha": target_sha,
         "tasks": changes,
     }
     events_after = events_before + (json.dumps(event, sort_keys=True) + "\n").encode(
@@ -1716,6 +1805,7 @@ def _prepare_repair_journal(
         "manifest_sha256": manifest_hash,
         "event_sequence": event["sequence"],
         "timestamp": event["timestamp"],
+        "target_sha": target_sha,
         "tasks": changes,
     }
     repairs = index.get("merge_receipt_repairs", {})
@@ -1731,6 +1821,7 @@ def _prepare_repair_journal(
         "manifest": str(manifest_path),
         "manifest_sha256": manifest_hash,
         "before": transaction["before"],
+        "target_sha": target_sha,
         "events_before_size": len(events_before),
         "outputs": {
             "snapshot": state,
@@ -1807,11 +1898,12 @@ def repair_merge_receipts(
                 )
 
         _validate_repair_binding_uniqueness(state, transaction["tasks"])
+        target_sha = _authenticate_repair_target(repository, state, transaction)
         changes: dict[str, Any] = {}
         for entry in transaction["tasks"]:
             number = int(entry["task"])
             changes[str(number)] = _authenticate_repair_entry(
-                repository, store, state, entry
+                repository, store, state, entry, target_sha
             )
         journal = _prepare_repair_journal(
             store,
@@ -1821,6 +1913,7 @@ def repair_merge_receipts(
             manifest_path,
             manifest_sha256,
             changes,
+            target_sha,
         )
         atomic_json(journal_path, journal)
         return _resume_repair_transaction(store, journal_path, journal)
