@@ -213,13 +213,14 @@ need their own measured refresh and refusal record.
 Start from a clean owned branch, including ordinary untracked files. The command
 captures that commit, source contents and index before creating two private
 clones in a unique external report directory. It does not register Git worktrees.
-BEFORE and AFTER always regenerate every selected tier from their respective
-copied ExifTool sources; an ordinary run selects the current pin for BEFORE,
-while `--from` selects an older release for a retrospective dry run. Both
-variants use the selected capable Perl, fresh dumps, separate oracle/build
-targets and the fresh executable reported by Cargo. Corpus A/B uses one
-target-version oracle and the same inputs. Dry runs may grade releases whose
-split-module inventories differ; live promotion refuses such a path-set change
+When the ordinary BEFORE version equals the pinned release, BEFORE consumes the
+committed generated state. Retrospective (`--from`) or otherwise regenerated
+BEFORE evidence reruns every selected tier from its copied ExifTool source.
+AFTER always regenerates every selected tier from the candidate and records its
+source/dump provenance. Both variants use the selected capable Perl, fresh
+dumps, separate oracle/build targets and the fresh executable reported by
+Cargo. Corpus A/B uses one target-version oracle and the same inputs. Dry runs
+may grade releases whose split-module inventories differ; live promotion refuses such a path-set change
 until the recovery journal can represent file additions and removals.
 
 ```sh
