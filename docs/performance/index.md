@@ -1,24 +1,25 @@
 # Performance
 
-OxiDex is a compiled Rust binary. Measured against the pinned Perl ExifTool
-13.59 on the same machine, it is about **3x faster on a single file** and
-**1.8x faster per core** on a real 194-file corpus. The parallel reader
-(rayon) adds more on multi-core machines. Those are the only speed claims
-this site makes. Every number on this page names the instrument, commit,
-ExifTool build and machine it came from.
+::: warning Historical benchmarks, not beta.1 evidence
+Every numeric result on this page is historical context. The committed CLI
+measurement is from commit `8f04e288` (OxiDex 1.2.1), and the cited CI run is
+also historical. Neither is v2.0.0-beta.1 performance evidence. An
+exact-candidate-SHA benchmark receipt is still pending; this page makes no
+beta.1 speed claim.
+:::
 
 ::: tip Two kinds of numbers, never mixed
-- **Committed numbers** come from a local run on the maintainer's
-  workstation, under the repository's exclusive heavy-job lock.
-  They are in `benches/benchmark_results.md` and in the first table below.
-- **CI numbers** come from `.github/workflows/benchmarks.yml` on a shared
-  GitHub-hosted runner. They are *indicative* and are never committed.
+- **Historical committed numbers** came from a local run on the maintainer's
+  workstation, under the repository's exclusive heavy-job lock. They are in
+  `benches/benchmark_results.md` and in the first table below.
+- **Historical CI numbers** came from `.github/workflows/benchmarks.yml` on a
+  shared GitHub-hosted runner. They are *indicative* and were never committed.
 
 Different hardware, core count and background load separate the two kinds.
 Compare a CI number only with other runs of the same workflow.
 :::
 
-## Committed measurement (#821)
+## Historical committed measurement (#821, not beta.1 evidence)
 
 | Item | Detail |
 | --- | --- |
@@ -55,7 +56,7 @@ measured the whole generated table engine at 0.66% of a corpus read, and
 found the dominant costs were per-process initialisation and Composite
 allocation, not tag dispatch.
 
-## Indicative CI measurement (#825)
+## Historical indicative CI measurement (#825, not beta.1 evidence)
 
 `.github/workflows/benchmarks.yml` runs the same script on every push to
 `refactor/tag-machinery`. It uses the shipped release profile, the pinned
@@ -80,7 +81,8 @@ The in-process Criterion suites (`parse_benchmarks`, `integration_benchmarks`)
 run in `ci.yml`'s `metrics` job **only on pushes to `main`**. That job uses
 a CI-only profile (`lto=false`, 16 codegen units) that no release ships, so
 its absolute times are not comparable with the tables above.
-`deploy-docs.yml` publishes the latest reports with the site:
+`deploy-docs.yml` can publish reports with the site, but a deployed report is
+not beta.1 evidence unless it is tied to the exact candidate SHA and receipt:
 
 <div class="benchmark-links">
 
