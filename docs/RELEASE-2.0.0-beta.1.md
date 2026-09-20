@@ -24,8 +24,9 @@ recollection.
       `Unreleased` with the release date.
 - [x] **Migration guide present.** `docs/guide/migrating-from-1x.md` (from
       #839).
-- [ ] **crates.io decision recorded.** One of options (a), (b) or (c) under
-      "crates.io" below is chosen, and the install instructions match it.
+- [x] **crates.io decision recorded.** Option (c) is selected for this beta:
+      no crates.io package is published, and the install instructions match
+      that policy.
 - [ ] **Tag SHA chosen and frozen.** After the reviewed promotion PR is merged,
       record it from the protected release branch: `SHA=$(git rev-parse origin/main)`
       after the last merge you intend to ship. Every box below is about
@@ -160,15 +161,15 @@ The name is the maintainer's decision. The options:
       crates.io badge in `README.md`; and the snippet in the
       `src/parsers/magika_detector.rs` docs. The tag crates keep their
       names.
-- [ ] **(c) No crates.io for the beta.** Ship the GitHub pre-release
+- [x] **(c) No crates.io for the beta.** Ship the GitHub pre-release
       binaries only. Rust users take a git dependency on the signed tag:
       `oxidex = { git = "https://github.com/swack-tools/oxidex", tag = "v2.0.0-beta.1" }`.
       This needs nothing else from this PR, and it is what happens by
       default if no box above is ticked.
 
-The docs already tell users not to run `cargo install oxidex` and to depend
-on Git, which matches (c). One leftover: the `README.md` crates.io badge
-points at `crates.io/crates/oxidex`, which is the other account's stub.
+The docs tell users not to run `cargo install oxidex` and to depend on Git,
+which matches the selected policy. The README no longer advertises a crates.io
+package or docs.rs API page for this beta.
 
 If the tag crates are published (under (a) or (b)), do it by hand. Cargo
 orders the crates by dependency, and `publish = false` keeps the root crate
@@ -185,8 +186,10 @@ A published pre-release is only selected by a requirement that names a
 pre-release (`=2.0.0-beta.1` or `^2.0.0-beta.1`). `^2` will not pick it,
 and that is intended.
 
-**Homebrew.** `packaging/homebrew/oxidex.rb` is a template that doesn't
-track releases. A tag doesn't change it.
+**Homebrew.** Homebrew is disabled for this beta. There is no active formula;
+the placeholder is retained as `packaging/homebrew/oxidex.rb.disabled` and
+must remain quarantined until a real release asset, checksum, tests, workflow,
+and approved policy exist. A tag does not enable it.
 
 ## Versions
 

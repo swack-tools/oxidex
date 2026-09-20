@@ -1,517 +1,129 @@
-# Packaging Guide for OxiDex
+# Packaging and distribution
 
-This document provides comprehensive instructions for creating and distributing packages for OxiDex across multiple platforms.
+This page describes the current OxiDex packaging policy and the optional
+local package helpers. It is intentionally explicit about what the
+`2.0.0-beta.1` release does and does not publish.
 
-## Table of Contents
+## Beta distribution policy
 
-1. [Prerequisites](#prerequisites)
-2. [Package Types](#package-types)
-3. [Building Packages](#building-packages)
-4. [Testing Packages](#testing-packages)
-5. [Publishing Releases](#publishing-releases)
-6. [Troubleshooting](#troubleshooting)
+The current beta release automation publishes signed GitHub release assets
+only: platform binaries, the macOS DMG, checksums, and independent release
+provenance. Debian/RPM, Homebrew, and crates.io packages are not published
+by the current beta release automation. Do not upload a locally generated package to a beta release or
+describe it as an official distribution channel.
 
-## Prerequisites
+The supported beta installation path is the signed asset on the
+[GitHub Releases page](https://github.com/swack-tools/oxidex/releases). Rust
+users who need the library can use the signed Git tag as a Git dependency or
+build from a checkout. The root crate remains intentionally unpublished.
 
-### Build Tools
+## Optional local experiments
 
-Install the required Rust packaging tools:
+The repository retains Cargo metadata for `cargo-deb` and
+`cargo-generate-rpm`. These tools are useful for developers who want to
+inspect a local package, but they are not part of the release workflow and
+their output is not a published OxiDex beta artifact.
+
+The helper scripts derive the product version from the root Cargo package:
 
 ```bash
-# For Debian packages
-cargo install cargo-deb
-
-# For RPM packages
-cargo install cargo-generate-rpm
+./scripts/build-all-packages.sh
+./scripts/test-packages.sh all
 ```
 
-### System Dependencies
+The package helpers may be run only on a host with the relevant tool installed
+(`cargo-deb`, `cargo-generate-rpm`, `dpkg-deb`, or `rpm`). Installation tests
+may require elevated privileges. The `brew` test is a documented no-op for
+this beta because there is no active formula.
 
-**For Debian packaging (Ubuntu/Debian):**
-```bash
-sudo apt-get install dpkg-dev
-```
+### Debian package (local only)
 
-**For RPM packaging (Fedora/RHEL):**
-```bash
-sudo dnf install rpm-build
-# or on RHEL/CentOS
-sudo yum install rpm-build
-```
-
-**For Homebrew (macOS):**
-```bash
-# Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-## Package Types
-
-OxiDex supports three primary package distribution formats:
-
-| Package Type | Platform | Tool | Output |
-|--------------|----------|------|--------|
-| **Debian (.deb)** | Ubuntu, Debian, Linux Mint | `cargo-deb` | `target/debian/oxidex_VERSION_amd64.deb` |
-| **RPM (.rpm)** | Fedora, RHEL, CentOS, openSUSE | `cargo-generate-rpm` | `target/generate-rpm/oxidex-VERSION-1.x86_64.rpm` |
-| **Homebrew (.rb)** | macOS | Homebrew formula | Source or binary installation |
-
-## Building Packages
-
-### 1. Debian Package (.deb)
-
-The Debian package configuration is defined in `Cargo.toml` under `[package.metadata.deb]`.
-
-#### Configuration
-
-Key settings:
-- **Binary location**: `/usr/bin/oxidex`
-- **Documentation**: `/usr/share/doc/oxidex/`
-- **Section**: `utils`
-- **Priority**: `optional`
-
-#### Build Process
+Install `cargo-deb`, then build and inspect a package from the checkout:
 
 ```bash
-# Step 1: Build the release binary (optional - cargo-deb does this)
 cargo build --release
-
-# Step 2: Generate the Debian package
 cargo deb
-
-# Output location
 ls -lh target/debian/oxidex_*.deb
+dpkg-deb --info target/debian/oxidex_*.deb
 ```
 
-#### Architecture-Specific Builds
-
-For cross-compilation:
-
-```bash
-# ARM64/aarch64
-cargo deb --target aarch64-unknown-linux-gnu
-
-# x86_64 (default)
-cargo deb --target x86_64-unknown-linux-gnu
-```
-
-#### Package Contents
-
-The `.deb` package includes:
-- Statically linked binary: `/usr/bin/oxidex`
-- Documentation: `/usr/share/doc/oxidex/README.md`
-- License: `/usr/share/doc/oxidex/LICENSE`
-
-#### Manual Installation
+For a local installation test, use the exact filename produced by the tool;
+do not copy a version from an old example:
 
 ```bash
-# Install
-sudo dpkg -i target/debian/oxidex_0.1.0_amd64.deb
-
-# Verify
+sudo dpkg -i target/debian/oxidex_<VERSION>_amd64.deb
 oxidex --version
-
-# Uninstall
 sudo dpkg -r oxidex
 ```
 
-### 2. RPM Package (.rpm)
+### RPM package (local only)
 
-The RPM package configuration is defined in `Cargo.toml` under `[package.metadata.generate-rpm]`.
-
-#### Configuration
-
-Key settings:
-- **Binary location**: `/usr/bin/oxidex`
-- **Documentation**: `/usr/share/doc/oxidex/`
-- **License**: GPL-3.0 (inherited from `[package]` section)
-- **Release number**: 1 (first build of this version)
-
-#### Build Process
+Install `cargo-generate-rpm`, build the release binary first, and inspect the
+result:
 
 ```bash
-# Step 1: Build the release binary (REQUIRED - must be done first)
 cargo build --release
-
-# Step 2: Generate the RPM package
 cargo generate-rpm
-
-# Output location
 ls -lh target/generate-rpm/oxidex-*.rpm
+rpm -qip target/generate-rpm/oxidex-*.rpm
 ```
 
-**Important**: Unlike `cargo-deb`, `cargo-generate-rpm` does NOT build the binary automatically. You MUST run `cargo build --release` first.
-
-#### Package Contents
-
-The `.rpm` package includes:
-- Statically linked binary: `/usr/bin/oxidex`
-- Documentation: `/usr/share/doc/oxidex/README.md`
-- License: `/usr/share/doc/oxidex/LICENSE`
-
-#### Manual Installation
+For a local installation test, use the exact filename produced by the tool:
 
 ```bash
-# Install (Fedora/RHEL 8+)
-sudo dnf install target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
-
-# Install (older RHEL/CentOS)
-sudo yum install target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
-
-# Install (using rpm directly)
-sudo rpm -i target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
-
-# Verify
+sudo dnf install target/generate-rpm/oxidex-<VERSION>-1.x86_64.rpm
 oxidex --version
-
-# Uninstall
-sudo rpm -e oxidex
+sudo dnf remove oxidex
 ```
 
-### 3. Homebrew Formula (macOS)
+The local package output must not be uploaded to the GitHub beta release. The
+release workflow's own checksums and provenance cover only the assets it
+builds and uploads.
 
-::: danger The formula is an unpublished template
-`packaging/homebrew/oxidex.rb` still points at `github.com/oxidex/oxidex`
-at tag `v0.1.0`, and its `sha256` is the placeholder
-`UPDATE_THIS_SHA256_AFTER_RELEASE`. It is not a working install path.
-Update the URL, tag and checksum before using or publishing it.
-:::
+## Homebrew
 
-The Homebrew formula is located at `packaging/homebrew/oxidex.rb`.
+Homebrew is **not enabled for the beta**. There is no active formula, tap, or
+bottle, and there is no release URL or checksum to copy into one. The
+quarantined placeholder and the policy for any future formula are documented
+in `packaging/homebrew/README.md`.
 
-#### Configuration
-
-The formula is a Ruby DSL file containing:
-- **URL**: Points to GitHub release tarball
-- **SHA256**: Checksum of the tarball (MUST be updated after each release)
-- **Dependencies**: `rust` (build-time only)
-- **Install method**: Builds from source using `cargo install`
-
-#### Updating the SHA256
-
-After creating a GitHub release:
+For a macOS developer build, use Cargo directly:
 
 ```bash
-# Calculate SHA256 of the release tarball
-curl -sL https://github.com/swack-tools/oxidex/archive/refs/tags/v1.2.1.tar.gz | shasum -a 256
-
-# Update the sha256 field in packaging/homebrew/oxidex.rb
+cargo build --release
+./target/release/oxidex --version
 ```
 
-#### Testing the Formula
+When Homebrew support is approved, it must be introduced together with a
+published asset, a real checksum, formula tests, workflow coverage, and an
+updated policy page. Until then, do not run or publish a formula from this
+repository.
+
+## Verifying local packages
+
+The scripts are local validation helpers, not release publication commands:
 
 ```bash
-# Test local installation
-brew install --build-from-source ./packaging/homebrew/oxidex.rb
-
-# Verify
-oxidex --version
-
-# Test formula syntax
-brew audit --strict ./packaging/homebrew/oxidex.rb
-
-# Uninstall
-brew uninstall oxidex
-```
-
-#### Publishing to Homebrew
-
-To make the formula available via official Homebrew:
-
-1. Fork [homebrew/homebrew-core](https://github.com/Homebrew/homebrew-core)
-2. Add `Formula/oxidex.rb` to your fork
-3. Submit a Pull Request following [Homebrew's guidelines](https://docs.brew.sh/How-To-Open-a-Homebrew-Pull-Request)
-
-Requirements for homebrew-core:
-- Project must be stable and actively maintained
-- Must have at least 75 stars or 30 forks on GitHub
-- Must be version 1.0.0 or later (semantic versioning)
-- Formula must pass `brew audit --strict`
-
-#### Binary Bottles (Future Enhancement)
-
-For faster installation, Homebrew supports pre-compiled "bottles":
-
-```ruby
-bottle do
-  sha256 cellar: :any_skip_relocation, arm64_sonoma: "abc123..."
-  sha256 cellar: :any_skip_relocation, arm64_ventura: "def456..."
-  sha256 cellar: :any_skip_relocation, sonoma: "ghi789..."
-  sha256 cellar: :any_skip_relocation, ventura: "jkl012..."
-end
-```
-
-Bottles are generated automatically by Homebrew's CI after the formula is accepted into homebrew-core.
-
-## Testing Packages
-
-### Automated Testing
-
-Use the provided test script to validate all package types:
-
-```bash
-# Test all packages
-./scripts/test-packages.sh all
-
-# Test specific package type
 ./scripts/test-packages.sh deb
 ./scripts/test-packages.sh rpm
-./scripts/test-packages.sh brew
+./scripts/test-packages.sh brew  # reports the beta policy and does no install
 ```
 
-The script performs:
-1. Package existence verification
-2. Package inspection (contents, metadata)
-3. Installation test (requires sudo)
-4. Binary execution test (`--version`)
-5. Uninstallation test
-6. Cleanup verification
+Each installed local package should report the same version as the checkout:
 
-### Manual Testing Checklist
-
-For each package type, verify:
-
-- [ ] Package file exists and is non-zero size
-- [ ] Package installs without errors
-- [ ] Binary is executable and in PATH
-- [ ] `oxidex --version` outputs correct version
-- [ ] `oxidex --help` displays help text
-- [ ] Package uninstalls cleanly
-- [ ] No files left behind after uninstall
-
-### Platform-Specific Testing
-
-**Debian/Ubuntu:**
 ```bash
-# Inspect package
-dpkg-deb --info target/debian/oxidex_0.1.0_amd64.deb
-dpkg-deb --contents target/debian/oxidex_0.1.0_amd64.deb
-
-# Test installation
-sudo dpkg -i target/debian/oxidex_0.1.0_amd64.deb
-which oxidex
+cargo metadata --no-deps --format-version 1 \
+  | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "oxidex"))'
 oxidex --version
 ```
 
-**Fedora/RHEL:**
-```bash
-# Inspect package
-rpm -qip target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
-rpm -qlp target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
+## Future distribution work
 
-# Test installation
-sudo dnf install target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
-which oxidex
-oxidex --version
-```
+Crates.io, Debian/RPM repositories, and Homebrew may be considered for a
+future release. Each requires a separate maintainer decision, publication
+workflow, signing/checksum policy, and factual documentation update. Do not
+pre-populate those surfaces with guessed URLs, tags, checksums, or artifacts.
 
-**macOS:**
-```bash
-# Audit formula
-brew audit --strict ./packaging/homebrew/oxidex.rb
-
-# Test installation (builds from source)
-brew install --build-from-source --verbose ./packaging/homebrew/oxidex.rb
-which oxidex
-oxidex --version
-```
-
-## Publishing Releases
-
-### 1. Pre-Release Checklist
-
-Before creating packages for distribution:
-
-- [ ] Update version in `Cargo.toml` (if needed)
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Run `cargo build --release` - successful build
-- [ ] Update CHANGELOG.md with release notes
-- [ ] Commit all changes
-
-### 2. Create Git Tag
-
-```bash
-# Create annotated tag
-git tag -a v0.1.0 -m "Release version 0.1.0"
-
-# Push tag to GitHub
-git push origin v0.1.0
-```
-
-### 3. GitHub Actions Workflow
-
-The `.github/workflows/release.yml` workflow automatically:
-- Builds binaries for all platforms (Linux, macOS, Windows, ARM)
-- Creates GitHub Release
-- Uploads binary archives with checksums
-
-Wait for the workflow to complete before generating packages.
-
-### 4. Generate Packages
-
-After the release workflow completes:
-
-```bash
-# Build Debian package
-cargo deb
-
-# Build RPM package
-cargo build --release
-cargo generate-rpm
-
-# Update Homebrew formula SHA256
-curl -sL https://github.com/swack-tools/oxidex/archive/refs/tags/v1.2.1.tar.gz | shasum -a 256
-# Update packaging/homebrew/oxidex.rb with the hash
-```
-
-### 5. Upload Packages to GitHub Release
-
-```bash
-# Using GitHub CLI (gh)
-gh release upload v0.1.0 \
-  target/debian/oxidex_0.1.0_amd64.deb \
-  target/generate-rpm/oxidex-0.1.0-1.x86_64.rpm
-
-# Or upload manually via GitHub web interface
-```
-
-### 6. Verify Release Assets
-
-Check that the GitHub Release includes:
-- Source code archives (`.tar.gz`, `.zip`)
-- Platform-specific binaries (from release workflow)
-- Debian package (`.deb`)
-- RPM package (`.rpm`)
-- SHA256 checksums
-
-### 7. Announce Release
-
-- Update README.md installation instructions (if needed)
-- Post release notes on GitHub Discussions
-- Announce on relevant forums/communities
-
-## Troubleshooting
-
-### Common Issues
-
-#### cargo-deb: Binary not found
-
-**Error**: `Error: failed to execute process cargo build --release`
-
-**Solution**: Ensure you have a valid `[[bin]]` section in `Cargo.toml`:
-```toml
-[[bin]]
-name = "oxidex"
-path = "src/main.rs"
-```
-
-#### cargo-generate-rpm: No such file or directory
-
-**Error**: `Error: No such file or directory (os error 2)`
-
-**Solution**: Build the release binary first:
-```bash
-cargo build --release
-cargo generate-rpm
-```
-
-#### Homebrew: SHA256 mismatch
-
-**Error**: `Error: SHA256 mismatch`
-
-**Solution**: Recalculate and update the SHA256 hash:
-```bash
-curl -sL https://github.com/swack-tools/oxidex/archive/refs/tags/v1.2.1.tar.gz | shasum -a 256
-# Update sha256 in packaging/homebrew/oxidex.rb
-```
-
-#### Package won't install: Permission denied
-
-**Solution**: Use `sudo` for system-wide installation:
-```bash
-# Debian/Ubuntu
-sudo dpkg -i package.deb
-
-# Fedora/RHEL
-sudo dnf install package.rpm
-```
-
-#### Binary not in PATH after installation
-
-**Solution**: Packages install to `/usr/bin/`, which should be in PATH. Verify:
-```bash
-echo $PATH
-which oxidex
-
-# If needed, manually add to PATH
-export PATH="/usr/bin:$PATH"
-```
-
-### Debugging Tips
-
-**View package contents:**
-```bash
-# Debian
-dpkg-deb --contents package.deb
-
-# RPM
-rpm -qlp package.rpm
-```
-
-**Check package dependencies:**
-```bash
-# Debian
-dpkg-deb --info package.deb | grep Depends
-
-# RPM
-rpm -qRp package.rpm
-```
-
-**Verify binary is statically linked (no external dependencies):**
-```bash
-ldd target/release/oxidex
-# Should show "not a dynamic executable" or minimal system libs
-```
-
-## Future Enhancements
-
-Potential improvements for the packaging system:
-
-1. **Automated Package Building in CI**
-   - Add package generation steps to `.github/workflows/release.yml`
-   - Automatically upload packages to GitHub Releases
-
-2. **Homebrew Tap Repository**
-   - Create `homebrew-oxidex` tap for easier installation
-   - Maintain binary bottles for faster installation
-
-3. **Additional Package Formats**
-   - AppImage (universal Linux package)
-   - Snap package (Ubuntu Software Center)
-   - Flatpak (Flathub distribution)
-   - Chocolatey (Windows package manager)
-   - Scoop (Windows package manager)
-
-4. **Package Signing**
-   - GPG sign Debian packages
-   - Sign RPM packages with GPG
-   - Code sign macOS binaries
-
-5. **Distribution Repositories**
-   - Host custom APT repository for Debian/Ubuntu
-   - Host custom YUM/DNF repository for RHEL/Fedora
-
-## References
-
-- **cargo-deb**: https://github.com/kornelski/cargo-deb
-- **cargo-generate-rpm**: https://github.com/cat-in-136/cargo-generate-rpm
-- **Homebrew Formula Cookbook**: https://docs.brew.sh/Formula-Cookbook
-- **Debian Policy Manual**: https://www.debian.org/doc/debian-policy/
-- **RPM Packaging Guide**: https://rpm-packaging-guide.github.io/
-- **OxiDex Project**: https://github.com/swack-tools/oxidex
-
----
-
-**Maintained by**: OxiDex Contributors
-**Last Updated**: 2025-10-30
-**Version**: 0.1.0
+For the current release workflow and its signed macOS assets, see
+[`docs/RELEASE-2.0.0-beta.1.md`](../../RELEASE-2.0.0-beta.1.md) and
+`.github/workflows/release.yml`.
