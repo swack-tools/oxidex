@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 
@@ -272,6 +273,25 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         self.assert_invalid("finalization", payload, "version_inventory[0].path")
 
         payload = fixture("finalization")
+        payload["version_inventory"][1]["kind"] = "independent_package"
+        payload["version_inventory"][1]["disposition"] = "independent"
+        self.assert_invalid("finalization", payload, "version_inventory[1].kind")
+
+        payload = fixture("finalization")
+        payload["version_inventory"][0]["line"] = 68
+        payload["version_inventory"][0]["evidence_path"] = "README.md"
+        self.assert_invalid("finalization", payload, "version_inventory[0].line")
+        self.assert_invalid("finalization", payload, "version_inventory[0].evidence_path")
+
+        payload = fixture("finalization")
+        payload["version_reconciliation"]["scan_sha256"] = "0" * 64
+        self.assert_invalid("finalization", payload, "version_reconciliation.scan_sha256")
+
+        payload = fixture("finalization")
+        payload["version_reconciliation"]["sha256"] = "f" * 64
+        self.assert_invalid("finalization", payload, "version_reconciliation.sha256")
+
+        payload = fixture("finalization")
         mac = payload["macos_verification"]
         mac["raw_binary_artifact"], mac["dmg_artifact"] = (
             mac["dmg_artifact"], mac["raw_binary_artifact"]
@@ -298,6 +318,20 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         ):
             with self.subTest(asset=asset):
                 self.assertIn(asset, workflow)
+        prepare = workflow.split("- name: Prepare release assets", 1)[1].split(
+            "- name: Extract version and create release notes", 1
+        )[0]
+        sources = set(re.findall(r"cp artifacts/([^/\s]+)/", prepare))
+        self.assertEqual(
+            sources,
+            {
+                "oxidex-x86_64-unknown-linux-musl",
+                "oxidex-aarch64-unknown-linux-musl",
+                "oxidex-x86_64-pc-windows-gnu",
+                "oxidex-aarch64-apple-darwin",
+                "oxidex-dmg",
+            },
+        )
 
     def test_cli_returns_two_and_prints_field_paths_for_invalid_receipt(self):
         payload = fixture("parity")

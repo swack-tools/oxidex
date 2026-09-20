@@ -18,6 +18,17 @@
     "expected_assets": []
   },
   "version_inventory": [],
+  "version_reconciliation": {
+    "status": "unverified",
+    "path": null,
+    "sha256": null,
+    "scan_sha256": null,
+    "tracked_files": null,
+    "matching_lines": null,
+    "reconciled_files": null,
+    "reconciled_lines": null,
+    "unresolved": []
+  },
   "promotion": {
     "pr_url": null,
     "review_decision": null,

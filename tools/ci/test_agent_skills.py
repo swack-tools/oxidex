@@ -172,6 +172,14 @@ class SkillMirrorTests(unittest.TestCase):
                 f"python3 tools/ci/validate_release_receipt.py --kind {kind}",
                 finalization,
             )
+        published = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        self.assertIn(
+            "python3 tools/ci/validate_release_receipt.py --kind finalization",
+            published,
+        )
+        self.assertIn('--candidate-sha "$CANDIDATE_SHA"', published)
 
     def test_release_promotion_requires_zero_unresolved_review_threads(self):
         text = canonical("oxidex-release-finalization", "references/gates.md")

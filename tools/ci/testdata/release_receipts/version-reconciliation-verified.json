@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status": "verified",
+  "scan_sha256": "b7eb82710fb4e567915c8b4be32a10d1667cbf814ce881d3483826dcf9f7a619",
+  "tracked_files": 284,
+  "matching_lines": 18075,
+  "reconciled_files": 284,
+  "reconciled_lines": 18075,
+  "reviewer": "release-skill-test-fixture",
+  "reviewed_at": "2026-09-20T00:00:00Z",
+  "unresolved": []
+}

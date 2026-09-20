@@ -290,3 +290,17 @@ Set the final receipt to `verified` only if all of the following agree:
 
 Otherwise preserve the most specific non-verified status and name one safe
 `next_action`; never summarize partial success as a completed release.
+
+After populating `FINALIZATION_RECEIPT` from the durable evidence above, run
+the terminal gate. A hand-edited `status: verified` is not a completion signal:
+
+```bash
+set -euo pipefail
+python3 tools/ci/validate_release_receipt.py --kind finalization \
+  --receipt "$FINALIZATION_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$CANDIDATE_SHA"
+```
+
+Only exit zero from this exact command permits the release to be reported as
+verified. Preserve a nonzero result and its field-level diagnostics as a
+blocked final receipt.

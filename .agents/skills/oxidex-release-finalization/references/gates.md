@@ -14,6 +14,7 @@ VERSION=2.0.0-beta.1
 TAG="v$VERSION"
 PARITY_RECEIPT=/absolute/path/to/release-parity-receipt.json
 DOCUMENTATION_RECEIPT=/absolute/path/to/documentation-release-receipt.json
+FINALIZATION_RECEIPT=/absolute/path/to/release-finalization-receipt.json
 tools/preflight.sh --upstream
 git fetch origin main refactor/tag-machinery --tags
 git status --short --branch
@@ -100,6 +101,16 @@ scope; neither automatic replacement nor a claim of a published formula is
 justified by finding it. Keep dependency pins, including those in `Cargo.lock`,
 separate from OxiDex release versions; preserve intentional independent crate
 versions and retain the excluded/dependency hit list for audit.
+
+The final receipt's `version_inventory` must cover every Cargo workspace
+manifest and bind each row to its actual `[package]` version declaration.
+Record the complete `version-literals.txt` reconciliation separately, including
+its scan SHA-256, tracked-file and matching-line counts, reviewer, and zero
+unresolved entries, in `version_reconciliation`. The terminal validator
+recomputes the tracked scan (excluding only its own receipt test fixtures),
+loads the referenced reconciliation bytes, and requires all counts and hashes
+to agree; a summary without the raw durable scan and human reconciliation is
+not evidence.
 
 ## 3. Receipt compatibility
 

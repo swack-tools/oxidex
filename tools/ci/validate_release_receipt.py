@@ -38,6 +38,7 @@ TARGET_ASSETS = {
     "x86_64-pc-windows-gnu": ("oxidex-x86_64-pc-windows-gnu.exe",),
 }
 REQUIRED_TARGETS = tuple(TARGET_ASSETS)
+VERSION_LITERAL_RE = r"(^|[^[:alnum:]_])[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?"
 
 
 def load_receipt(path: str | pathlib.Path) -> dict[str, Any]:
@@ -71,6 +72,43 @@ def _workspace_packages() -> dict[str, tuple[str, str]]:
         manifest = pathlib.Path(package["manifest_path"]).resolve().relative_to(ROOT)
         packages[manifest.as_posix()] = (package["name"], package["version"])
     return packages
+
+
+@functools.lru_cache(maxsize=1)
+def _version_literal_scan() -> dict[str, Any]:
+    result = subprocess.run(
+        [
+            "git", "grep", "-n", "-I", "-E", VERSION_LITERAL_RE, "--", ".",
+            ":(exclude)tools/ci/testdata/release_receipts/**",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+    lines = result.stdout.splitlines()
+    files = {line.split(b":", 1)[0] for line in lines}
+    return {
+        "sha256": hashlib.sha256(result.stdout).hexdigest(),
+        "matching_lines": len(lines),
+        "tracked_files": len(files),
+    }
+
+
+def _package_version_line(path: pathlib.Path, version: str) -> int | None:
+    in_package = False
+    pattern = re.compile(r'^version\s*=\s*"' + re.escape(version) + r'"\s*$')
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip()
+        if stripped == "[package]":
+            in_package = True
+            continue
+        if in_package and stripped.startswith("["):
+            return None
+        if in_package and pattern.fullmatch(stripped):
+            return number
+    return None
 
 
 def _validate_upstream_receipt(
@@ -627,15 +665,27 @@ def _validate_finalization(
                 package = workspace_packages.get(relative)
                 if package is None:
                     checks.error(f"version_inventory[{index}].path", "not a cargo workspace manifest")
-                elif item.get("version") != package[1]:
-                    checks.error(
-                        f"version_inventory[{index}].version",
-                        f"does not match cargo metadata version {package[1]!r}",
+                else:
+                    expected_kind = (
+                        "oxidex_package" if package[1] == payload.get("version") else "independent_package"
                     )
-            if path.is_file() and isinstance(item.get("line"), int) and item["line"] > 0:
-                lines = path.read_text(encoding="utf-8").splitlines()
-                if item["line"] > len(lines) or str(item.get("literal", "")) not in lines[item["line"] - 1]:
-                    checks.error(f"version_inventory[{index}].literal", "not present at the recorded line")
+                    expected_disposition = "current" if expected_kind == "oxidex_package" else "independent"
+                    if item.get("kind") != expected_kind:
+                        checks.error(f"version_inventory[{index}].kind", f"expected {expected_kind!r} from cargo metadata")
+                    if item.get("disposition") != expected_disposition:
+                        checks.error(f"version_inventory[{index}].disposition", f"expected {expected_disposition!r}")
+                    if item.get("version") != package[1]:
+                        checks.error(
+                            f"version_inventory[{index}].version",
+                            f"does not match cargo metadata version {package[1]!r}",
+                        )
+                    expected_line = _package_version_line(path, package[1]) if path.is_file() else None
+                    if item.get("line") != expected_line:
+                        checks.error(f"version_inventory[{index}].line", f"expected [package] version declaration at line {expected_line!r}")
+                    if item.get("literal") != package[1]:
+                        checks.error(f"version_inventory[{index}].literal", f"expected exact package version {package[1]!r}")
+                    if item.get("evidence_path") != raw_path:
+                        checks.error(f"version_inventory[{index}].evidence_path", "workspace evidence must be the same manifest")
         evidence_path = item.get("evidence_path")
         if isinstance(evidence_path, str) and evidence_path and not _evidence_path(evidence_path).is_file():
             checks.error(f"version_inventory[{index}].evidence_path", "referenced evidence does not exist")
@@ -648,6 +698,37 @@ def _validate_finalization(
             "version_inventory",
             f"workspace manifest coverage mismatch; missing={missing!r}, extra={extra!r}",
         )
+    checks.equal("version_reconciliation.status", "verified")
+    reconciliation_path = checks.string("version_reconciliation.path")
+    reconciliation_sha = checks.sha256("version_reconciliation.sha256")
+    try:
+        scan = _version_literal_scan()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        checks.error("version_reconciliation", f"cannot scan tracked version literals: {exc}")
+        scan = {}
+    for field in ("scan_sha256",):
+        checks.equal(f"version_reconciliation.{field}", scan.get("sha256"))
+    for field in ("tracked_files", "matching_lines"):
+        checks.equal(f"version_reconciliation.{field}", scan.get(field))
+    checks.equal("version_reconciliation.reconciled_files", scan.get("tracked_files"))
+    checks.equal("version_reconciliation.reconciled_lines", scan.get("matching_lines"))
+    checks.empty_list("version_reconciliation.unresolved")
+    if reconciliation_path is not None:
+        path = _evidence_path(reconciliation_path)
+        try:
+            actual_sha = _file_sha256(path)
+            record = load_receipt(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            checks.error("version_reconciliation.path", f"cannot load reconciliation: {exc}")
+        else:
+            if reconciliation_sha is not None and reconciliation_sha != actual_sha:
+                checks.error("version_reconciliation.sha256", f"does not match referenced reconciliation {actual_sha}")
+            for field in (
+                "status", "scan_sha256", "tracked_files", "matching_lines",
+                "reconciled_files", "reconciled_lines", "unresolved",
+            ):
+                if record.get(field) != checks.value(f"version_reconciliation.{field}"):
+                    checks.error(f"version_reconciliation.{field}", "does not match referenced reconciliation")
     checks.string("promotion.pr_url")
     checks.equal("promotion.review_decision", "APPROVED")
     checks.equal("promotion.required_checks_status", "success")

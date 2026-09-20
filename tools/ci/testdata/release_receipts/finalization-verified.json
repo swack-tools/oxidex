@@ -23,6 +23,17 @@
     {"path": "oxidex-tags-specialty/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-specialty/Cargo.toml", "status": "verified"},
     {"path": "oxidex-tags-shared/Cargo.toml", "line": 3, "literal": "0.1.0", "version": "0.1.0", "kind": "independent_package", "disposition": "independent", "reason": "intentionally independent package version", "evidence_path": "oxidex-tags-shared/Cargo.toml", "status": "verified"}
   ],
+  "version_reconciliation": {
+    "status": "verified",
+    "path": "tools/ci/testdata/release_receipts/version-reconciliation-verified.json",
+    "sha256": "3eb456329654fd961067a41f3060dc9fc1e332ad29a5815067dfe68a49d75fbe",
+    "scan_sha256": "b7eb82710fb4e567915c8b4be32a10d1667cbf814ce881d3483826dcf9f7a619",
+    "tracked_files": 284,
+    "matching_lines": 18075,
+    "reconciled_files": 284,
+    "reconciled_lines": 18075,
+    "unresolved": []
+  },
   "promotion": {
     "pr_url": "https://github.com/swack-tools/oxidex/pull/999",
     "review_decision": "APPROVED",
