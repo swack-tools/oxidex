@@ -2064,9 +2064,8 @@ impl PentaxParser {
                 // (key 1.1) reads the same byte as "WxH" instead of
                 // multiplying: `ValueConv => '($val>>4)." ".($val&0x0f)'` then
                 // `PrintConv => '$val =~ tr/ /x/; $val'` turns the space into
-                // an "x". `CAFPointsInFocus`/`CAFPointsSelected` need
-                // `DecodeAFPoints`, a bitmask walk over a grid whose size this
-                // byte determines, and neither is decoded here.
+                // an "x". The remaining bytes pack two-bit AF point states,
+                // decoded through the exact `DecodeAFPoints` walk below.
                 PENTAX_CAF_POINT_INFO => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 2 {
@@ -2076,6 +2075,15 @@ impl PentaxParser {
                         tags.insert(
                             "Pentax:CAFGridSize".to_string(),
                             format!("{}x{}", b >> 4, b & 0x0f),
+                        );
+                        let point_bits = raw.get(2..).unwrap_or_default();
+                        tags.insert(
+                            "Pentax:CAFPointsInFocus".to_string(),
+                            decode_caf_points(point_bits, n, 0x02),
+                        );
+                        tags.insert(
+                            "Pentax:CAFPointsSelected".to_string(),
+                            decode_caf_points(point_bits, n, 0x03),
                         );
                     }
                 }
@@ -2997,6 +3005,30 @@ static AF_POINT_SELECTED_K3_KP: Cond = Cond::Model {
 /// which this reader does not encounter as a second int16u here. None of
 /// the three alternatives sets `PrintHex`, so an unmapped value falls back
 /// to plain decimal `"Unknown ($val)"` (ExifTool.pm:3628-3634).
+/// Decode the two-bit contrast-detect AF point records in `CAFPointInfo`.
+///
+/// This mirrors ExifTool's `DecodeAFPoints($val, $num, 2, $mask)` in the
+/// pinned Pentax.pm. Points are one-based and packed most-significant pair
+/// first. An empty carrier is the only case rendered as `(none)`.
+fn decode_caf_points(bytes: &[u8], point_count: u32, required_value: u8) -> String {
+    if bytes.is_empty() {
+        return "(none)".to_string();
+    }
+
+    let mut points = Vec::new();
+    for point in 0..point_count {
+        let byte_index = (point / 4) as usize;
+        let Some(&byte) = bytes.get(byte_index) else {
+            break;
+        };
+        let shift = 6 - (point % 4) * 2;
+        if (byte >> shift) & 0x03 == required_value {
+            points.push((point + 1).to_string());
+        }
+    }
+    points.join(",")
+}
+
 fn decode_af_point_selected(model: Option<&str>, value: u16) -> String {
     if AF_POINT_SELECTED_K1_645Z.holds(model) {
         af_point_selected_k1_645z(value)
