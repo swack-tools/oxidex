@@ -238,9 +238,6 @@ class ArtifactValidationTests(unittest.TestCase):
     def test_validator_replays_raw_children_and_rejects_mutated_counter(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
             root = pathlib.Path(td)
-            oracle_json = '[{"File:FileType":"ICC","ICC_Profile:Header":"abc"}]'
-            full_json = '[{"File:FileType":"ICC","ICC-header:Header":"abc"}]'
-            drop_json = '[{"File:FileType":"ICC"}]'
             relative_paths = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
             selection_root = root / "selection"
             selection_root.mkdir()
@@ -261,6 +258,20 @@ class ArtifactValidationTests(unittest.TestCase):
             for mode in (
                 "pre-seam-control", "control-unset", "control-empty", *attribute.TOKENS, "union"
             ):
+                oracle_json = json.dumps([{
+                    "File:System:FileAccessDate": f"oracle-{mode}",
+                    "File:FileType": "ICC",
+                    "ICC_Profile:Header": "abc",
+                }])
+                full_json = json.dumps([{
+                    "System:FileAccessDate": f"candidate-{mode}",
+                    "File:FileType": "ICC",
+                    "ICC-header:Header": "abc",
+                }])
+                drop_json = json.dumps([{
+                    "System:FileAccessDate": f"candidate-{mode}",
+                    "File:FileType": "ICC",
+                }])
                 children = []
                 per_file = {}
                 for number, relative in enumerate(relative_paths, 1):
@@ -301,7 +312,14 @@ class ArtifactValidationTests(unittest.TestCase):
                     }
                     children.append(child_record)
                     oracle_parsed = attribute.parse_json_output(oracle_json.encode(), "oracle")
-                    per_file[relative] = attribute.project_file(oracle_parsed, candidate_parsed)
+                    per_file[relative] = attribute.project_file(
+                        attribute.normalize_access_date_output(
+                            oracle_parsed, oracle=True
+                        ),
+                        attribute.normalize_access_date_output(
+                            candidate_parsed, oracle=False
+                        ),
+                    )
                 runs[mode] = {
                     "path_set_sha256": attribute.path_set_sha256(relative_paths),
                     "children": children,

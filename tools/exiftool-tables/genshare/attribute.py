@@ -714,7 +714,10 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
                     raise ReceiptError(f"run {mode} {side} parsed output does not match raw stdout")
                 sides[side] = parsed
             relative = child["relative_path"]
-            per_file[relative] = project_file(sides["oracle"], sides["candidate"])
+            per_file[relative] = project_file(
+                normalize_access_date_output(sides["oracle"], oracle=True),
+                normalize_access_date_output(sides["candidate"], oracle=False),
+            )
         recomputed[mode] = {"per_file": per_file, "aggregate": _sum_projection(per_file)}
         if recomputed[mode] != projections.get(mode):
             raise ReceiptError(f"projection counters or rows do not replay: {mode}")
