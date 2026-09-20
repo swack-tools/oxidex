@@ -511,6 +511,10 @@ tag version commit="origin/main":
     if [ "$CARGO_VERSION" != "{{version}}" ]; then
       echo "refusing: Cargo.toml at $SHA says $CARGO_VERSION, not {{version}}" >&2; exit 1
     fi
+    if [ "${OXIDEX_TAG_DRY_RUN:-0}" != 1 ] && [ "${OXIDEX_TAG_AUTHORIZATION:-}" != "$TAG@$SHA" ]; then
+      echo "refusing: set OXIDEX_TAG_AUTHORIZATION=$TAG@$SHA only after explicit authorization for this exact tag and commit" >&2
+      exit 1
+    fi
     git tag -s "$TAG" -m "OxiDex $TAG" "$SHA"
     # Verify the new tag's signature before it leaves this machine.
     if [ "$(git config --get gpg.format)" = "ssh" ]; then
@@ -530,19 +534,8 @@ tag version commit="origin/main":
       git tag -d "$TAG" >/dev/null
       echo "dry run: signature verified; $TAG deleted locally, nothing pushed"; exit 0
     fi
-    if [ "${OXIDEX_TAG_AUTHORIZATION:-}" != "$TAG@$SHA" ]; then
-      git tag -d "$TAG" >/dev/null
-      echo "refusing: set OXIDEX_TAG_AUTHORIZATION=$TAG@$SHA only after explicit authorization for this exact tag and commit; tag deleted locally" >&2
-      exit 1
-    fi
     echo "signature verified; pushing $TAG"
     git push origin "refs/tags/$TAG"
-
-# Delete a tag locally and remotely
-untag version:
-    @echo "Deleting tag: v{{version}}"
-    git tag -d "v{{version}}"
-    git push origin :refs/tags/v{{version}}
 
 # macOS packaging
 # ----------------

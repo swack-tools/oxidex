@@ -84,13 +84,22 @@ check and the sign-and-verify step, then deletes the tag without pushing.
 1. `verify-version` runs `tools/ci/release_version.py`. It fails the whole
    run if the tag and `Cargo.toml` disagree, and emits `prerelease=true`
    because the tag contains `-`.
-2. Builds Linux x86_64/arm64 (musl), Windows x86_64, and a signed, notarized
-   macOS arm64 binary and DMG (`oxidex-v2.0.0-beta.1.dmg`).
-3. `create-release` publishes GitHub release "Release v2.0.0-beta.1" as a
-   **pre-release** with `make_latest: false`, so `/releases/latest` stays on
-   v1.2.1.
-4. `update-docs` is **skipped** for a pre-release: the stable gh-pages
+2. Builds Linux x86_64/arm64 (musl), Windows x86_64, and a signed universal
+   macOS binary plus notarized DMG (`oxidex-v2.0.0-beta.1.dmg`).
+3. `create-release` creates a fail-closed draft **pre-release** with
+   `make_latest: false`, uploads the exact asset set, and records an independent
+   run/attempt provenance artifact before any release asset is uploaded.
+4. `verify-release-assets` downloads that exact run's provenance and the draft
+   release, binds them to the tag commit and release ID, checks the exact asset
+   set and digests, and exercises Gatekeeper on both downloaded executables.
+5. `publish-release` independently repeats the provenance, release-ID, draft,
+   and asset checks before publishing. `/releases/latest` stays on v1.2.1.
+6. `update-docs` is **skipped** for a pre-release: the stable gh-pages
    changelog and version dropdown are left alone.
+
+If a failed run leaves a draft release, stop and inspect it manually. Do not
+delete, reuse, overwrite, or rerun against that draft; resolve the incident and
+obtain explicit authorization for a new immutable tag.
 
 **`docker.yml` (Docker Hub `swackhamer/oxidex`).** Its first job only
 publishes a tag reachable from `origin/main`. `refactor/tag-machinery` is
