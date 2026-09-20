@@ -16,6 +16,8 @@ PACKAGING_GUIDE = (REPO / "docs/reference/packaging/packaging-guide.md").read_te
     encoding="utf-8"
 )
 RELEASE_PAGE = (REPO / "docs/RELEASE-2.0.0-beta.1.md").read_text(encoding="utf-8")
+LIBRARY_GUIDE = (REPO / "docs/guide/library-api.md").read_text(encoding="utf-8")
+RELEASE_TODO = (REPO / "TODO_RELEASE_BETA.md").read_text(encoding="utf-8")
 HOMEBREW_README_PATH = REPO / "packaging/homebrew/README.md"
 HOMEBREW_README = (
     HOMEBREW_README_PATH.read_text(encoding="utf-8")
@@ -86,6 +88,37 @@ class DistributionSurfaceTests(unittest.TestCase):
         self.assertIn("packaging/homebrew/oxidex.rb.disabled", RELEASE_PAGE)
         self.assertIn("Homebrew is disabled for this beta", RELEASE_PAGE)
         self.assertNotIn("`packaging/homebrew/oxidex.rb`", RELEASE_PAGE)
+
+    def test_library_guide_records_beta_no_crates_io_policy_without_live_name_claims(self):
+        self.assertRegex(
+            LIBRARY_GUIDE,
+            r"neither the root crate nor the tag crates will be\s+published to crates\.io",
+        )
+        self.assertRegex(
+            LIBRARY_GUIDE, r"signed tag and exact `main` SHA are still pending"
+        )
+        self.assertIn("signed-tag dependency instructions remain pending", LIBRARY_GUIDE)
+        self.assertNotIn("final crates.io decision", LIBRARY_GUIDE)
+        self.assertNotIn("belongs to an unrelated crate", LIBRARY_GUIDE)
+
+    def test_release_todo_resolves_beta_package_policy_but_keeps_release_inputs_pending(self):
+        section = RELEASE_TODO[
+            RELEASE_TODO.index("## 4. Version and package audit"):
+            RELEASE_TODO.index("## 5. Documentation and factual-release audit")
+        ]
+        self.assertRegex(
+            section, r"- \[x\] Keep the root crate `publish = false` for this beta;"
+        )
+        self.assertRegex(
+            section,
+            r"- \[x\] Record the crates\.io decision: no crates\.io publication",
+        )
+        self.assertRegex(section, r"root\s+crate\s+or any tag crate")
+        self.assertRegex(section, r"- \[x\] Do not publish tag crates for this beta;")
+        self.assertIn("signed tag and exact", section)
+        self.assertIn("frozen `main` SHA remain pending", section)
+        self.assertNotIn("Decide whether tag crates will be published manually", section)
+        self.assertNotIn("> Record the crates.io and package-publication decision here.", section)
 
 
 if __name__ == "__main__":

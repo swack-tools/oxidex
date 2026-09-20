@@ -606,17 +606,20 @@ open until it is proven on the final release candidate.
 - [ ] Verify the built CLI reports the intended version.
 - [ ] Search all tracked files for stale `1.x`, beta, branch, installation,
       artifact-name, and release-channel claims; classify every hit.
-- [ ] Keep the root crate `publish = false` unless the crates.io ownership and
-      package-size blockers are deliberately resolved.
-- [ ] Record the crates.io decision: transfer name, alternate package name, or
-      no crates.io publication for this beta.
-- [ ] Ensure every installation example matches that decision.
-- [ ] Decide whether tag crates will be published manually; if yes, rehearse
-      the complete dependency order with `cargo publish --dry-run`.
+- [x] Keep the root crate `publish = false` for this beta; no root crate
+      publication is part of the selected policy.
+- [x] Record the crates.io decision: no crates.io publication for the root
+      crate or any tag crate in this beta.
+- [x] Ensure every installation example matches that decision.
+- [x] Do not publish tag crates for this beta; no manual `cargo publish` step
+      is part of the selected policy.
 
 Decision:
 
-> Record the crates.io and package-publication decision here.
+> Option (c) is selected: v2.0.0-beta.1 publishes no crates to crates.io.
+> This policy covers the root crate and every tag crate; it does not claim
+> current package-name availability or publication. The signed tag and exact
+> frozen `main` SHA remain pending until the final release inputs exist.
 
 ## 5. Documentation and factual-release audit
 
