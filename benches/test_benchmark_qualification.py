@@ -349,6 +349,21 @@ class ReceiptTests(unittest.TestCase):
 
 
 class QualificationWorkflowTests(unittest.TestCase):
+    def test_external_actions_are_pinned_to_full_immutable_git_object_ids(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        external_refs = [
+            ref for ref in re.findall(r"(?m)^\s+uses:\s+([^\s#]+)", workflow)
+            if not ref.startswith("./")
+        ]
+        action_refs = [ref.rsplit("@", 1)[1] if "@" in ref else "" for ref in external_refs]
+
+        self.assertTrue(action_refs, "qualification workflow must pin its external actions")
+        self.assertEqual(
+            [ref for ref in action_refs if re.fullmatch(r"[0-9a-f]{40}", ref) is None],
+            [],
+            "external action pins must be complete immutable 40-character Git object IDs",
+        )
+
     def test_manual_preflight_is_candidate_bound_and_never_times_a_benchmark(self) -> None:
         self.assertTrue(
             WORKFLOW_PATH.is_file(),
