@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 import importlib.util
 import tempfile
 import unittest
@@ -37,6 +38,10 @@ def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
     evidence = corpus.parent / "evidence" / "run-20260920-a"
     evidence.parent.mkdir(exist_ok=True)
     evidence.mkdir(exist_ok=True)
+    artifact_paths = {name: evidence / name for name in ("result.json", "raw.json", "source.json", "cache.json")}
+    for artifact in artifact_paths.values():
+        artifact.write_text("artifact")
+    measured_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     commands = {
         "single_file": ["single-file-oracle", binary],
         "single_canon": ["single-canon-oracle", binary],
@@ -50,6 +55,11 @@ def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
     }
     return {
         "identity": {"run_id": "run-20260920-a", "evidence_path": str(evidence),
+                      "measured_at": measured_at,
+                      "result_artifact_path": str(artifact_paths["result.json"]),
+                      "raw_artifact_path": str(artifact_paths["raw.json"]),
+                      "source_artifact_path": str(artifact_paths["source.json"]),
+                      "cache_artifact_path": str(artifact_paths["cache.json"]),
                       "cache_policy": "warm-cache", "result_artifact_sha256": "f" * 64,
                       "source_artifact_sha256": source_hash},
         "instrument": {
@@ -137,6 +147,26 @@ class ResultValidationTests(unittest.TestCase):
                 corpus_manifest=qualification.build_corpus_manifest(root, expected_count=2),
                 warmups=5, runs=30, expected_corpus_count=2)
             self.assertEqual(result["benchmark_status"], "observed-input-validated")
+
+    def test_artifacts_must_stay_inside_run_and_be_fresh(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = self._valid(root)
+            manifest = qualification.build_corpus_manifest(root, expected_count=2)
+            document["identity"]["raw_artifact_path"] = str((root.parent / "outside.raw").resolve())
+            (root.parent / "outside.raw").write_text("outside")
+            with self.assertRaisesRegex(qualification.Refused, "outside"):
+                qualification.validate_result_document(document, candidate_sha=SHA,
+                    binary_path=Path("/fresh-target/release/oxidex"), binary_sha256=BINARY_SHA,
+                    cargo_version="2.0.0-beta.1", exiftool_version="13.59", corpus_manifest=manifest,
+                    warmups=5, runs=30, expected_corpus_count=2)
+            document = self._valid(root)
+            document["identity"]["measured_at"] = "2020-01-01T00:00:00Z"
+            with self.assertRaisesRegex(qualification.Refused, "freshness"):
+                qualification.validate_result_document(document, candidate_sha=SHA,
+                    binary_path=Path("/fresh-target/release/oxidex"), binary_sha256=BINARY_SHA,
+                    cargo_version="2.0.0-beta.1", exiftool_version="13.59", corpus_manifest=manifest,
+                    warmups=5, runs=30, expected_corpus_count=2)
     def test_exact_seven_scenarios_and_two_30_sample_rows_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             corpus = Path(directory)

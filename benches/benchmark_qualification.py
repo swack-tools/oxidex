@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import statistics
+from datetime import datetime, timezone
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -168,6 +169,20 @@ def _require_sha(value: str, label: str) -> str:
     if not SHA256_RE.fullmatch(value):
         raise Refused(f"{label} must be a lowercase SHA-256")
     return value
+
+
+def _durable_artifact(value: Any, evidence: Path, label: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise Refused(f"result identity missing {label}")
+    path = Path(value)
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise Refused(f"{label} must be an existing regular file")
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(evidence)
+    except ValueError as exc:
+        raise Refused(f"{label} is outside the durable run directory") from exc
+    return resolved
 
 
 def validate_binary_identity(binary: Path, expected_sha256: str, target_dir: Path, repository: Path) -> dict[str, str]:
@@ -319,7 +334,8 @@ def validate_result_document(
     identity = document.get("identity")
     if not isinstance(identity, dict):
         raise Refused("result has no bound run identity")
-    for key in ("run_id", "evidence_path", "cache_policy", "source_artifact_sha256"):
+    for key in ("run_id", "evidence_path", "cache_policy", "source_artifact_sha256", "measured_at",
+                "result_artifact_path", "raw_artifact_path", "source_artifact_path", "cache_artifact_path"):
         if not identity.get(key):
             raise Refused(f"result identity missing {key}")
     if identity["cache_policy"] != cache_policy:
@@ -331,6 +347,19 @@ def validate_result_document(
         raise Refused("result evidence path is not the durable run directory")
     if identity["source_artifact_sha256"] != trusted_manifest["manifest_sha256"]:
         raise Refused("result source artifact is not the trusted corpus manifest")
+    try:
+        measured = datetime.fromisoformat(str(identity["measured_at"]).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise Refused("result measured_at must be an ISO-8601 timestamp") from exc
+    if measured.tzinfo is None:
+        raise Refused("result measured_at must include a timezone")
+    now = datetime.now(timezone.utc).timestamp()
+    if abs(now - measured.timestamp()) > 86400:
+        raise Refused("result measured_at is outside the 24-hour freshness window")
+    artifacts = [_durable_artifact(identity[key], evidence, key) for key in
+                 ("result_artifact_path", "raw_artifact_path", "source_artifact_path", "cache_artifact_path")]
+    if any(abs(path.stat().st_mtime - measured.timestamp()) > 86400 for path in artifacts):
+        raise Refused("result artifact freshness is outside the 24-hour window")
     row_count = 0
     for name in EXPECTED_SCENARIOS:
         scenario = document.get(name)
