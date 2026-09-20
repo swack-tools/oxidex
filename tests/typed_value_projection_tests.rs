@@ -40,7 +40,7 @@ struct Case {
 
 fn fixture() -> Fixture {
     serde_json::from_str(include_str!(
-        "../tools/exiftool-tables/fixtures/typed_value_projection.json"
+        "../tools/exiftool-tables/testdata/typed_value_projection.json"
     ))
     .expect("typed projection fixture must be valid JSON")
 }

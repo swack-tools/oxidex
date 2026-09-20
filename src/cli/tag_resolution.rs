@@ -322,13 +322,34 @@ pub fn resolve_requested_tags<'a>(
 /// storage, else `occurrence.raw`. This matches whole-map raw projection
 /// and composite dependency resolution without inverting printed labels.
 pub fn resolved_display_value(occurrence: &TagOccurrence, no_print_conv: bool) -> TagValue {
-    occurrence
-        .project(if no_print_conv {
-            ValueChannel::ValueConv
-        } else {
-            ValueChannel::PrintConv
-        })
-        .into_owned()
+    if no_print_conv {
+        occurrence.project(ValueChannel::ValueConv).into_owned()
+    } else {
+        resolved_print_value(occurrence)
+    }
+}
+
+/// Projects a tag for normal output while preserving the compatibility
+/// formatter used by legacy parser call sites.
+///
+/// Most migrated producers attach an explicit `print` form, which is the
+/// canonical typed projection. The remaining `insert()` shim producers keep
+/// a typed `raw` value with no print form; those rows historically went
+/// through the name-keyed ExifTool compatibility rules (GPS reference labels,
+/// APP14 flags, Ducky quality, and similar conversions). Apply those rules to
+/// the typed ValueConv result only in that legacy case. This avoids reparsing
+/// display strings while retaining the public output contract during the
+/// migration.
+fn resolved_print_value(occurrence: &TagOccurrence) -> TagValue {
+    if occurrence.print.is_some() {
+        occurrence.project(ValueChannel::PrintConv).into_owned()
+    } else {
+        let value = occurrence.project(ValueChannel::ValueConv);
+        crate::core::exiftool_compat::format_tag_value_rules(
+            &occurrence.lookup_key(),
+            value.as_ref(),
+        )
+    }
 }
 
 /// Builds a synthesized [`MetadataMap`] ready to hand to the existing
@@ -604,7 +625,14 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
     let metadata = raw_metadata
         .winner_occurrences()
         .filter(|(key, _)| surviving.contains_key(*key))
-        .map(|(key, occurrence)| (key.clone(), occurrence.project(channel).into_owned()))
+        .map(|(key, occurrence)| {
+            let value = if no_print_conv {
+                occurrence.project(channel).into_owned()
+            } else {
+                resolved_print_value(occurrence)
+            };
+            (key.clone(), value)
+        })
         .collect();
     ResolvedFileOutput::Metadata(metadata)
 }
@@ -904,6 +932,39 @@ mod tests {
             TagValue::new_string("26 kB")
         );
     }
+
+    #[test]
+    fn legacy_untyped_occurrences_keep_name_based_print_conversions() {
+        // These producers still use the compatibility insert shim: their raw
+        // values are typed, but no explicit PrintConv form is attached.  The
+        // CLI must retain the old ExifTool-compatible display projection
+        // while the typed occurrence consumers are being migrated.
+        let mut metadata = MetadataMap::new();
+        metadata.insert("Ducky:Quality", TagValue::new_integer(84));
+        metadata.insert("GPS:GPSLatitudeRef", TagValue::new_string("N"));
+        metadata.insert("GPS:GPSLongitudeRef", TagValue::new_string("W"));
+        metadata.insert("GPS:GPSDestDistanceRef", TagValue::new_string(""));
+        metadata.insert_with_group1("APP14:APP14Flags0", TagValue::new_integer(0), "Adobe");
+        metadata.insert_with_group1("APP14:APP14Flags1", TagValue::new_integer(0), "Adobe");
+
+        for (request, expected) in [
+            ("Quality", TagValue::new_string("84%")),
+            ("GPSLatitudeRef", TagValue::new_string("North")),
+            ("GPSLongitudeRef", TagValue::new_string("West")),
+            ("GPSDestDistanceRef", TagValue::new_string("Unknown ()")),
+            ("APP14Flags0", TagValue::new_string("(none)")),
+            ("APP14Flags1", TagValue::new_string("(none)")),
+        ] {
+            let resolved = resolve_requested_tags(&metadata, &[request.to_string()], false);
+            assert_eq!(resolved.len(), 1, "request {request} must resolve");
+            assert_eq!(
+                resolved_display_value(resolved[0].occurrence, false),
+                expected,
+                "legacy PrintConv compatibility for {request}"
+            );
+        }
+    }
+
     #[test]
     fn raw_projection_and_renderers_keep_values_in_default_and_selected_modes() {
         use crate::cli::args::DetectorMode;
