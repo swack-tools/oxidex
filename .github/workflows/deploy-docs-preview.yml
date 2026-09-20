@@ -1,0 +1,205 @@
+name: Deploy Documentation Preview
+
+# Publishes a development preview of the docs, built from refactor/tag-machinery,
+# next to the live site (oxidex.net, built from main by deploy-docs.yml).
+#
+# WHERE IT GOES, AND WHY NOT oxidex.net/next/
+#
+# The preview is pushed to the gh-pages branch of a SEPARATE repository,
+# swack-tools/oxidex-next, whose own branch-based Pages site serves it at
+# https://swack-tools.github.io/oxidex-next/ -- no DNS change needed.
+#
+# This repo's Pages site uses the artifact-based deploy (build_type: workflow),
+# and every artifact deploy replaces the WHOLE site. Serving the preview under
+# oxidex.net/next/ would therefore mean this workflow re-publishing the live
+# stable site on every tip push (rebuilding main, its ExifTool comparison report
+# and its benchmark data), main's deploy-docs.yml carrying /next/ on every main
+# push, and the `github-pages` environment admitting this branch -- after which
+# any workflow on refactor/tag-machinery could replace oxidex.net. A separate
+# repository makes it structurally impossible for this workflow to touch the
+# live site: it holds no Pages credential for this repository at all.
+#
+# NOT YET ACTIVE. Deploying needs changes only the maintainer can make:
+#   1. create the public repository swack-tools/oxidex-next;
+#   2. add a write-enabled deploy key to it;
+#   3. store that key's private half here as the secret
+#      DOCS_PREVIEW_DEPLOY_KEY in an environment named `docs-preview`
+#      restricted to the refactor/tag-machinery branch;
+#   4. set oxidex-next's Pages source to "Deploy from a branch", gh-pages, /
+#      (after the first successful push creates that branch).
+# Optional later: serve it as next.oxidex.net (a CNAME record for `next`
+# pointing at swack-tools.github.io, plus that custom domain on oxidex-next),
+# then set DOCS_BASE to '/' and DOCS_PREVIEW_URL below, and the
+# DOCS_PREVIEW_URL default in docs/.vitepress/config.mts.
+# Until the secret exists the build job still runs (so a broken preview build is
+# visible) and the deploy job reports "not configured" and skips.
+on:
+  push:
+    branches: [refactor/tag-machinery]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-docs-preview.yml'
+  workflow_dispatch:
+
+# Only the newest tip is worth publishing.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  PREVIEW_REPO: swack-tools/oxidex-next
+  # Must match the Pages URL of PREVIEW_REPO. If next.oxidex.net is ever set
+  # up as its custom domain, this becomes '/' and the URL below changes too.
+  DOCS_BASE: /oxidex-next/
+  DOCS_PREVIEW_URL: https://swack-tools.github.io/oxidex-next/
+
+jobs:
+  build:
+    name: Build preview site
+    # Refuse to publish anything but the tip, whatever branch a manual
+    # dispatch was started from.
+    if: github.ref == 'refs/heads/refactor/tag-machinery'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DOCS_CHANNEL: preview
+      DOCS_PREVIEW_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm ci
+        working-directory: docs
+
+      # The preview is a cold build: docs/reference/comparison/ holds the
+      # placeholder, not a generated ExifTool report, and there are no
+      # /benchmarks/ reports (the benchmark links point at the stable site).
+      - name: Build VitePress site
+        run: npm run docs:build
+        working-directory: docs
+
+      - name: Check no link escapes the base
+        run: npm run docs:check-links
+        working-directory: docs
+
+      - name: Verify the preview rendered
+        run: |
+          set -euo pipefail
+          grep -q '<div class="oxidex-preview-banner" role="note">' docs/.vitepress/dist/index.html \
+            || { echo "::error::preview build has no preview banner"; exit 1; }
+          grep -Fq "href=\"https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}\"" docs/.vitepress/dist/index.html \
+            || { echo "::error::preview banner does not link its source commit"; exit 1; }
+          # Branch-based Pages runs Jekyll unless told not to.
+          touch docs/.vitepress/dist/.nojekyll
+
+      - name: Upload preview site
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-preview-site
+          path: docs/.vitepress/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    name: Push preview to swack-tools/oxidex-next
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The deploy key lives only in this environment, which the maintainer
+    # restricts to refactor/tag-machinery. This job runs no project code: it
+    # downloads the built site and pushes it, so the key is never present on
+    # a runner that executed `npm ci` install scripts.
+    environment:
+      name: docs-preview
+      url: ${{ env.DOCS_PREVIEW_URL }}
+    permissions: {}
+    steps:
+      - name: Check deployment is configured
+        id: configured
+        env:
+          KEY: ${{ secrets.DOCS_PREVIEW_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::warning::DOCS_PREVIEW_DEPLOY_KEY is not set in the docs-preview environment; the preview was built but NOT deployed. Setup steps: header of .github/workflows/deploy-docs-preview.yml."
+            {
+              echo "### Docs preview NOT deployed"
+              echo "The site built, but \`DOCS_PREVIEW_DEPLOY_KEY\` is not configured, so nothing was pushed to \`$PREVIEW_REPO\`. Setup steps are in the header of .github/workflows/deploy-docs-preview.yml."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download preview site
+        if: steps.configured.outputs.ok == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: docs-preview-site
+          path: site
+
+      # Treat the downloaded artifact as hostile. In particular, never run Git
+      # inside it: upload-artifact includes hidden files, and `git init` keeps
+      # an existing .git/config whose hooks, filters or fsmonitor could execute
+      # while the deploy key is in the environment. Validate and commit a copy
+      # in a fresh repository before the secret-bearing push step begins.
+      - name: Prepare trusted publish repository
+        if: steps.configured.outputs.ok == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -f site/index.html || { echo "::error::downloaded site has no index.html"; exit 1; }
+          test -f site/.nojekyll || { echo "::error::downloaded site has no .nojekyll"; exit 1; }
+          if find site -name .git -print -quit | grep -q .; then
+            echo "::error::downloaded site contains an untrusted .git entry"; exit 1
+          fi
+          PUBLISH="$RUNNER_TEMP/docs-preview-publish"
+          test ! -e "$PUBLISH" || { echo "::error::trusted publish path already exists"; exit 1; }
+          mkdir "$PUBLISH"
+          cp -R site/. "$PUBLISH/"
+          git -C "$PUBLISH" init -q -b gh-pages
+          git -C "$PUBLISH" config core.hooksPath /dev/null
+          git -C "$PUBLISH" config user.name "github-actions[bot]"
+          git -C "$PUBLISH" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$PUBLISH" add -A
+          git -C "$PUBLISH" commit -q -m "Docs preview of refactor/tag-machinery at ${SHA:0:8}" \
+            -m "Built from https://github.com/${GITHUB_REPOSITORY}/commit/${SHA} by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      # One orphan commit, force-pushed: the preview is a moving view of the
+      # tip, and the source history already lives in this repository. Keeping
+      # every build would only grow oxidex-next without bound.
+      #
+      # GitHub's SSH host keys come from the API over TLS rather than a
+      # trust-on-first-use ssh-keyscan.
+      - name: Push to gh-pages of the preview repository
+        if: steps.configured.outputs.ok == 'true'
+        env:
+          KEY: ${{ secrets.DOCS_PREVIEW_DEPLOY_KEY }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          PUBLISH="$RUNNER_TEMP/docs-preview-publish"
+          test -d "$PUBLISH/.git" || { echo "::error::trusted publish repository is missing"; exit 1; }
+          umask 077
+          SSHDIR="$RUNNER_TEMP/ssh"
+          mkdir -p "$SSHDIR"
+          printf '%s\n' "$KEY" > "$SSHDIR/key"
+          trap 'rm -f "$SSHDIR/key"' EXIT
+          curl -fsSL https://api.github.com/meta \
+            | jq -r '.ssh_keys[] | "github.com " + .' > "$SSHDIR/known_hosts"
+          test -s "$SSHDIR/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $SSHDIR/key -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=$SSHDIR/known_hosts -o StrictHostKeyChecking=yes"
+          git -C "$PUBLISH" push --force \
+            "git@github.com:${PREVIEW_REPO}.git" "HEAD:refs/heads/gh-pages"
+          echo "Published ${SHA:0:8} to ${DOCS_PREVIEW_URL}" >> "$GITHUB_STEP_SUMMARY"
