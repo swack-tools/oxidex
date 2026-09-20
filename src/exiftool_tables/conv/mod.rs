@@ -38,7 +38,16 @@
 //! probe through the arm and requires the same bytes -- or a decline, which
 //! is counted. A disagreement fails the build.
 
+// BEGIN GENERATED CONVERSION REGISTRY
 pub mod exif_main;
+
+pub static REGISTRY: &[Entry] = &[Entry {
+    module: "Exif",
+    table: "Main",
+    decode: exif_main::decode,
+    claims: exif_main::claims,
+}];
+// END GENERATED CONVERSION REGISTRY
 pub mod rt;
 
 pub use rt::{Decline, Out, R};
@@ -49,11 +58,35 @@ use super::session::{MemberVal, Session};
 /// A generated table's entry point: `decode(session, id, $val)`.
 pub type Decode = fn(&mut Session, u16, &MemberVal) -> Arm;
 
+/// One generated table, keyed by its exact ExifTool identity. The decoder and
+/// claim predicate travel together so dispatch cannot accidentally borrow the
+/// first table's claim set for another table.
+pub struct Entry {
+    pub module: &'static str,
+    pub table: &'static str,
+    pub decode: Decode,
+    pub claims: fn(u16) -> bool,
+}
+
+fn entry_in(entries: &'static [Entry], table: &IfdTable) -> Option<&'static Entry> {
+    entries
+        .binary_search_by_key(&(table.module, table.table), |entry| {
+            (entry.module, entry.table)
+        })
+        .ok()
+        .map(|index| &entries[index])
+}
+
+#[cfg(test)]
+fn decoder_in(entries: &'static [Entry], table: &IfdTable) -> Option<Decode> {
+    entry_in(entries, table).map(|entry| entry.decode)
+}
+
 /// The generated decoder for `table`, if one was generated. Keyed by the
 /// table's ExifTool identity, never by a caller's name for it.
 #[must_use]
 pub fn decoder(table: &IfdTable) -> Option<Decode> {
-    (table.module == "Exif" && table.table == "Main").then_some(exif_main::decode as Decode)
+    entry_in(REGISTRY, table).map(|entry| entry.decode)
 }
 
 /// Whether `table`'s generated decoder takes plain tag `tag`: an arm exists
@@ -63,8 +96,11 @@ pub fn decoder(table: &IfdTable) -> Option<Decode> {
 /// table withholds its conversion (`omitted`): the arm is the conversion.
 #[must_use]
 pub fn claims(table: &IfdTable, tag: &IfdTag) -> bool {
-    decoder(table).is_some()
-        && exif_main::claims(tag.id)
+    claims_in(REGISTRY, table, tag)
+}
+
+fn claims_in(entries: &'static [Entry], table: &IfdTable, tag: &IfdTag) -> bool {
+    entry_in(entries, table).is_some_and(|entry| (entry.claims)(tag.id))
         && tag.subdir.is_none()
         && !tag.flags.unknown
         && !tag.omitted.condition

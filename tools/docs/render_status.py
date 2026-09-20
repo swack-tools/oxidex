@@ -459,8 +459,18 @@ def collect_expressions(root):
 
 def collect_artifacts(root):
     module = import_file("artifacts", root / ARTIFACTS)
-    module.validate()
-    items = list(module.select("all", "all", None))
+    # artifacts.py keeps the conversion generator lazy so it remains
+    # importable in scratch repositories.  Once a generated conversion hub is
+    # present, its validator imports conv_codegen during the later inventory
+    # call.  Keep that dependency available for the whole validation/selection
+    # boundary; import_file() intentionally restores sys.path after loading.
+    saved = list(sys.path)
+    sys.path.insert(0, str((root / "tools/exiftool-tables").resolve()))
+    try:
+        module.validate()
+        items = list(module.select("all", "all", None))
+    finally:
+        sys.path[:] = saved
     if not items:
         raise SourceError(f"{ARTIFACTS}: the inventory lists no outputs")
     tiers: dict[str, int] = {}
