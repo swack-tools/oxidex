@@ -855,9 +855,13 @@ def _ci_state(checks: Any) -> str:
 
 
 def read_remote_inventory(
-    repo: Path, state: Mapping[str, Any]
+    repo: Path, state: Mapping[str, Any], task_number: int | None = None
 ) -> dict[str, Any]:
-    """Read branches, PRs, checks, and merges without changing local or remote refs."""
+    """Read branches, PRs, checks, and merges without changing local or remote refs.
+
+    A single-task reconciliation authenticates only that task's PR, so a
+    historical PR on another task cannot prevent its observation.
+    """
     repository = require_operational_path(repo)
     target_ref = str(state["target_ref"])
     target_name = target_ref.removeprefix("origin/")
@@ -916,6 +920,8 @@ def read_remote_inventory(
 
     tasks: dict[str, dict[str, Any]] = {}
     for key, task in state["tasks"].items():
+        if task_number is not None and int(key) != task_number:
+            continue
         branch = _task_branch(task)
         pushed_sha = refs.get(f"refs/heads/{branch}")
         pr = prs_by_branch.get(branch)
@@ -2655,7 +2661,9 @@ def dispatch(args: argparse.Namespace) -> Any:
         )
     if args.command == "reconcile":
         repository = require_operational_path(args.repo)
-        inventory = read_remote_inventory(repository, store.read_snapshot())
+        inventory = read_remote_inventory(
+            repository, store.read_snapshot(), task_number=args.task
+        )
         remote = inventory["tasks"].get(str(args.task), {})
         return reconcile_task(store, args.task, remote)
     if args.command == "recover":
