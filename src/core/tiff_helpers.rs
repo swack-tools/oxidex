@@ -4,19 +4,21 @@
 //! processing tags, and handling sub-IFDs (EXIF, GPS), MakerNotes, and GeoTiff.
 
 use super::{FileReader, MetadataMap, TagValue};
-use crate::core::exif_dir_engine::{self, engine_row_value};
+use crate::core::exif_dir_engine;
+#[cfg(test)]
+use crate::core::exif_dir_engine::engine_row_value;
 use crate::core::formatters::composite_image_exposure_times::format_composite_image_exposure_times;
 use crate::core::operations_helpers::read_u32;
+use crate::core::read_options::ReadOptions;
 use crate::core::tag_conversion::{
     apply_tile_offsets_value_conv, exif_raw_conv_drops_entry, gps_coordinate_degrees,
     raw_bytes_to_tag_value,
 };
 use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+#[cfg(test)]
+use crate::exiftool_tables::engine_reports;
 use crate::exiftool_tables::session::{MemberVal, Session};
-use crate::exiftool_tables::{
-    Ctx, Emitted, EntryRead, IfdDir, IfdTable, MemberValue, engine_reports, find_ifd_table,
-    process_exif_decoded, read_ifd,
-};
+use crate::exiftool_tables::{Ctx, IfdTable, MemberValue, find_ifd_table};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
@@ -27,7 +29,71 @@ use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
 use crate::tag_db::lookup_tag_name;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Maps the surviving rows returned by [`parse_ifd`] back to their physical
+/// slots in the on-disk entry array.
+///
+/// `parse_ifd` deliberately skips malformed entries. Its vector index is
+/// therefore not a stable occurrence identity, while the generated reader's
+/// [`crate::exiftool_tables::RootReads`] is indexed by the physical slot. A
+/// shared producer must use this mapping before asking [`DirEngineRows`] who
+/// owns an occurrence.
+pub(crate) fn physical_entry_indices(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    tags: &[(u16, u16, u32, std::borrow::Cow<'static, [u8]>)],
+) -> Option<Vec<usize>> {
+    fn u16_at(bytes: &[u8], byte_order: ByteOrder) -> u16 {
+        match byte_order {
+            ByteOrder::LittleEndian => u16::from_le_bytes([bytes[0], bytes[1]]),
+            ByteOrder::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
+        }
+    }
+    fn u32_at(bytes: &[u8], byte_order: ByteOrder) -> u32 {
+        match byte_order {
+            ByteOrder::LittleEndian => u32::from_le_bytes(bytes.try_into().expect("four bytes")),
+            ByteOrder::BigEndian => u32::from_be_bytes(bytes.try_into().expect("four bytes")),
+        }
+    }
+
+    let count = usize::from(ifd_entry_count(reader, ifd_offset, byte_order)?);
+    let mut physical = Vec::with_capacity(tags.len());
+    let mut search_from = 0usize;
+
+    for (tag_id, field_type, value_count, raw_bytes) in tags {
+        let mut found = None;
+        for index in search_from..count {
+            let entry_offset = ifd_offset
+                .checked_add(2)?
+                .checked_add(u64::try_from(index.checked_mul(12)?).ok()?)?;
+            let entry = reader.read(entry_offset, 12).ok()?;
+            if u16_at(&entry[0..2], byte_order) != *tag_id
+                || u16_at(&entry[2..4], byte_order) != *field_type
+                || u32_at(&entry[4..8], byte_order) != *value_count
+            {
+                continue;
+            }
+
+            let raw = raw_bytes.as_ref();
+            let matches_value = if raw.len() <= 4 {
+                entry[8..8 + raw.len()] == *raw
+            } else {
+                let value_offset = u64::from(u32_at(&entry[8..12], byte_order));
+                reader.read(value_offset, raw.len()).ok() == Some(raw)
+            };
+            if matches_value {
+                found = Some(index);
+                break;
+            }
+        }
+        let index = found?;
+        physical.push(index);
+        search_from = index.checked_add(1)?;
+    }
+    Some(physical)
+}
 
 // =============================================================================
 // Interoperability IFD Tag Constants
@@ -292,29 +358,58 @@ pub fn parse_ifd_chain(
     byte_order: ByteOrder,
     metadata: &mut MetadataMap,
 ) -> crate::error::Result<()> {
+    parse_ifd_chain_with_optional_options(reader, first_offset, byte_order, None, metadata)
+}
+
+/// [`parse_ifd_chain`] with the caller's real tag request propagated to
+/// silent `SubDirectory` edge ownership decisions.
+pub(crate) fn parse_ifd_chain_with_options(
+    reader: &dyn FileReader,
+    first_offset: u64,
+    byte_order: ByteOrder,
+    options: &ReadOptions,
+    metadata: &mut MetadataMap,
+) -> crate::error::Result<()> {
+    parse_ifd_chain_with_optional_options(reader, first_offset, byte_order, Some(options), metadata)
+}
+
+fn parse_ifd_chain_with_optional_options(
+    reader: &dyn FileReader,
+    first_offset: u64,
+    byte_order: ByteOrder,
+    options: Option<&ReadOptions>,
+    metadata: &mut MetadataMap,
+) -> crate::error::Result<()> {
     let mut ifd_offset = first_offset;
     let mut ifd_index = 0;
+    let mut visited_ifds = HashSet::new();
     let mut session = Session::new();
     let mut members = HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
 
     while ifd_offset != 0 {
+        if !visited_ifds.insert(ifd_offset) {
+            eprintln!("Warning: cyclic next-IFD pointer to offset {ifd_offset}, stopping");
+            break;
+        }
         // Determine IFD name based on index
         let ifd_name = get_ifd_name(ifd_index);
 
         // Parse this IFD
         let tags = parse_ifd(reader, ifd_offset, byte_order)?;
 
-        // Slice v2-ifd0: IFD0 (only; IFD1 and later pages stay hand) is
-        // produced by the generated `Exif::Main` for every ordinary entry it
-        // reports, over the whole file -- the TIFF block of a standalone
-        // TIFF, whose header is byte 0.
-        let tiff = (ifd_index == 0)
+        let physical_indices = physical_entry_indices(reader, ifd_offset, byte_order, &tags);
+
+        // IFD0 and IFD1 share the generated `Exif::Main` producer. Later
+        // pages remain on their existing hand path. The physical-index map
+        // is a precondition: without it a malformed skipped entry could make
+        // the two producers disagree about which occurrence they own.
+        let tiff = (ifd_index <= 1 && physical_indices.is_some())
             .then(|| usize::try_from(reader.size()).ok())
             .flatten()
             .and_then(|len| reader.read(0, len).ok());
-        let mut engine = tiff.as_deref().and_then(|tiff| {
-            crate::core::exif_dir_engine::ifd0_walk_with_session(
+        let mut engine = tiff.as_deref().and_then(|tiff| match ifd_index {
+            0 => crate::core::exif_dir_engine::ifd0_walk_with_session(
                 tiff,
                 0,
                 ifd_offset,
@@ -322,30 +417,82 @@ pub fn parse_ifd_chain(
                 metadata,
                 &mut session,
                 &mut cond_ctx,
-            )
+            ),
+            1 => find_ifd_table("Exif", "Main")
+                .filter(|table| table.enabled())
+                .map(|table| {
+                    ifd1_engine_rows(
+                        table,
+                        tiff,
+                        0,
+                        ifd_offset,
+                        byte_order,
+                        false,
+                        metadata,
+                        &mut session,
+                        &mut cond_ctx,
+                    )
+                    .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
+                }),
+            _ => None,
         });
 
+        // An ExifIFD may alias the linked next-IFD directory physically.
+        // The shared session guard then owns the entire repeated IFD1
+        // adapter: do not let its pointer, MakerNote, IPTC, GeoTIFF or
+        // PrintIM handlers replay before route_entry gets a chance to say
+        // Silent. We still read the on-disk next pointer below so traversal
+        // remains bounded and later top-level pages remain reachable.
+        let adapter_already_processed = engine
+            .as_ref()
+            .is_some_and(crate::core::exif_dir_engine::DirEngineRows::already_processed);
+
         // Process IFD tags and get sub-IFD information
-        let (exif_offset, gps_offset, makernote_data) =
-            process_tiff_ifd_tags(&tags, ifd_name, byte_order, engine.as_mut(), metadata);
-        if let Some(engine) = engine {
-            engine.drain_ifd0(metadata);
-        }
+        let (exif_offset, gps_offset, makernote_data) = if adapter_already_processed {
+            (None, None, None)
+        } else {
+            let offsets = process_tiff_ifd_tags_indexed(
+                &tags,
+                physical_indices.as_deref(),
+                ifd_name,
+                byte_order,
+                engine.as_mut(),
+                metadata,
+            );
+            if let Some(engine) = engine {
+                engine.finish(metadata, |name| format!("{ifd_name}:{name}"), |_, _| true);
+            }
+            offsets
+        };
 
         // Parse EXIF Sub-IFD if present. A standalone TIFF's structure starts
         // at file offset 0, so the TIFF base ExifTool adds to stored offsets
         // is 0 here, and the whole file is the enclosing TIFF block.
         if let Some(offset) = exif_offset {
-            parse_exif_subifd_with_session(
-                reader,
-                offset,
-                byte_order,
-                0,
-                reader.size(),
-                &mut session,
-                &mut cond_ctx,
-                metadata,
-            );
+            if let Some(options) = options {
+                parse_exif_subifd_with_session_and_options(
+                    reader,
+                    offset,
+                    byte_order,
+                    0,
+                    reader.size(),
+                    options,
+                    &mut session,
+                    &mut cond_ctx,
+                    metadata,
+                );
+            } else {
+                parse_exif_subifd_with_session(
+                    reader,
+                    offset,
+                    byte_order,
+                    0,
+                    reader.size(),
+                    &mut session,
+                    &mut cond_ctx,
+                    metadata,
+                );
+            }
         }
 
         // Parse GPS Sub-IFD if present
@@ -477,6 +624,29 @@ mod parse_ifd_chain_malformed_entry_tests {
         // second page from a misread pointer.
         assert_eq!(metadata.get_integer("File:PageCount"), None);
     }
+
+    #[test]
+    fn a_cyclic_next_ifd_pointer_processes_the_physical_directory_once() {
+        let mut data = b"II\x2a\0\x08\0\0\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x010fu16.to_le_bytes()); // Make
+        data.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.extend_from_slice(b"A\0\0\0");
+        data.extend_from_slice(&8u32.to_le_bytes()); // cycle to this IFD
+
+        let reader = TestReader::new(data);
+        let mut metadata = MetadataMap::new();
+        parse_ifd_chain(&reader, 8, ByteOrder::LittleEndian, &mut metadata)
+            .expect("a cyclic chain is bounded by physical identity");
+
+        let make_rows = metadata
+            .all_occurrences()
+            .filter(|(key, _)| key.ends_with(":Make"))
+            .count();
+        assert_eq!(make_rows, 1, "the same physical IFD must not be replayed");
+        assert_eq!(metadata.get_integer("File:PageCount"), None);
+    }
 }
 
 /// Gets the canonical IFD name for a given index.
@@ -527,6 +697,24 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
     mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
 ) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
+    process_tiff_ifd_tags_indexed(
+        tags,
+        None,
+        ifd_name,
+        byte_order,
+        engine.as_deref_mut(),
+        metadata,
+    )
+}
+
+fn process_tiff_ifd_tags_indexed<'a>(
+    tags: &'a [(u16, u16, u32, std::borrow::Cow<[u8]>)],
+    physical_indices: Option<&[usize]>,
+    ifd_name: &str,
+    byte_order: ByteOrder,
+    mut engine: Option<&mut exif_dir_engine::DirEngineRows>,
+    metadata: &mut MetadataMap,
+) -> (Option<u64>, Option<u64>, Option<&'a [u8]>) {
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
     let mut makernote_data: Option<&[u8]> = None;
@@ -538,7 +726,11 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
     let mut model_transformation: Option<&[u8]> = None;
 
     // Convert tags to metadata
-    for (tag_id, field_type, value_count, raw_bytes) in tags {
+    for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in tags.iter().enumerate() {
+        let entry_index = physical_indices
+            .and_then(|indices| indices.get(survivor_index))
+            .copied()
+            .unwrap_or(survivor_index);
         // Convert Cow<[u8]> to &[u8] for processing
         let bytes = raw_bytes.as_ref();
 
@@ -688,10 +880,20 @@ pub(crate) fn process_tiff_ifd_tags<'a>(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
-        if let Some(engine) = engine.as_deref_mut()
-            && engine.take_ifd0(*tag_id, metadata)
-        {
-            continue;
+        if let Some(engine) = engine.as_deref_mut() {
+            match engine.route_entry(
+                entry_index,
+                *tag_id,
+                false,
+                false,
+                exif_dir_engine::Owner::Silent,
+                metadata,
+                |name| format!("{ifd_name}:{name}"),
+                |_, _| true,
+            ) {
+                exif_dir_engine::Owner::Engine | exif_dir_engine::Owner::Silent => continue,
+                exif_dir_engine::Owner::Hand => {}
+            }
         }
 
         // An Exif::Main RawConv that returns undef creates no tag at all
@@ -927,12 +1129,54 @@ pub(crate) fn parse_exif_subifd_with_session(
     ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
 ) {
+    parse_exif_subifd_with_optional_options(
+        reader, offset, byte_order, tiff_base, tiff_len, None, session, ctx, metadata,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_exif_subifd_with_session_and_options(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    options: &ReadOptions,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
+    metadata: &mut MetadataMap,
+) {
+    parse_exif_subifd_with_optional_options(
+        reader,
+        offset,
+        byte_order,
+        tiff_base,
+        tiff_len,
+        Some(options),
+        session,
+        ctx,
+        metadata,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_exif_subifd_with_optional_options(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    options: Option<&ReadOptions>,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
+    metadata: &mut MetadataMap,
+) {
     // Slice E-2. The lookup is spelled with literal arguments because
     // `tools/exiftool-tables/reachability.py` counts literal call sites;
     // `enabled()` re-checks Gate A and the allowlist at runtime.
     let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
     parse_exif_directory_with_session(
-        reader, offset, byte_order, tiff_base, tiff_len, table, session, ctx, metadata,
+        reader, offset, byte_order, tiff_base, tiff_len, table, options, session, ctx, metadata,
     );
 }
 
@@ -970,19 +1214,10 @@ const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
 /// commit: before it the hand arm reported them (DJI_XT2.jpg's 0x02bc
 /// ApplicationNotes, an XMP edge, was a census EXTRA).
 ///
-/// Accepted loss, by name only: ExifTool DOES report an edge tag requested
-/// by name (Exif.pm:7104 `next unless $doMaker or
-/// $$et{REQ_TAG_LOOKUP}{lc($tagStr)} ...` -- pinned `-j -ApplicationNotes`
-/// on DJI_XT2.jpg prints its `(Binary data 1035 bytes, ...)`), and before
-/// D-3 so did oxidex (`-ExifIFD:ApplicationNotes`). A silenced edge has no
-/// row, so that request now returns nothing: the default listing (the
-/// census) gains, a by-name request of one of the 27 edge ids loses -- and
-/// with it a by-name copy, `-TagsFromFile DJI_XT2.jpg
-/// -ExifIFD:ApplicationNotes`, which control and ExifTool make. A
-/// by-name-only row needs the request to reach this walk (`ReadOptions`
-/// does not), a later change. Writes to the file itself are unaffected: the
-/// surgical writers still edit or delete an entry the reader surfaces no row
-/// for. Revert this commit alone to restore the rows.
+/// A request-aware caller may restore the physical edge row by passing
+/// [`ReadOptions`]: ExifTool reports an edge requested by name (Exif.pm:7104
+/// `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default listing remains
+/// silent. The legacy wrapper intentionally supplies no request.
 const EXIF_IFD_SILENCE_EDGES: bool = true;
 
 /// The key an engine-produced ExifIFD row is recorded under: ExifTool's
@@ -1006,11 +1241,13 @@ fn parse_exif_directory_with_session(
     tiff_base: u64,
     tiff_len: u64,
     table: Option<&'static IfdTable>,
+    options: Option<&ReadOptions>,
     session: &mut Session,
     ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
+        let physical_indices = physical_entry_indices(reader, offset, byte_order, &exif_tags);
         // Track MakerNote and InteroperabilityIFD pointer in EXIF IFD
         // An EXIF IFD may declare 0x927C more than once -- an editor that
         // appends its own private block leaves the camera's in place, and
@@ -1032,6 +1269,7 @@ fn parse_exif_directory_with_session(
         // hand arm alone, unchanged. Its `Make`/`Model` members are the same
         // trimmed IFD0 rows.
         let mut engine = table
+            .filter(|_| physical_indices.is_some())
             .and_then(|table| {
                 let len = usize::try_from(tiff_len.min(reader.size())).ok()?;
                 Some((table, reader.read(0, len).ok()?))
@@ -1066,8 +1304,24 @@ fn parse_exif_directory_with_session(
                 .with_stored_forms()
             });
 
+        // The guard applies to the directory as a whole, not only ordinary
+        // rows. Stop before queuing MakerNotes, previews or nested edges.
+        if engine
+            .as_ref()
+            .is_some_and(exif_dir_engine::DirEngineRows::already_processed)
+        {
+            return;
+        }
+
         // First pass: convert tags and capture special pointers
-        for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
+        for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in
+            exif_tags.iter().enumerate()
+        {
+            let entry_index = physical_indices
+                .as_deref()
+                .and_then(|indices| indices.get(survivor_index))
+                .copied()
+                .unwrap_or(survivor_index);
             // Convert Cow<[u8]> to &[u8] for processing
             let bytes = raw_bytes.as_ref();
 
@@ -1103,15 +1357,19 @@ fn parse_exif_directory_with_session(
             let mut priority = SHIM_DEFAULT_PRIORITY;
             if let Some(engine) = engine.as_mut() {
                 let silence = EXIF_IFD_SILENCE_EDGES && *tag_id != INTEROPERABILITY_IFD_POINTER;
-                match engine.owner(*tag_id, silence) {
-                    exif_dir_engine::Owner::Engine => {
-                        if engine.replay(*tag_id, metadata, exif_ifd_key, exif_ifd_keep)
-                            || !engine.undecoded(*tag_id)
-                        {
-                            continue;
-                        }
-                    }
-                    exif_dir_engine::Owner::Silent => continue,
+                let requested_edge = options
+                    .is_some_and(|options| requested_subdir_edge(engine.table(), *tag_id, options));
+                match engine.route_entry(
+                    entry_index,
+                    *tag_id,
+                    silence,
+                    requested_edge,
+                    exif_dir_engine::Owner::Silent,
+                    metadata,
+                    exif_ifd_key,
+                    exif_ifd_keep,
+                ) {
+                    exif_dir_engine::Owner::Engine | exif_dir_engine::Owner::Silent => continue,
                     exif_dir_engine::Owner::Hand => {
                         if exif_dir_engine::tag_priority_is_zero(engine.table(), *tag_id) {
                             priority = 0;
@@ -1173,7 +1431,7 @@ fn parse_exif_directory_with_session(
         // drops a malformed entry `read_ifd` may accept), still before the
         // MakerNote pass.
         if let Some(engine) = engine {
-            engine.drain(metadata, exif_ifd_key, exif_ifd_keep);
+            engine.finish(metadata, exif_ifd_key, exif_ifd_keep);
         }
 
         // Second pass: parse the MakerNote found in the EXIF IFD. The decoder
@@ -1210,6 +1468,19 @@ fn parse_exif_directory_with_session(
             );
         }
     }
+}
+
+fn requested_subdir_edge(table: &IfdTable, id: u16, options: &ReadOptions) -> bool {
+    table
+        .tag(id)
+        .into_iter()
+        .chain(
+            table
+                .variant_group(id)
+                .into_iter()
+                .flat_map(|group| group.alternatives.iter().map(|(_, tag)| tag)),
+        )
+        .any(|tag| tag.subdir.is_some() && options.is_requested(tag.name))
 }
 
 /// IFD0's offset as the TIFF header at `reader` offset 0 declares it (bytes
@@ -1378,11 +1649,13 @@ fn parse_interop_directory_with_session(
     let Ok(interop_tags) = parse_ifd(reader, offset, byte_order) else {
         return;
     };
+    let physical_indices = physical_entry_indices(reader, offset, byte_order, &interop_tags);
 
     // The engine reads the TIFF block as one slice (ExifTool's `DataPt`,
     // offsets from its byte 0); the hand arms read `reader`. `None` = the
     // hand arms alone, unchanged.
     let mut engine = table
+        .filter(|_| physical_indices.is_some())
         .and_then(|table| {
             let len = usize::try_from(tiff_len.min(reader.size())).ok()?;
             Some((table, reader.read(0, len).ok()?))
@@ -1417,26 +1690,39 @@ fn parse_interop_directory_with_session(
             .at_priority(SHIM_DEFAULT_PRIORITY)
         });
 
+    if engine
+        .as_ref()
+        .is_some_and(exif_dir_engine::DirEngineRows::already_processed)
+    {
+        return;
+    }
+
     let mut other_image_start: Option<u64> = None;
     let mut other_image_length: Option<u64> = None;
 
-    for (tag_id, field_type, value_count, raw_bytes) in &interop_tags {
+    for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in
+        interop_tags.iter().enumerate()
+    {
+        let entry_index = physical_indices
+            .as_deref()
+            .and_then(|indices| indices.get(survivor_index))
+            .copied()
+            .unwrap_or(survivor_index);
         let bytes = raw_bytes.as_ref();
 
-        if let Some(engine) = engine.as_mut()
-            && INTEROP_RESIDUAL_IDS.binary_search(tag_id).is_err()
-        {
-            // An engine-reported id replays its row here; any other id
-            // produces nothing, as the hand arm dropped every id it did not
-            // name (the `_` arm below). An engine-reported id with no row --
-            // the engine refused the value (one it cannot locate inside the
-            // TIFF block; before K-O also one stored before the directory)
-            // or the whole directory -- falls through to its hand arm, the
-            // pre-engine producer.
-            if engine.owner(*tag_id, false) != exif_dir_engine::Owner::Engine
-                || engine.replay(*tag_id, metadata, interop_key, interop_keep)
-            {
-                continue;
+        if let Some(engine) = engine.as_mut() {
+            match engine.route_entry(
+                entry_index,
+                *tag_id,
+                false,
+                false,
+                exif_dir_engine::Owner::Hand,
+                metadata,
+                interop_key,
+                interop_keep,
+            ) {
+                exif_dir_engine::Owner::Engine | exif_dir_engine::Owner::Silent => continue,
+                exif_dir_engine::Owner::Hand => {}
             }
         }
 
@@ -1501,7 +1787,7 @@ fn parse_interop_directory_with_session(
 
     // Engine rows whose entry the hand walk never reached.
     if let Some(engine) = engine {
-        engine.drain(metadata, interop_key, interop_keep);
+        engine.finish(metadata, interop_key, interop_keep);
     }
 
     // ExifTool emits the offset/length pair only when both are present.
@@ -3041,7 +3327,8 @@ pub(crate) fn parse_ifd1_with_session(
             byte_order,
             tiff_base,
             Ifd1Hand::Thumbnail,
-            &[],
+            None,
+            None,
             metadata,
             &mut collected,
         );
@@ -3064,17 +3351,40 @@ pub(crate) fn parse_ifd1_with_session(
         "IFD1 at {ifd1_offset}: tiff_data and reader address different bytes"
     );
 
-    let declined = ifd1_engine_rows(
+    let Some(physical_indices) = parse_ifd(reader, ifd1_offset, byte_order)
+        .ok()
+        .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries))
+    else {
+        let mut collected = MetadataMap::new();
+        collect_ifd1_thumbnail(
+            reader,
+            ifd1_offset,
+            byte_order,
+            tiff_base,
+            Ifd1Hand::Thumbnail,
+            None,
+            None,
+            metadata,
+            &mut collected,
+        );
+        metadata.merge(collected);
+        return;
+    };
+
+    let engine = ifd1_engine_rows(
         table,
         tiff_data,
         tiff_base,
         ifd1_offset,
         byte_order,
         low_priority_dir,
+        metadata,
         session,
         ctx,
-        metadata,
     );
+    if engine.already_processed() {
+        return;
+    }
 
     let priority = if low_priority_dir {
         0
@@ -3088,7 +3398,8 @@ pub(crate) fn parse_ifd1_with_session(
         byte_order,
         tiff_base,
         Ifd1Hand::Residual { priority },
-        &declined,
+        Some(engine),
+        Some(&physical_indices),
         metadata,
         &mut collected,
     );
@@ -3109,10 +3420,9 @@ pub(crate) fn parse_ifd1_with_session(
 /// tag declares a `Priority` other than 0 (`Emitted::low_priority` carries
 /// those and the `Avoid` default), so "0 if either" is exact for this table.
 ///
-/// Returns the engine-reported ids whose entry the walk left
-/// [`EntryRead::Unread`] -- a generated arm that declined the entry where the
-/// static table withholds the conversion (mixed mode): the residual hand
-/// collector produces those entries as it did before the arm existed.
+/// Returns the shared occurrence-index route for IFD1. The hand collector
+/// asks it once for every physical entry, exactly like IFD0, ExifIFD and
+/// InteropIFD.
 fn ifd1_engine_rows(
     table: &'static IfdTable,
     tiff_data: &[u8],
@@ -3120,15 +3430,12 @@ fn ifd1_engine_rows(
     ifd1_offset: u64,
     byte_order: ByteOrder,
     low_priority_dir: bool,
+    context: &MetadataMap,
     session: &mut Session,
     ctx: &mut Ctx<'_>,
-    metadata: &mut MetadataMap,
-) -> Vec<u16> {
-    let Ok(ifd_start) = usize::try_from(ifd1_offset) else {
-        return Vec::new();
-    };
+) -> exif_dir_engine::DirEngineRows {
     for (member, key) in [("Make", "IFD0:Make"), ("Model", "IFD0:Model")] {
-        if let Some(text) = metadata.get(key).and_then(TagValue::as_string) {
+        if let Some(text) = context.get(key).and_then(TagValue::as_string) {
             ctx.members
                 .insert(member, MemberValue::Str(text.to_string()));
             session
@@ -3136,73 +3443,23 @@ fn ifd1_engine_rows(
                 .expect("Make and Model are UTF-8 metadata strings");
         }
     }
-    let mut emitted = Vec::new();
-    let reads = process_exif_decoded(
+    let rows = exif_dir_engine::walk_with_session(
         table,
-        IfdDir {
-            data: tiff_data,
-            data_domain,
-            ifd_start,
-            // Stored offsets are TIFF-relative and `tiff_data[0]` is the
-            // TIFF header, so no correction.
-            base: Some(0),
-            byte_order: byte_order.to_io_byte_order(),
-            // SET_GROUP1: `ifd_engine::group1_of` reports this verbatim.
-            group1: Some("IFD1"),
-        },
+        tiff_data,
+        data_domain,
+        ifd1_offset,
+        byte_order,
+        "IFD1",
+        context,
         session,
         ctx,
-        &mut emitted,
-    );
-    let declined: Vec<u16> = match (
-        reads,
-        read_ifd(tiff_data, ifd_start, byte_order.to_io_byte_order()),
-    ) {
-        (Some(reads), Some(entries)) => entries
-            .iter()
-            .zip(&reads.entries)
-            .filter(|(entry, read)| {
-                **read == EntryRead::Unread && engine_reports(table, entry.tag_id)
-            })
-            .map(|(entry, _)| entry.tag_id)
-            .collect(),
-        _ => Vec::new(),
-    };
-    for row in emitted {
-        // FENCE: this call site reports IFD1's own `Exif::Main` rows only.
-        // Anything else arrived through a `SubDirectory` edge whose target
-        // the hand walks own (ExifIFD, InteropIFD, GPS, ...): ExifTool's
-        // PROCESSED guard would skip an already-walked directory, and the
-        // engine's `Guard` cannot see the hand walks. None can arrive today
-        // (the same-table edges are emitted unwalked and GPS::Main is not
-        // enabled); the day an edge target gets an allowlist line, this is
-        // what keeps an IFD1 pointer from duplicating a hand walk.
-        if !is_ifd1_exif_main_row(&row) {
-            continue;
-        }
-        let priority = if low_priority_dir || row.low_priority {
-            0
-        } else {
-            SHIM_DEFAULT_PRIORITY
-        };
-        // `--no-print-conv` shows ExifTool's `-n` form: the engine's
-        // pre-PrintConv value when a PrintConv rendered the row, else the
-        // row itself (`TagOccurrence::value_conv` must not re-derive one from
-        // a printed string).
-        let display = engine_row_value(row.value);
-        let no_print_conv = row
-            .value_conv
-            .map_or_else(|| display.clone(), engine_row_value);
-        metadata.insert_occurrence_with_raw(
-            format!("IFD1:{}", row.name),
-            display,
-            no_print_conv,
-            priority,
-            IFD1_GROUP1,
-            Instance::default(),
-        );
+    )
+    .with_ifd1_forms();
+    if low_priority_dir {
+        rows.at_uniform_priority(0)
+    } else {
+        rows
     }
-    declined
 }
 
 /// The `group1` every IFD1 occurrence is recorded under: empty, like every
@@ -3216,12 +3473,6 @@ fn ifd1_engine_rows(
 /// `LOW_PRIORITY_DIR` arbitration.
 const IFD1_GROUP1: &str = "";
 
-/// The fence of [`ifd1_engine_rows`]: a row of `Exif::Main` itself, walked
-/// under DirName `IFD1`.
-fn is_ifd1_exif_main_row(row: &Emitted) -> bool {
-    row.module == "Exif" && row.table == "Main" && row.group1 == "IFD1"
-}
-
 // Separate incoming precedence context from newly emitted occurrences so a
 // complete directory can order the same thumbnail results among ordinary tags.
 // `ifd1_offset` has already passed `legal_ifd1_offset`.
@@ -3231,7 +3482,8 @@ fn collect_ifd1_thumbnail(
     byte_order: ByteOrder,
     tiff_base: u64,
     mode: Ifd1Hand,
-    declined: &[u16],
+    mut engine: Option<exif_dir_engine::DirEngineRows>,
+    physical_indices: Option<&[usize]>,
     context: &MetadataMap,
     metadata: &mut MetadataMap,
 ) {
@@ -3244,14 +3496,26 @@ fn collect_ifd1_thumbnail(
     let mut thumb_offset: Option<u64> = None;
     let mut thumb_length: Option<u64> = None;
 
-    for (tag_id, field_type, value_count, raw_bytes) in &entries {
-        // Beside the engine, the hand path reads only the ids the generated
-        // table leaves to it; everything else is the engine's.
-        if residual
-            && IFD1_RESIDUAL_IDS.binary_search(tag_id).is_err()
-            && !declined.contains(tag_id)
-        {
-            continue;
+    for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in entries.iter().enumerate()
+    {
+        let entry_index = physical_indices
+            .and_then(|indices| indices.get(survivor_index))
+            .copied()
+            .unwrap_or(survivor_index);
+        if residual && let Some(engine) = engine.as_mut() {
+            match engine.route_entry(
+                entry_index,
+                *tag_id,
+                false,
+                false,
+                exif_dir_engine::Owner::Silent,
+                metadata,
+                |name| format!("IFD1:{name}"),
+                |_, _| true,
+            ) {
+                exif_dir_engine::Owner::Engine | exif_dir_engine::Owner::Silent => continue,
+                exif_dir_engine::Owner::Hand => {}
+            }
         }
         match *tag_id {
             TAG_SUBFILE_TYPE => {
@@ -3376,6 +3640,10 @@ fn collect_ifd1_thumbnail(
         }
     }
 
+    if let Some(engine) = engine {
+        engine.finish(metadata, |name| format!("IFD1:{name}"), |_, _| true);
+    }
+
     if let Some((name, tiff)) = rebuild_thumbnail_tiff(reader, &entries, byte_order) {
         // RebuildTIFF names the rebuilt image after the SubfileType tag's
         // groups (family 1 = IFD1), calling it PreviewTIFF above 256 pixels
@@ -3494,7 +3762,8 @@ pub fn parse_ifd1_directory(
         byte_order,
         tiff_base,
         Ifd1Hand::Thumbnail,
-        &[],
+        None,
+        None,
         metadata,
         &mut collected,
     );
@@ -4336,6 +4605,7 @@ fn parse_exif_directory(
         tiff_base,
         tiff_len,
         table,
+        None,
         &mut session,
         &mut ctx,
         metadata,
@@ -4903,11 +5173,6 @@ mod exif_subifd_tests {
     /// (engine off) still reports it. The 0xa005 pointer stays the hand's
     /// (spec 0.4): a well-formed one is followed, not reported.
     ///
-    /// This pins the accepted by-name loss too (review finding, E-2; see
-    /// [`EXIF_IFD_SILENCE_EDGES`]): the map has no edge row at all, so
-    /// `-ExifIFD:ApplicationNotes` finds nothing where pinned ExifTool's
-    /// `-ApplicationNotes` reports the tag. A change that restores by-name
-    /// rows turns this red on purpose.
     #[test]
     fn edge_ids_report_nothing() {
         let data = exif_block(&[(0x02bc, UNDEFINED, 8, tail_at(1))], b"<x:xmp/>");
@@ -4919,6 +5184,41 @@ mod exif_subifd_tests {
         // An 0x8825 GPSInfo edge misplaced in an ExifIFD: silent too.
         let data = exif_block(&[(0x8825, 4, 1, 0)], &[]);
         assert!(walk_exif(&data, None, exif_main(), &[]).is_empty());
+    }
+
+    #[test]
+    fn requested_edge_id_reports_the_exact_physical_occurrence() {
+        let data = exif_block(&[(0x02bc, UNDEFINED, 8, tail_at(1))], b"<x:xmp/>");
+        let reader = TestReader::new(data.clone());
+        let options = crate::core::read_options::ReadOptions::new(
+            &["ExifIFD:ApplicationNotes".to_string()],
+            false,
+        );
+        let mut metadata = MetadataMap::new();
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+
+        parse_exif_subifd_with_session_and_options(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            data.len() as u64,
+            &options,
+            &mut session,
+            &mut ctx,
+            &mut metadata,
+        );
+
+        assert_eq!(
+            metadata.occurrences_for("ExifIFD:ApplicationNotes").len(),
+            1
+        );
+        assert!(matches!(
+            metadata.get("ExifIFD:ApplicationNotes"),
+            Some(TagValue::Binary(value)) if value == b"<x:xmp/>"
+        ));
     }
 
     /// The TIFF block of a JPEG's first `Exif\0\0` APP1 segment.
@@ -6181,23 +6481,6 @@ mod ifd1_tests {
             .filter(|key| !key.starts_with("IFD1:"))
             .collect();
         assert!(foreign.is_empty(), "rows outside IFD1: {foreign:?}");
-        // The filter itself, over rows the engine could emit through an edge.
-        let row = |module, table, group1| Emitted {
-            module,
-            table,
-            group0: "EXIF",
-            group1,
-            group2: "Image",
-            name: "ExposureTime",
-            value: TagValue::Integer(5),
-            value_conv: None,
-            low_priority: false,
-            avoid: false,
-            rational: None,
-        };
-        assert!(is_ifd1_exif_main_row(&row("Exif", "Main", "IFD1")));
-        assert!(!is_ifd1_exif_main_row(&row("Exif", "Main", "ExifIFD")));
-        assert!(!is_ifd1_exif_main_row(&row("GPS", "Main", "IFD1")));
     }
 
     /// Four corpus files aim IFD1 at a directory already walked (ExifTool:

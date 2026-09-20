@@ -128,7 +128,9 @@ use crate::parsers::xmp::generic_xml::parse_xml_file;
 use crate::parsers::xmp::parse_xmp_file;
 
 // Import format-specific parsers from operations module
-use super::operations::{parse_casio_cam_metadata, parse_jpeg_metadata, parse_tiff_metadata};
+use super::operations::{
+    parse_casio_cam_metadata, parse_jpeg_metadata, parse_tiff_metadata_with_options,
+};
 
 /// Dispatches to the appropriate format parser based on file format.
 ///
@@ -142,9 +144,9 @@ use super::operations::{parse_casio_cam_metadata, parse_jpeg_metadata, parse_tif
 /// * `options` - Step 21 request-awareness (`ReadOptions`): which specific
 ///   tags were asked for and whether OxiDex's `--extended-output` namespace
 ///   is on. Only JPEG consults this today (`JPEGQualityEstimate`'s request
-///   gate and the SOF/DQT diagnostic-tag extended gate); every other format
-///   parser's signature is unchanged and simply does not receive it. See
-///   `core::read_options` for why.
+///   gate, the SOF/DQT diagnostic-tag extended gate, and explicitly requested
+///   EXIF edge tags). Standalone TIFF receives it for the same EXIF edge-tag
+///   rule. See `core::read_options` for why.
 ///
 /// # Returns
 ///
@@ -157,7 +159,7 @@ pub fn dispatch_format_parser(
 ) -> Result<MetadataMap> {
     match format {
         FileFormat::JPEG => parse_jpeg_metadata(reader, options),
-        FileFormat::TIFF => parse_tiff_metadata(reader),
+        FileFormat::TIFF => parse_tiff_metadata_with_options(reader, options),
         FileFormat::PNG => parse_png_metadata(reader),
         FileFormat::PDF => parse_pdf_metadata(reader),
         FileFormat::PE => parse_pe_metadata(reader),
