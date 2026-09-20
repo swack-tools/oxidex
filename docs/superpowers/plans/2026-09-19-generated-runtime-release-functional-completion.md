@@ -1757,6 +1757,8 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 - Modify: `src/core/format_dispatch.rs`
 - Modify: `src/core/operations.rs`
 - Modify: `src/exiftool_tables/enabled_ifd.rs`
+- Modify: `tools/exiftool-tables/conformance.py`
+- Modify: `tools/exiftool-tables/test_conformance.py`
 - Add focused tests in these modules
 - Add: `tests/exif_shared_pipeline.rs`
 - Do not edit vendor parser directories or delete compatibility branches
@@ -1850,6 +1852,13 @@ task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-sh
 Commit the signed task candidate after tests/formatting/Clippy and before the
 conformance/read-receipt portions of the standard commands. Rebuild the
 release binary after the commit so its candidate-bound staleness check passes.
+The conformance transcript must authenticate the same stable tag surface that
+is scored: values whose logical names are in `IGNORE` (including both tools'
+`FileAccessDate` spellings) may not invalidate replay merely because a read
+advances filesystem access time. Preserve authentication of every scored key,
+value, group-qualified occurrence, and colon-bearing OxiDex name. Pin both the
+volatile-value case and a real scored-value mutation; a corpus prewarm is not
+an acceptable substitute for deterministic receipt semantics.
 Record an explicit performance disposition for the full-session staging copy:
 cite the retained 20,000-iteration timing, state the measured per-attempt cost,
 and either accept that cost for this beta with a bounded rationale or optimize
