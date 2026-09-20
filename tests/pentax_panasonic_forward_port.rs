@@ -27,3 +27,19 @@ fn pentax_caf_point_info_decodes_focus_and_selected_points() {
     assert_eq!(tags.get("Pentax:CAFPointsInFocus"), Some(&"1,4".to_string()));
     assert_eq!(tags.get("Pentax:CAFPointsSelected"), Some(&"2".to_string()));
 }
+
+/// Panasonic's legacy `MKE*` MakerNote is a fixed `Panasonic::Type2` binary
+/// record, not a TIFF IFD.  The generated 13.59 table owns its layout:
+/// string[4] at offset 0 and an int16u Gain at offset 6.
+#[test]
+fn panasonic_mke_type2_uses_generated_binary_layout() {
+    let mut tags = HashMap::new();
+    oxidex::parsers::tiff::makernotes::panasonic::parse_panasonic_makernotes(
+        b"MKE\0\0\0\x34\x12",
+        ByteOrder::BigEndian,
+        &mut tags,
+    );
+
+    assert_eq!(tags.get("Panasonic:MakerNoteType"), Some(&"MKE".to_string()));
+    assert_eq!(tags.get("Panasonic:Gain"), Some(&"4660".to_string()));
+}

@@ -42,6 +42,8 @@ use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use super::shared::ifd_parser_base::resolve_byte_order_at;
 use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
+use crate::exiftool_tables::{Ctx, Dir, find_table, process_binary_data};
+use crate::parsers::tiff::makernotes::shared::engine_value::engine_value_text;
 
 // Import declarative decoder macros
 use crate::const_decoder;
@@ -59,6 +61,38 @@ const PANASONIC_HEADER: &[u8] = b"Panasonic\0\0\0";
 /// point ExifTool at `Panasonic::Main` -- the same table and tag group as a
 /// real Panasonic body -- with the IFD starting 8 bytes in, not 12.
 const LEICA_UNNUMBERED_HEADER: &[u8] = b"LEICA\0\0\0";
+
+/// `MakerNotePanasonic2` selects the fixed `Panasonic::Type2` binary record
+/// for `MKE*` payloads and forces little-endian decoding, independently of
+/// the enclosing TIFF byte order (MakerNotes.pm:743-750).
+fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
+    data.starts_with(b"MKE")
+}
+
+/// Project the existing generated `Panasonic::Type2` table through the binary
+/// runtime. This deliberately keeps the source layout in the generated 13.59
+/// table rather than adding a second handwritten record map.
+fn insert_generated_type2(data: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(table) = find_table("Panasonic", "Type2") else {
+        return;
+    };
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    let mut rows = Vec::new();
+    process_binary_data(
+        table,
+        Dir::whole(data, crate::io::ByteOrder::Little),
+        &mut ctx,
+        &mut rows,
+    );
+    for row in rows {
+        if row.module == "Panasonic" && row.group1 == "Panasonic" {
+            if let Some(text) = engine_value_text(&row.value) {
+                tags.insert(format!("Panasonic:{}", row.name), text);
+            }
+        }
+    }
+}
 
 /// The `MakerNoteLeica10` header (MakerNotes.pm:724-731). Leica's Panasonic-built
 /// compacts -- the D-Lux 7, D-Lux 8 and V-Lux 5 -- sign "LEICA CAMERA AG\0" and
@@ -665,7 +699,7 @@ impl MakerNoteParser for PanasonicParser {
         // Panasonic header: "Panasonic\0\0\0" (12 bytes), or the unnumbered
         // "LEICA\0\0\0" (8 bytes) a bare-Make "LEICA" body writes for the
         // same Panasonic::Main table.
-        panasonic_ifd_offset(data).is_some()
+        panasonic_ifd_offset(data).is_some() || is_panasonic_type2_makernote(data)
     }
 
     fn parse(
@@ -743,6 +777,11 @@ impl PanasonicParser {
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
+            return Ok(());
+        }
+
+        if is_panasonic_type2_makernote(data) {
+            insert_generated_type2(data, tags);
             return Ok(());
         }
 
