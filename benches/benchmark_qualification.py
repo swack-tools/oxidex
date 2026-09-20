@@ -12,18 +12,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import statistics
 import tomllib
 from pathlib import Path
 from typing import Any
 
 
-EXPECTED_CANDIDATE_SHA = "32aaf737339ef3020d35128accda217990f1350b"
 EXPECTED_EXIFTOOL_VERSION = "13.59"
 EXPECTED_CORPUS_COUNT = 194
 EXPECTED_WARMUPS = 5
@@ -47,6 +49,24 @@ class Refused(ValueError):
 
 def _canonical_json(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def load_json_rejecting_duplicates(path: Path) -> dict[str, Any]:
+    """Load an artifact without allowing JSON object keys to be overwritten."""
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if key in result:
+                raise Refused(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=pairs)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise Refused(f"invalid result JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise Refused("result JSON must be an object")
+    return value
 
 
 def sha256_file(path: Path) -> str:
@@ -171,12 +191,10 @@ def _run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | N
 
 
 def git_identity(repository: Path, candidate_sha: str) -> dict[str, Any]:
-    if candidate_sha != EXPECTED_CANDIDATE_SHA:
-        raise Refused("requested candidate SHA is not the frozen beta.1 candidate")
     commit = _run(["git", "rev-parse", "HEAD"], cwd=repository)
+    if not SHA256_RE.fullmatch(candidate_sha) or candidate_sha != commit:
+        raise Refused("requested candidate SHA does not exactly match repository HEAD")
     dirty = bool(_run(["git", "status", "--porcelain=v1"], cwd=repository))
-    if commit != EXPECTED_CANDIDATE_SHA:
-        raise Refused(f"candidate SHA {commit} != frozen candidate SHA {EXPECTED_CANDIDATE_SHA}")
     if dirty:
         raise Refused("candidate working tree is dirty")
     return {"sha": commit, "dirty": False}
@@ -250,8 +268,6 @@ def validate_result_document(
     expected_corpus_count: int = EXPECTED_CORPUS_COUNT,
 ) -> dict[str, Any]:
     """Validate existing hyperfine JSON without writing or executing anything."""
-    if candidate_sha != EXPECTED_CANDIDATE_SHA:
-        raise Refused("candidate SHA is not the frozen beta.1 candidate")
     if exiftool_version != EXPECTED_EXIFTOOL_VERSION:
         raise Refused("result validation requires the pinned ExifTool version")
     if cache_policy != "warm-cache":
@@ -280,11 +296,25 @@ def validate_result_document(
     if corpus_manifest.get("file_count") != expected_corpus_count:
         raise Refused(f"result validation requires the exact {expected_corpus_count}-file corpus manifest")
 
-    actual_scenarios = tuple(key for key in document if key != "instrument")
+    actual_scenarios = tuple(key for key in document if key not in ("instrument", "identity"))
     if set(actual_scenarios) != set(EXPECTED_SCENARIOS) or len(actual_scenarios) != len(EXPECTED_SCENARIOS):
         raise Refused("benchmark result does not contain exactly the expected seven scenarios")
 
-    expected_corpus_paths = [str(Path(corpus_manifest["root"]) / row["path"]) for row in corpus_manifest["files"]]
+    root = Path(corpus_manifest.get("root", ""))
+    if not root.is_absolute():
+        raise Refused("corpus manifest root must be absolute")
+    trusted_manifest = build_corpus_manifest(root, expected_count=expected_corpus_count)
+    if trusted_manifest != corpus_manifest:
+        raise Refused("corpus manifest does not match trusted corpus bytes")
+    expected_corpus_paths = [str(root / row["path"]) for row in trusted_manifest["files"]]
+    identity = document.get("identity")
+    if not isinstance(identity, dict):
+        raise Refused("result has no bound run identity")
+    for key in ("run_id", "evidence_path", "cache_policy", "result_artifact_sha256", "source_artifact_sha256"):
+        if not identity.get(key):
+            raise Refused(f"result identity missing {key}")
+    if identity["cache_policy"] != cache_policy:
+        raise Refused("result cache policy is not bound to the requested policy")
     row_count = 0
     for name in EXPECTED_SCENARIOS:
         scenario = document.get(name)
@@ -295,12 +325,31 @@ def validate_result_document(
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get("command"), str):
                 raise Refused(f"scenario {name} contains a malformed result row")
-            if str(binary_path) in row["command"]:
+            try:
+                argv = shlex.split(row["command"])
+            except ValueError as exc:
+                raise Refused(f"scenario {name} has invalid command argv") from exc
+            if not argv or argv[0] != str(binary_path):
+                candidate_rows += 0
+            else:
                 candidate_rows += 1
             if not isinstance(row.get("times"), list) or len(row["times"]) != runs:
                 raise Refused(f"scenario {name} does not contain 30 timed samples")
             if row.get("exit_codes") != [0] * runs:
                 raise Refused(f"scenario {name} contains a failed timed command")
+            if not all(isinstance(sample, (int, float)) and not isinstance(sample, bool)
+                       and math.isfinite(sample) and sample >= 0 for sample in row["times"]):
+                raise Refused(f"scenario {name} contains non-finite timing samples")
+            summary = row.get("summary")
+            if not isinstance(summary, dict):
+                raise Refused(f"scenario {name} is missing timing summary")
+            expected = {"min": min(row["times"]), "max": max(row["times"]),
+                        "mean": statistics.fmean(row["times"]),
+                        "median": statistics.median(row["times"]),
+                        "stddev": statistics.pstdev(row["times"])}
+            for key, value in expected.items():
+                if not isinstance(summary.get(key), (int, float)) or not math.isclose(summary[key], value, rel_tol=1e-9, abs_tol=1e-12):
+                    raise Refused(f"scenario {name} summary {key} does not match samples")
             if name in ("corpus", "corpus_1thread") and not all(path in row["command"] for path in expected_corpus_paths):
                 raise Refused(f"scenario {name} does not use every manifest file")
             row_count += 1
@@ -313,6 +362,15 @@ def validate_result_document(
         "warmups": warmups,
         "timed_runs_per_row": runs,
     }
+
+
+def validate_result_artifact(path: Path, **kwargs: Any) -> dict[str, Any]:
+    document = load_json_rejecting_duplicates(path)
+    digest = sha256_file(path)
+    identity = document.get("identity")
+    if not isinstance(identity, dict) or identity.get("result_artifact_sha256") != digest:
+        raise Refused("result artifact hash is missing or does not match bytes")
+    return validate_result_document(document, **kwargs)
 
 
 def _machine_identity() -> dict[str, Any]:
@@ -412,12 +470,34 @@ def parser() -> argparse.ArgumentParser:
         ("run-id", "unique non-historical run identity"),
     ):
         result.add_argument(f"--{name}", required=True, help=help_text)
+    result.add_argument("--result-artifact", help="existing result JSON artifact to validate")
+    result.add_argument("--corpus-manifest", help="trusted corpus manifest JSON for result validation")
+    result.add_argument("--warmups", type=int, default=EXPECTED_WARMUPS)
+    result.add_argument("--runs", type=int, default=EXPECTED_RUNS)
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        run_dir = prepare(parser().parse_args(argv))
+        args = parser().parse_args(argv)
+        if args.result_artifact:
+            repository = Path(args.repository).resolve()
+            git = git_identity(repository, args.candidate_sha)
+            binary = validate_binary_identity(Path(args.binary), args.binary_sha256, Path(args.target_dir), repository)
+            cargo = cargo_identity(repository)
+            manifest = (load_json_rejecting_duplicates(Path(args.corpus_manifest))
+                        if args.corpus_manifest else build_corpus_manifest(Path(args.corpus), expected_count=EXPECTED_CORPUS_COUNT))
+            validated = validate_result_artifact(
+                Path(args.result_artifact), candidate_sha=git["sha"], binary_path=Path(binary["path"]),
+                binary_sha256=binary["sha256"], cargo_version=cargo["package_version"],
+                exiftool_version=EXPECTED_EXIFTOOL_VERSION, corpus_manifest=manifest,
+                warmups=args.warmups, runs=args.runs, expected_corpus_count=manifest["file_count"])
+            receipt = {"schema": "oxidex.frozen-candidate-benchmark-qualification/v2",
+                       "status": "validated", "candidate": git, "result_artifact": str(Path(args.result_artifact).resolve()),
+                       **validated}
+            print(json.dumps(receipt, sort_keys=True))
+            return 0
+        run_dir = prepare(args)
     except (OSError, Refused, KeyError, tomllib.TOMLDecodeError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

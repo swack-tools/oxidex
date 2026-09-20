@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import importlib.util
 import tempfile
 import unittest
@@ -16,15 +17,17 @@ qualification = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qualification)
 
 
-SHA = "32aaf737339ef3020d35128accda217990f1350b"
+SHA = "55090c9b1c86d90efa48719ee39a1c94177eb9a0"
 BINARY_SHA = "a" * 64
 
 
 def result_row(command: str, *, candidate: bool = False) -> dict:
+    times = [0.01] * 30
     return {
         "command": command,
-        "times": [0.01] * 30,
+        "times": times,
         "exit_codes": [0] * 30,
+        "summary": {"min": 0.01, "max": 0.01, "mean": 0.01, "median": 0.01, "stddev": 0.0},
         "candidate": candidate,
     }
 
@@ -42,6 +45,9 @@ def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
                            binary + " " + " ".join(str(corpus / name) for name in ("a", "b"))],
     }
     return {
+        "identity": {"run_id": "run-20260920-a", "evidence_path": "/evidence/run-20260920-a",
+                      "cache_policy": "warm-cache", "result_artifact_sha256": "f" * 64,
+                      "source_artifact_sha256": "e" * 64},
         "instrument": {
             "commit": commit,
             "dirty": False,
@@ -55,7 +61,7 @@ def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
             name: {
                 "results": [
                     result_row(commands[name][0]),
-                    result_row(commands[name][1], candidate=True),
+                    result_row(binary + " " + " ".join(str(corpus / name) for name in ("a", "b")) if name in ("corpus", "corpus_1thread") else binary, candidate=True),
                 ]
             }
             for name in qualification.EXPECTED_SCENARIOS
@@ -88,6 +94,29 @@ class CorpusManifestTests(unittest.TestCase):
 
 
 class ResultValidationTests(unittest.TestCase):
+    def _valid(self, root: Path) -> dict:
+        (root / "a").write_bytes(b"a")
+        (root / "b").write_bytes(b"b")
+        return result_document("/fresh-target/release/oxidex", root)
+
+    def test_duplicate_json_keys_are_rejected_at_artifact_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "result.json"
+            path.write_text('{"identity": {}, "identity": {}}')
+            with self.assertRaisesRegex(qualification.Refused, "duplicate"):
+                qualification.load_json_rejecting_duplicates(path)
+
+    def test_nonfinite_samples_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = self._valid(root)
+            document["single_file"]["results"][1]["times"][0] = "not-a-number"
+            manifest = qualification.build_corpus_manifest(root, expected_count=2)
+            with self.assertRaisesRegex(qualification.Refused, "non-finite"):
+                qualification.validate_result_document(document, candidate_sha=SHA,
+                    binary_path=Path("/fresh-target/release/oxidex"), binary_sha256=BINARY_SHA,
+                    cargo_version="2.0.0-beta.1", exiftool_version="13.59", corpus_manifest=manifest,
+                    warmups=5, runs=30, expected_corpus_count=2)
     def test_exact_seven_scenarios_and_two_30_sample_rows_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             corpus = Path(directory)
