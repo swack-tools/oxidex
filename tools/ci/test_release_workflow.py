@@ -628,6 +628,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('lipo -archs "$APP_PATH"', block)
         self.assertIn('aarch64 x86_64', block)
 
+    def test_universal_macos_asset_name_is_shared_by_release_contract_surfaces(self):
+        expected = "oxidex-universal-apple-darwin"
+        legacy = "oxidex-aarch64-apple-darwin"
+        surfaces = (
+            WORKFLOWS / "release.yml",
+            RELEASE_ASSETS,
+            HERE / "verify_macos_release.sh",
+            REPO / "docs" / "guide" / "getting-started.md",
+            REPO / ".agents" / "skills" / "oxidex-release-finalization" /
+            "references" / "github-release-and-macos.md",
+            REPO / ".claude" / "skills" / "oxidex-release-finalization" /
+            "references" / "github-release-and-macos.md",
+        )
+        for surface in surfaces:
+            with self.subTest(surface=surface):
+                text = surface.read_text()
+                self.assertIn(expected, text)
+                self.assertNotIn(legacy, text)
+
     def test_universal_build_uses_only_explicit_target_outputs(self):
         block = job_block(self.text, "build-macos")
         self.assertIn('target/aarch64-apple-darwin/release/oxidex', block)
