@@ -711,8 +711,8 @@ Notes:
       has reached a terminal state.
 - [ ] Verify all referenced Actions secret names exist. Never print secret
       values.
-- [ ] Verify Linux x86_64/ARM64, Windows x86_64, and macOS ARM64 release
-      artifacts are produced with the expected names.
+- [ ] Verify Linux x86_64/ARM64, Windows x86_64, and macOS universal
+      (arm64 and x86_64) release artifacts are produced with the expected names.
 - [ ] Verify `create-release` waits for every platform build and publishes only
       after all have succeeded.
 - [ ] Verify a SemVer prerelease becomes a GitHub prerelease with
@@ -853,7 +853,7 @@ Final candidate:
   - Linux x86_64 musl binary;
   - Linux ARM64 musl binary;
   - Windows x86_64 executable;
-  - signed macOS ARM64 binary;
+  - signed macOS universal binary containing arm64 and x86_64 slices;
   - signed, notarized, and stapled macOS DMG.
 - [ ] Run basic `--version` and metadata-reading smoke tests on applicable
       artifacts.

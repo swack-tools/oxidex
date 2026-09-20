@@ -37,7 +37,7 @@ RELEASE_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-release-run.json")
 DOCKER_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-docker-run.json")
 gh run watch "$RELEASE_RUN_ID" --exit-status
 gh run view "$RELEASE_RUN_ID" --json \
-  databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
+  databaseId,attempt,url,headSha,headBranch,event,status,conclusion,workflowName \
   > "$EVIDENCE_DIR/final-release-run.json"
 jq -e --argjson id "$RELEASE_RUN_ID" --arg tag "$TAG" \
   --arg sha "$MAIN_SHA" --arg workflow "Release" '
@@ -47,6 +47,7 @@ jq -e --argjson id "$RELEASE_RUN_ID" --arg tag "$TAG" \
     .status == "completed" and .conclusion == "success"
   )
 ' "$EVIDENCE_DIR/final-release-run.json" > /dev/null
+RELEASE_RUN_ATTEMPT=$(jq -er '.attempt' "$EVIDENCE_DIR/final-release-run.json")
 gh run watch "$DOCKER_RUN_ID" --exit-status
 gh run view "$DOCKER_RUN_ID" --json \
   databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
@@ -138,8 +139,10 @@ not the extracted executable; do not compare those unlike hashes.
 
 ```bash
 set -euo pipefail
-RELEASE_RUN_ATTEMPT=$(gh api "repos/$REPO/actions/runs/$RELEASE_RUN_ID" --jq .run_attempt)
+RELEASE_RUN_ATTEMPT=$(jq -er '.attempt' "$EVIDENCE_DIR/final-release-run.json")
 test "$RELEASE_RUN_ATTEMPT" -gt 0
+API_RELEASE_RUN_ATTEMPT=$(gh api "repos/$REPO/actions/runs/$RELEASE_RUN_ID" --jq .run_attempt)
+test "$RELEASE_RUN_ATTEMPT" = "$API_RELEASE_RUN_ATTEMPT"
 MAC_RUN_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
 DMG_RUN_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
 gh api --paginate --slurp "repos/$REPO/actions/runs/$RELEASE_RUN_ID/artifacts" \
@@ -157,12 +160,19 @@ jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" \
 RUN_ARTIFACT_DIR="$EVIDENCE_DIR/release-run-$RELEASE_RUN_ID-artifacts"
 test ! -e "$RUN_ARTIFACT_DIR"
 mkdir "$RUN_ARTIFACT_DIR"
+RUN_MACOS_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
+RUN_DMG_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
+test "$MAC_RUN_ARTIFACT" = "$RUN_MACOS_ARTIFACT"
+test "$DMG_RUN_ARTIFACT" = "$RUN_DMG_ARTIFACT"
+MAC_RUN_ARTIFACT_ARGS=(--name "$MAC_RUN_ARTIFACT" --name "$DMG_RUN_ARTIFACT")
+RUN_MACOS_ARTIFACT_ARGS=(--name "$RUN_MACOS_ARTIFACT" --name "$RUN_DMG_ARTIFACT")
+test "${MAC_RUN_ARTIFACT_ARGS[*]}" = "${RUN_MACOS_ARTIFACT_ARGS[*]}"
 gh run download "$RELEASE_RUN_ID" --repo "$REPO" \
-  --name "$MAC_RUN_ARTIFACT" --name "$DMG_RUN_ARTIFACT" --dir "$RUN_ARTIFACT_DIR"
+  "${RUN_MACOS_ARTIFACT_ARGS[@]}" --dir "$RUN_ARTIFACT_DIR"
 MAC_BIN="$EVIDENCE_DIR/assets/oxidex-universal-apple-darwin"
 DMG="$EVIDENCE_DIR/assets/oxidex-v${VERSION}.dmg"
-RUN_MAC_BIN="$RUN_ARTIFACT_DIR/$MAC_RUN_ARTIFACT/oxidex-universal-apple-darwin"
-RUN_DMG="$RUN_ARTIFACT_DIR/$DMG_RUN_ARTIFACT/oxidex-v${VERSION}.dmg"
+RUN_MAC_BIN="$RUN_ARTIFACT_DIR/$RUN_MACOS_ARTIFACT/oxidex-universal-apple-darwin"
+RUN_DMG="$RUN_ARTIFACT_DIR/$RUN_DMG_ARTIFACT/oxidex-v${VERSION}.dmg"
 test -s "$MAC_BIN" && test -s "$DMG" && test -s "$RUN_MAC_BIN" && test -s "$RUN_DMG"
 shasum -a 256 "$MAC_BIN" "$RUN_MAC_BIN" "$DMG" "$RUN_DMG" \
   | tee "$EVIDENCE_DIR/macos-run-and-release.sha256"

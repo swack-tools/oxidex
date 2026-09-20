@@ -761,6 +761,10 @@ class SkillMirrorTests(unittest.TestCase):
         for required in (
             'actions/runs/$RELEASE_RUN_ID/artifacts',
             '.workflow_run.id == $run', '.workflow_run.head_sha == $sha',
+            "RELEASE_RUN_ATTEMPT=$(jq -er '.attempt'",
+            'RUN_MACOS_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"',
+            'RUN_DMG_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"',
+            '--name "$RUN_MACOS_ARTIFACT" --name "$RUN_DMG_ARTIFACT"',
             'gh run download "$RELEASE_RUN_ID"',
             'cmp "$MAC_BIN" "$RUN_MAC_BIN"', 'cmp "$DMG" "$RUN_DMG"',
             'mktemp -d "$EVIDENCE_DIR/dmg-mount.XXXXXX"',
