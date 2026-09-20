@@ -1,4 +1,16 @@
-# Generated share of correct output (probe census)
+# Generated share of correct output (authenticated census)
+
+`genshare-probe/1` used a temporary, forward-ported patch. It is retired.
+The maintained `src/exiftool_tables::attribution` seam reads
+`OXIDEX_GENSHARE_SILENCE` once, and only drops an outward row after its reader
+has completed stateful work. `census.sh` builds one binary, records paired
+control/probe process hashes and return codes, validates the pinned oracle,
+and refuses unknown or `conv` tokens with exit status 2 before traversal.
+
+Use the maintained interface from the task PRD. The committed three-file
+manifest is an authenticated smoke scope; the full-corpus command supplies
+the production denominator. `receipt.json`, not a historical summary, is the
+consumable artifact.
 
 This directory is the instrument behind the "generated share of correct output"
 figure on the status page (`/status/`) and in `docs/AUTOGENERATION-PLAN.md`. The

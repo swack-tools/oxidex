@@ -43,6 +43,71 @@ TOTAL. This script refuses a probe whose matched total falls below
 import argparse, collections, json, re, sys
 
 SUFFIX = re.compile(r' \((\d+)\)$')
+SHA256 = re.compile(r'^[0-9a-f]{64}$')
+SHA1 = re.compile(r'^[0-9a-f]{40}$')
+
+
+class ReceiptError(ValueError):
+    """The paired control/probe result lacks replayable provenance."""
+
+
+def _require(mapping, key, where):
+    value = mapping.get(key) if isinstance(mapping, dict) else None
+    if value is None:
+        raise ReceiptError(f'{where}.{key} is required')
+    return value
+
+
+def _sha(value, where):
+    if not isinstance(value, str) or not SHA256.fullmatch(value):
+        raise ReceiptError(f'{where} must be a lowercase SHA-256')
+
+
+def validate_receipt(receipt):
+    """Reject a historical summary unless both executions are authenticated."""
+    if _require(receipt, 'schema', 'receipt') != 'genshare-receipt/v2':
+        raise ReceiptError('receipt.schema must be genshare-receipt/v2')
+    source = _require(receipt, 'source', 'receipt')
+    for key in ('commit', 'tree'):
+        value = _require(source, key, 'source')
+        if not isinstance(value, str) or not SHA1.fullmatch(value):
+            raise ReceiptError(f'source.{key} must be a lowercase SHA-1')
+    if _require(source, 'dirty', 'source') is not False:
+        raise ReceiptError('source.dirty must be false')
+    oracle = _require(receipt, 'oracle', 'receipt')
+    if _require(oracle, 'version', 'oracle') != '13.59':
+        raise ReceiptError('oracle.version must be 13.59')
+    if _require(oracle, 'docx_filetype', 'oracle') != 'DOCX':
+        raise ReceiptError('oracle.docx_filetype must be DOCX')
+    for key in ('perl_sha256', 'exiftool_sha256'):
+        _sha(_require(oracle, key, 'oracle'), f'oracle.{key}')
+    corpus = _require(receipt, 'corpus', 'receipt')
+    _sha(_require(corpus, 'manifest_sha256', 'corpus'), 'corpus.manifest_sha256')
+    if not isinstance(_require(corpus, 'files', 'corpus'), int) or corpus['files'] < 1:
+        raise ReceiptError('corpus.files must be a positive integer')
+    tokens = _require(receipt, 'token_set', 'receipt')
+    if not isinstance(tokens, list) or not tokens or any(not isinstance(t, str) for t in tokens):
+        raise ReceiptError('receipt.token_set must be a non-empty token list')
+    def process(record, where):
+        for key in ('returncode', 'binary_sha256', 'stdout_sha256', 'stderr_sha256', 'output_sha256'):
+            value = _require(record, key, where)
+            if key == 'returncode':
+                if value != 0:
+                    raise ReceiptError(f'{where}.returncode must be 0')
+            else:
+                _sha(value, f'{where}.{key}')
+    process(_require(receipt, 'control', 'receipt'), 'control')
+    probes = _require(receipt, 'probes', 'receipt')
+    for token in tokens:
+        process(_require(probes, token, 'probes'), f'probes.{token}')
+    inertness = _require(receipt, 'inertness', 'receipt')
+    if _require(inertness, 'equal', 'inertness') is not True or _require(inertness, 'differences', 'inertness') != 0:
+        raise ReceiptError('inertness must show zero differences')
+    deltas = _require(receipt, 'per_occurrence_deltas', 'receipt')
+    for token in tokens:
+        delta = _require(deltas, token, 'per_occurrence_deltas')
+        if _require(delta, 'residual', f'per_occurrence_deltas.{token}') != 0:
+            raise ReceiptError(f'per_occurrence_deltas.{token}.residual must be 0')
 
 def load(path):
     with open(path, encoding='utf-8') as fh:
@@ -228,16 +293,23 @@ def attribute(tok, ctl, prb, idx):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('--class-names', required=True)
+    ap.add_argument('--validate-receipt', metavar='RECEIPT')
+    ap.add_argument('--class-names')
     ap.add_argument('--add-pairs', action='append', default=[], metavar='JSON',
                     help='addendum {token: [[group0, name], ...]} for rows a route gained after '
                          'the class index was built (e.g. class-names-addendum-838.json)')
-    ap.add_argument('--control', required=True)
+    ap.add_argument('--control')
     ap.add_argument('--probe', action='append', default=[], metavar='TOKEN=PATH')
     ap.add_argument('--json-out')
     ap.add_argument('--min-kept', type=float, default=0.25)
     ap.add_argument('--allow-collapse', action='store_true')
     args = ap.parse_args()
+    if args.validate_receipt:
+        validate_receipt(load(args.validate_receipt))
+        print(f'validated {args.validate_receipt}')
+        return
+    if not args.class_names or not args.control:
+        ap.error('--class-names and --control are required unless --validate-receipt is used')
     idx, unions = class_index(load(args.class_names))
     for path in args.add_pairs:
         for tok, pairs in load(path).items():
