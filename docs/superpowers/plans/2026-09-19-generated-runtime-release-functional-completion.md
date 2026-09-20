@@ -1785,6 +1785,9 @@ The staged-effect matrix must cover commit and discard for option mutation,
 typed Make/Model mutation, arbitrary member removal, warning order, and
 scope/processed-state preservation. Assertions must observe production
 residual output/state rather than counters detached from the residual path.
+Exercise typed Make/Model clearing as well as assignment, and directly assert
+the reported-scalar UTF-8 decline reason plus absence of every staged mutation
+before the real residual runs.
 
 - [ ] **Step 2: Run focused engine tests red**
 
@@ -1811,7 +1814,12 @@ SubIFD, MakerNote, IPTC, GeoTIFF, and PrintIM edges. If ExifIFD and the next-IFD
 pointer alias the same physical directory, guard the entire repeated adapter
 before any structural handler can replay while preserving bounded next-chain
 traversal. Pin the alias with an observable structural child and add one
-four-directory owner/group/order fixture.
+four-directory owner/group/order fixture. In standalone TIFF, the
+`engine.already_processed()` decision must guard the whole IFD1 adapter before
+`process_tiff_ifd_tags_indexed` or any MakerNote/pointer/IPTC/GeoTIFF/PrintIM
+handler runs; checking inside `route_entry` is too late. The four-directory
+fixture must assert each named `Owner` outcome and that silent parent edges are
+absent, not only tag keys/count/order.
 
 - [ ] **Step 5: Make request-aware edge behavior explicit**
 
@@ -1835,7 +1843,10 @@ task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-sh
 Commit the signed task candidate after tests/formatting/Clippy and before the
 conformance/read-receipt portions of the standard commands. Rebuild the
 release binary after the commit so its candidate-bound staleness check passes.
-Record an explicit performance disposition for the full-session staging copy.
+Record an explicit performance disposition for the full-session staging copy:
+cite the retained 20,000-iteration timing, state the measured per-attempt cost,
+and either accept that cost for this beta with a bounded rationale or optimize
+and remeasure it. A raw timing with no disposition is incomplete.
 
 - [ ] **Step 7: Commit, update handoff, and report**
 
