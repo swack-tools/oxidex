@@ -134,6 +134,11 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
         "oxidex-universal-apple-darwin",
         "oxidex-v2.0.0-beta.1.dmg",
     )
+    SBOM_NAME = "oxidex-v2.0.0-beta.1.sbom.cdx.json"
+
+    @property
+    def release_asset_names(self) -> tuple[str, ...]:
+        return (*self.PAYLOAD_NAMES, self.SBOM_NAME, "SHA256SUMS")
 
     def run_assets(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -158,6 +163,9 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
             "--run-attempt", self.RUN_ATTEMPT,
         ]
 
+    def source_args(self) -> list[str]:
+        return ["--source-root", str(REPO)]
+
     def test_independent_provenance_verifies_exact_release_assets(self):
         """Removing independent manifest generation must make verification fail."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,18 +176,68 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
 
             created = self.run_assets(
                 "create-provenance", "--assets", str(assets),
-                "--provenance", str(provenance), *self.identity_args())
+                "--provenance", str(provenance), *self.identity_args(),
+                *self.source_args())
             self.assertEqual(created.returncode, 0, created.stderr)
             self.assertEqual(
                 sorted(path.name for path in assets.iterdir()),
-                sorted((*self.PAYLOAD_NAMES, "SHA256SUMS")),
+                sorted((*self.PAYLOAD_NAMES, self.SBOM_NAME, "SHA256SUMS")),
             )
 
             verified = self.run_assets(
                 "verify-assets", "--assets", str(assets),
                 "--provenance", str(provenance), *self.identity_args())
             self.assertEqual(verified.returncode, 0, verified.stderr)
-            self.assertIn("verified 6 exact release assets", verified.stdout)
+            self.assertIn("verified 7 exact release assets", verified.stdout)
+
+    def test_sbom_is_deterministic_and_binds_exact_source_and_payload_digests(self):
+        """A changed lockfile or payload must not yield the same release SBOM."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            assets = root / "release-assets"
+            provenance = root / "provenance"
+            source = root / "source"
+            source.mkdir()
+            (source / "Cargo.toml").write_text(
+                '[package]\nname = "oxidex"\nversion = "2.0.0-beta.1"\n')
+            (source / "Cargo.lock").write_text(
+                'version = 4\n\n[[package]]\nname = "alpha"\nversion = "1.0.0"\n')
+            self.create_payloads(assets)
+            args = ["--source-root", str(source)]
+
+            created = self.run_assets(
+                "create-provenance", "--assets", str(assets),
+                "--provenance", str(provenance), *self.identity_args(), *args)
+            self.assertEqual(created.returncode, 0, created.stderr)
+            first = (assets / self.SBOM_NAME).read_bytes()
+            sbom = json.loads(first)
+            self.assertEqual(sbom["bomFormat"], "CycloneDX")
+            self.assertEqual(sbom["metadata"]["component"]["version"], self.VERSION)
+            self.assertEqual(
+                sbom["metadata"]["properties"],
+                [{"name": "org.oxidex.source.cargo_lock.sha256", "value":
+                  __import__("hashlib").sha256((source / "Cargo.lock").read_bytes()).hexdigest()}],
+            )
+            self.assertEqual(
+                {component["name"] for component in sbom["components"]},
+                {"alpha", *self.PAYLOAD_NAMES},
+            )
+
+            (assets / self.SBOM_NAME).unlink()
+            (assets / "SHA256SUMS").unlink()
+            provenance_2 = root / "provenance-2"
+            created_again = self.run_assets(
+                "create-provenance", "--assets", str(assets),
+                "--provenance", str(provenance_2), *self.identity_args(), *args)
+            self.assertEqual(created_again.returncode, 0, created_again.stderr)
+            self.assertEqual((assets / self.SBOM_NAME).read_bytes(), first)
+
+            (assets / self.PAYLOAD_NAMES[0]).write_bytes(b"changed payload\n")
+            verified = self.run_assets(
+                "verify-assets", "--assets", str(assets),
+                "--provenance", str(provenance), *self.identity_args())
+            self.assertNotEqual(verified.returncode, 0)
+            self.assertIn("differs from run provenance", verified.stderr)
 
     def test_release_json_binds_exact_id_state_commit_and_asset_set(self):
         """Accepting a different release ID or state must make publication fail."""
@@ -196,7 +254,7 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 "assets": [
                     {"name": name, "size": index}
                     for index, name in enumerate(
-                        (*self.PAYLOAD_NAMES, "SHA256SUMS"), start=1)
+                        self.release_asset_names, start=1)
                 ],
             }))
 
@@ -217,7 +275,8 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
             self.create_payloads(assets)
             created = self.run_assets(
                 "create-provenance", "--assets", str(assets),
-                "--provenance", str(provenance), *self.identity_args())
+                "--provenance", str(provenance), *self.identity_args(),
+                *self.source_args())
             self.assertEqual(created.returncode, 0, created.stderr)
 
             victim = assets / self.PAYLOAD_NAMES[0]
@@ -240,7 +299,7 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 "id": 987, "tag_name": self.TAG, "target_commitish": "main",
                 "draft": True, "prerelease": True,
                 "assets": [{"name": name, "size": 1}
-                           for name in (*self.PAYLOAD_NAMES, "SHA256SUMS")],
+                           for name in self.release_asset_names],
             }
             for mutation in (
                     {"id": 988}, {"draft": False},
@@ -264,6 +323,50 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 "--prerelease", "true", "--resolved-target", "2" * 40,
                 *self.identity_args())
             self.assertNotEqual(wrong_target.returncode, 0)
+
+    def test_published_release_requires_fail_closed_latest_api_evidence(self):
+        """Publishing must reject a beta made Latest or a stable not made Latest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            release_json = root / "release.json"
+            latest_json = root / "latest.json"
+            beta = {
+                "id": 987, "tag_name": self.TAG, "draft": False,
+                "prerelease": True,
+                "assets": [{"name": name, "size": 1}
+                           for name in self.release_asset_names],
+            }
+            release_json.write_text(json.dumps(beta))
+            latest_json.write_text(json.dumps({
+                "tag_name": "v1.9.0", "draft": False, "prerelease": False,
+            }))
+            beta_ok = self.run_assets(
+                "verify-release", "--release-json", str(release_json),
+                "--latest-json", str(latest_json), "--release-id", "987",
+                "--draft", "false", "--prerelease", "true",
+                "--resolved-target", self.SHA, *self.identity_args())
+            self.assertEqual(beta_ok.returncode, 0, beta_ok.stderr)
+
+            latest_json.write_text(json.dumps({
+                "tag_name": self.TAG, "draft": False, "prerelease": True,
+            }))
+            beta_latest = self.run_assets(
+                "verify-release", "--release-json", str(release_json),
+                "--latest-json", str(latest_json), "--release-id", "987",
+                "--draft", "false", "--prerelease", "true",
+                "--resolved-target", self.SHA, *self.identity_args())
+            self.assertNotEqual(beta_latest.returncode, 0)
+
+            stable = {**beta, "tag_name": "v2.0.0", "prerelease": False}
+            release_json.write_text(json.dumps(stable))
+            stable_latest = self.run_assets(
+                "verify-release", "--release-json", str(release_json),
+                "--latest-json", str(latest_json), "--release-id", "987",
+                "--tag", "v2.0.0", "--draft", "false", "--prerelease", "false",
+                "--resolved-target", self.SHA, "--version", "2.0.0",
+                "--head-sha", self.SHA, "--run-id", self.RUN_ID,
+                "--run-attempt", self.RUN_ATTEMPT)
+            self.assertNotEqual(stable_latest.returncode, 0)
 
 
 class MacOSReleaseVerificationTests(unittest.TestCase):
@@ -465,6 +568,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_assets_have_a_checksum_manifest(self):
         block = job_block(self.text, "create-release")
         self.assertIn('python3 tools/ci/release_assets.py create-provenance', block)
+        self.assertIn('--source-root "$GITHUB_WORKSPACE"', block)
+        self.assertIn('sbom.cdx.json', block)
         self.assertIn('name: release-provenance', block)
         self.assertLess(block.index('name: Upload independent release provenance'),
                         block.index('name: Create fail-closed draft release'))
@@ -501,6 +606,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('python3 tools/ci/release_assets.py verify-assets', publish)
         self.assertIn('python3 tools/ci/release_assets.py verify-release', publish)
         self.assertIn('--method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"', publish)
+
+    def test_published_release_verification_reads_fail_closed_latest_api_evidence(self):
+        publish = job_block(self.text, "publish-release")
+        self.assertIn('repos/$GITHUB_REPOSITORY/releases/latest', publish)
+        self.assertIn('--latest-json latest-release.json', publish)
 
     def test_release_is_bound_to_exact_id_and_fails_closed_on_rerun(self):
         create = job_block(self.text, "create-release")

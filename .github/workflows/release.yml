@@ -372,7 +372,8 @@ jobs:
             --tag "$GITHUB_REF_NAME" \
             --head-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT"
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --source-root "$GITHUB_WORKSPACE"
 
       # This Actions artifact is immutable run evidence and is deliberately
       # uploaded before the independently mutable GitHub Release assets.
@@ -405,6 +406,7 @@ jobs:
           **macOS:**
           - `oxidex-universal-apple-darwin` - Signed universal macOS binary (Apple Silicon and Intel)
           - `oxidex-v$VERSION.dmg` - Signed and notarized macOS DMG installer
+          - `oxidex-v$VERSION.sbom.cdx.json` - Deterministic CycloneDX SBOM for the release source and payloads
           - `SHA256SUMS` - SHA-256 checksums for every release asset
 
           ### Installation
@@ -577,13 +579,15 @@ jobs:
             --resolved-target "$RESOLVED_TARGET"
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             --field draft=false > published-release.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > latest-release.json
           python3 tools/ci/release_assets.py verify-release \
             --release-json published-release.json --release-id "$RELEASE_ID" \
             --version "${{ needs.verify-version.outputs.version }}" \
             --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --draft false --prerelease "${{ needs.verify-version.outputs.prerelease }}" \
-            --resolved-target "$RESOLVED_TARGET"
+            --resolved-target "$RESOLVED_TARGET" \
+            --latest-json latest-release.json
 
   update-docs:
     name: Update GitHub Pages
