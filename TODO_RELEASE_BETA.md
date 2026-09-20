@@ -877,6 +877,15 @@ Published release evidence:
 
 ## Open decisions and notes
 
+> **2026-09-19 — legacy fleet end state (design only).** OxiDex retains the
+> local release controller. After live zero-consumer proof and separate explicit
+> approval, legacy fleet source and evidence move to one separate read-only
+> archived Git repository with a signed tag and checksummed, credential-free
+> evidence. Actions, webhooks, deploy keys, runners, writable state refs, and
+> service accounts must be disabled. The archive is forensic evidence, not a
+> runnable fallback. `server` and `work2.oxidex.net` being unreachable remains
+> a hard NO-GO for retirement; this note authorizes no retirement mutation.
+
 | Date | Decision or blocker | Owner | Status/next action |
 |---|---|---|---|
 | | | | |
