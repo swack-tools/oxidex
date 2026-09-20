@@ -372,7 +372,8 @@ jobs:
             --tag "$GITHUB_REF_NAME" \
             --head-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT"
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --source-root "$GITHUB_WORKSPACE"
 
       # This Actions artifact is immutable run evidence and is deliberately
       # uploaded before the independently mutable GitHub Release assets.
@@ -405,6 +406,7 @@ jobs:
           **macOS:**
           - `oxidex-universal-apple-darwin` - Signed universal macOS binary (Apple Silicon and Intel)
           - `oxidex-v$VERSION.dmg` - Signed and notarized macOS DMG installer
+          - `oxidex-v$VERSION.sbom.cdx.json` - Deterministic CycloneDX SBOM for the release source and payloads
           - `SHA256SUMS` - SHA-256 checksums for every release asset
 
           ### Installation
@@ -511,7 +513,8 @@ jobs:
             --assets downloaded-assets --provenance release-provenance \
             --version "${{ needs.verify-version.outputs.version }}" \
             --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --source-root "$GITHUB_WORKSPACE"
           RESOLVED_TARGET=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > draft-release.json
           python3 tools/ci/release_assets.py verify-release \
@@ -565,7 +568,8 @@ jobs:
             --assets downloaded-assets --provenance release-provenance \
             --version "${{ needs.verify-version.outputs.version }}" \
             --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --source-root "$GITHUB_WORKSPACE"
           RESOLVED_TARGET=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > draft-release.json
           python3 tools/ci/release_assets.py verify-release \
@@ -577,13 +581,152 @@ jobs:
             --resolved-target "$RESOLVED_TARGET"
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             --field draft=false > published-release.json
+
+      - name: Poll Latest release projection
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.verify-version.outputs.prerelease }}
+        run: |
+          LATEST_MAX_ATTEMPTS="${LATEST_MAX_ATTEMPTS:-12}"
+          LATEST_POLL_DELAY="${LATEST_POLL_DELAY:-5}"
+          LATEST_JSON=latest-release.json
+          LATEST_HISTORY=latest-release-attempts.jsonl
+          : > "$LATEST_HISTORY"
+          valid=0
+          all_404=1
+
+          for attempt in $(seq 1 "$LATEST_MAX_ATTEMPTS"); do
+            response_path="latest-release-response-${attempt}.json"
+            error_path="latest-release-response-${attempt}.stderr"
+            if gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
+                --include \
+                > "$response_path" 2> "$error_path"; then
+              gh_status=0
+            else
+              gh_status=$?
+            fi
+
+            http_status=$(python3 - "$response_path" <<'PY'
+          import re
+          import sys
+
+          raw = open(sys.argv[1], "rb").read()
+          match = re.match(rb"HTTP/[0-9.]+\s+([0-9]{3})(?:\s|$)", raw)
+          if match is None:
+              raise SystemExit("GitHub API response did not contain an HTTP status line")
+          print(match.group(1).decode())
+          PY
+            ) || {
+              cat "$error_path" >&2
+              exit "${gh_status:-1}"
+            }
+
+            case "$http_status" in
+              200|404)
+                if [ "$http_status" -ne 404 ]; then
+                  all_404=0
+                fi
+                receipt=$(python3 - "$response_path" "$LATEST_JSON" "$attempt" "$http_status" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          raw = Path(sys.argv[1]).read_bytes()
+          separator = b"\r\n\r\n" if b"\r\n\r\n" in raw else b"\n\n"
+          body = raw.split(separator, 1)[1]
+          status = int(sys.argv[4])
+          try:
+              response = json.loads(body)
+          except json.JSONDecodeError:
+              response = {"raw": body.decode("utf-8", errors="replace").strip()}
+          if status == 200:
+              Path(sys.argv[2]).write_bytes(body)
+          else:
+              Path(sys.argv[2]).write_text('{"status":404}\n')
+          print(json.dumps({
+              "attempt": int(sys.argv[3]), "status": status, "response": response,
+          }, separators=(",", ":")))
+          PY
+                )
+                printf '%s\n' "$receipt" >> "$LATEST_HISTORY"
+                ;;
+              *)
+                cat "$error_path" >&2
+                exit "${gh_status:-1}"
+                ;;
+            esac
+
+            if python3 - "$LATEST_JSON" "$GITHUB_REF_NAME" "$PRERELEASE" "$attempt" "$LATEST_MAX_ATTEMPTS" "$all_404" <<'PY'
+          import json
+          import sys
+
+          def reject_duplicate_keys(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON object key: {key!r}")
+                  result[key] = value
+              return result
+
+          latest = json.load(open(sys.argv[1]), object_pairs_hook=reject_duplicate_keys)
+          tag = sys.argv[2]
+          prerelease = sys.argv[3] == "true"
+          attempt = int(sys.argv[4])
+          max_attempts = int(sys.argv[5])
+          all_404 = sys.argv[6] == "1"
+          if latest.get("status") == 404:
+              ok = prerelease and attempt == max_attempts and all_404
+          elif prerelease:
+              ok = (latest.get("tag_name") != tag and
+                    latest.get("draft") is False and
+                    latest.get("prerelease") is False)
+          else:
+              ok = (latest.get("tag_name") == tag and
+                    latest.get("draft") is False and
+                    latest.get("prerelease") is False)
+          raise SystemExit(0 if ok else 1)
+          PY
+            then
+              valid=1
+              break
+            fi
+
+            if [ "$attempt" -lt "$LATEST_MAX_ATTEMPTS" ]; then
+              sleep "$LATEST_POLL_DELAY"
+            fi
+          done
+
+          if [ "$valid" -ne 1 ]; then
+            echo "refusing: GitHub Latest did not converge within $LATEST_MAX_ATTEMPTS attempts" >&2
+            exit 1
+          fi
+
+      - name: Upload Latest API polling receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-latest-poll-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            latest-release-attempts.jsonl
+            latest-release-response-*.json
+            latest-release-response-*.stderr
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verify published release state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+          PRERELEASE: ${{ needs.verify-version.outputs.prerelease }}
+        run: |
+          RESOLVED_TARGET=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
           python3 tools/ci/release_assets.py verify-release \
             --release-json published-release.json --release-id "$RELEASE_ID" \
             --version "${{ needs.verify-version.outputs.version }}" \
             --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --draft false --prerelease "${{ needs.verify-version.outputs.prerelease }}" \
-            --resolved-target "$RESOLVED_TARGET"
+            --draft false --prerelease "$PRERELEASE" \
+            --resolved-target "$RESOLVED_TARGET" \
+            --latest-json latest-release.json
 
   update-docs:
     name: Update GitHub Pages
