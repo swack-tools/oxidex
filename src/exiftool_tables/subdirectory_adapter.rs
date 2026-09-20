@@ -3,28 +3,20 @@
 //! as a complete `ProcessExif` walk; this adapter adds no tag knowledge.
 
 use super::{
-    DirectoryRule, Emitted, Guard, IfdDir, IfdEntry, IfdTable, IfdTag, accepted_type, cond,
+    DirectoryRule, Emitted, IfdDir, IfdEntry, IfdTable, IfdTag, Session, accepted_type, cond,
     descend, find_table, locate, resolve,
 };
 
 /// One parent directory's shared subdirectory reader. Keep it alive across
 /// entries so repeated pointers share the ordinary recursion/duplicate guard.
-pub struct SubdirectoryReader {
-    guard: Guard,
+pub struct SubdirectoryReader<'a> {
+    session: &'a mut Session,
 }
 
-impl Default for SubdirectoryReader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SubdirectoryReader {
+impl<'a> SubdirectoryReader<'a> {
     #[must_use]
-    pub fn new() -> Self {
-        Self {
-            guard: Guard::new(),
-        }
+    pub fn new(session: &'a mut Session) -> Self {
+        Self { session }
     }
 
     /// Handle an entry only when every possible selected alternative is a
@@ -82,8 +74,8 @@ impl SubdirectoryReader {
                 edge,
                 &located,
                 &dir,
+                self.session,
                 ctx,
-                &mut self.guard,
                 out,
             );
         }
