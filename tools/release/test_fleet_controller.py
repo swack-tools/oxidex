@@ -1354,6 +1354,23 @@ class FleetControllerTests(unittest.TestCase):
         self.assertEqual(value["tasks"]["20"]["worker"]["model"], "gpt-6-astra")
         self.assertEqual(len(value["tasks"]["0"]["file_lease"]), 11)
 
+    def test_remaining_sol_workers_materialize_as_cli_without_fast_mode(self) -> None:
+        repository = MODULE.parents[2]
+        plan = repository / "docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md"
+        store = fleet.StateStore(self.root)
+
+        for number in (9, 10, 11, 17, 18):
+            store.write_snapshot(state(task(number)))
+            materialized = fleet.materialize_prd(store, plan, number, SHA_A)
+            worker = store.read_snapshot()["tasks"][str(number)]["worker"]
+            self.assertEqual(worker["kind"], "CLI")
+            self.assertEqual(worker["model"], "gpt-5.6-sol")
+            self.assertEqual(worker["effort"], "medium")
+            content = materialized.read_text(encoding="utf-8")
+            self.assertIn("fleet_controller.py launch", content)
+            self.assertIn("Worker policy: `CLI` / `gpt-5.6-sol` / `medium`", content)
+            self.assertNotIn("--enable fast_mode", content)
+
     def test_materialize_contains_only_global_contract_and_complete_selected_task(self) -> None:
         store = fleet.StateStore(self.root)
         value = state(task(0))
