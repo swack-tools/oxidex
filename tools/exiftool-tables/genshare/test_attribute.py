@@ -321,6 +321,9 @@ class ArtifactValidationTests(unittest.TestCase):
             proof_root.mkdir()
             retained_binary = proof_root / "oxidex"
             retained_binary.write_bytes(b"ordinary binary")
+            built_binary = root / "outside-target" / "release" / "oxidex"
+            built_binary.parent.mkdir(parents=True)
+            built_binary.write_bytes(retained_binary.read_bytes())
             process_records = {}
             for label in ("clone", "checkout", "cargo"):
                 stdout = proof_root / f"{label}.stdout"
@@ -356,7 +359,7 @@ class ArtifactValidationTests(unittest.TestCase):
                 "clone": process_records["clone"],
                 "checkout_process": process_records["checkout"],
                 "build": process_records["cargo"],
-                "built_binary": attribute._artifact_record(retained_binary),
+                "built_binary": attribute._artifact_record(built_binary),
                 "binary": attribute._artifact_record(retained_binary),
                 "run_mode": "pre-seam-control",
                 "environment": attribute._mode_environment("pre-seam-control"),
@@ -375,6 +378,21 @@ class ArtifactValidationTests(unittest.TestCase):
             mutated["projections"]["engine"]["aggregate"]["matched_occurrences"] += 1
             with self.assertRaisesRegex(attribute.ReceiptError, "equation|replay"):
                 attribute.validate_v3_receipt(mutated, root, replay=True)
+            tampered = copy.deepcopy(receipt)
+            tampered["pre_seam"]["built_binary"]["sha256"] = "0" * 64
+            attribute.write_json(
+                proof_path,
+                {key: value for key, value in tampered["pre_seam"].items() if key != "artifact"},
+            )
+            tampered["pre_seam"]["artifact"] = attribute._artifact_record(proof_path)
+            proof_relative = proof_path.relative_to(root).as_posix()
+            tampered["artifact_index"] = [
+                attribute._file_identity(proof_path, relative_path=proof_relative)
+                if row["relative_path"] == proof_relative else row
+                for row in tampered["artifact_index"]
+            ]
+            with self.assertRaisesRegex(attribute.ReceiptError, "built.*retained|binary identity"):
+                attribute.validate_v3_receipt(tampered, root, replay=True)
 
 
 class RouteLedgerTests(unittest.TestCase):

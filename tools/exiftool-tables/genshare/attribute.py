@@ -1023,6 +1023,11 @@ def _validate_pre_seam_proof(proof: dict, root: Path, *, live: bool) -> None:
     binary_path = Path(binary.get("path", "")) if isinstance(binary, dict) else Path("")
     if not _inside(root, binary_path) or _artifact_record(binary_path) != binary:
         raise ReceiptError("retained pre-seam binary does not verify")
+    built = proof.get("built_binary")
+    identity_keys = ("size", "mode", "sha256")
+    if not isinstance(built, dict) or any(key not in built for key in identity_keys) \
+            or any(built[key] != binary[key] for key in identity_keys):
+        raise ReceiptError("pre-seam built and retained binary identity differs")
     proof_artifact = proof.get("artifact")
     proof_path = Path(proof_artifact.get("path", "")) if isinstance(proof_artifact, dict) else Path("")
     if not _inside(root, proof_path) or _artifact_record(proof_path) != proof_artifact:
@@ -1038,7 +1043,6 @@ def _validate_pre_seam_proof(proof: dict, root: Path, *, live: bool) -> None:
             raise ReceiptError("live pre-seam resolution changed")
         if _source_identity(Path(checkout["root"])) != checkout:
             raise ReceiptError("live pre-seam checkout identity changed")
-        built = proof.get("built_binary")
         built_path = Path(built.get("path", "")) if isinstance(built, dict) else Path("")
         if _artifact_record(built_path) != built or _artifact_record(binary_path) != binary:
             raise ReceiptError("live pre-seam binary identity changed")
