@@ -1,10 +1,13 @@
 # Release parity metrics and receipt contract
 
 The receipt template is a summary index, not a replacement for instrument
-artifacts or an automatically validated attestation. Fill it from retained
+artifacts or an attestation by itself. Fill it from retained
 JSON, verified receipts and command logs; never manufacture counts or copy
-console totals without their structured evidence. Paths must remain available
-to the documentation/release reviewer; include SHA-256 for every artifact.
+console totals without their structured evidence. Run
+`tools/ci/validate_release_receipt.py --kind parity` with the exact requested
+version and candidate SHA before handoff; validation failure blocks release
+use. Paths must remain available to the documentation/release reviewer;
+include SHA-256 for every artifact.
 
 ## Four independent measurement families
 

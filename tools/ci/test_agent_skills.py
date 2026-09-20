@@ -149,12 +149,56 @@ class SkillMirrorTests(unittest.TestCase):
 
     def test_parity_release_instrument_contract(self):
         text = canonical("exiftool-parity", "SKILL.md")
+        self.assertNotIn("/tmp/oxidex-perl538-build-", text)
         for phrase in (
-            "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/cache/exiftool/<pin>",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
         ):
             self.assertIn(phrase, text)
+
+    def test_release_skills_call_receipt_and_oracle_validators(self):
+        parity = canonical("exiftool-parity", "references/harnesses.md")
+        finalization = canonical("oxidex-release-finalization", "references/gates.md")
+        for required in (
+            "python3 tools/ci/release_oracle.py",
+            "python3 tools/ci/validate_release_receipt.py --kind parity",
+            "--candidate-sha \"$PARITY_SHA\"",
+        ):
+            self.assertIn(required, parity)
+        for kind in ("parity", "documentation"):
+            self.assertIn(
+                f"python3 tools/ci/validate_release_receipt.py --kind {kind}",
+                finalization,
+            )
+
+    def test_release_promotion_requires_zero_unresolved_review_threads(self):
+        text = canonical("oxidex-release-finalization", "references/gates.md")
+        for required in (
+            "reviewThreads(first: 100)",
+            "isResolved",
+            "isOutdated",
+            "unresolved-actionable-review-threads",
+            "review-threads.json",
+        ):
+            self.assertIn(required, text)
+
+    def test_macos_claim_matches_binary_signing_and_dmg_notarization(self):
+        skill = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        workflow = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        combined = skill + workflow
+        self.assertNotIn("Signed, notarized, stapled macOS disk image", combined)
+        self.assertNotIn("Signed and notarized macOS DMG installer", combined)
+        for required in (
+            "Notarized and stapled macOS DMG containing the signed executable",
+            "EXPECTED_DEVELOPER_ID",
+            "EXPECTED_TEAM_IDENTIFIER",
+            "TeamIdentifier",
+        ):
+            self.assertIn(required, combined)
 
     def test_parity_receipt_separates_measurement_families(self):
         path = REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json"

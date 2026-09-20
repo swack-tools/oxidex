@@ -97,7 +97,7 @@ matrix if that workflow intentionally changes. For v2.0.0-beta.1 it is:
 | `oxidex-aarch64-unknown-linux-musl` | Linux arm64 static binary |
 | `oxidex-x86_64-pc-windows-gnu.exe` | Windows x86_64 binary |
 | `oxidex-aarch64-apple-darwin` | Signed macOS arm64 binary |
-| `oxidex-v2.0.0-beta.1.dmg` | Signed, notarized, stapled macOS disk image |
+| `oxidex-v2.0.0-beta.1.dmg` | Notarized and stapled macOS DMG containing the signed executable |
 
 Require no missing, zero-byte, or unexpected assets. If checksums are
 advertised or emitted, verify them; current absence of a checksum asset must be
@@ -177,6 +177,8 @@ block in Bash; its subshell confines cleanup traps to this verification.
 
 ```bash
 set -euo pipefail
+: "${EXPECTED_DEVELOPER_ID:?Set the full expected Developer ID Application authority}"
+: "${EXPECTED_TEAM_IDENTIFIER:?Set the expected Apple team identifier}"
 (
 DMG_MOUNT=$(mktemp -d "$EVIDENCE_DIR/dmg-mount.XXXXXX")
 cleanup_macos_mount() {
@@ -220,6 +222,13 @@ codesign --verify --strict --verbose=4 "$MAC_DMG_PAYLOAD" \
   2>&1 | tee "$EVIDENCE_DIR/macos-payload-codesign-verify.txt"
 codesign --display --verbose=4 "$MAC_DMG_PAYLOAD" \
   2>&1 | tee "$EVIDENCE_DIR/macos-payload-codesign-display.txt"
+for signature in \
+  "$EVIDENCE_DIR/macos-codesign-display.txt" \
+  "$EVIDENCE_DIR/macos-payload-codesign-display.txt"
+do
+  grep -Fqx "Authority=$EXPECTED_DEVELOPER_ID" "$signature"
+  grep -Fqx "TeamIdentifier=$EXPECTED_TEAM_IDENTIFIER" "$signature"
+done
 spctl --assess --type execute --verbose=4 "$MAC_BIN" \
   2>&1 | tee "$EVIDENCE_DIR/macos-gatekeeper-binary.txt"
 spctl --assess --type execute --verbose=4 "$MAC_DMG_PAYLOAD" \
@@ -241,9 +250,10 @@ All checks and cleanup must exit zero. The trap detaches only the new mount
 and removes only its empty mount-point directory; downloads and evidence are
 retained. A failed attach may leave an empty directory; a failed detach leaves
 the mount for explicit diagnosis, never recursive deletion or forced detach.
-Inspect the display output for the expected
-Developer ID identity, hardened runtime, timestamp, and TeamIdentifier without
-recording private keys or credentials. Set `macos_verification.status` to
+The command block requires the exact expected Developer ID authority and
+TeamIdentifier in both executable signatures. Also inspect the display output
+for hardened runtime and a trusted timestamp without recording private keys or
+credentials. Set `macos_verification.status` to
 `verified` only when the manifest/run SHA, run-to-release comparison, payload
 hash match, expected version, signature/Gatekeeper/ticket checks and cleanup
 are all evidenced. Record the host OS/architecture and every command's result.
@@ -273,8 +283,9 @@ Set the final receipt to `verified` only if all of the following agree:
 - the exact expected asset set exists and its hashes are recorded;
 - downloaded macOS artifacts match the selected run manifest/provenance, the
   DMG payload matches the raw executable, both report the release version and
-  pass basic invocation, and signature, Gatekeeper and stapled-ticket checks
-  pass with successful mount cleanup;
+  pass basic invocation, their exact Developer ID and TeamIdentifier match the
+  recorded expectations, and signature, Gatekeeper and DMG stapled-ticket
+  checks pass with successful mount cleanup;
 - every gate/workflow/artifact entry carries durable evidence.
 
 Otherwise preserve the most specific non-verified status and name one safe

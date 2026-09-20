@@ -109,14 +109,12 @@ candidate in `oxidex_sha`; the documentation receipt binds it in
 
 ```bash
 set -euo pipefail
-jq -e --arg sha "$CANDIDATE_SHA" '
-  .schema_version == 1 and .oxidex_sha == $sha and .status == "verified"
-  and (.refusals | length) == 0
-' "$PARITY_RECEIPT"
-jq -e --arg sha "$CANDIDATE_SHA" --arg version "$VERSION" '
-  .schema_version == 1 and .candidate_sha == $sha and .version == $version
-  and .status == "verified" and (.unresolved | length) == 0
-' "$DOCUMENTATION_RECEIPT"
+python3 tools/ci/validate_release_receipt.py --kind parity \
+  --receipt "$PARITY_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$CANDIDATE_SHA"
+python3 tools/ci/validate_release_receipt.py --kind documentation \
+  --receipt "$DOCUMENTATION_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$CANDIDATE_SHA"
 ```
 
 If the current receipt schema uses a later documented version, validate that
@@ -168,11 +166,35 @@ test -n "$PR_URL"
 printf '%s\n' "$PR_URL" | tee "$EVIDENCE_DIR/pr-url.txt"
 PR=$(gh pr view "$PR_URL" --json number --jq '.number')
 test -n "$PR"
-gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup
+gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup \
+  | tee "$EVIDENCE_DIR/pr-state.json"
 gh pr checks "$PR" --required
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+gh api graphql \
+  -F owner="$REPO_OWNER" -F name="$REPO_NAME" -F number="$PR" \
+  -f query='query($owner:String!,$name:String!,$number:Int!){
+    repository(owner:$owner,name:$name){
+      pullRequest(number:$number){
+        reviewThreads(first: 100){
+          pageInfo{hasNextPage}
+          nodes{isResolved isOutdated comments(first:1){nodes{url body author{login}}}}
+        }
+      }
+    }
+  }' > "$EVIDENCE_DIR/review-threads.json"
+jq -e '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false' \
+  "$EVIDENCE_DIR/review-threads.json" > /dev/null
+jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+    | select(.isResolved == false and .isOutdated == false)] | length' \
+  "$EVIDENCE_DIR/review-threads.json" \
+  | tee "$EVIDENCE_DIR/unresolved-actionable-review-threads.txt"
+test "$(<"$EVIDENCE_DIR/unresolved-actionable-review-threads.txt")" -eq 0
 ```
 
-Require review approval and all required checks. After the authorized merge:
+Require review approval, all required checks, a complete review-thread page,
+and zero unresolved non-outdated review threads. A general review decision does
+not prove that inline comments were resolved. After the authorized merge:
 
 ```bash
 set -euo pipefail

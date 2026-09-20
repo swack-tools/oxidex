@@ -272,7 +272,7 @@ jobs:
       - name: Create artifact directory
         run: mkdir -p artifacts
 
-      - name: Copy signed binary and DMG to artifacts
+      - name: Copy signed binary and notarized DMG to artifacts
         run: |
           cp target/release/oxidex artifacts/oxidex-aarch64-apple-darwin
           cp dist/oxidex-v${{ steps.version.outputs.version }}.dmg artifacts/
@@ -327,7 +327,7 @@ jobs:
           cp artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe release-assets/
           # macOS signed binary (ARM64)
           cp artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin release-assets/
-          # macOS DMG (signed and notarized)
+          # macOS DMG (notarized and stapled; contains the signed executable)
           cp artifacts/oxidex-dmg/*.dmg release-assets/
 
       - name: Extract version and create release notes
@@ -350,7 +350,7 @@ jobs:
 
           **macOS:**
           - `oxidex-aarch64-apple-darwin` - Signed macOS ARM64 binary
-          - `oxidex-v$VERSION.dmg` - Signed and notarized macOS DMG installer
+          - `oxidex-v$VERSION.dmg` - Notarized and stapled macOS DMG containing the signed executable
 
           ### Installation
 
@@ -367,10 +367,10 @@ jobs:
           **macOS DMG:**
           1. Download and open the DMG file
           2. Drag OxiDex to Applications or desired location
-          3. No security warnings - fully signed and notarized by Apple
+          3. The executable is Developer ID signed; the DMG is notarized and stapled by Apple
 
           ### Note
-          The macOS artifacts are signed with a Developer ID certificate and the DMG is notarized by Apple for secure installation.
+          The macOS executable is signed with a Developer ID certificate. The DMG containing it is notarized and stapled by Apple for secure installation.
           EOF
 
           # Replace $VERSION in the file with actual version
