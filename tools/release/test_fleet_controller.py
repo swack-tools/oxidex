@@ -1196,6 +1196,18 @@ class FleetControllerTests(unittest.TestCase):
         self.assertTrue(any(value.endswith("/final-1.md") for value in record["argv"]))
         self.assertEqual(record["launch_count"], 1)
         self.assertEqual(record["model"], "gpt-5.6-terra")
+        argv = record["argv"]
+        self.assertNotIn(("--enable", "fast_mode"), list(zip(argv, argv[1:])))
+        self.assertEqual(
+            argv,
+            [
+                str(fake.resolve()), "--yolo", "exec", "--disable", "fast_mode",
+                "--model", "gpt-5.6-terra", "--json", "-o",
+                str(self.root / "processes/05/final-1.md"),
+                "-C", str(worktree),
+                f"Process token token-x. Execute the canonical PRD at {prd}",
+            ],
+        )
 
     def test_launch_writes_a_durable_intent_before_spawn_and_marks_it_recorded(self) -> None:
         store = fleet.StateStore(self.root)
@@ -1596,6 +1608,19 @@ class FleetControllerTests(unittest.TestCase):
         self.assertEqual(intent["lifecycle"], "recorded")
         self.assertEqual(intent["mode"], "resume")
         self.assertEqual(intent["record"]["pid"], record["pid"])
+        argv = record["argv"]
+        self.assertNotIn(("--enable", "fast_mode"), list(zip(argv, argv[1:])))
+        self.assertEqual(
+            argv,
+            [
+                str(fake.resolve()), "--yolo", "exec", "resume", "--disable",
+                "fast_mode", "--model", "gpt-5.6-terra", "--json", "-o",
+                str(self.root / "final-2.md"), "recorded-session",
+                f"Process token {record['token']}. Continue from "
+                f"{self.root / 'processes/00/recovery-prompt.md'}",
+            ],
+        )
+        self.assertEqual(intent["argv"], argv)
 
     def test_fresh_controller_adopts_post_spawn_pre_record_worker_without_duplicate(self) -> None:
         """Real SIGKILL leaves only an intent; a fresh controller adopts its exact child."""
