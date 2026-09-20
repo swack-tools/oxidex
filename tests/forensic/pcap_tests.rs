@@ -9,10 +9,7 @@
 //!
 //! Uses TestReader pattern with synthetic PCAP data.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::{FormatParser, TagValue};
 use oxidex::parsers::specialized::pcap::PCAPParser;
 
@@ -180,16 +177,14 @@ fn create_pcapng_with_idb(
 
         // Option length (rounded to 4-byte boundary)
         let name_len = name.len();
-        let padded_len = ((name_len + 3) / 4) * 4;
+        let padded_len = name_len.div_ceil(4) * 4;
         idb_data.extend_from_slice(&(name_len as u16).to_le_bytes());
 
         // Interface name value
         idb_data.extend_from_slice(name.as_bytes());
 
         // Padding
-        for _ in 0..(padded_len - name_len) {
-            idb_data.push(0);
-        }
+        idb_data.extend(std::iter::repeat_n(0, padded_len - name_len));
     }
 
     if let Some(os) = operating_system {

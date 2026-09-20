@@ -203,11 +203,11 @@ fn test_round_trip_tiff_modification() {
     let iso_tag = new_tags.iter().find(|(id, _, _, _)| *id == 0x8827);
     assert!(iso_tag.is_some(), "ISO tag should be present in output");
 
-    if let Some((_, _, _, iso_value)) = iso_tag {
-        if iso_value.len() >= 2 {
-            let iso = u16::from_le_bytes([iso_value[0], iso_value[1]]);
-            assert_eq!(iso, 800, "ISO value should be 800");
-        }
+    if let Some((_, _, _, iso_value)) = iso_tag
+        && iso_value.len() >= 2
+    {
+        let iso = u16::from_le_bytes([iso_value[0], iso_value[1]]);
+        assert_eq!(iso, 800, "ISO value should be 800");
     }
 
     // Verify other tags remain unchanged

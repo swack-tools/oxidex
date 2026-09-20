@@ -4,10 +4,7 @@
 //! Tests cover format detection, signature verification, fingerprint calculation,
 //! and metadata extraction from various certificate structures.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::x509::{X509Parser, parse_x509_metadata};
 

@@ -3,10 +3,7 @@
 //! Comprehensive tests for OLE (Compound File Binary Format) parsing and VBA macro
 //! forensic analysis, including detection of suspicious patterns used in malware.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::FormatParser;
 use oxidex::parsers::archive::ole::{OLEParser, VBAAnalyzer};
 
@@ -53,7 +50,7 @@ fn test_suspicious_wscript() {
 
     // Verify we get multiple suspicious indicators
     assert!(
-        patterns.len() >= 1,
+        !patterns.is_empty(),
         "Expected at least one suspicious pattern"
     );
 }

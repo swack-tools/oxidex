@@ -1,5 +1,8 @@
 //! Unit tests for audio parsers and document formats
 
+#[path = "common/mod.rs"]
+mod common;
+
 #[path = "unit/audio/flac_tests.rs"]
 mod flac_tests;
 

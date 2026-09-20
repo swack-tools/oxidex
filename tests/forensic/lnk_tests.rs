@@ -12,10 +12,7 @@
 //! - Extra data blocks (`TrackerData`, `ConsoleData`)
 //! - Edge cases and error handling
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::{FormatParser, TagValue};
 use oxidex::parsers::specialized::lnk::LNKParser;
 

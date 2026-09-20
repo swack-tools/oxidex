@@ -324,7 +324,7 @@ fn test_error_corrupted_ifd_circular_reference() {
             );
             // Should have extracted at least the first IFD's tags
             assert!(
-                tags.len() >= 1,
+                !tags.is_empty(),
                 "Should extract at least one tag before detecting cycle"
             );
         }
@@ -468,24 +468,22 @@ fn test_malformed_fixtures_directory() {
             continue;
         }
 
-        for entry in entries.unwrap() {
-            if let Ok(entry) = entry {
-                let file_path = entry.path();
-                if file_path.is_file() {
-                    println!("Testing malformed file: {:?}", file_path);
+        for entry in entries.unwrap().flatten() {
+            let file_path = entry.path();
+            if file_path.is_file() {
+                println!("Testing malformed file: {:?}", file_path);
 
-                    // Try to parse with timeout - should not panic or hang
-                    if let Ok(reader) = BufferedReader::new(&file_path) {
-                        let result = with_timeout(Duration::from_secs(5), || {
-                            let _ = detect_format(&reader);
-                            let _ = parse_tiff_file(&reader);
-                            let _ = parse_segments(&reader);
-                        });
+                // Try to parse with timeout - should not panic or hang
+                if let Ok(reader) = BufferedReader::new(&file_path) {
+                    let result = with_timeout(Duration::from_secs(5), || {
+                        let _ = detect_format(&reader);
+                        let _ = parse_tiff_file(&reader);
+                        let _ = parse_segments(&reader);
+                    });
 
-                        match result {
-                            Ok(_) => println!("  ✓ Handled gracefully"),
-                            Err(e) => panic!("  ✗ Timed out: {}", e),
-                        }
+                    match result {
+                        Ok(_) => println!("  ✓ Handled gracefully"),
+                        Err(e) => panic!("  ✗ Timed out: {}", e),
                     }
                 }
             }

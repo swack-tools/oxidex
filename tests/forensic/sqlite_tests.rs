@@ -4,10 +4,7 @@
 //! metadata extraction, encoding detection, application identification, and forensic
 //! indicators. Tests use synthetic SQLite headers to verify parser behavior.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::sqlite::{SQLiteParser, parse_sqlite_metadata};
 
