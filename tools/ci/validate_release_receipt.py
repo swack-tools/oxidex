@@ -524,6 +524,13 @@ def _validate_documentation(
                 f"benchmarks[{index}].disposition",
                 f"expected one of {sorted(allowed_dispositions)!r}",
             )
+        if disposition == "not_applicable":
+            reason = benchmark.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                checks.error(
+                    f"benchmarks[{index}].reason",
+                    "expected a non-empty reason when disposition is 'not_applicable'",
+                )
     checks.equal("local_build.status", "verified")
     checks.equal("local_build.candidate_sha", payload.get("candidate_sha"))
     for path in (

@@ -133,7 +133,7 @@ reproducible browser contract as follows:
    setting. Wait for fonts/images and layout to settle with a bounded wait;
    do not use arbitrary sleep as proof. Exercise mobile menu, search, a normal
    internal navigation, code blocks, and horizontal scrolling of wide tables.
-5. Save a full-page screenshot for every route/viewport/theme combination via
+5. Save a full-page screenshot for every representative route/viewport/theme cell via
    `page.screenshot({path, fullPage: true})` or equivalent; capture additional
    screenshots for opened navigation/search and any clipped/overflow state.
    Use deterministic filenames keyed by route, width and theme. Record a

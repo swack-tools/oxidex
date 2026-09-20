@@ -10,7 +10,9 @@ commands:
 
 ```bash
 set -euo pipefail
-VERSION=2.0.0-beta.1
+: "${VERSION:?Set the release version without a v prefix}"
+: "${RELEASE_LOCK:?Set the absolute shared lock controller path}"
+test -f "$RELEASE_LOCK"
 TAG="v$VERSION"
 PARITY_RECEIPT=/absolute/path/to/release-parity-receipt.json
 DOCUMENTATION_RECEIPT=/absolute/path/to/documentation-release-receipt.json
@@ -156,7 +158,7 @@ each command, exit code, candidate SHA, log path, and tool version in `gates`.
 ```bash
 set -euo pipefail
 CARGO_TARGET_DIR="$CANDIDATE_CARGO_TARGET_DIR" \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 "$RELEASE_LOCK" --shared \
   "$EVIDENCE_DIR/ci-standard.log" -- just ci-standard
 python3 -m unittest tools.ci.test_release_workflow -v \
   2>&1 | tee "$EVIDENCE_DIR/release-workflow-tests.log"
@@ -258,7 +260,7 @@ set -euo pipefail
   cd "$POST_MERGE_WORKTREE"
   test "$(git rev-parse 'HEAD^{commit}')" = "$MAIN_SHA"
   CARGO_TARGET_DIR="$MAIN_CARGO_TARGET_DIR" \
-  python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+  python3 "$RELEASE_LOCK" --shared \
     "$MAIN_EVIDENCE_DIR/ci-standard.log" -- just ci-standard
   python3 -m unittest tools.ci.test_release_workflow -v \
     2>&1 | tee "$MAIN_EVIDENCE_DIR/release-workflow-tests.log"

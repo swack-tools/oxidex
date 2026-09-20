@@ -17,7 +17,8 @@ EVIDENCE_ROOT=/absolute/durable/evidence/root
 test -d "$EVIDENCE_ROOT"
 PARITY_EVIDENCE=$(mktemp -d "$EVIDENCE_ROOT/parity-${PARITY_SHA}.XXXXXX")
 export CARGO_TARGET_DIR=/absolute/dedicated/parity-target
-PARITY_LOCK=/Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py
+: "${PARITY_LOCK:?Set the absolute lock controller path}"
+test -f "$PARITY_LOCK"
 PARITY_PIN=$(tr -d '\r\n' < .exiftool-version)
 : "${EXIFTOOL_PERL:=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2}"
 : "${EXIFTOOL_CACHE_DIR:=/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN}"
@@ -43,6 +44,8 @@ fingerprint fields emitted by `release_oracle.py`; map those exact fields into
 the release receipt rather than reconstructing them by hand. The shared Python
 resolver obeys `EXIFTOOL_PERL`; its generic
 fallback suggestions are not permission to change the release oracle.
+Missing standard-library modules such as `strict.pm` block the oracle; do not
+treat a successful version-only probe as capability evidence.
 Direct probes and authenticated reads use `-config ''`. The conformance and
 library harnesses do not add that flag: the empty `EXIFTOOL_HOME` and refusal
 of a script-directory `.ExifTool_config` exclude default configuration for
@@ -199,8 +202,8 @@ re-run the version/DOCX probes through it before running the matrix:
 #!/bin/bash
 set -euo pipefail
 exec /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
-  -I/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/lib \
-  /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool -config '' "$@"
+  -I/absolute/path/to/pinned-exiftool/lib \
+  /absolute/path/to/pinned-exiftool/exiftool -config '' "$@"
 ```
 
 Archive and hash the wrapper. Never point directly at the script's env-Perl
@@ -264,7 +267,7 @@ executable validator the final handoff gate:
 ```bash
 set -euo pipefail
 PARITY_RELEASE_RECEIPT=/absolute/path/to/release-parity-receipt.json
-VERSION=2.0.0-beta.1
+: "${VERSION:?Set the release version without a v prefix}"
 python3 tools/ci/validate_release_receipt.py --kind parity \
   --receipt "$PARITY_RELEASE_RECEIPT" --version "$VERSION" \
   --candidate-sha "$PARITY_SHA"
