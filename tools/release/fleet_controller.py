@@ -882,9 +882,11 @@ def read_remote_inventory(
     )
     recorded_pr: int | None = None
     if task_number is not None:
-        pr_ci_state = state["tasks"][str(task_number)].get("pr_ci_state") or {}
-        candidate = pr_ci_state.get("pr")
-        if isinstance(candidate, int) and candidate > 0:
+        pr_ci_state = state["tasks"][str(task_number)].get("pr_ci_state")
+        # Malformed or legacy durable PR state is treated as unrecorded so
+        # recovery retains the safe inventory-list fallback.
+        candidate = pr_ci_state.get("pr") if isinstance(pr_ci_state, Mapping) else None
+        if type(candidate) is int and candidate > 0:
             recorded_pr = candidate
     command = [gh, "pr"]
     if recorded_pr is not None:

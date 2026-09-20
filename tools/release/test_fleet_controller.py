@@ -1062,6 +1062,90 @@ class FleetControllerTests(unittest.TestCase):
         self.assertEqual(reconciled["pr_ci_state"]["pr"], 875)
         self.assertEqual(reconciled["merge_sha"], head_sha)
 
+    def test_reconcile_boolean_recorded_pr_falls_back_to_inventory_listing(self) -> None:
+        """Boolean durable PR data is not a valid direct-view identifier."""
+        repository = self.root / "repository"
+        head_sha = initialize_git_repository(repository)
+        remote = self.root / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        git(repository, "remote", "add", "origin", str(remote))
+        for branch in (
+            "staging/beta1-functional-integration",
+            "staging/beta1/task-6",
+        ):
+            git(repository, "branch", branch, head_sha)
+            git(repository, "push", "-q", "origin", f"{branch}:{branch}")
+        fake_gh = self.root / "fake-gh"
+        fake_gh.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import sys\n"
+            "if sys.argv[1:3] != ['pr', 'list']:\n"
+            "    raise SystemExit('invalid recorded PR must use gh pr list')\n"
+            "print(json.dumps([]))\n",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+        recorded = task(6, "pushed")
+        recorded["pr_ci_state"] = {"pr": True, "ci": "pending"}
+        controller_state = state(recorded)
+        controller_state["target_sha"] = head_sha
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_GH_EXECUTABLE": str(fake_gh),
+                "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+            },
+            clear=False,
+        ):
+            inventory = fleet.read_remote_inventory(
+                repository, controller_state, task_number=6
+            )
+
+        self.assertEqual(inventory["tasks"]["6"]["branch"], "staging/beta1/task-6")
+
+    def test_reconcile_non_mapping_pr_ci_state_falls_back_to_inventory_listing(self) -> None:
+        """Legacy non-object durable PR state cannot crash targeted reconciliation."""
+        repository = self.root / "repository"
+        head_sha = initialize_git_repository(repository)
+        remote = self.root / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+        git(repository, "remote", "add", "origin", str(remote))
+        for branch in (
+            "staging/beta1-functional-integration",
+            "staging/beta1/task-6",
+        ):
+            git(repository, "branch", branch, head_sha)
+            git(repository, "push", "-q", "origin", f"{branch}:{branch}")
+        fake_gh = self.root / "fake-gh"
+        fake_gh.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import sys\n"
+            "if sys.argv[1:3] != ['pr', 'list']:\n"
+            "    raise SystemExit('invalid PR state must use gh pr list')\n"
+            "print(json.dumps([]))\n",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+        recorded = task(6, "pushed")
+        recorded["pr_ci_state"] = ["legacy"]
+        controller_state = state(recorded)
+        controller_state["target_sha"] = head_sha
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_GH_EXECUTABLE": str(fake_gh),
+                "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+            },
+            clear=False,
+        ):
+            inventory = fleet.read_remote_inventory(
+                repository, controller_state, task_number=6
+            )
+
+        self.assertEqual(inventory["tasks"]["6"]["branch"], "staging/beta1/task-6")
+
     def test_identity_requires_pid_start_token_executable_task_and_exact_argv(self) -> None:
         record = {
             "pid": 7,
