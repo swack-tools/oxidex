@@ -58,6 +58,7 @@
         "properties": {
           "number": {"type": "integer", "minimum": 0, "maximum": 20},
           "slug": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+          "remote_branch": {"type": "string", "pattern": "^staging/beta1/(?!.*(?:\\.\\.|//|/\\.|\\.(?:lock)?(?:/|$)|/$))[a-z0-9][a-z0-9._/-]*$"},
           "state": {"type": "string", "minLength": 1},
           "state_history": {
             "type": "array",
