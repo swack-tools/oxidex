@@ -485,13 +485,15 @@ class MacOSReleaseVerificationTests(unittest.TestCase):
         path.write_text(text)
         path.chmod(0o755)
 
-    def make_fake_tools(self, root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    def make_fake_tools(
+        self, root: pathlib.Path, archs: str = "arm64 x86_64"
+    ) -> tuple[pathlib.Path, pathlib.Path]:
         fake_bin = root / "fake-bin"
         fake_bin.mkdir()
         tool_log = root / "tools.log"
         common = "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$(basename \"$0\") $*\" >> \"$TOOL_LOG\"\n"
         self.make_executable(
-            fake_bin / "lipo", common + "printf '%s\\n' 'aarch64 x86_64'\n")
+            fake_bin / "lipo", common + f"printf '%s\\n' '{archs}'\n")
         self.make_executable(
             fake_bin / "codesign",
             common
@@ -525,7 +527,9 @@ class MacOSReleaseVerificationTests(unittest.TestCase):
         )
         return fake_bin, tool_log
 
-    def run_verifier(self, fail_payload: bool = False) -> tuple[subprocess.CompletedProcess[str], str]:
+    def run_verifier(
+        self, fail_payload: bool = False, archs: str = "arm64 x86_64"
+    ) -> tuple[subprocess.CompletedProcess[str], str]:
         temporary = tempfile.TemporaryDirectory()
         try:
             root = pathlib.Path(temporary.name)
@@ -539,7 +543,7 @@ class MacOSReleaseVerificationTests(unittest.TestCase):
                 "elif [ \"${1:-}\" = --help ]; then echo help; fi\n",
             )
             (assets / "oxidex-v2.0.0-beta.1.dmg").write_bytes(b"fake-dmg\n")
-            fake_bin, tool_log = self.make_fake_tools(root)
+            fake_bin, tool_log = self.make_fake_tools(root, archs=archs)
             mount_parent = root / "mount-parent"
             mount_parent.mkdir()
             env = os.environ.copy()
@@ -564,7 +568,7 @@ class MacOSReleaseVerificationTests(unittest.TestCase):
 
     def test_real_verifier_assesses_both_executables_and_cleans_mount(self):
         """Removing either execute assessment or detach must fail this behavior test."""
-        result, calls = self.run_verifier()
+        result, calls = self.run_verifier(archs="x86_64 arm64")
         self.assertEqual(result.returncode, 0, result.stderr)
         execute_assessments = [
             line for line in calls.splitlines()
@@ -583,6 +587,11 @@ class MacOSReleaseVerificationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("hdiutil attach", calls)
         self.assertIn("hdiutil detach", calls)
+
+    def test_real_verifier_rejects_artifact_missing_x86_64_slice(self):
+        result, calls = self.run_verifier(archs="arm64")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("codesign --verify", calls)
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -622,11 +631,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_macos_release_builds_and_asserts_a_universal_binary(self):
         block = job_block(self.text, "build-macos")
         self.assertIn('targets: aarch64-apple-darwin,x86_64-apple-darwin', block)
-        self.assertIn('cargo build --release --target aarch64-apple-darwin', block)
-        self.assertIn('cargo build --release --target x86_64-apple-darwin', block)
+        self.assertIn('cargo +1.97.1 build --release --target aarch64-apple-darwin', block)
+        self.assertIn('cargo +1.97.1 build --release --target x86_64-apple-darwin', block)
         self.assertIn('lipo -create -output "$APP_PATH"', block)
         self.assertIn('lipo -archs "$APP_PATH"', block)
-        self.assertIn('aarch64 x86_64', block)
+        self.assertIn('arm64 x86_64', block)
+        self.assertNotIn('aarch64 x86_64', block)
+        self.assertIn('toolchain: 1.97.1', block)
+        self.assertIn('rustup target list --installed --toolchain 1.97.1', block)
+        self.assertIn('test -d "$SYSROOT/lib/rustlib/$target/lib"', block)
 
     def test_universal_macos_asset_name_is_shared_by_release_contract_surfaces(self):
         expected = "oxidex-universal-apple-darwin"

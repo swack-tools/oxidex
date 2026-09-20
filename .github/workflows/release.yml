@@ -173,6 +173,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.97.1
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -184,14 +185,22 @@ jobs:
       # material. Cargo build scripts must never inherit access to the key.
       - name: Build universal release binary
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          SYSROOT=$(rustc +1.97.1 --print sysroot)
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            rustup target list --installed --toolchain 1.97.1 | grep -Fx "$target"
+            test -d "$SYSROOT/lib/rustlib/$target/lib"
+          done
+          cargo +1.97.1 build --release --target aarch64-apple-darwin
+          cargo +1.97.1 build --release --target x86_64-apple-darwin
           mkdir -p artifacts
           APP_PATH="artifacts/oxidex-universal-apple-darwin"
           lipo -create -output "$APP_PATH" \
             target/aarch64-apple-darwin/release/oxidex \
             target/x86_64-apple-darwin/release/oxidex
-          test "$(lipo -archs "$APP_PATH")" = "aarch64 x86_64"
+          ARCHS=$(lipo -archs "$APP_PATH")
+          NORMALIZED_ARCHS=$(printf '%s\n' "$ARCHS" | awk '{ for (i = 1; i <= NF; i++) print $i }' \
+            | LC_ALL=C sort | paste -sd ' ' -)
+          test "$NORMALIZED_ARCHS" = "arm64 x86_64"
 
       - name: Import signing certificate and sign binary
         env:
