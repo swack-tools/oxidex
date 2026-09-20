@@ -1,81 +1,61 @@
 ---
 name: oxidex-release-documentation
-description: Use when auditing OxiDex documentation, benchmark claims, or GitHub Pages readiness for a release candidate, including approval requests based on a green VitePress build or sidebar review.
+description: Use when release-candidate documentation, benchmark claims, changelog, or GitHub Pages must be audited for factual accuracy and build/browser readiness; not for an isolated prose or typo edit.
 ---
 
 # OxiDex Release Documentation
 
-Approve documentation only from a complete, commit-bound evidence receipt.
-A green build and a sidebar tour do not cover every rendered route. This
-skill audits release readiness; it does not authorize a merge, deployment,
-Pages setting change, or release publication.
+Approve documentation only from complete, commit-bound evidence. A green build
+or sidebar tour does not cover every rendered route. This skill does not
+authorize merge, deployment, Pages-setting changes, tagging, or publication.
 
 ## Inputs and output
 
-Require version, full candidate SHA, parity receipt, benchmark artifacts,
-workflow files, live Pages settings, committed docs, and generated content.
-Copy `templates/documentation-release-receipt.json` into a unique durable
-evidence directory outside tracked content. Populate all sections, retaining
-unknown facts as `unverified` and blockers in `unresolved`. A template is not
-evidence. Record command, exit status, UTC time, full SHA, and evidence path.
+Require a version, full candidate SHA/tree, verified parity receipt, committed
+docs/generated content, workflow files, Pages settings, and an explicit
+benchmark disposition. Benchmark artifacts are required only when a current or
+historical performance claim is retained; a release with no performance claim
+uses `not_applicable` with a reason.
+
+Copy [`documentation-release-receipt.json`](templates/documentation-release-receipt.json)
+to a unique durable evidence directory outside tracked content. Keep unknown
+facts `unverified`, known failures `blocked`, and blockers in `unresolved`.
 
 ## Ordered audit
 
-1. Read repository instructions, run preflight, and freeze the candidate SHA
-   in an isolated clean worktree. Ingest the parity receipt: check its actual
-   schema, status, SHA, oracle pin/capability, instruments, and artifact hashes.
-   Missing, partial, or mismatched parity evidence blocks parity claims.
-2. Read [factuality-ledger.md](references/factuality-ledger.md). Build the claim
-   ledger, then inventory every committed Markdown source, generated comparison
-   page, and rendered HTML route. Reconcile all three sets, including unlinked
-   pages and copied benchmark reports. Give each page a `current`, `historical`,
-   or `excluded` disposition and evidence; exclusions require a build reason.
-3. Resolve stale current content. Check changelog, versions, installation,
-   migration, platform support, status, parity and performance statements
-   against candidate sources and receipts. Historical claims need visible
-   dates/commits and must not be repeated as current release claims.
-4. Read [benchmark-policy.md](references/benchmark-policy.md). Verify the exact
-   candidate commit for each current benchmark claim. Record measured SHA,
-   profile, machine, corpus, oracle, artifact identity and disposition. An older
-   fallback may remain only as visibly historical, never as candidate results.
-5. Read [github-pages-audit.md](references/github-pages-audit.md). Reproduce the
-   production build using `tools/docs-local-deploy.sh`, real comparison output
-   and candidate benchmark inputs. Crawl every rendered route and referenced
-   asset with browser automation (Playwright preferred, equivalent tooling
-   acceptable); inspect representative pages at desktop and mobile widths in
-   light and dark theme. Save screenshots and console/network findings, then
-   obtain human screenshot review of the complete representative matrix.
-6. Inspect Pages API `build_type`, `deploy-docs.yml`, and `release.yml`.
-   Validate syntax/tests, triggers/path filters, permissions, generated-report
-   and benchmark handoff, artifact/deploy actions, domain/base/HTTPS and current
-   `workflow` mode settings. A pipeline defect blocks verification; a `gh-pages`
-   update is not proof of deployment.
-7. Bind the verified local audit to the exact candidate SHA and tree. After an
-   authorized merge, compare the final `MAIN_SHA` tree: if it differs, rerun the
-   same local audit against it before tag authorization. For an identical tree,
-   preserve candidate evidence and record the SHA/tree equivalence explicitly.
+1. Run preflight in a clean isolated worktree and freeze the candidate. Validate
+   the parity receipt's schema, status, SHA/tree, oracle, instruments, scope,
+   and hashes. Missing or mismatched parity evidence blocks parity claims.
+2. Read [`factuality-ledger.md`](references/factuality-ledger.md). Reconcile all
+   committed Markdown, generated pages, and rendered routes, including unlinked
+   pages and copied reports. Classify each as `current`, `historical`, or
+   `excluded` with evidence.
+3. Reconcile changelog, version, installation, migration, platform, status,
+   parity, and performance statements against the exact candidate. Read
+   [`benchmark-policy.md`](references/benchmark-policy.md) and bind every
+   retained benchmark claim to its actual commit and artifact.
+4. Read [`github-pages-audit.md`](references/github-pages-audit.md). Run the
+   tracked production-equivalent build and browser audit. Crawl every rendered
+   route, local asset, and fragment; separately capture every representative
+   route/viewport/theme cell. Preserve manifests, screenshots, console/page/
+   request findings, server logs, and human screenshot review.
+5. Audit Pages API `build_type`, workflow syntax/tests, triggers, permissions,
+   generated/benchmark handoffs, artifact/deploy actions, domain/base, and
+   HTTPS. A legacy `gh-pages` update or workflow YAML is not deployment proof.
+6. Bind approval to candidate SHA/tree. If an authorized merge changes the
+   tree, rerun against `MAIN_SHA` before tag authorization; otherwise record
+   explicit tree equivalence.
 
 ## Approval contract
 
-Set overall `status: verified` after the exact candidate's production-equivalent
-local deploy, exhaustive factuality/route/asset audit, automated responsive
-browser checks, human screenshot review and Pages pipeline audit all pass,
-with no unresolved required checks. This is sufficient to approve documentation
-quality before deployment. It does not authorize a merge, tag or publication.
+Set `status: verified` only after exact-candidate factuality, source/generated/
+rendered reconciliation, production-equivalent local build, exhaustive route/
+asset/fragment browser checks, the complete representative visual matrix,
+human screenshot review, and Pages pipeline/settings audit all pass with no
+required unresolved items. This approves documentation quality before tag
+authorization, not the release itself.
 
-Actual live deployment is optional post-merge operational confirmation, not a
-documentation-quality prerequisite. `live_deployment` may be `not_run` or
-`unverified` with `required_for_documentation_verification: false`. Do not put
-an unrequested live confirmation into required `unresolved` items. If optional
-checks discover a real documentation or pipeline defect, record that defect
-and block verification until resolved.
-
-A known unmet requirement is `blocked`; evidence not yet collected is
-`unverified`. Preserve completed evidence and name the remaining work.
-
-| Shortcut | Required evidence |
-| --- | --- |
-| Sidebar pages look fine | Reconciled source/generated/rendered census |
-| Cold build is green | Production inputs, route/asset crawl, responsive screenshots |
-| Older benchmark fallback succeeded | Historical label and actual measured commit |
-| Release workflow updates `gh-pages` | Workflow-mode Pages API and pipeline audit |
+Live deployment confirmation is optional post-merge evidence. It may remain
+`not_run` or `unverified` with
+`required_for_documentation_verification: false`. If an optional check exposes
+a real defect, block verification until it is resolved.

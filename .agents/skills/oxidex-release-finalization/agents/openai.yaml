@@ -2,3 +2,6 @@ interface:
   display_name: "OxiDex Release Finalization"
   short_description: "Finalize an evidence-backed OxiDex release"
   default_prompt: "Use $oxidex-release-finalization to finalize this OxiDex release candidate safely."
+
+policy:
+  allow_implicit_invocation: true

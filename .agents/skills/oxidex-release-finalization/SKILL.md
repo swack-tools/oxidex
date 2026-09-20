@@ -1,6 +1,6 @@
 ---
 name: oxidex-release-finalization
-description: Use when preparing, promoting, tagging, publishing, or validating an OxiDex release or release candidate.
+description: Use when preparing, promoting to main, tagging, publishing, or validating an OxiDex release candidate; not for an ordinary feature PR or integration-branch merge.
 ---
 
 # OxiDex Release Finalization

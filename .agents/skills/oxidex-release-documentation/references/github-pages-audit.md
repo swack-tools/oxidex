@@ -12,11 +12,13 @@ SHA, tree hash, tool versions, lockfile hash, UTC time and exact commands.
 Do not run a heavy comparison/build outside the shared measurement lock
 documented in `docs/AUTOGENERATION-PLAN.md`.
 
-The production-shaped command is:
+The production-shaped durable build command is:
 
-```text
+```bash
+set -euo pipefail
 tools/docs-local-deploy.sh --ref <candidate-sha> --full-report \
-  --bench <candidate-benchmark-run-id> --no-open --keep
+  --bench <candidate-benchmark-run-id> --build-only \
+  --output "$EVIDENCE_DIR/docs-snapshot"
 ```
 
 Replace the angle-bracket inputs with the frozen full SHA and verified run ID;
@@ -25,12 +27,16 @@ comparison pages; a stub cold build is insufficient. `--bench` must use an
 explicit provenance-checked ID, with historical disposition if applicable.
 Match the workflow's Node version (currently 24), environment/base URL,
 dependency lock and generated report inputs. Save complete stdout/stderr and
-exit statuses. The helper archives the ref into a temporary snapshot, builds,
-copies Criterion reports and remains serving until interrupted. Record its
-printed source/dist paths, keep the process running for review, then retain
-the snapshot and copy evidence to durable storage; `--keep` alone is not a
-durability guarantee. A server intentionally stopped after review is not a
-failed build; record the build result separately from server termination.
+exit statuses. In build-only mode the helper archives the ref into a temporary
+snapshot, builds, copies Criterion reports into a durable output directory,
+writes `snapshot-manifest.json`, and terminates. Require the manifest's exact
+candidate SHA, source identity, configured base path, tree hash, dist hash and
+complete rendered-route inventory. A `--worktree` snapshot deliberately records
+`candidate_sha: null` plus a `source_identity` ending in `-worktree`; it is useful
+for iterative testing but cannot be promoted as commit-bound release evidence.
+Use `--ref` for the receipt-producing build. The
+interactive default remains available for manual preview but is not the
+receipt-producing instrument.
 
 Check the helper against the workflow at this SHA. It is a reproduction aid,
 not proof of equivalence: verify generated inputs, report counts and hashes,
@@ -66,14 +72,30 @@ origin and classification. Record counts and unresolved set differences in
 the receipt. Sidebar links and a crawler starting only at home cannot discover
 all published files. Resolve every difference before approval.
 
-Serve via HTTP using the helper, never `file://`: root-relative assets and
-clean URLs require a server. Crawl **every rendered route** from the HTML
-inventory and every referenced local asset/link, including CSS/JS resources,
-fonts/images, downloads and fragment targets. Verify status, content type,
-expected content and fragment existence; a 200 fallback/404 page is not a
-valid route. Save machine-readable per-URL outcomes, final redirects, broken
-links, asset failures and unresolved external links. Check base-path handling,
-navigation, search, and benchmark links. Run the whole crawl again after fixes.
+Install the lockfile and the pinned Playwright browser, then run the tracked
+audit against the helper's own route inventory:
+
+```bash
+set -euo pipefail
+(cd docs && npm ci --no-audit --no-fund && npx playwright install chromium)
+node tools/docs/release-audit.mjs \
+  --dist "$EVIDENCE_DIR/docs-snapshot/dist" \
+  --inventory "$EVIDENCE_DIR/docs-snapshot/snapshot-manifest.json" \
+  --representatives tools/docs/release-audit-representatives.json \
+  --output "$EVIDENCE_DIR/browser-audit"
+```
+
+The command serves via ephemeral localhost HTTP, never `file://`, and writes
+`automation-manifest.json`, `crawl.json`, `visual-matrix.json`, deterministic
+screenshots and `server.log`. It verifies the dist aggregate hash against the
+snapshot manifest before browser navigation and mounts the site at the
+manifest's recorded base path, including non-root preview deployments.
+It compares the supplied inventory to every rendered HTML file and exits
+nonzero for route, asset, fragment, console, page, request, HTTP, interaction,
+theme or missing-matrix-cell failures. Preserve all outputs without filtering
+or rewriting them. A 200 fallback/404 page is not a valid route. Check base-path
+handling, navigation, search and benchmark links, then rerun the whole audit
+after fixes.
 
 ## Reproducible local browser automation and human review
 
@@ -111,7 +133,7 @@ reproducible browser contract as follows:
    setting. Wait for fonts/images and layout to settle with a bounded wait;
    do not use arbitrary sleep as proof. Exercise mobile menu, search, a normal
    internal navigation, code blocks, and horizontal scrolling of wide tables.
-5. Save a full-page screenshot for every route/viewport/theme combination via
+5. Save a full-page screenshot for every representative route/viewport/theme cell via
    `page.screenshot({path, fullPage: true})` or equivalent; capture additional
    screenshots for opened navigation/search and any clipped/overflow state.
    Use deterministic filenames keyed by route, width and theme. Record a

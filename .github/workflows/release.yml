@@ -305,7 +305,7 @@ jobs:
       - name: Create artifact directory
         run: mkdir -p artifacts
 
-      - name: Copy signed binary and DMG to artifacts
+      - name: Copy signed binary and notarized DMG to artifacts
         run: |
           cp dist/oxidex-v${{ steps.version.outputs.version }}.dmg artifacts/
 
@@ -405,7 +405,7 @@ jobs:
 
           **macOS:**
           - `oxidex-universal-apple-darwin` - Signed universal macOS binary (Apple Silicon and Intel)
-          - `oxidex-v$VERSION.dmg` - Signed and notarized macOS DMG installer
+          - `oxidex-v$VERSION.dmg` - Notarized and stapled macOS DMG containing the signed executable
           - `oxidex-v$VERSION.sbom.cdx.json` - Deterministic CycloneDX SBOM for the release source and payloads
           - `SHA256SUMS` - SHA-256 checksums for every release asset
 
@@ -424,10 +424,10 @@ jobs:
           **macOS DMG:**
           1. Download and open the DMG file
           2. Drag OxiDex to Applications or desired location
-          3. No security warnings - fully signed and notarized by Apple
+          3. The executable is Developer ID signed; the DMG is notarized and stapled by Apple
 
           ### Note
-          The macOS artifacts are signed with a Developer ID certificate and the DMG is notarized by Apple for secure installation.
+          The macOS executable is signed with a Developer ID certificate. The DMG containing it is notarized and stapled by Apple for secure installation.
           EOF
 
           # Replace $VERSION in the file with actual version

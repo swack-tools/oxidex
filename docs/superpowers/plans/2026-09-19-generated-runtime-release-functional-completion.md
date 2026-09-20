@@ -20,7 +20,7 @@ fan out after those interfaces are frozen.
 
 **Tech Stack:** Rust, Python 3, Perl 5.38.2, ExifTool 13.59 and fixed rehearsal
 releases 11.78/12.64, Cargo, `uv`, `just`, Git worktrees, Codex Desktop
-subagents, Codex CLI fast mode.
+subagents, and Codex CLI. Do not use fast mode.
 
 **Spec:**
 [`docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md`](../specs/2026-09-19-generated-runtime-release-functional-design.md)
@@ -51,8 +51,8 @@ subagents, Codex CLI fast mode.
   `python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared`
   for Cargo builds, tests, and Clippy. Use the same wrapper without `--shared`
   for corpus, read/write, transition, and timing gates.
-- Every agent and CLI worker uses fast mode. When two models are adequate,
-  choose the cheaper model.
+- Every agent and CLI worker must not use fast mode. When two models are
+  adequate, choose the cheaper model.
 - CLI launches use `codex --yolo exec`; the task PRD still prohibits worker
   pushes, destructive actions, shared-branch edits, and edits outside its
   lease. Only the controller performs authenticated remote operations.
@@ -214,7 +214,7 @@ and verbatim Global Constraints.
 
 CLI launches use `fleet_controller.py launch`. It validates dependencies and
 hashes, generates a unique launch token, then starts `codex --yolo exec
---enable fast_mode --model MODEL --json -o FINAL -C WORKTREE "Process token
+--disable fast_mode --model MODEL --json -o FINAL -C WORKTREE "Process token
 TOKEN. Execute the canonical PRD at PRD_PATH"` with
 `subprocess.Popen(..., start_new_session=True)` and append-only JSONL stdout
 and stderr. The token and absolute PRD path are therefore visible in the exact
@@ -232,7 +232,7 @@ reconciled, and no unowned path changed. It starts this exact shape in the
 task worktree, writes a new JSONL segment, and increments `launch_count`:
 
 ```bash
-codex --yolo exec resume --enable fast_mode --model MODEL --json \
+codex --yolo exec resume --disable fast_mode --model MODEL --json \
   -o FINAL SESSION_ID "Process token TOKEN. Continue from RECOVERY_PROMPT_PATH"
 ```
 
@@ -520,8 +520,8 @@ the task branch or opening/updating its draft PR.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/durable-controller-oracle-bootstrap`
 **Worktree:** `/Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap`
@@ -559,7 +559,7 @@ The Task 0 worker is told to execute Task 0 only.
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
 bootstrap_token=$(uuidgen)
 bootstrap_prompt="Bootstrap process token ${bootstrap_token}. Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER."
-nohup codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
+nohup codex --yolo exec --disable fast_mode --model gpt-5.6-terra --json \
   -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final-1.md \
   -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
   "$bootstrap_prompt" \
@@ -623,7 +623,7 @@ test -n "$session_id"
 next_segment=$((segment + 1))
 resume_token=$(uuidgen)
 resume_prompt="Bootstrap process token ${resume_token}. Continue Task 0 from its canonical PRD and HANDOFF.md. Reconcile the current worktree first; do not repeat completed external actions."
-nohup codex --yolo exec resume --enable fast_mode --model gpt-5.6-terra --json \
+nohup codex --yolo exec resume --disable fast_mode --model gpt-5.6-terra --json \
   -o "$process_root/final-${next_segment}.md" \
   "$session_id" \
   "$resume_prompt" \
@@ -829,8 +829,8 @@ squash-merges Task 0 before creating any other task worktree.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/01-ownership-inventory.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/ownership-inventory`
 **Worktree:** `/Users/allen/git/oxidex-beta1-ownership-inventory`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/ownership-inventory`
@@ -940,8 +940,8 @@ commit SHA, exact tests, and `RETURN_TO_CONTROLLER` as the next action in
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/02-typed-occurrence-core.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/typed-occurrence-core`
 **Worktree:** `/Users/allen/git/oxidex-beta1-typed-occurrence-core`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core`
@@ -1050,8 +1050,8 @@ conversion still living in `exiftool_compat.rs`, commit SHA, exact tests, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/03-typed-consumers.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/typed-consumers`
 **Worktree:** `/Users/allen/git/oxidex-beta1-typed-consumers`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/typed-consumers`
@@ -1178,8 +1178,8 @@ allowlist, and `RETURN_TO_CONTROLLER` next action to `HANDOFF.md`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/04-conv-registry.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/conv-registry`
 **Worktree:** `/Users/allen/git/oxidex-beta1-conv-registry`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/conv-registry`
@@ -1287,8 +1287,8 @@ commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/upgrade-transaction`
 **Worktree:** `/Users/allen/git/oxidex-beta1-upgrade-transaction`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/upgrade-transaction`
@@ -1367,8 +1367,8 @@ and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/06-conformance-receipts.md`
 
-**Worker:** Codex CLI, `gpt-5.6-luna`, fast mode
-**Reviewer:** `gpt-5.6-terra`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-luna`
+**Reviewer:** `gpt-5.6-terra`
 **Branch:** `staging/beta1/conformance-receipts`
 **Worktree:** `/Users/allen/git/oxidex-beta1-conformance-receipts`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/conformance-receipts`
@@ -1436,8 +1436,8 @@ Record schema/reconciliation totals, test output, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/07-file-session.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/file-session`
 **Worktree:** `/Users/allen/git/oxidex-beta1-file-session`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/file-session`
@@ -1540,8 +1540,8 @@ Record scope semantics, call-site inventory, tests, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/08-generated-attribution.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/generated-attribution`
 **Worktree:** `/Users/allen/git/oxidex-beta1-generated-attribution`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/generated-attribution`
@@ -1663,8 +1663,8 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/09-exif-shared-pipeline.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/exif-shared-pipeline`
 **Worktree:** `/Users/allen/git/oxidex-beta1-exif-shared-pipeline`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/exif-shared-pipeline`
@@ -1765,8 +1765,8 @@ path and its owner, test and receipt hashes, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/10-refusal-closure.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/refusal-closure`
 **Worktree:** `/Users/allen/git/oxidex-beta1-refusal-closure`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/refusal-closure`
@@ -1875,8 +1875,8 @@ verification, commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/11-olympus-pilot.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/olympus-pilot`
 **Worktree:** `/Users/allen/git/oxidex-beta1-olympus-pilot`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/olympus-pilot`
@@ -1979,8 +1979,8 @@ The controller freezes the shared adapter interfaces after this task integrates.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/12-nikon-port.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/nikon-port`
 **Worktree:** `/Users/allen/git/oxidex-beta1-nikon-port`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/nikon-port`
@@ -2046,8 +2046,8 @@ gate `lost 0`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/13-pentax-panasonic-port.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/pentax-panasonic-port`
 **Worktree:** `/Users/allen/git/oxidex-beta1-pentax-panasonic-port`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/pentax-panasonic-port`
@@ -2119,8 +2119,8 @@ task values. Require zero lost reads and zero new VALUE rows.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/14-dji-composite-xmp-port.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/dji-composite-xmp-port`
 **Worktree:** `/Users/allen/git/oxidex-beta1-dji-composite-xmp-port`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/dji-composite-xmp-port`
@@ -2190,8 +2190,8 @@ Require zero lost reads and zero new VALUE rows.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/15-legacy-camera-tail.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/legacy-camera-tail`
 **Worktree:** `/Users/allen/git/oxidex-beta1-legacy-camera-tail`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/legacy-camera-tail`
@@ -2260,8 +2260,8 @@ measurement blocks with the literal legacy-camera task values.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/16-trailer-tail.md`
 
-**Worker:** Codex CLI, `gpt-5.6-terra`, fast mode
-**Reviewer:** `gpt-5.6-sol`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-terra`
+**Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/trailer-tail`
 **Worktree:** `/Users/allen/git/oxidex-beta1-trailer-tail`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/trailer-tail`
@@ -2327,8 +2327,8 @@ values. Require zero lost reads and zero new VALUE rows.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/17-walker-engine-consolidation.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/walker-engine-consolidation`
 **Worktree:** `/Users/allen/git/oxidex-beta1-walker-engine-consolidation`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/walker-engine-consolidation`
@@ -2419,8 +2419,8 @@ the shared stage.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/18-proven-deletion.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/proven-deletion`
 **Worktree:** `/Users/allen/git/oxidex-beta1-proven-deletion`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/proven-deletion`
@@ -2532,8 +2532,8 @@ retained compatibility symbol with its reason.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/19-version-transition-qualification.md`
 
-**Worker:** Codex CLI, `gpt-5.6-sol`, fast mode
-**Reviewer:** `gpt-6-astra`, fast mode
+**Worker:** Codex CLI, `gpt-5.6-sol`
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/version-transition-qualification`
 **Worktree:** `/Users/allen/git/oxidex-beta1-version-transition-qualification`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/version-transition-qualification`
@@ -2707,7 +2707,7 @@ The source tree must end at its original pin and clean state.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-r1.md`
 **Worker:** Controller-owned; no implementation worker
-**Reviewer:** `gpt-6-astra`, fast mode
+**Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/frozen-candidate-evidence-r1`
 **Worktree:** `/Users/allen/git/oxidex-beta1-frozen-candidate-evidence-r1`
 **Target:** `/Users/allen/git/oxidex-beta1-targets/final-r1`

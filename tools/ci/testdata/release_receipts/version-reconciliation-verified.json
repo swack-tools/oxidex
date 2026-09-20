@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "status": "verified",
+  "scan_sha256": "c17317557acde1a37300feb4c372fc0e632e3c98038c6e9be96b3a8be5f5a79f",
+  "tracked_files": 291,
+  "matching_lines": 18169,
+  "fields_scan_sha256": "6dd52ab90c734d0d805cae5cab9d56466aec30f105ed86c8d1c69b089bf809b5",
+  "fields_tracked_files": 361,
+  "fields_matching_lines": 1958,
+  "reconciled_files": 291,
+  "reconciled_lines": 18169,
+  "reconciled_field_files": 361,
+  "reconciled_field_lines": 1958,
+  "reviewer": "release-skill-test-fixture",
+  "reviewed_at": "2026-09-20T00:00:00Z",
+  "unresolved": []
+}

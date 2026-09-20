@@ -30,7 +30,9 @@ Open and review a release PR whose base is `main`; never push directly to the
 protected branch. After merge, freeze the exact `main` commit as `MAIN_SHA` and
 require its CI and release gates to pass. If its tree differs from the audited
 candidate, regenerate the parity receipt and documentation receipt against
-`MAIN_SHA` before continuing.
+`MAIN_SHA` before continuing. Before merge, persist the PR review-thread query
+and require zero unresolved non-outdated threads; an aggregate review decision
+does not prove that actionable inline feedback was resolved.
 
 Run the signed-tag dry run against that exact commit:
 
@@ -52,8 +54,9 @@ After the authorized signed tag is pushed, follow
 - successful tag-bound GitHub Actions runs;
 - the GitHub release's prerelease/latest classification, expected assets, and
   checksums;
-- downloaded macOS artifact hashes plus the actual code signature, Gatekeeper
-  assessment, and stapled notarization ticket; and
+- downloaded macOS artifact hashes plus the executable code signature's exact
+  expected Developer ID and TeamIdentifier, its Gatekeeper assessment, and the
+  DMG's stapled notarization ticket; and
 - any selected package or container publication results.
 
 Workflow YAML, secret names, a dry run, or a green build do not prove that the

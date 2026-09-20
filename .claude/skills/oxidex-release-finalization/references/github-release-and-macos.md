@@ -89,7 +89,8 @@ The Git tag peel, not `target_commitish` text alone, proves the released commit.
 ## Expected asset matrix
 
 Derive the current expectation from the reviewed `release.yml`; update the
-matrix if that workflow intentionally changes. For v2.0.0-beta.1 it is:
+matrix if that workflow intentionally changes. With the release version in
+`VERSION`, the current workflow expects:
 
 | Asset | Platform / proof |
 | --- | --- |
@@ -97,7 +98,9 @@ matrix if that workflow intentionally changes. For v2.0.0-beta.1 it is:
 | `oxidex-aarch64-unknown-linux-musl` | Linux arm64 static binary |
 | `oxidex-x86_64-pc-windows-gnu.exe` | Windows x86_64 binary |
 | `oxidex-universal-apple-darwin` | Signed macOS universal binary (Apple Silicon and Intel) |
-| `oxidex-v2.0.0-beta.1.dmg` | Signed, notarized, stapled macOS disk image |
+| `oxidex-v${VERSION}.dmg` | Notarized and stapled macOS DMG containing the signed executable |
+| `oxidex-v${VERSION}.sbom.cdx.json` | Deterministic CycloneDX source/payload inventory |
+| `SHA256SUMS` | SHA-256 checksums for all other release assets |
 
 Require no missing, zero-byte, or unexpected assets. If checksums are
 advertised or emitted, verify them; current absence of a checksum asset must be
@@ -126,7 +129,8 @@ docker buildx imagetools inspect "swackhamer/oxidex:$VERSION" \
 Run these on macOS against the actual GitHub release downloads, not the CI
 workspace artifact and not a locally rebuilt binary. First bind the downloads
 to the selected release run. The current workflow uploads the signed binary
-as `oxidex-universal-apple-darwin` and the stapled image as `oxidex-dmg`, then
+as `oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}` and
+the stapled image as `oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}`, then
 copies those same files into the release. Preserve the API artifact manifest
 (IDs, names, digests, expiry and workflow SHA), the run downloads, and their
 file hashes. The API `digest`, when present, describes the artifact archive,
@@ -134,11 +138,16 @@ not the extracted executable; do not compare those unlike hashes.
 
 ```bash
 set -euo pipefail
+RELEASE_RUN_ATTEMPT=$(gh api "repos/$REPO/actions/runs/$RELEASE_RUN_ID" --jq .run_attempt)
+test "$RELEASE_RUN_ATTEMPT" -gt 0
+MAC_RUN_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
+DMG_RUN_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
 gh api --paginate --slurp "repos/$REPO/actions/runs/$RELEASE_RUN_ID/artifacts" \
   > "$EVIDENCE_DIR/release-run-artifact-pages.json"
-jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" '
+jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" \
+  --arg mac "$MAC_RUN_ARTIFACT" --arg dmg "$DMG_RUN_ARTIFACT" '
   [.[] | .artifacts[] | select(
-    .name == "oxidex-universal-apple-darwin" or .name == "oxidex-dmg"
+    .name == $mac or .name == $dmg
   )] | select(length == 2)
   | select((map(.name) | unique | length) == 2)
   | select(all(.[]; .expired == false and
@@ -149,11 +158,11 @@ RUN_ARTIFACT_DIR="$EVIDENCE_DIR/release-run-$RELEASE_RUN_ID-artifacts"
 test ! -e "$RUN_ARTIFACT_DIR"
 mkdir "$RUN_ARTIFACT_DIR"
 gh run download "$RELEASE_RUN_ID" --repo "$REPO" \
-  --name oxidex-universal-apple-darwin --name oxidex-dmg --dir "$RUN_ARTIFACT_DIR"
+  --name "$MAC_RUN_ARTIFACT" --name "$DMG_RUN_ARTIFACT" --dir "$RUN_ARTIFACT_DIR"
 MAC_BIN="$EVIDENCE_DIR/assets/oxidex-universal-apple-darwin"
 DMG="$EVIDENCE_DIR/assets/oxidex-v${VERSION}.dmg"
-RUN_MAC_BIN="$RUN_ARTIFACT_DIR/oxidex-universal-apple-darwin/oxidex-universal-apple-darwin"
-RUN_DMG="$RUN_ARTIFACT_DIR/oxidex-dmg/oxidex-v${VERSION}.dmg"
+RUN_MAC_BIN="$RUN_ARTIFACT_DIR/$MAC_RUN_ARTIFACT/oxidex-universal-apple-darwin"
+RUN_DMG="$RUN_ARTIFACT_DIR/$DMG_RUN_ARTIFACT/oxidex-v${VERSION}.dmg"
 test -s "$MAC_BIN" && test -s "$DMG" && test -s "$RUN_MAC_BIN" && test -s "$RUN_DMG"
 shasum -a 256 "$MAC_BIN" "$RUN_MAC_BIN" "$DMG" "$RUN_DMG" \
   | tee "$EVIDENCE_DIR/macos-run-and-release.sha256"
@@ -177,6 +186,8 @@ block in Bash; its subshell confines cleanup traps to this verification.
 
 ```bash
 set -euo pipefail
+: "${EXPECTED_DEVELOPER_ID:?Set the full expected Developer ID Application authority}"
+: "${EXPECTED_TEAM_IDENTIFIER:?Set the expected Apple team identifier}"
 (
 DMG_MOUNT=$(mktemp -d "$EVIDENCE_DIR/dmg-mount.XXXXXX")
 cleanup_macos_mount() {
@@ -212,6 +223,8 @@ shasum -a 256 "$MAC_BIN" "$MAC_DMG_PAYLOAD" \
 test "$MAC_BIN_SHA256" = "$DMG_PAYLOAD_SHA256"
 chmod u+x "$MAC_BIN"
 file "$MAC_BIN" "$DMG" | tee "$EVIDENCE_DIR/macos-file.txt"
+lipo -verify_arch arm64 x86_64 "$MAC_BIN"
+lipo -verify_arch arm64 x86_64 "$MAC_DMG_PAYLOAD"
 codesign --verify --strict --verbose=4 "$MAC_BIN" \
   2>&1 | tee "$EVIDENCE_DIR/macos-codesign-verify.txt"
 codesign --display --verbose=4 "$MAC_BIN" \
@@ -220,6 +233,13 @@ codesign --verify --strict --verbose=4 "$MAC_DMG_PAYLOAD" \
   2>&1 | tee "$EVIDENCE_DIR/macos-payload-codesign-verify.txt"
 codesign --display --verbose=4 "$MAC_DMG_PAYLOAD" \
   2>&1 | tee "$EVIDENCE_DIR/macos-payload-codesign-display.txt"
+for signature in \
+  "$EVIDENCE_DIR/macos-codesign-display.txt" \
+  "$EVIDENCE_DIR/macos-payload-codesign-display.txt"
+do
+  grep -Fqx "Authority=$EXPECTED_DEVELOPER_ID" "$signature"
+  grep -Fqx "TeamIdentifier=$EXPECTED_TEAM_IDENTIFIER" "$signature"
+done
 spctl --assess --type execute --verbose=4 "$MAC_BIN" \
   2>&1 | tee "$EVIDENCE_DIR/macos-gatekeeper-binary.txt"
 spctl --assess --type execute --verbose=4 "$MAC_DMG_PAYLOAD" \
@@ -241,9 +261,10 @@ All checks and cleanup must exit zero. The trap detaches only the new mount
 and removes only its empty mount-point directory; downloads and evidence are
 retained. A failed attach may leave an empty directory; a failed detach leaves
 the mount for explicit diagnosis, never recursive deletion or forced detach.
-Inspect the display output for the expected
-Developer ID identity, hardened runtime, timestamp, and TeamIdentifier without
-recording private keys or credentials. Set `macos_verification.status` to
+The command block requires the exact expected Developer ID authority and
+TeamIdentifier in both executable signatures. Also inspect the display output
+for hardened runtime and a trusted timestamp without recording private keys or
+credentials. Set `macos_verification.status` to
 `verified` only when the manifest/run SHA, run-to-release comparison, payload
 hash match, expected version, signature/Gatekeeper/ticket checks and cleanup
 are all evidenced. Record the host OS/architecture and every command's result.
@@ -273,9 +294,24 @@ Set the final receipt to `verified` only if all of the following agree:
 - the exact expected asset set exists and its hashes are recorded;
 - downloaded macOS artifacts match the selected run manifest/provenance, the
   DMG payload matches the raw executable, both report the release version and
-  pass basic invocation, and signature, Gatekeeper and stapled-ticket checks
-  pass with successful mount cleanup;
+  pass basic invocation, their exact Developer ID and TeamIdentifier match the
+  recorded expectations, and signature, Gatekeeper and DMG stapled-ticket
+  checks pass with successful mount cleanup;
 - every gate/workflow/artifact entry carries durable evidence.
 
 Otherwise preserve the most specific non-verified status and name one safe
 `next_action`; never summarize partial success as a completed release.
+
+After populating `FINALIZATION_RECEIPT` from the durable evidence above, run
+the terminal gate. A hand-edited `status: verified` is not a completion signal:
+
+```bash
+set -euo pipefail
+python3 tools/ci/validate_release_receipt.py --kind finalization \
+  --receipt "$FINALIZATION_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$CANDIDATE_SHA"
+```
+
+Only exit zero from this exact command permits the release to be reported as
+verified. Preserve a nonzero result and its field-level diagnostics as a
+blocked final receipt.

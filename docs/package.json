@@ -8,13 +8,17 @@
     "comparison:stub": "node scripts/ensure-comparison-stub.mjs",
     "docs:dev": "npm run comparison:stub && vitepress dev",
     "docs:build": "npm run comparison:stub && vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:preview": "vitepress preview",
+    "docs:check-links": "node scripts/check-base-links.mjs",
+    "docs:audit-release": "node ../tools/docs/release-audit.mjs",
+    "test:release-audit": "node --test ../tools/docs/test-release-audit.mjs"
   },
   "devDependencies": {
+    "playwright": "1.63.0",
     "vitepress": "^1.5.0",
     "vue": "^3.5.13"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

@@ -154,6 +154,7 @@ docs/reference/comparison/
 
 # Generated HTML files in docs (VitePress generates from .md at build time)
 docs/**/*.html
+!docs/public/benchmarks/**/index.html
 
 # Build artifacts
 build.log
