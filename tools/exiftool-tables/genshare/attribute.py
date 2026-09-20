@@ -1302,11 +1302,18 @@ def _route_ledger(repository: Path, root: Path) -> dict:
             if relative == engine_file:
                 continue
             path = repository / relative
-            in_tests = False
-            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if line.strip().startswith("#[cfg(test)]"):
-                    in_tests = True
-                if not in_tests and f"{symbol}(" in line:
+            pending_test_cfg = False
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                stripped = line.strip()
+                if stripped == "#[cfg(test)]":
+                    pending_test_cfg = True
+                    continue
+                if pending_test_cfg and re.match(r"(?:pub\s+)?mod\s+tests\b", stripped):
+                    break
+                pending_test_cfg = False
+                if f"{symbol}(" in line:
                     calls.append({"path": relative, "line": line_number, "source": line.strip()})
         return calls
 

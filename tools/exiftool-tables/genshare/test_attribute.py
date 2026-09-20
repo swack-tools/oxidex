@@ -458,6 +458,43 @@ class RouteLedgerTests(unittest.TestCase):
             self.assertTrue(ledger["production_reachable"]["serial"])
             self.assertFalse(ledger["production_reachable"]["keyed"])
 
+    def test_route_ledger_does_not_hide_production_after_cfg_test_helper(self):
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            repository = pathlib.Path(td) / "repo"
+            run_root = pathlib.Path(td) / "run"
+            (run_root / "contracts").mkdir(parents=True)
+            for relative in self.EXPECTED_BOUNDARY:
+                path = repository / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("// exact Task8 boundary fixture\n", encoding="utf-8")
+            guards = {
+                "src/exiftool_tables/engine.rs": "attribution::Token::Engine",
+                "src/exiftool_tables/ifd_engine.rs": "attribution::Token::LegacyL1",
+                "src/exiftool_tables/serial_engine.rs": "attribution::Token::Serial",
+                "src/exiftool_tables/keyed_engine.rs": "attribution::Token::Keyed",
+                "src/parsers/tiff/makernotes/sony.rs": "attribution::Token::LegacyL2",
+                "src/composite/mod.rs": "attribution::Token::Producers",
+            }
+            for relative, source in guards.items():
+                with (repository / relative).open("a", encoding="utf-8") as handle:
+                    handle.write(source + "\n")
+            with (repository / "src/exiftool_tables/ifd_engine.rs").open(
+                "a", encoding="utf-8"
+            ) as handle:
+                handle.write(
+                    "#[cfg(test)]\nfn helper() {}\n"
+                    "#[cfg(not(test))]\nfn helper() {}\n"
+                    "fn production() { process_serial_directory(input); }\n"
+                    "#[cfg(test)]\nmod tests {\n"
+                    "    fn only_test() { process_keyed_directory(input); }\n"
+                    "}\n"
+                )
+
+            ledger = attribute._route_ledger(repository, run_root)
+
+            self.assertTrue(ledger["production_reachable"]["serial"])
+            self.assertFalse(ledger["production_reachable"]["keyed"])
+
 
 class PreSeamControlTests(unittest.TestCase):
     def test_introducing_commit_resolves_to_its_unique_parent(self):
