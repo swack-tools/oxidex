@@ -880,20 +880,22 @@ def read_remote_inventory(
         "number,url,state,isDraft,headRefName,headRefOid,baseRefName,"
         "baseRefOid,mergeCommit,statusCheckRollup"
     )
+    recorded_pr: int | None = None
+    if task_number is not None:
+        pr_ci_state = state["tasks"][str(task_number)].get("pr_ci_state")
+        # Malformed or legacy durable PR state is treated as unrecorded so
+        # recovery retains the safe inventory-list fallback.
+        candidate = pr_ci_state.get("pr") if isinstance(pr_ci_state, Mapping) else None
+        if type(candidate) is int and candidate > 0:
+            recorded_pr = candidate
+    command = [gh, "pr"]
+    if recorded_pr is not None:
+        command.extend(["view", str(recorded_pr)])
+    else:
+        command.extend(["list", "--state", "all", "--limit", "200"])
+    command.extend(["--repo", github_repository, "--json", fields])
     result = subprocess.run(
-        [
-            gh,
-            "pr",
-            "list",
-            "--repo",
-            github_repository,
-            "--state",
-            "all",
-            "--limit",
-            "200",
-            "--json",
-            fields,
-        ],
+        command,
         capture_output=True,
         text=True,
         check=False,
@@ -904,11 +906,17 @@ def read_remote_inventory(
             + (result.stderr.strip() or result.stdout.strip())
         )
     try:
-        pull_requests = json.loads(result.stdout)
+        response = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise Refused("GitHub PR inventory was not valid JSON") from exc
-    if not isinstance(pull_requests, list):
-        raise Refused("GitHub PR inventory must be a list")
+    if recorded_pr is not None:
+        if not isinstance(response, Mapping):
+            raise Refused("GitHub PR view must be an object")
+        pull_requests = [response]
+    else:
+        if not isinstance(response, list):
+            raise Refused("GitHub PR inventory must be a list")
+        pull_requests = response
     prs_by_branch: dict[str, dict[str, Any]] = {}
     for raw in pull_requests:
         if not isinstance(raw, Mapping) or not raw.get("headRefName"):
