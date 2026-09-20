@@ -1480,13 +1480,72 @@ class FleetControllerTests(unittest.TestCase):
             "src/exiftool_tables/keyed_engine.rs",
             "src/exiftool_tables/serial_engine.rs",
             "src/exiftool_tables/runtime.rs",
+            "src/main.rs",
+            "src/composite/compute.rs",
+            "src/composite/mod.rs",
+            "src/core/file_metadata.rs",
+            "src/core/operations.rs",
+            "src/parsers/archive/ar.rs",
+            "src/parsers/canon_vrd/mod.rs",
+            "src/parsers/elf/metadata_extractor.rs",
+            "src/parsers/flir_fpf.rs",
+            "src/parsers/jpeg/app_segments/infiray.rs",
+            "src/parsers/macho/metadata_extractor.rs",
+            "src/parsers/specialized/fits.rs",
+            "src/parsers/tiff/geotiff_parser.rs",
+            "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
+            "src/parsers/tiff/makernotes/nikon/settings.rs",
+            "src/parsers/tiff/makernotes/shared/binary_subdir.rs",
+            "src/parsers/tiff/makernotes/sony.rs",
+            "src/parsers/tiff/makernotes/sony/binary_data.rs",
+            "tools/exiftool-tables/genshare/testdata/bounded-corpus-expectations.json",
         ]
         expected.sort()
         materialized = store.read_snapshot()["tasks"]["8"]
         self.assertEqual(materialized["file_lease"], expected)
-        self.assertEqual(len(materialized["file_lease"]), 14)
+        self.assertEqual(len(materialized["file_lease"]), 33)
         self.assertNotIn("stale/retired-lease-entry.rs", materialized["file_lease"])
         self.assertIn("- `tools/exiftool-tables/genshare/probe.patch`", prd.read_text())
+        self.assertIn("separate all-six union probe", prd.read_text())
+
+    def test_task8_lease_names_only_active_l2_and_producer_boundaries(self) -> None:
+        repository = MODULE.parents[2]
+        plan = repository / "docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md"
+        store = fleet.StateStore(self.root)
+        current = task(8)
+        store.write_snapshot(state(current))
+
+        fleet.materialize_prd(store, plan, 8, SHA_A)
+        lease = set(store.read_snapshot()["tasks"]["8"]["file_lease"])
+        l2 = {
+            "src/parsers/jpeg/app_segments/infiray.rs",
+            "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
+            "src/parsers/tiff/makernotes/nikon/settings.rs",
+            "src/parsers/tiff/makernotes/shared/binary_subdir.rs",
+            "src/parsers/tiff/makernotes/sony.rs",
+            "src/parsers/tiff/makernotes/sony/binary_data.rs",
+        }
+        producers = {
+            "src/composite/compute.rs",
+            "src/composite/mod.rs",
+            "src/core/file_metadata.rs",
+            "src/core/operations.rs",
+            "src/parsers/archive/ar.rs",
+            "src/parsers/canon_vrd/mod.rs",
+            "src/parsers/elf/metadata_extractor.rs",
+            "src/parsers/flir_fpf.rs",
+            "src/parsers/macho/metadata_extractor.rs",
+            "src/parsers/specialized/fits.rs",
+            "src/parsers/tiff/geotiff_parser.rs",
+        }
+        self.assertTrue(l2 <= lease)
+        self.assertTrue(producers <= lease)
+        self.assertIn("src/main.rs", lease)
+        self.assertFalse(any(path.endswith("/**") for path in lease))
+        self.assertNotIn("src/composite/generated_compute.rs", lease)
+        self.assertNotIn("src/parsers/tiff/makernotes/sony/plain_tables.rs", lease)
+        self.assertNotIn("tools/exiftool-tables/conformance.py", lease)
+        self.assertNotIn("tools/exiftool-tables/test_conformance.py", lease)
 
     def test_file_lease_refuses_nonliteral_file_operation(self) -> None:
         section = "**Files:**\n\n- Add: tools/exiftool-tables/genshare/test_attribute.py\n"
