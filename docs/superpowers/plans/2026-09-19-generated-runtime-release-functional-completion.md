@@ -214,7 +214,7 @@ and verbatim Global Constraints.
 
 CLI launches use `fleet_controller.py launch`. It validates dependencies and
 hashes, generates a unique launch token, then starts `codex --yolo exec
---enable fast_mode --model MODEL --json -o FINAL -C WORKTREE "Process token
+--disable fast_mode --model MODEL --json -o FINAL -C WORKTREE "Process token
 TOKEN. Execute the canonical PRD at PRD_PATH"` with
 `subprocess.Popen(..., start_new_session=True)` and append-only JSONL stdout
 and stderr. The token and absolute PRD path are therefore visible in the exact
@@ -232,7 +232,7 @@ reconciled, and no unowned path changed. It starts this exact shape in the
 task worktree, writes a new JSONL segment, and increments `launch_count`:
 
 ```bash
-codex --yolo exec resume --enable fast_mode --model MODEL --json \
+codex --yolo exec resume --disable fast_mode --model MODEL --json \
   -o FINAL SESSION_ID "Process token TOKEN. Continue from RECOVERY_PROMPT_PATH"
 ```
 
@@ -559,7 +559,7 @@ The Task 0 worker is told to execute Task 0 only.
 mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
 bootstrap_token=$(uuidgen)
 bootstrap_prompt="Bootstrap process token ${bootstrap_token}. Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER."
-nohup codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
+nohup codex --yolo exec --disable fast_mode --model gpt-5.6-terra --json \
   -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final-1.md \
   -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
   "$bootstrap_prompt" \
@@ -623,7 +623,7 @@ test -n "$session_id"
 next_segment=$((segment + 1))
 resume_token=$(uuidgen)
 resume_prompt="Bootstrap process token ${resume_token}. Continue Task 0 from its canonical PRD and HANDOFF.md. Reconcile the current worktree first; do not repeat completed external actions."
-nohup codex --yolo exec resume --enable fast_mode --model gpt-5.6-terra --json \
+nohup codex --yolo exec resume --disable fast_mode --model gpt-5.6-terra --json \
   -o "$process_root/final-${next_segment}.md" \
   "$session_id" \
   "$resume_prompt" \
