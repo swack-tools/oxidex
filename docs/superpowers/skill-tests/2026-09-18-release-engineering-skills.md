@@ -257,3 +257,55 @@ behavior, binary/commit provenance, recursive scope/floors, durable structured
 evidence, fresh baselines, four metric families, no blended percentage,
 recovery prerequisites and honest failure evidence. No oracle invocation or
 corpus sweep occurred; this verifies skill behavior, not release parity.
+
+## 2026-09-19 Phase 1 trigger regression probes
+
+These fresh probes validate routing and instruction behavior after adding the
+executable oracle and receipt gates. They are behavioral skill tests, not a
+release certification or a corpus measurement.
+
+### `exiftool-parity`
+
+Positive prompt:
+
+> Compare this OxiDex release candidate against ExifTool and give me
+> publishable tag-parity metrics for the release notes.
+
+Result: **PASS / trigger**. A fresh evaluator matched the request to the skill
+description and required the pinned explicit Perl/tree, `release_oracle.py`,
+receipt verification, candidate identity, structured evidence, conformance
+file/tag floors, the authenticated-read occurrence floor, and four separate
+measurement families. It refused PATH/Homebrew fallback and a blended parity
+percentage.
+
+Negative prompt:
+
+> Explain what EXIF metadata is in one paragraph; do not inspect this
+> repository or run comparisons.
+
+Result: **PASS / do not trigger**. The request is conceptual and asks for no
+OxiDex comparison, regression verification, file diagnosis, or release metric.
+The evaluator reported no Critical or Important routing issue.
+
+### `oxidex-release-finalization`
+
+Positive prompt:
+
+> Finalize v2.0.0-beta.1: promote it through main, wait for CI and review
+> comments, tag it, and verify the GitHub/macOS release.
+
+Result: **PASS / trigger**. A fresh evaluator required validated parity and
+documentation receipts, reviewed promotion to `main`, required CI, a complete
+review-thread query with zero unresolved actionable threads, exact merged-SHA
+revalidation, and a separate authorization naming the exact version/tag/SHA
+before tag push. It selected tag workflows by exact SHA and distinguished the
+Developer ID signed executable from its notarized and stapled containing DMG.
+
+Negative prompt:
+
+> Run cargo test for my feature branch; this is ordinary development and not a
+> release.
+
+Result: **PASS / do not trigger**. No release preparation, promotion, tagging,
+publication, or release validation was requested. The evaluator reported no
+Critical or Important routing issue.

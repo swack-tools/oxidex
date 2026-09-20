@@ -18,11 +18,13 @@ test -d "$EVIDENCE_ROOT"
 PARITY_EVIDENCE=$(mktemp -d "$EVIDENCE_ROOT/parity-${PARITY_SHA}.XXXXXX")
 export CARGO_TARGET_DIR=/absolute/dedicated/parity-target
 PARITY_LOCK=/Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py
-PARITY_PERL=/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2
-PARITY_ET_TREE=/tmp/oxidex-exiftool-cache/exiftool
 PARITY_PIN=$(tr -d '\r\n' < .exiftool-version)
+: "${EXIFTOOL_PERL:=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2}"
+: "${EXIFTOOL_CACHE_DIR:=/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN}"
+PARITY_PERL="$EXIFTOOL_PERL"
+PARITY_ET_TREE="$EXIFTOOL_CACHE_DIR/exiftool"
 export EXIFTOOL_PERL="$PARITY_PERL"
-export EXIFTOOL_CACHE_DIR=/tmp/oxidex-exiftool-cache
+export EXIFTOOL_CACHE_DIR
 unset EXIFTOOL OXIDEX_ALLOW_EXIFTOOL_SKEW OXIDEX_ALLOW_DIRTY_TREE
 unset PERL5LIB PERLLIB PERL5OPT
 mkdir "$PARITY_EVIDENCE/empty-oracle-home"
@@ -30,20 +32,16 @@ export EXIFTOOL_HOME="$PARITY_EVIDENCE/empty-oracle-home"
 test ! -e "$PARITY_ET_TREE/.ExifTool_config"
 PARITY_ORACLE=("$PARITY_PERL" "-I$PARITY_ET_TREE/lib" "$PARITY_ET_TREE/exiftool" -config '')
 printf '%s\n' "$PARITY_SHA" "$PARITY_TREE" > "$PARITY_EVIDENCE/source.txt"
-"$PARITY_PERL" -e 'print $^V' > "$PARITY_EVIDENCE/perl-version.txt" 2> "$PARITY_EVIDENCE/perl-version.stderr"
-test "$(cat "$PARITY_EVIDENCE/perl-version.txt")" = v5.38.2
-"$PARITY_PERL" -Mstrict -Mwarnings -MArchive::Zip -MCompress::Zlib -e 1 > "$PARITY_EVIDENCE/modules.txt" 2> "$PARITY_EVIDENCE/modules.stderr"
-"${PARITY_ORACLE[@]}" -ver > "$PARITY_EVIDENCE/oracle-version.txt" 2> "$PARITY_EVIDENCE/oracle-version.stderr"
-test "$(cat "$PARITY_EVIDENCE/oracle-version.txt")" = "$PARITY_PIN"
-"${PARITY_ORACLE[@]}" -s3 -FileType "$PARITY_ET_TREE/t/images/OOXML.docx" > "$PARITY_EVIDENCE/docx.txt" 2> "$PARITY_EVIDENCE/docx.stderr"
-test "$(cat "$PARITY_EVIDENCE/docx.txt")" = DOCX
+python3 tools/ci/release_oracle.py --repo . --perl "$PARITY_PERL" \
+  --exiftool-dir "$PARITY_ET_TREE" --output "$PARITY_EVIDENCE/oracle.json"
 ```
 
 Stop on any nonzero command, recording that exit and the failing prerequisite
 in the receipt. Do not continue a partially executed shell recipe. Record
-interpreter/script SHA-256 and library fingerprint from the authenticated
-receipt; before that exists, use explicit file hashes and record the library
-tree identity. The shared Python resolver obeys `EXIFTOOL_PERL`; its generic
+interpreter/script SHA-256 and the deterministic library-path/file-count/
+fingerprint fields emitted by `release_oracle.py`; map those exact fields into
+the release receipt rather than reconstructing them by hand. The shared Python
+resolver obeys `EXIFTOOL_PERL`; its generic
 fallback suggestions are not permission to change the release oracle.
 Direct probes and authenticated reads use `-config ''`. The conformance and
 library harnesses do not add that flag: the empty `EXIFTOOL_HOME` and refusal
@@ -84,7 +82,7 @@ before measuring, apply them equally to base/head, and retain the manifest.
 set -euo pipefail
 : "${PARITY_MIN_FILES:?Set the approved file floor}"
 : "${PARITY_MIN_TAGS:?Set the approved native occurrence floor}"
-PARITY_CORPORA=("$PARITY_ET_TREE/t/images" /tmp/oxidex-exiftool-cache/combined-samples)
+PARITY_CORPORA=("$PARITY_ET_TREE/t/images" "$EXIFTOOL_CACHE_DIR/combined-samples")
 python3 "$PARITY_LOCK" "$PARITY_EVIDENCE/conformance.log" -- \
   python3 tools/exiftool-tables/conformance.py "${PARITY_CORPORA[@]}" \
   --exiftool-dir "$PARITY_ET_TREE" --oxidex "$PARITY_BIN" --recursive \
@@ -128,6 +126,7 @@ do not pretend it supports multiple `--corpus` roots in one receipt.
 ```bash
 set -euo pipefail
 : "${PARITY_READ_MIN_FILES:?Set the approved authenticated corpus floor}"
+: "${PARITY_READ_MIN_TAGS:?Set the approved native occurrence floor}"
 PARITY_READ_CORPUS="$PARITY_ET_TREE/t/images"
 python3 "$PARITY_LOCK" "$PARITY_EVIDENCE/observe.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py observe \
@@ -138,12 +137,18 @@ python3 "$PARITY_LOCK" "$PARITY_EVIDENCE/observe.log" -- \
 python3 "$PARITY_LOCK" "$PARITY_EVIDENCE/verify.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py verify \
   --receipt "$PARITY_EVIDENCE/observe/receipt.json"
+jq -e --argjson floor "$PARITY_READ_MIN_TAGS" \
+  '.metric_c.native_identity_occurrences >= $floor' \
+  "$PARITY_EVIDENCE/observe/receipt.json" \
+  > "$PARITY_EVIDENCE/native-occurrence-floor.json"
 python3 "$PARITY_LOCK" "$PARITY_EVIDENCE/read-gate.log" -- \
   python3 tools/ci/read_regression_gate.py --receipt "$PARITY_EVIDENCE/observe/receipt.json"
 ```
 
-Set and enforce an independent native-occurrence floor on verified `metric_c`
-counts; this instrument has `--min-files` but no `--min-tags` flag. Keep failed
+The explicit `jq -e` assertion enforces the independently chosen occurrence
+floor against verified `metric_c.native_identity_occurrences`; this instrument
+has `--min-files` but no `--min-tags` flag. Record the floor and
+`native-occurrence-floor.json` in the release receipt. Keep failed
 file modes, missing/mismatched/unattributable identities and withheld source
 coordinates visible. Receipt verification proves internal replay integrity;
 the consumer must also compare its producer commit, binary and corpus with
@@ -186,16 +191,16 @@ in for generated-table verification. Repair is outside this skill revision;
 do not modify generated tables or suppress the blocked status to pass a gate.
 
 For the matrix only, create an executable wrapper in the evidence directory
-using `apply_patch`, with these exact contents (update paths only after an
-explicit canonical-oracle change). Set `EXIFTOOL` to its absolute path and
+using `apply_patch`, substituting the already-probed absolute values of
+`PARITY_PERL` and `PARITY_ET_TREE`. Set `EXIFTOOL` to its absolute path and
 re-run the version/DOCX probes through it before running the matrix:
 
 ```bash
 #!/bin/bash
 set -euo pipefail
-exec /tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2 \
-  -I/tmp/oxidex-exiftool-cache/exiftool/lib \
-  /tmp/oxidex-exiftool-cache/exiftool/exiftool -config '' "$@"
+exec /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+  -I/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/lib \
+  /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool -config '' "$@"
 ```
 
 Archive and hash the wrapper. Never point directly at the script's env-Perl
@@ -250,3 +255,21 @@ retains that failure. Never revert user changes to recover a clean receipt.
 If source changed, stop and investigate ownership, then remeasure from a clean
 identified candidate. The report directory is retained evidence, not a request
 to publish its generated Markdown without the documentation factuality audit.
+
+## Validate the release receipt
+
+Populate the template only from the retained artifacts above, then make the
+executable validator the final handoff gate:
+
+```bash
+set -euo pipefail
+PARITY_RELEASE_RECEIPT=/absolute/path/to/release-parity-receipt.json
+VERSION=2.0.0-beta.1
+python3 tools/ci/validate_release_receipt.py --kind parity \
+  --receipt "$PARITY_RELEASE_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$PARITY_SHA"
+```
+
+A hand-edited or structurally plausible JSON file is not a verified receipt
+until this command succeeds. Both identity arguments are mandatory outside
+template mode. Preserve validator stdout/stderr and exit status.

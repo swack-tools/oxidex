@@ -149,12 +149,67 @@ class SkillMirrorTests(unittest.TestCase):
 
     def test_parity_release_instrument_contract(self):
         text = canonical("exiftool-parity", "SKILL.md")
+        self.assertNotIn("/tmp/oxidex-perl538-build-", text)
         for phrase in (
-            "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/cache/exiftool/<pin>",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
         ):
             self.assertIn(phrase, text)
+
+    def test_release_skills_call_receipt_and_oracle_validators(self):
+        parity = canonical("exiftool-parity", "references/harnesses.md")
+        finalization = canonical("oxidex-release-finalization", "references/gates.md")
+        for required in (
+            "python3 tools/ci/release_oracle.py",
+            "python3 tools/ci/validate_release_receipt.py --kind parity",
+            "--candidate-sha \"$PARITY_SHA\"",
+        ):
+            self.assertIn(required, parity)
+        for kind in ("parity", "documentation"):
+            self.assertIn(
+                f"python3 tools/ci/validate_release_receipt.py --kind {kind}",
+                finalization,
+            )
+        published = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        self.assertIn(
+            "python3 tools/ci/validate_release_receipt.py --kind finalization",
+            published,
+        )
+        self.assertIn('--candidate-sha "$CANDIDATE_SHA"', published)
+
+    def test_release_promotion_requires_zero_unresolved_review_threads(self):
+        text = canonical("oxidex-release-finalization", "references/gates.md")
+        for required in (
+            "reviewThreads(first: 100)",
+            "isResolved",
+            "isOutdated",
+            "unresolved-actionable-review-threads",
+            "review-threads.json",
+            "python3 tools/ci/release_pr_gate.py",
+            '--expected-head "$CANDIDATE_SHA"',
+            "reviewed-promotion.json",
+        ):
+            self.assertIn(required, text)
+
+    def test_macos_claim_matches_binary_signing_and_dmg_notarization(self):
+        skill = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        workflow = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        combined = skill + workflow
+        self.assertNotIn("Signed, notarized, stapled macOS disk image", combined)
+        self.assertNotIn("Signed and notarized macOS DMG installer", combined)
+        for required in (
+            "Notarized and stapled macOS DMG containing the signed executable",
+            "EXPECTED_DEVELOPER_ID",
+            "EXPECTED_TEAM_IDENTIFIER",
+            "TeamIdentifier",
+        ):
+            self.assertIn(required, combined)
 
     def test_parity_receipt_separates_measurement_families(self):
         path = REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json"
@@ -168,6 +223,53 @@ class SkillMirrorTests(unittest.TestCase):
             self.assertIsInstance(receipt[family], dict)
             self.assertEqual(receipt[family]["status"], "unverified")
         self.assertNotIn("overall_parity_percent", receipt)
+
+    def test_release_receipts_have_schemas_and_validate_as_templates(self):
+        from tools.ci import validate_release_receipt
+
+        entries = (
+            (
+                "parity",
+                REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json",
+                REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.schema.json",
+            ),
+            (
+                "documentation",
+                REPO / ".claude/skills/oxidex-release-documentation/templates/documentation-release-receipt.json",
+                REPO / ".claude/skills/oxidex-release-documentation/templates/documentation-release-receipt.schema.json",
+            ),
+            (
+                "finalization",
+                REPO / ".claude/skills/oxidex-release-finalization/templates/release-finalization-receipt.json",
+                REPO / ".claude/skills/oxidex-release-finalization/templates/release-finalization-receipt.schema.json",
+            ),
+        )
+        for kind, template_path, schema_path in entries:
+            with self.subTest(kind=kind):
+                template = json.loads(template_path.read_text(encoding="utf-8"))
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
+                self.assertEqual(schema["title"], f"OxiDex {kind} release receipt")
+                self.assertIs(schema["additionalProperties"], False)
+                self.assertTrue(schema["allOf"], "verified receipts need conditional constraints")
+                self.assertIn("$defs", schema)
+                self.assertEqual(
+                    validate_release_receipt.validate_receipt(kind, template, template=True),
+                    [],
+                )
+
+    def test_finalization_template_has_explicit_release_evidence_slots(self):
+        receipt = json.loads(canonical(
+            "oxidex-release-finalization", "templates/release-finalization-receipt.json"
+        ))
+        for field in (
+            "candidate_tree", "main_tree", "receipts", "packaging", "promotion",
+            "authorization", "tag_verification",
+        ):
+            self.assertIn(field, receipt)
+        self.assertIn("review_threads_evidence", receipt["promotion"])
+        self.assertIn("expected_developer_id", receipt["macos_verification"])
+        self.assertIn("expected_team_identifier", receipt["macos_verification"])
 
     def test_parity_matrix_report_isolates_writes_and_checks_source(self):
         text = canonical("exiftool-parity", "references/harnesses.md")

@@ -17,7 +17,12 @@
   },
   "claims": [],
   "pages": [],
-  "benchmarks": [],
+  "benchmarks": [
+    {
+      "disposition": "unverified",
+      "reason": null
+    }
+  ],
   "local_build": {
     "status": "unverified",
     "command": null,

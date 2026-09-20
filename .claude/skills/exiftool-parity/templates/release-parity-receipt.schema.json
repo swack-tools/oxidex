@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oxidex.net/schemas/release-parity-receipt.schema.json",
+  "title": "OxiDex parity release receipt",
+  "type": "object",
+  "required": ["schema_version", "version", "oxidex_sha", "oxidex_tree", "source_dirty", "exiftool_version", "binary", "oracle", "corpora", "runs", "conformance", "authenticated_reads", "generated_catalog", "write_matrix", "regressions", "status", "refusals", "unresolved"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": ["string", "null"]},
+    "oxidex_sha": {"type": ["string", "null"]},
+    "oxidex_tree": {"type": ["string", "null"]},
+    "source_dirty": {"type": ["boolean", "null"]},
+    "exiftool_version": {"type": ["string", "null"]},
+    "created_at": {"type": ["string", "null"]},
+    "required_families": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "scope_exclusions": {"type": "array"},
+    "binary": {"type": "object"},
+    "oracle": {"type": "object"},
+    "corpora": {"type": "array"},
+    "runs": {"type": "array"},
+    "conformance": {"type": "object"},
+    "authenticated_reads": {"type": "object"},
+    "generated_catalog": {"type": "object"},
+    "write_matrix": {"type": "object"},
+    "regressions": {"type": "object"},
+    "status": {"enum": ["unverified", "blocked", "verified"]},
+    "refusals": {"type": "array"},
+    "unresolved": {"type": "array"}
+  },
+  "additionalProperties": false,
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "verified"}}, "required": ["status"]},
+    "then": {
+      "properties": {
+        "version": {"$ref": "#/$defs/nonempty"},
+        "oxidex_sha": {"$ref": "#/$defs/commit"},
+        "oxidex_tree": {"$ref": "#/$defs/commit"},
+        "source_dirty": {"const": false},
+        "exiftool_version": {"$ref": "#/$defs/nonempty"},
+        "binary": {"type": "object", "required": ["path", "sha256", "build_proof_path", "build_proof_sha256", "cargo_target_dir"], "properties": {"path": {"$ref": "#/$defs/nonempty"}, "sha256": {"$ref": "#/$defs/sha256"}, "build_proof_path": {"$ref": "#/$defs/nonempty"}, "build_proof_sha256": {"$ref": "#/$defs/sha256"}, "cargo_target_dir": {"$ref": "#/$defs/nonempty"}}, "additionalProperties": false},
+        "oracle": {"type": "object", "required": ["status", "perl_path", "perl_version", "perl_sha256", "tree_path", "script_sha256", "exiftool_version", "docx_file_type", "library_fingerprint_path", "library_fingerprint_sha256", "library_file_count", "probes"], "properties": {"status": {"const": "verified"}, "perl_path": {"$ref": "#/$defs/nonempty"}, "perl_version": {"const": "v5.38.2"}, "perl_sha256": {"$ref": "#/$defs/sha256"}, "tree_path": {"$ref": "#/$defs/nonempty"}, "script_sha256": {"$ref": "#/$defs/sha256"}, "exiftool_version": {"$ref": "#/$defs/nonempty"}, "docx_file_type": {"const": "DOCX"}, "library_fingerprint_path": {"$ref": "#/$defs/nonempty"}, "library_fingerprint_sha256": {"$ref": "#/$defs/sha256"}, "library_file_count": {"$ref": "#/$defs/positive"}, "probes": {"type": "array", "minItems": 4, "items": {"$ref": "#/$defs/nonempty"}, "uniqueItems": true}}, "additionalProperties": false},
+        "corpora": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["path", "manifest_sha256", "files"], "properties": {"path": {"$ref": "#/$defs/nonempty"}, "manifest_sha256": {"$ref": "#/$defs/sha256"}, "files": {"$ref": "#/$defs/positive"}}, "additionalProperties": false}},
+        "runs": {"type": "array", "minItems": 4, "items": {"type": "object", "required": ["instrument", "artifact_sha256"], "properties": {"instrument": {"$ref": "#/$defs/nonempty"}, "artifact_sha256": {"$ref": "#/$defs/sha256"}}, "additionalProperties": false}},
+        "conformance": {"type": "object", "required": ["status", "artifacts", "files", "native_scored_denominator"], "properties": {"status": {"const": "verified"}, "artifacts": {"$ref": "#/$defs/strings"}, "files": {"$ref": "#/$defs/positive"}, "native_scored_denominator": {"$ref": "#/$defs/positive"}}, "additionalProperties": true},
+        "authenticated_reads": {"type": "object", "required": ["status", "receipts", "verification_runs", "metric_c", "native_occurrence_floor", "native_occurrence_floor_evidence", "credited_coordinates_artifact", "published_read_gate"], "properties": {"status": {"const": "verified"}, "receipts": {"$ref": "#/$defs/strings"}, "verification_runs": {"$ref": "#/$defs/strings"}, "metric_c": {"$ref": "#/$defs/positive"}, "native_occurrence_floor": {"$ref": "#/$defs/positive"}, "native_occurrence_floor_evidence": {"$ref": "#/$defs/nonempty"}, "credited_coordinates_artifact": {"$ref": "#/$defs/nonempty"}, "published_read_gate": {"type": "object", "required": ["status", "lost_reads"], "properties": {"status": {"const": "verified"}, "lost_reads": {"const": 0}}, "additionalProperties": true}}, "additionalProperties": true},
+        "generated_catalog": {"type": "object", "required": ["status", "artifacts", "ratchet_exit_code"], "properties": {"status": {"const": "verified"}, "artifacts": {"$ref": "#/$defs/strings"}, "ratchet_exit_code": {"const": 0}}, "additionalProperties": true},
+        "write_matrix": {"type": "object", "required": ["status", "artifacts", "report_exit_code"], "properties": {"status": {"const": "verified"}, "artifacts": {"$ref": "#/$defs/strings"}, "report_exit_code": {"const": 0}}, "additionalProperties": true},
+        "regressions": {"type": "object", "required": ["status", "base_sha", "head_sha", "new_losses", "new_value_differences"], "properties": {"status": {"const": "verified"}, "base_sha": {"$ref": "#/$defs/commit"}, "head_sha": {"$ref": "#/$defs/commit"}, "new_losses": {"const": 0}, "new_value_differences": {"const": 0}}, "additionalProperties": true},
+        "refusals": {"maxItems": 0},
+        "unresolved": {"maxItems": 0}
+      }
+    }
+  }],
+  "$defs": {
+    "nonempty": {"type": "string", "minLength": 1},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "positive": {"type": "integer", "minimum": 1},
+    "strings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonempty"}}
+  }
+}

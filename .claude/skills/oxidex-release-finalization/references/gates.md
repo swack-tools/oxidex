@@ -14,6 +14,7 @@ VERSION=2.0.0-beta.1
 TAG="v$VERSION"
 PARITY_RECEIPT=/absolute/path/to/release-parity-receipt.json
 DOCUMENTATION_RECEIPT=/absolute/path/to/documentation-release-receipt.json
+FINALIZATION_RECEIPT=/absolute/path/to/release-finalization-receipt.json
 tools/preflight.sh --upstream
 git fetch origin main refactor/tag-machinery --tags
 git status --short --branch
@@ -74,6 +75,7 @@ dependency pins; a search for only the requested version misses stale values.
 set -euo pipefail
 VERSION_LITERAL_RE='(^|[^[:alnum:]_])[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?'
 git grep -n -I -E "$VERSION_LITERAL_RE" -- . \
+  ':(exclude)tools/ci/testdata/release_receipts/**' \
   | tee "$EVIDENCE_DIR/version-literals.txt"
 ```
 
@@ -82,6 +84,7 @@ Also inventory computed/field-based version sources and validate the tag:
 ```bash
 set -euo pipefail
 git grep -n -I -E '\[package\]|version[[:space:]]*=|VERSION|__version__' -- . \
+  ':(exclude)tools/ci/testdata/release_receipts/**' \
   | tee "$EVIDENCE_DIR/version-fields.txt"
 python3 tools/ci/release_version.py --tag "$TAG" --cargo-toml Cargo.toml \
   | tee "$EVIDENCE_DIR/release-version.txt"
@@ -101,6 +104,17 @@ justified by finding it. Keep dependency pins, including those in `Cargo.lock`,
 separate from OxiDex release versions; preserve intentional independent crate
 versions and retain the excluded/dependency hit list for audit.
 
+The final receipt's `version_inventory` must cover every Cargo workspace
+manifest and bind each row to its actual `[package]` version declaration.
+Record the complete `version-literals.txt` and `version-fields.txt`
+reconciliation separately, including both scan SHA-256 values, tracked-file
+and matching-line counts, reviewer, and zero unresolved entries, in
+`version_reconciliation`. Both documented scans and the terminal validator
+exclude only the validator's self-referential receipt fixtures. The terminal
+validator recomputes both scans, loads the referenced reconciliation bytes,
+and requires all counts and hashes to agree; a summary without both raw durable
+scans and human reconciliation is not evidence.
+
 ## 3. Receipt compatibility
 
 Parse both JSON receipts before trusting them. The parity receipt binds the
@@ -109,14 +123,12 @@ candidate in `oxidex_sha`; the documentation receipt binds it in
 
 ```bash
 set -euo pipefail
-jq -e --arg sha "$CANDIDATE_SHA" '
-  .schema_version == 1 and .oxidex_sha == $sha and .status == "verified"
-  and (.refusals | length) == 0
-' "$PARITY_RECEIPT"
-jq -e --arg sha "$CANDIDATE_SHA" --arg version "$VERSION" '
-  .schema_version == 1 and .candidate_sha == $sha and .version == $version
-  and .status == "verified" and (.unresolved | length) == 0
-' "$DOCUMENTATION_RECEIPT"
+python3 tools/ci/validate_release_receipt.py --kind parity \
+  --receipt "$PARITY_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$CANDIDATE_SHA"
+python3 tools/ci/validate_release_receipt.py --kind documentation \
+  --receipt "$DOCUMENTATION_RECEIPT" --version "$VERSION" \
+  --candidate-sha "$CANDIDATE_SHA"
 ```
 
 If the current receipt schema uses a later documented version, validate that
@@ -130,7 +142,11 @@ schema's equivalent identity/status fields instead of weakening the check.
 | Version/tag or packaging decision differs | Block and reconcile documentation plus inventory. |
 | Receipt is verified and bound to the frozen candidate | Accept provisionally; post-merge tree/SHA checks still apply. |
 
-Store the receipt paths and SHA-256 hashes in the finalization receipt.
+Store each receipt's path, SHA-256, measured commit, and measured tree in the
+finalization receipt. When candidate and `main` trees match, the measured
+commit may remain the candidate SHA with that tree-equivalence proof. When the
+trees differ, both upstream receipts must name the regenerated `MAIN_SHA` and
+`MAIN_TREE`.
 
 ## 4. Locked local gates and workflow audit
 
@@ -168,11 +184,38 @@ test -n "$PR_URL"
 printf '%s\n' "$PR_URL" | tee "$EVIDENCE_DIR/pr-url.txt"
 PR=$(gh pr view "$PR_URL" --json number --jq '.number')
 test -n "$PR"
-gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup
-gh pr checks "$PR" --required
+gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup \
+  | tee "$EVIDENCE_DIR/pr-state.json"
+gh pr checks "$PR" --required --json name,state,link \
+  | tee "$EVIDENCE_DIR/required-checks.json"
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+gh api graphql \
+  -F owner="$REPO_OWNER" -F name="$REPO_NAME" -F number="$PR" \
+  -f query='query($owner:String!,$name:String!,$number:Int!){
+    repository(owner:$owner,name:$name){
+      pullRequest(number:$number){
+        reviewThreads(first: 100){
+          pageInfo{hasNextPage}
+          nodes{isResolved isOutdated comments(first:1){nodes{url body author{login}}}}
+        }
+      }
+    }
+  }' > "$EVIDENCE_DIR/review-threads.json"
+python3 tools/ci/release_pr_gate.py \
+  --pr-state "$EVIDENCE_DIR/pr-state.json" \
+  --review-threads "$EVIDENCE_DIR/review-threads.json" \
+  --required-checks "$EVIDENCE_DIR/required-checks.json" \
+  --expected-head "$CANDIDATE_SHA" \
+  --output "$EVIDENCE_DIR/reviewed-promotion.json"
+jq -er '.unresolved_actionable_threads' "$EVIDENCE_DIR/reviewed-promotion.json" \
+  | tee "$EVIDENCE_DIR/unresolved-actionable-review-threads.txt"
 ```
 
-Require review approval and all required checks. After the authorized merge:
+Require review approval, all required checks, a complete review-thread page,
+and zero unresolved non-outdated review threads. The verified promotion JSON
+also records SHA-256 identities for both raw inputs. A general review decision
+does not prove that inline comments were resolved. After the authorized merge:
 
 ```bash
 set -euo pipefail

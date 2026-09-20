@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "version": "2.0.0-beta.1",
+  "oxidex_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "oxidex_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "source_dirty": false,
+  "exiftool_version": "13.59",
+  "required_families": ["conformance", "authenticated_reads", "generated_catalog", "write_matrix"],
+  "scope_exclusions": [],
+  "binary": {
+    "path": "/evidence/oxidex",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "build_proof_path": "/evidence/build-proof.json",
+    "build_proof_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "cargo_target_dir": "/evidence/target"
+  },
+  "oracle": {
+    "status": "verified",
+    "perl_path": "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+    "perl_version": "v5.38.2",
+    "perl_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "tree_path": "/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool",
+    "script_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "exiftool_version": "13.59",
+    "docx_file_type": "DOCX",
+    "library_fingerprint_path": "/evidence/library.sha256",
+    "library_fingerprint_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "library_file_count": 100,
+    "probes": ["perl-version", "required-modules", "exiftool-version", "docx"]
+  },
+  "corpora": [{"path": "/corpus", "manifest_sha256": "6666666666666666666666666666666666666666666666666666666666666666", "files": 200}],
+  "runs": [
+    {"instrument": "conformance", "artifact_sha256": "7777777777777777777777777777777777777777777777777777777777777777"},
+    {"instrument": "authenticated_reads", "artifact_sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+    {"instrument": "generated_catalog", "artifact_sha256": "9999999999999999999999999999999999999999999999999999999999999999"},
+    {"instrument": "write_matrix", "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+  ],
+  "conformance": {"status": "verified", "artifacts": ["/evidence/conformance.json"], "files": 200, "native_scored_denominator": 10000},
+  "authenticated_reads": {
+    "status": "verified",
+    "receipts": ["/evidence/read-receipt.json"],
+    "verification_runs": ["/evidence/read-verify.log"],
+    "metric_c": 9000,
+    "native_occurrence_floor": 8000,
+    "native_occurrence_floor_evidence": "/evidence/native-occurrence-floor.json",
+    "credited_coordinates_artifact": "/evidence/coordinates.json",
+    "published_read_gate": {"status": "verified", "lost_reads": 0}
+  },
+  "generated_catalog": {"status": "verified", "artifacts": ["/evidence/catalog.json"], "ratchet_exit_code": 0},
+  "write_matrix": {"status": "verified", "artifacts": ["/evidence/matrix.json"], "report_exit_code": 0},
+  "regressions": {"status": "verified", "base_sha": "cccccccccccccccccccccccccccccccccccccccc", "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "new_losses": 0, "new_value_differences": 0},
+  "status": "verified",
+  "refusals": [],
+  "unresolved": []
+}

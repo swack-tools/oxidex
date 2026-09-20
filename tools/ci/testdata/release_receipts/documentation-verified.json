@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "version": "2.0.0-beta.1",
+  "candidate_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "candidate_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "main_equivalence": {"main_sha": null, "main_tree": null, "matches_candidate_tree": null, "evidence_path": null},
+  "parity_receipt": {
+    "path": "tools/ci/testdata/release_receipts/parity-verified.json",
+    "sha256": "aa7a7ad7b9559c53a6d161bc1984a266cc77d94e57a3fb283a9827ea4372f94c",
+    "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "verified"
+  },
+  "claims": [{"claim": "current release facts", "status": "verified", "evidence_path": "/evidence/claims.json"}],
+  "pages": [{"route": "/", "disposition": "current", "status": "verified"}],
+  "benchmarks": [{"disposition": "not_applicable", "reason": "No performance claim is published for this candidate."}],
+  "local_build": {
+    "status": "verified",
+    "command": "tools/docs-local-deploy.sh --build-only",
+    "candidate_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "snapshot_path": "/evidence/snapshot",
+    "dist_path": "/evidence/dist",
+    "input_manifest": "/evidence/inputs.json",
+    "source_inventory": "/evidence/sources.json",
+    "generated_inventory": "/evidence/generated.json",
+    "rendered_inventory": "/evidence/rendered.json",
+    "reconciliation": "/evidence/reconciliation.json",
+    "crawl_evidence": "/evidence/crawl.json",
+    "evidence_path": "/evidence/build.json"
+  },
+  "visual_review": {
+    "status": "verified",
+    "automation_manifest": "/evidence/visual-matrix.json",
+    "samples": [{"route": "/", "viewport": "1440x1000", "theme": "light", "status": "verified"}],
+    "findings": [],
+    "human_review": {
+      "status": "verified",
+      "reviewer": "maintainer",
+      "reviewed_at": "2026-09-19T00:00:00Z",
+      "screenshot_manifest": "/evidence/visual-matrix.json",
+      "evidence_path": "/evidence/human-review.json"
+    },
+    "evidence_path": "/evidence/visual-review.json"
+  },
+  "pages_pipeline": {
+    "status": "verified",
+    "build_type": "workflow",
+    "cname": "oxidex.net",
+    "https_enforced": true,
+    "source": "github-actions",
+    "workflow_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "evidence_path": "/evidence/pages.json"
+  },
+  "live_deployment": {"status": "not_run", "required_for_documentation_verification": false},
+  "status": "verified",
+  "unresolved": []
+}
