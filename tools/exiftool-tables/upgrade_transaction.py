@@ -584,6 +584,9 @@ class Transaction:
     def promote(self, tree):
         assert_entry(self.root, self.start)
         self.identities()
+        generated_paths = [a.path for a in artifacts.select(root=tree)] + [PIN]
+        if generated_paths != self.paths:
+            raise Refused("generated artifact path set changed; live promotion cannot safely add or remove split modules")
         # Durable payloads on both sides; prepared identity before first write.
         after = {}
         for rel in self.paths:

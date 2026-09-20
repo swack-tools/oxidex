@@ -226,6 +226,14 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
                 self.assertTrue(self.report()['variants']['before']['output_sha256'])
                 self.unchanged()
 
+    def test_live_promotion_refuses_split_module_set_changes_without_partial_write(self):
+        for fail in ('added-module','removed-module'):
+            with self.subTest(fail=fail):
+                result=self.run_bump(fail=fail)
+                self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertIn('generated artifact path set changed',result.stderr)
+                self.unchanged()
+
     def test_retrospective_before_and_after_have_no_mixed_tiers(self):
         result=self.run_bump(['--dry-run','--from','13.55'],version='13.59',old='13.55')
         self.assertEqual(result.returncode,0,result.stderr);self.unchanged()
