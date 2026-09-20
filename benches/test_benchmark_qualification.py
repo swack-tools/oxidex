@@ -34,12 +34,14 @@ def result_row(command: str, *, candidate: bool = False) -> dict:
 
 
 def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
+    source_manifest = qualification.build_corpus_manifest(corpus, expected_count=2)
     evidence = corpus.parent / "evidence" / "run-20260920-a"
     evidence.parent.mkdir(exist_ok=True)
     evidence.mkdir(exist_ok=True)
     artifact_paths = {name: evidence / name for name in ("result.json", "raw.json", "source.json", "cache.json")}
     for artifact in artifact_paths.values():
         artifact.write_text("artifact")
+    artifact_paths["source.json"].write_bytes(qualification._canonical_json(source_manifest))
     artifact_hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in artifact_paths.items()}
     measured_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     commands = {
@@ -158,6 +160,21 @@ class ResultValidationTests(unittest.TestCase):
             document["identity"]["raw_artifact_path"] = str((root.parent / "outside.raw").resolve())
             (root.parent / "outside.raw").write_text("outside")
             with self.assertRaisesRegex(qualification.Refused, "outside"):
+                qualification.validate_result_document(document, candidate_sha=SHA,
+                    binary_path=Path("/fresh-target/release/oxidex"), binary_sha256=BINARY_SHA,
+                    cargo_version="2.0.0-beta.1", exiftool_version="13.59", corpus_manifest=manifest,
+                    warmups=5, runs=30, expected_corpus_count=2)
+
+    def test_source_artifact_must_match_the_trusted_corpus_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = self._valid(root)
+            manifest = qualification.build_corpus_manifest(root, expected_count=2)
+            source = Path(document["identity"]["source_artifact_path"])
+            source.write_bytes(b"arbitrary substituted source bytes")
+            document["identity"]["source_artifact_sha256"] = qualification.sha256_file(source)
+
+            with self.assertRaisesRegex(qualification.Refused, "trusted corpus manifest"):
                 qualification.validate_result_document(document, candidate_sha=SHA,
                     binary_path=Path("/fresh-target/release/oxidex"), binary_sha256=BINARY_SHA,
                     cargo_version="2.0.0-beta.1", exiftool_version="13.59", corpus_manifest=manifest,

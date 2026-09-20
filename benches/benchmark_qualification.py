@@ -352,8 +352,9 @@ def validate_result_document(
     evidence = evidence_input.resolve()
     if evidence_input.is_symlink() or not evidence.is_dir() or evidence.name != identity["run_id"]:
         raise Refused("result evidence path is not the durable run directory")
-    if identity["source_artifact_sha256"] != _require_sha(identity["source_artifact_sha256"], "source artifact SHA-256"):
-        raise Refused("invalid source artifact SHA-256")
+    trusted_source_sha256 = hashlib.sha256(_canonical_json(trusted_manifest)).hexdigest()
+    if _require_sha(identity["source_artifact_sha256"], "source artifact SHA-256") != trusted_source_sha256:
+        raise Refused("result source artifact is not the trusted corpus manifest")
     try:
         measured = datetime.fromisoformat(str(identity["measured_at"]).replace("Z", "+00:00"))
     except ValueError as exc:
