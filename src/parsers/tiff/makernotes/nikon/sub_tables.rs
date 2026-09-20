@@ -335,13 +335,18 @@ pub fn parse_maker_notes_0x56(data: &[u8], order: ByteOrder, tags: &mut HashMap<
     if data.len() < 4 {
         return;
     }
-    let firmware = ascii_value(&data[..4]);
-    if firmware.len() == 4 && firmware.as_bytes().iter().all(u8::is_ascii_digit) {
-        tags.insert(
-            "Nikon:FirmwareVersion56".to_string(),
-            format!("{}.{}", &firmware[..2], &firmware[2..]),
-        );
+    let mut firmware = ascii_value(&data[..4]);
+    if let Some(pair_start) = firmware
+        .as_bytes()
+        .windows(2)
+        .position(|pair| pair.iter().all(u8::is_ascii_digit))
+    {
+        // Nikon.pm's exact ValueConv is `$val =~ s/(\d{2})/$1./; $val`:
+        // insert after the first two consecutive digits, wherever they occur,
+        // and retain strings with no digit pair unchanged.
+        firmware.insert(pair_start + 2, '.');
     }
+    tags.insert("Nikon:FirmwareVersion56".to_string(), firmware);
 
     let burst = read_u32(data, 4, order).unwrap_or(0);
     if burst != 0 {
@@ -374,13 +379,12 @@ pub fn parse_maker_notes_0x56(data: &[u8], order: ByteOrder, tags: &mut HashMap<
         }
     }
     if let Some(active) = read_u32(data, 12, order) {
-        if let Some(printed) = match active {
-            0 => Some("No"),
-            1 => Some("Yes"),
-            _ => None,
-        } {
-            tags.insert("Nikon:PixelShiftActive".to_string(), printed.to_string());
-        }
+        let printed = match active {
+            0 => "No".to_string(),
+            1 => "Yes".to_string(),
+            _ => format!("Unknown ({active})"),
+        };
+        tags.insert("Nikon:PixelShiftActive".to_string(), printed);
     }
 }
 

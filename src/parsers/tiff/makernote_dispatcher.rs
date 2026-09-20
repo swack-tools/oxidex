@@ -209,6 +209,26 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
 
+    // MakerNotes.pm's `MakerNotePanasonic2` requires both an `MKE` payload
+    // and `Make =~ /^Panasonic/`. The low-level Panasonic parser deliberately
+    // accepts an already-routed Type2 record, so enforce the Make half here at
+    // the dispatch boundary before Leica's Panasonic::Main routes can see it.
+    if panasonic::is_panasonic_type2_makernote(data) {
+        if make_normalized.starts_with("panasonic") {
+            let parser = panasonic::PanasonicParser;
+            parser.parse_with_context_and_values_and_session(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+            )?;
+        }
+        return Ok(());
+    }
+
     // Phase One's MakerNote is dispatched by ExifTool purely on its own
     // signature (MakerNotes.pm's `MakerNotePhaseOne` Condition has no Make
     // check at all), because the format is OEMed under multiple brand names.

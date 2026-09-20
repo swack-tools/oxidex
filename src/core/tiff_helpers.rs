@@ -18,6 +18,7 @@ use crate::exiftool_tables::{
     process_exif_decoded, read_ifd,
 };
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
+use crate::parsers::jpeg::app_segments::dji_dbg::parse_dji_info_records_in_group;
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
     ByteOrder, find_entry_position, ifd_entry_count, parse_ifd,
@@ -3872,6 +3873,15 @@ fn parse_makernote_with_session(
         return;
     }
 
+    // `MakerNoteDJIInfo` is the same bracketed `DJI::Info` record stream as
+    // the APP7 `DJI-DBG` carrier, but has no APP7 header and belongs to the
+    // DJI family-1 group. It may contain binary values, so keep it in the
+    // MetadataMap path instead of forcing it through the dispatcher's string
+    // map. Ordinary numeric DJI MakerNotes continue to the dispatcher below.
+    if parse_dji_info_makernote_if_dji(&make, ctx, metadata) {
+        return;
+    }
+
     // Sony's own `PreviewImage` (0x2001) is deliberately absent from Sony's
     // string-map `MAIN_TABLE`: its value routinely lives outside the
     // MakerNote payload the dispatcher hands that table, so it needs the
@@ -3988,6 +3998,22 @@ fn parse_makernote_with_session(
     for (tag_name, value) in value_forms {
         metadata.set_value_form(tag_name, value);
     }
+}
+
+/// Parses the bracketed `MakerNoteDJIInfo` payload selected by ExifTool's
+/// `DJI::Info` table. DJI's ordinary numeric MakerNotes continue through the
+/// standard dispatcher.
+fn parse_dji_info_makernote_if_dji(
+    make: &str,
+    ctx: &MakerNoteContext<'_>,
+    metadata: &mut MetadataMap,
+) -> bool {
+    if !make.trim().eq_ignore_ascii_case("DJI") || !ctx.payload().starts_with(b"[") {
+        return false;
+    }
+
+    metadata.merge(parse_dji_info_records_in_group(ctx.payload(), "DJI"));
+    true
 }
 
 /// Bare tag name of an `OffsetPair`'s offset half.

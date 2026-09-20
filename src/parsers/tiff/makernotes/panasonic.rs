@@ -41,9 +41,9 @@ use super::makernote_context::{MakerNoteContext, value_overlaps_directory};
 use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
 use super::shared::ifd_parser_base::resolve_byte_order_at;
-use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
 use crate::exiftool_tables::{Ctx, Dir, find_table, process_binary_data};
 use crate::parsers::tiff::makernotes::shared::engine_value::engine_value_text;
+use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
 
 // Import declarative decoder macros
 use crate::const_decoder;
@@ -65,7 +65,7 @@ const LEICA_UNNUMBERED_HEADER: &[u8] = b"LEICA\0\0\0";
 /// `MakerNotePanasonic2` selects the fixed `Panasonic::Type2` binary record
 /// for `MKE*` payloads and forces little-endian decoding, independently of
 /// the enclosing TIFF byte order (MakerNotes.pm:743-750).
-fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
+pub(crate) fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
     data.starts_with(b"MKE")
 }
 

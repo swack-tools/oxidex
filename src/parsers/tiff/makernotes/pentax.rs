@@ -3010,7 +3010,7 @@ static AF_POINT_SELECTED_K3_KP: Cond = Cond::Model {
 /// This mirrors ExifTool's `DecodeAFPoints($val, $num, 2, $mask)` in the
 /// pinned Pentax.pm. Points are one-based and packed most-significant pair
 /// first. An empty carrier is the only case rendered as `(none)`.
-fn decode_caf_points(bytes: &[u8], point_count: u32, required_value: u8) -> String {
+fn decode_caf_points(bytes: &[u8], point_count: u32, required_mask: u8) -> String {
     if bytes.is_empty() {
         return "(none)".to_string();
     }
@@ -3022,7 +3022,7 @@ fn decode_caf_points(bytes: &[u8], point_count: u32, required_value: u8) -> Stri
             break;
         };
         let shift = 6 - (point % 4) * 2;
-        if (byte >> shift) & 0x03 == required_value {
+        if ((byte >> shift) & required_mask) != 0 {
             points.push((point + 1).to_string());
         }
     }

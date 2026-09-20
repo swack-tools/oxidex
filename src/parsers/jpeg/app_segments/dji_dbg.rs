@@ -4,7 +4,7 @@ use crate::core::{MetadataMap, TagValue};
 
 const HEADER: &[u8] = b"DJI-DBG\0";
 
-/// Extracts the known `sensor_id` record from a DJI-DBG APP7 payload.
+/// Extracts known `DJI::Info` records from a DJI-DBG APP7 payload.
 ///
 /// ExifTool selects `DJI::Info` only when APP7 starts with `DJI-DBG\0`, then
 /// `ProcessDJIInfo` accepts contiguous bracketed records. Its printable-value
@@ -16,9 +16,18 @@ pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
         })
 }
 
-/// Extracts known `DJI::Info` records from either APP7 or the MakerNote
-/// diagnostic stream.  ExifTool uses the same table for both carriers, with
-/// the APP7 form adding only the `DJI-DBG` header.
+/// Extracts the bracketed record stream used by `DJI::Info`.
+///
+/// ExifTool uses the same table for an APP7 `DJI-DBG\0` payload and for the
+/// `MakerNoteDJIInfo` EXIF value. The latter starts directly with `[`. This
+/// convenience entry point retains the APP7 group used by the original
+/// parser; MakerNote dispatch calls the group-aware variant below.
+pub fn parse_dji_info_records(records: &[u8]) -> MetadataMap {
+    parse_dji_info_records_in_group(records, "APP7")
+}
+
+/// Extracts the bracketed `DJI::Info` stream under its carrier's ExifTool
+/// family-1 group.
 pub fn parse_dji_info_records_in_group(records: &[u8], group: &str) -> MetadataMap {
     let mut metadata = MetadataMap::new();
 
@@ -49,6 +58,16 @@ pub fn parse_dji_info_records_in_group(records: &[u8], group: &str) -> MetadataM
                     b"FlightDegree(Y,P,R)" => Some(("FlightDegree", value)),
                     b"FlightSpeed(X,Y,Z)" => Some(("FlightSpeed", value)),
                     b"ae_dbg_info" => Some(("AEDebugInfo", value)),
+                    b"ae_histogram_info" => Some(("AEHistogramInfo", value)),
+                    b"ae_local_histogram" => Some(("AELocalHistogram", value)),
+                    b"ae_liveview_histogram_info" => Some(("AELiveViewHistogramInfo", value)),
+                    b"ae_liveview_local_histogram" => Some(("AELiveViewLocalHistogram", value)),
+                    b"awb_dbg_info" => Some(("AWBDebugInfo", value)),
+                    b"af_dbg_info" => Some(("AFDebugInfo", value)),
+                    b"hiso" => Some(("Histogram", value)),
+                    b"xidiri" => Some(("Xidiri", value)),
+                    b"adj_dbg_info" => Some(("ADJDebugInfo", value)),
+                    b"hyperlapse_dbg_info" => Some(("HyperlapsDebugInfo", value)),
                     _ => None,
                 })
         else {
