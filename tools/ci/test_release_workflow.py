@@ -26,6 +26,7 @@ REPO = HERE.parent.parent
 WORKFLOWS = REPO / ".github" / "workflows"
 RELEASE_ASSETS = HERE / "release_assets.py"
 VERIFY_MACOS_RELEASE = HERE / "verify_macos_release.sh"
+RELEASE_GUIDE = REPO / "docs" / "RELEASE-2.0.0-beta.1.md"
 
 spec = importlib.util.spec_from_file_location("release_version", HERE / "release_version.py")
 rv = importlib.util.module_from_spec(spec)
@@ -730,6 +731,29 @@ class TagRecipeTests(unittest.TestCase):
         self.assertLess(calls.index("git tag -s"), calls.index("tag -v"))
         self.assertLess(calls.index("tag -v"), calls.index("git push"))
         self.assertIn("git push origin refs/tags/v2.0.0-beta.1", calls)
+
+
+class ReleaseGuideTests(unittest.TestCase):
+    text = RELEASE_GUIDE.read_text()
+
+    def test_tag_instructions_use_only_the_guarded_main_recipe(self):
+        section = self.text[
+            self.text.index("## Tag and publish"):
+            self.text.index("### What the push triggers")]
+        self.assertNotIn("git tag -s", section)
+        self.assertNotRegex(section, r"git push .*refs/tags")
+        self.assertNotIn("origin/refactor/tag-machinery", section)
+        self.assertIn('SHA=$(git rev-parse origin/main)', section)
+        self.assertIn('OXIDEX_TAG_AUTHORIZATION="v2.0.0-beta.1@$SHA"', section)
+        self.assertIn('just tag 2.0.0-beta.1 "$SHA"', section)
+
+    def test_checklist_and_docker_policy_require_a_main_tag(self):
+        self.assertNotIn("branch refactor/tag-machinery", self.text)
+        self.assertNotIn("not merged into `main`, so for this tag", self.text)
+        self.assertIn("reachable from `origin/main`", self.text)
+        self.assertIn(":v2.0.0-beta.1", self.text)
+        self.assertIn(":2.0.0-beta.1", self.text)
+        self.assertIn("never moves `:latest`", self.text)
 
 
 class CratesIoTests(unittest.TestCase):
