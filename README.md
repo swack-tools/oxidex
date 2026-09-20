@@ -1,7 +1,6 @@
 # OxiDex
 
 [![CI](https://github.com/swack-tools/oxidex/workflows/CI/badge.svg)](https://github.com/swack-tools/oxidex/actions)
-[![Crates.io](https://img.shields.io/crates/v/oxidex.svg)](https://crates.io/crates/oxidex)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
 A high-performance Rust implementation of [ExifTool](https://exiftool.org/) for metadata extraction and manipulation.
@@ -24,6 +23,9 @@ OxiDex is a memory-safe, drop-in replacement for the Perl-based ExifTool. It def
 ### Download Binary
 
 Pre-built binaries available on the [Releases page](https://github.com/swack-tools/oxidex/releases).
+The `2.0.0-beta.1` release is not published to crates.io; Rust users should
+use the signed Git tag or build from a checkout. Debian/RPM and Homebrew
+packages are not published by the beta release automation either.
 
 ## Usage
 
@@ -59,7 +61,7 @@ oxidex --detector=magika unknown_file
 
 - [User Guide](https://oxidex.net/) - Installation, usage, and format support
 - [Performance](https://oxidex.net/performance/) - benchmark status and how to reproduce measurements
-- [API Reference](https://docs.rs/oxidex) - Rust library documentation
+- [API Reference](https://oxidex.net/reference/api-reference) - Rust library documentation (this beta is not on crates.io)
 - [Autogeneration plan](docs/AUTOGENERATION-PLAN.md) - the goal, the measured state and the ordered next steps; the mechanism is in [AUTOGENERATION-V2-DESIGN.md](docs/AUTOGENERATION-V2-DESIGN.md)
 - [Tag Machinery Status](docs/TAG_MACHINERY_STATUS.md) - Dated integration status, evidence limits and the documentation map
 - [Automation Backlog](docs/AUTOMATION-AND-TESTER-PLAN.md) - Remaining upgrade, verification and migration work

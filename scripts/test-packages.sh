@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Package Testing Script for oxidex
-# Tests .deb, .rpm, and Homebrew packages
+# Package Testing Script for OxiDex
+# Tests locally generated .deb and .rpm packages.
+# The beta release workflow does not publish Debian, RPM, or Homebrew assets.
 #
 # Usage: ./scripts/test-packages.sh [deb|rpm|brew|all]
 
@@ -12,9 +13,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Run from the repository root so package paths are stable from any caller.
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$REPO_ROOT"
+
 # Configuration
 BINARY_NAME="oxidex"
-EXPECTED_VERSION="0.1.0"
+EXPECTED_VERSION="${OXIDEX_PACKAGE_VERSION:-$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "oxidex"))')}"
 
 # Helper functions
 log_info() {
@@ -189,69 +194,10 @@ test_rpm_package() {
     return 0
 }
 
-# Homebrew Package Testing
+# Homebrew is intentionally not a beta distribution channel. Keep this case
+# so callers get a clear, successful no-op instead of trying a fake formula.
 test_homebrew_package() {
-    log_info "=== Testing Homebrew Formula ==="
-
-    if ! check_command "brew"; then
-        log_error "Homebrew not found. Install from https://brew.sh"
-        return 1
-    fi
-
-    local formula_path="packaging/homebrew/${BINARY_NAME}.rb"
-
-    if [[ ! -f "$formula_path" ]]; then
-        log_error "Homebrew formula not found at $formula_path"
-        return 1
-    fi
-
-    log_info "Found formula: $formula_path"
-
-    # Audit formula syntax
-    log_info "Auditing formula..."
-    if brew audit --formula "$formula_path" 2>&1 | grep -v "bottle"; then
-        log_info "Formula audit passed (ignoring bottle warnings)"
-    else
-        log_warn "Formula audit has warnings (may be acceptable)"
-    fi
-
-    # Check if package is already installed
-    if brew list "$BINARY_NAME" &>/dev/null; then
-        log_warn "Package already installed via Homebrew. Uninstalling first..."
-        brew uninstall "$BINARY_NAME"
-    fi
-
-    # Install from formula
-    log_info "Installing from formula (this may take several minutes to compile)..."
-    log_warn "Note: The SHA256 in the formula must be updated after creating a GitHub release"
-
-    if brew install --build-from-source "$formula_path" 2>&1 | tee /tmp/brew-install.log; then
-        log_info "Installation completed"
-    else
-        log_error "Installation failed. Check /tmp/brew-install.log for details"
-        return 1
-    fi
-
-    # Test binary
-    if test_binary; then
-        log_info "Homebrew package test: PASSED"
-    else
-        log_error "Homebrew package test: FAILED"
-        brew uninstall "$BINARY_NAME" || true
-        return 1
-    fi
-
-    # Uninstall package
-    log_info "Uninstalling package..."
-    brew uninstall "$BINARY_NAME"
-
-    # Verify removal
-    if check_command "$BINARY_NAME"; then
-        log_error "Binary still found after uninstall"
-        return 1
-    fi
-
-    log_info "Homebrew package test completed successfully"
+    log_warn "Homebrew distribution is not enabled for this beta; no formula test was run."
     return 0
 }
 
