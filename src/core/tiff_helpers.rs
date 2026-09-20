@@ -316,6 +316,7 @@ pub fn parse_ifd_chain(
         let mut engine = tiff.as_deref().and_then(|tiff| {
             crate::core::exif_dir_engine::ifd0_walk_with_session(
                 tiff,
+                0,
                 ifd_offset,
                 byte_order,
                 metadata,
@@ -1056,7 +1057,7 @@ fn parse_exif_directory_with_session(
                 // is -1 (ExifTool.pm:2218-2233), so a 0 would lose to a JFIF
                 // copy that ExifTool ranks below it (slice E-1's finding).
                 exif_dir_engine::walk_with_session(
-                    table, tiff, offset, byte_order, "ExifIFD", metadata, session, ctx,
+                    table, tiff, tiff_base, offset, byte_order, "ExifIFD", metadata, session, ctx,
                 )
                 .at_priority(SHIM_DEFAULT_PRIORITY)
                 .keep_hand(EXIF_IFD_HAND_KEPT)
@@ -1405,6 +1406,7 @@ fn parse_interop_directory_with_session(
             exif_dir_engine::walk_with_session(
                 table,
                 tiff,
+                tiff_base,
                 offset,
                 byte_order,
                 "InteropIFD",
@@ -3065,6 +3067,7 @@ pub(crate) fn parse_ifd1_with_session(
     let declined = ifd1_engine_rows(
         table,
         tiff_data,
+        tiff_base,
         ifd1_offset,
         byte_order,
         low_priority_dir,
@@ -3113,6 +3116,7 @@ pub(crate) fn parse_ifd1_with_session(
 fn ifd1_engine_rows(
     table: &'static IfdTable,
     tiff_data: &[u8],
+    data_domain: u64,
     ifd1_offset: u64,
     byte_order: ByteOrder,
     low_priority_dir: bool,
@@ -3137,6 +3141,7 @@ fn ifd1_engine_rows(
         table,
         IfdDir {
             data: tiff_data,
+            data_domain,
             ifd_start,
             // Stored offsets are TIFF-relative and `tiff_data[0]` is the
             // TIFF header, so no correction.

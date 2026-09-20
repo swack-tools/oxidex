@@ -312,6 +312,7 @@ fn insert_row(
 pub(super) fn walk(
     table: &'static IfdTable,
     data: &[u8],
+    data_domain: u64,
     order: ByteOrder,
     config: &IfdParserConfig,
     base: u32,
@@ -339,6 +340,7 @@ pub(super) fn walk(
         table,
         IfdDir {
             data: ifd_data,
+            data_domain,
             ifd_start: 0,
             base: Some(-i64::from(base)),
             byte_order: order.to_io_byte_order(),

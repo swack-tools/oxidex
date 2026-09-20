@@ -468,6 +468,7 @@ fn parse_sony_makernote_impl(
                 table,
                 crate::exiftool_tables::IfdDir {
                     data,
+                    data_domain: tiff_base,
                     ifd_start,
                     base: data_base.map(|base| -i64::from(base)),
                     byte_order: byte_order.to_io_byte_order(),

@@ -264,6 +264,7 @@ pub fn process_exif_segments(
                     // arm keeps the rest, the pointers and the order.
                     let mut engine = crate::core::exif_dir_engine::ifd0_walk_with_session(
                         tiff_data,
+                        tiff_offset,
                         ifd_offset,
                         byte_order,
                         metadata,
@@ -2880,6 +2881,49 @@ mod print_im_tests {
         jpeg.extend_from_slice(&payload);
         jpeg.extend_from_slice(&[0xFF, 0xD9]);
         jpeg
+    }
+
+    fn push_exif_ifd0_short(jpeg: &mut Vec<u8>, tag: u16, value: u16) {
+        let mut payload = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        payload.extend_from_slice(&tag.to_le_bytes());
+        payload.extend_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&value.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        jpeg.extend_from_slice(&[0xff, 0xe1]);
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+    }
+
+    #[test]
+    fn distinct_exif_app1_payloads_with_ifd0_at_eight_are_both_walked() {
+        let mut jpeg = vec![0xff, 0xd8];
+        push_exif_ifd0_short(&mut jpeg, 0x0112, 1);
+        push_exif_ifd0_short(&mut jpeg, 0x0128, 3);
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("two valid EXIF APP1 segments");
+        let exif = segments
+            .iter()
+            .filter(|segment| segment.is_app1() && segment.data.starts_with(b"Exif\0\0"))
+            .collect::<Vec<_>>();
+        assert_eq!(exif.len(), 2);
+        assert!(
+            exif.iter().all(|segment| {
+                u32::from_le_bytes(segment.data[10..14].try_into().unwrap()) == 8
+            })
+        );
+
+        let mut metadata = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
+
+        assert_eq!(
+            metadata.get_string("IFD0:Orientation"),
+            Some("Horizontal (normal)")
+        );
+        assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("cm"));
     }
 
     #[test]

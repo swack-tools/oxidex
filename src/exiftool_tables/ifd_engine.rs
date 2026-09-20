@@ -179,6 +179,10 @@ pub struct IfdDir<'a> {
     /// entry's out-of-line value and every `SubDirectory` start are offsets
     /// into *this*.
     pub data: &'a [u8],
+    /// Stable identity of the enclosing file/data domain.
+    /// Separate from [`Self::base`]: it identifies buffers for the processed
+    /// directory guard but never participates in stored-offset correction.
+    pub data_domain: u64,
     /// `$$dirInfo{DirStart}`: where the 2-byte entry count sits in `data`.
     pub ifd_start: usize,
     /// The signed correction added to an entry's stored `value_offset` to
@@ -831,10 +835,12 @@ pub fn process_exif_decoded(
 ) -> Option<RootReads> {
     // ExifTool.pm:9065-9072: `ProcessDirectory` records the root directory's
     // address too, which is what stops a table that points at itself.
-    if !session
-        .processed()
-        .admit(ifd_addr(dir.ifd_start), table_key(table), false)
-    {
+    if !session.processed().admit(
+        dir.data_domain,
+        ifd_addr(dir.ifd_start),
+        table_key(table),
+        false,
+    ) {
         return None;
     }
     let mut decoded = RootReads::default();
@@ -2008,10 +2014,12 @@ fn descend_inner(
             Target::Ifd(target) => {
                 // ExifTool.pm:9065-9072: a repeat is `return 0` for THIS
                 // directory; the loop moves on to the next value.
-                if !session
-                    .processed()
-                    .admit(ifd_addr(start_pos), table_key(target), false)
-                {
+                if !session.processed().admit(
+                    dir.data_domain,
+                    ifd_addr(start_pos),
+                    table_key(target),
+                    false,
+                ) {
                     continue;
                 }
                 session.processed().depth += 1;
@@ -2020,6 +2028,7 @@ fn descend_inner(
                     target,
                     IfdDir {
                         data,
+                        data_domain: dir.data_domain,
                         ifd_start: start_pos,
                         base,
                         byte_order,
@@ -2042,6 +2051,7 @@ fn descend_inner(
                     continue;
                 }
                 if !session.processed().admit(
+                    dir.data_domain,
                     binary_addr(base, start_pos),
                     table_key(target),
                     false,
@@ -2053,6 +2063,7 @@ fn descend_inner(
                     target,
                     Dir {
                         data,
+                        data_domain: dir.data_domain,
                         dir_start: start_pos,
                         dir_len: Some(dir_len),
                         // The binary engine reads at data-relative offsets;
@@ -2092,6 +2103,7 @@ fn descend_inner(
                     }
                 }
                 if !session.processed().admit(
+                    dir.data_domain,
                     binary_addr(base, start_pos),
                     table_key(target),
                     false,
@@ -2332,6 +2344,7 @@ mod tests {
             table,
             IfdDir {
                 data,
+                data_domain: 0,
                 ifd_start: 0,
                 base,
                 byte_order: order,
@@ -2686,6 +2699,7 @@ mod tests {
             table,
             IfdDir {
                 data,
+                data_domain: 0,
                 ifd_start,
                 base: Some(0),
                 byte_order: ByteOrder::Big,
@@ -2809,6 +2823,7 @@ mod tests {
                 &EXIF_STRINGS,
                 IfdDir {
                     data: &data,
+                    data_domain: 0,
                     ifd_start: 0,
                     base: Some(0),
                     byte_order: order,
@@ -2849,6 +2864,7 @@ mod tests {
             &EXIF_STRINGS,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: order,
@@ -2913,6 +2929,7 @@ mod tests {
                 &EXIF_STRINGS,
                 IfdDir {
                     data: &data,
+                    data_domain: 0,
                     ifd_start: 8,
                     base: Some(0),
                     byte_order: order,
@@ -2974,6 +2991,7 @@ mod tests {
         let mut out = Vec::new();
         let dir = IfdDir {
             data: &data,
+            data_domain: 0,
             ifd_start: 0,
             base: Some(0),
             byte_order: order,
@@ -3020,6 +3038,7 @@ mod tests {
 
         let first = IfdDir {
             data: &data,
+            data_domain: 0,
             ifd_start: 0,
             base: Some(0),
             byte_order: order,
@@ -3727,6 +3746,7 @@ mod tests {
             &LOSING_ASSIGNMENT_TABLE,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: order,
@@ -3835,6 +3855,7 @@ mod tests {
                 &SERIAL_EDGE,
                 IfdDir {
                     data: &data,
+                    data_domain: 0,
                     ifd_start: 0,
                     base: Some(0),
                     byte_order: order,
@@ -3883,6 +3904,7 @@ mod tests {
             &SERIAL_EDGE,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: ByteOrder::Little,
@@ -3995,6 +4017,7 @@ mod tests {
             parent,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: ByteOrder::Little,
@@ -4377,6 +4400,7 @@ mod tests {
             table,
             IfdDir {
                 data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: ByteOrder::Big,

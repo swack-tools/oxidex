@@ -406,6 +406,7 @@ fn ifd0_key(name: &str) -> String {
 /// allowlist): then every entry is the hand arm's, as before the slice.
 pub(crate) fn ifd0_walk_with_session(
     tiff: &[u8],
+    data_domain: u64,
     ifd0: u64,
     order: ByteOrder,
     metadata: &MetadataMap,
@@ -417,10 +418,20 @@ pub(crate) fn ifd0_walk_with_session(
     // `enabled()` re-checks Gate A and the allowlist at runtime.
     let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").filter(|t| t.enabled())?;
     Some(
-        walk_with_session(table, tiff, ifd0, order, "IFD0", metadata, session, ctx)
-            .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
-            .keep_hand(IFD0_HAND_KEPT)
-            .with_stored_forms(),
+        walk_with_session(
+            table,
+            tiff,
+            data_domain,
+            ifd0,
+            order,
+            "IFD0",
+            metadata,
+            session,
+            ctx,
+        )
+        .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
+        .keep_hand(IFD0_HAND_KEPT)
+        .with_stored_forms(),
     )
 }
 
@@ -459,6 +470,7 @@ fn record(row: &Row, stored_forms: bool, metadata: &mut MetadataMap, key: String
 pub(crate) fn walk_with_session(
     table: &'static IfdTable,
     tiff: &[u8],
+    data_domain: u64,
     ifd_start: u64,
     order: ByteOrder,
     dir: &'static str,
@@ -491,6 +503,7 @@ pub(crate) fn walk_with_session(
         table,
         IfdDir {
             data: tiff,
+            data_domain,
             ifd_start: start,
             base: Some(0),
             byte_order: order.to_io_byte_order(),
@@ -571,7 +584,7 @@ pub(crate) fn ifd0_walk(
     let mut session = Session::new();
     let mut members = HashMap::new();
     let mut ctx = Ctx::new(&mut members);
-    ifd0_walk_with_session(tiff, ifd0, order, metadata, &mut session, &mut ctx)
+    ifd0_walk_with_session(tiff, 0, ifd0, order, metadata, &mut session, &mut ctx)
 }
 
 #[cfg(test)]
@@ -589,6 +602,7 @@ pub(crate) fn walk(
     walk_with_session(
         table,
         tiff,
+        0,
         ifd_start,
         order,
         dir,

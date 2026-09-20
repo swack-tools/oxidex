@@ -169,6 +169,7 @@ fn insert_row(
 pub(super) fn insert_rows(
     table: &'static IfdTable,
     data: &[u8],
+    data_domain: u64,
     ifd_start: usize,
     model: Option<&str>,
     session: &mut Session,
@@ -189,6 +190,7 @@ pub(super) fn insert_rows(
         table,
         IfdDir {
             data,
+            data_domain,
             ifd_start,
             base: Some(0),
             byte_order: order,
@@ -706,6 +708,7 @@ mod tests {
             fuji_main(),
             IfdDir {
                 data: &note,
+                data_domain: 0,
                 ifd_start: 12,
                 base: Some(0),
                 byte_order: ByteOrder::LittleEndian.to_io_byte_order(),
@@ -944,6 +947,7 @@ mod tests {
                 fuji_main(),
                 IfdDir {
                     data: &note,
+                    data_domain: 0,
                     ifd_start: 12,
                     base: Some(0),
                     byte_order: ByteOrder::LittleEndian.to_io_byte_order(),

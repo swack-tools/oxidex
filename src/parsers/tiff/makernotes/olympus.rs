@@ -487,6 +487,7 @@ impl MakerNoteParser for OlympusParser {
             byte_order,
             model,
             ctx.payload_tiff_offset(),
+            ctx.tiff_base(),
             session,
             cond_ctx,
             tags,
@@ -634,6 +635,7 @@ impl OlympusParser {
             byte_order,
             model,
             data_base,
+            0,
             &mut session,
             &mut cond_ctx,
             tags,
@@ -648,6 +650,7 @@ impl OlympusParser {
         byte_order: ByteOrder,
         model: Option<&str>,
         data_base: Option<u32>,
+        data_domain: u64,
         session: &mut Session,
         cond_ctx: &mut Ctx<'_>,
         tags: &mut HashMap<String, String>,
@@ -710,6 +713,7 @@ impl OlympusParser {
                 session,
                 cond_ctx,
                 data,
+                data_domain,
                 ifd_start,
                 base,
                 effective_byte_order,
@@ -862,7 +866,16 @@ impl OlympusParser {
             && let Some((start, order)) = main_info
         {
             walk_main_through_engine(
-                table, session, cond_ctx, data, start, base, order, model, tags,
+                table,
+                session,
+                cond_ctx,
+                data,
+                data_domain,
+                start,
+                base,
+                order,
+                model,
+                tags,
             );
             // The same remainder as for the top level: the withheld rows
             // (a MainInfo directory carries SpecialMode and DigitalZoom
@@ -972,6 +985,7 @@ fn walk_main_through_engine(
     session: &mut Session,
     ctx: &mut Ctx<'_>,
     data: &[u8],
+    data_domain: u64,
     ifd_start: usize,
     base: Option<i64>,
     order: ByteOrder,
@@ -988,6 +1002,7 @@ fn walk_main_through_engine(
         table,
         IfdDir {
             data,
+            data_domain,
             ifd_start,
             base,
             byte_order: order.to_io_byte_order(),

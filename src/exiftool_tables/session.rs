@@ -373,9 +373,8 @@ pub struct Session {
 /// fields while it walks a directory, then restores their exact prior state.
 /// Everything else in the session is deliberately left alone: DataMembers,
 /// options, warnings, values and processed-directory state belong to the
-/// input file rather than to one IFD. The guard is intentionally not
-/// cloneable, so a scope has one LIFO exit and [`Drop`] covers every return
-/// path.
+/// input file rather than to one IFD. The scope itself is intentionally not
+/// cloneable, so it has one LIFO exit and [`Drop`] covers every return path.
 pub struct DirectoryScope<'a> {
     session: &'a mut Session,
     saved_dir_name: Option<MemberVal>,

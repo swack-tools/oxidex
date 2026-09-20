@@ -123,6 +123,7 @@ pub fn parse_embedded_exif_at(
     // `EMBEDDED_IFD0_HAND_KEPT`.
     let mut engine = crate::core::exif_dir_engine::ifd0_walk_with_session(
         tiff_data,
+        tiff_base,
         ifd0_offset,
         byte_order,
         metadata,

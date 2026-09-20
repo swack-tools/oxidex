@@ -5015,6 +5015,7 @@ impl MakerNoteParser for CanonParser {
             byte_order,
             model,
             ctx.payload_tiff_offset(),
+            ctx.tiff_base(),
             Some(value_forms),
             session,
             cond_ctx,
@@ -5187,6 +5188,7 @@ fn parse_canon_makernote_impl_located_with_values(
         byte_order,
         exif_model,
         dir_tiff_offset,
+        0,
         value_forms,
         &mut session,
         &mut ctx,
@@ -5200,6 +5202,7 @@ fn parse_canon_makernote_impl_located_with_values_and_session(
     byte_order: ByteOrder,
     exif_model: Option<&str>,
     dir_tiff_offset: Option<u32>,
+    data_domain: u64,
     value_forms: Option<&mut HashMap<String, String>>,
     session: &mut crate::exiftool_tables::session::Session,
     ctx: &mut crate::exiftool_tables::Ctx<'_>,
@@ -5210,6 +5213,7 @@ fn parse_canon_makernote_impl_located_with_values_and_session(
         byte_order,
         exif_model,
         dir_tiff_offset,
+        data_domain,
         value_forms,
         true,
         session,
@@ -5234,6 +5238,7 @@ fn parse_canon_makernote_directory(
     byte_order: ByteOrder,
     exif_model: Option<&str>,
     dir_tiff_offset: Option<u32>,
+    data_domain: u64,
     mut value_forms: Option<&mut HashMap<String, String>>,
     walk_main: bool,
     session: &mut crate::exiftool_tables::session::Session,
@@ -5343,7 +5348,15 @@ fn parse_canon_makernote_directory(
         .flatten()
         .map(|table| {
             main_engine::walk(
-                table, data, byte_order, &config, base, self_model, session, ctx,
+                table,
+                data,
+                data_domain,
+                byte_order,
+                &config,
+                base,
+                self_model,
+                session,
+                ctx,
             )
         });
     // How many entries the hand walk visited, for the one structural invariant
@@ -7565,6 +7578,7 @@ pub(crate) fn parse_canon_ciff_records(
         ByteOrder::LittleEndian,
         model,
         Some(0),
+        0,
         Some(value_forms),
         false,
         &mut session,
