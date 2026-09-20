@@ -39,6 +39,8 @@ TARGET_ASSETS = {
 }
 REQUIRED_TARGETS = tuple(TARGET_ASSETS)
 VERSION_LITERAL_RE = r"(^|[^[:alnum:]_])[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?"
+VERSION_FIELDS_RE = r"\[package\]|version[[:space:]]*=|VERSION|__version__"
+INDEPENDENT_WORKSPACE_PACKAGES = frozenset({"oxidex-tags-shared"})
 
 
 def load_receipt(path: str | pathlib.Path) -> dict[str, Any]:
@@ -74,11 +76,10 @@ def _workspace_packages() -> dict[str, tuple[str, str]]:
     return packages
 
 
-@functools.lru_cache(maxsize=1)
-def _version_literal_scan() -> dict[str, Any]:
+def _git_grep_scan(pattern: str) -> dict[str, Any]:
     result = subprocess.run(
         [
-            "git", "grep", "-n", "-I", "-E", VERSION_LITERAL_RE, "--", ".",
+            "git", "grep", "-n", "-I", "-E", pattern, "--", ".",
             ":(exclude)tools/ci/testdata/release_receipts/**",
         ],
         cwd=ROOT,
@@ -94,6 +95,16 @@ def _version_literal_scan() -> dict[str, Any]:
         "matching_lines": len(lines),
         "tracked_files": len(files),
     }
+
+
+@functools.lru_cache(maxsize=1)
+def _version_literal_scan() -> dict[str, Any]:
+    return _git_grep_scan(VERSION_LITERAL_RE)
+
+
+@functools.lru_cache(maxsize=1)
+def _version_fields_scan() -> dict[str, Any]:
+    return _git_grep_scan(VERSION_FIELDS_RE)
 
 
 def _package_version_line(path: pathlib.Path, version: str) -> int | None:
@@ -667,7 +678,9 @@ def _validate_finalization(
                     checks.error(f"version_inventory[{index}].path", "not a cargo workspace manifest")
                 else:
                     expected_kind = (
-                        "oxidex_package" if package[1] == payload.get("version") else "independent_package"
+                        "independent_package"
+                        if package[0] in INDEPENDENT_WORKSPACE_PACKAGES
+                        else "oxidex_package"
                     )
                     expected_disposition = "current" if expected_kind == "oxidex_package" else "independent"
                     if item.get("kind") != expected_kind:
@@ -703,15 +716,28 @@ def _validate_finalization(
     reconciliation_sha = checks.sha256("version_reconciliation.sha256")
     try:
         scan = _version_literal_scan()
+        fields_scan = _version_fields_scan()
     except (OSError, subprocess.CalledProcessError) as exc:
         checks.error("version_reconciliation", f"cannot scan tracked version literals: {exc}")
         scan = {}
+        fields_scan = {}
     for field in ("scan_sha256",):
         checks.equal(f"version_reconciliation.{field}", scan.get("sha256"))
     for field in ("tracked_files", "matching_lines"):
         checks.equal(f"version_reconciliation.{field}", scan.get(field))
+    checks.equal("version_reconciliation.fields_scan_sha256", fields_scan.get("sha256"))
+    for field in ("tracked_files", "matching_lines"):
+        checks.equal(
+            f"version_reconciliation.fields_{field}", fields_scan.get(field)
+        )
     checks.equal("version_reconciliation.reconciled_files", scan.get("tracked_files"))
     checks.equal("version_reconciliation.reconciled_lines", scan.get("matching_lines"))
+    checks.equal(
+        "version_reconciliation.reconciled_field_files", fields_scan.get("tracked_files")
+    )
+    checks.equal(
+        "version_reconciliation.reconciled_field_lines", fields_scan.get("matching_lines")
+    )
     checks.empty_list("version_reconciliation.unresolved")
     if reconciliation_path is not None:
         path = _evidence_path(reconciliation_path)
@@ -726,6 +752,8 @@ def _validate_finalization(
             for field in (
                 "status", "scan_sha256", "tracked_files", "matching_lines",
                 "reconciled_files", "reconciled_lines", "unresolved",
+                "fields_scan_sha256", "fields_tracked_files", "fields_matching_lines",
+                "reconciled_field_files", "reconciled_field_lines",
             ):
                 if record.get(field) != checks.value(f"version_reconciliation.{field}"):
                     checks.error(f"version_reconciliation.{field}", "does not match referenced reconciliation")

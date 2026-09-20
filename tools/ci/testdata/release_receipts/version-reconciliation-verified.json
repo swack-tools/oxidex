@@ -1,11 +1,16 @@
 {
   "schema_version": 1,
   "status": "verified",
-  "scan_sha256": "b7eb82710fb4e567915c8b4be32a10d1667cbf814ce881d3483826dcf9f7a619",
+  "scan_sha256": "ecaae6bd7958556f58e370b9598b9721c695fc2cb5bfadc350a1092648255d2f",
   "tracked_files": 284,
   "matching_lines": 18075,
+  "fields_scan_sha256": "5e504fe4b6ade70bca523ea1bba8032dccc24af007aff46ce11d56f195dc5101",
+  "fields_tracked_files": 347,
+  "fields_matching_lines": 1883,
   "reconciled_files": 284,
   "reconciled_lines": 18075,
+  "reconciled_field_files": 347,
+  "reconciled_field_lines": 1883,
   "reviewer": "release-skill-test-fixture",
   "reviewed_at": "2026-09-20T00:00:00Z",
   "unresolved": []

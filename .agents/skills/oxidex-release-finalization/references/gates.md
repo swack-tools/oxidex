@@ -75,6 +75,7 @@ dependency pins; a search for only the requested version misses stale values.
 set -euo pipefail
 VERSION_LITERAL_RE='(^|[^[:alnum:]_])[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?'
 git grep -n -I -E "$VERSION_LITERAL_RE" -- . \
+  ':(exclude)tools/ci/testdata/release_receipts/**' \
   | tee "$EVIDENCE_DIR/version-literals.txt"
 ```
 
@@ -83,6 +84,7 @@ Also inventory computed/field-based version sources and validate the tag:
 ```bash
 set -euo pipefail
 git grep -n -I -E '\[package\]|version[[:space:]]*=|VERSION|__version__' -- . \
+  ':(exclude)tools/ci/testdata/release_receipts/**' \
   | tee "$EVIDENCE_DIR/version-fields.txt"
 python3 tools/ci/release_version.py --tag "$TAG" --cargo-toml Cargo.toml \
   | tee "$EVIDENCE_DIR/release-version.txt"
@@ -104,13 +106,14 @@ versions and retain the excluded/dependency hit list for audit.
 
 The final receipt's `version_inventory` must cover every Cargo workspace
 manifest and bind each row to its actual `[package]` version declaration.
-Record the complete `version-literals.txt` reconciliation separately, including
-its scan SHA-256, tracked-file and matching-line counts, reviewer, and zero
-unresolved entries, in `version_reconciliation`. The terminal validator
-recomputes the tracked scan (excluding only its own receipt test fixtures),
-loads the referenced reconciliation bytes, and requires all counts and hashes
-to agree; a summary without the raw durable scan and human reconciliation is
-not evidence.
+Record the complete `version-literals.txt` and `version-fields.txt`
+reconciliation separately, including both scan SHA-256 values, tracked-file
+and matching-line counts, reviewer, and zero unresolved entries, in
+`version_reconciliation`. Both documented scans and the terminal validator
+exclude only the validator's self-referential receipt fixtures. The terminal
+validator recomputes both scans, loads the referenced reconciliation bytes,
+and requires all counts and hashes to agree; a summary without both raw durable
+scans and human reconciliation is not evidence.
 
 ## 3. Receipt compatibility
 

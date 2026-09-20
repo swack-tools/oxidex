@@ -25,8 +25,13 @@
     "scan_sha256": null,
     "tracked_files": null,
     "matching_lines": null,
+    "fields_scan_sha256": null,
+    "fields_tracked_files": null,
+    "fields_matching_lines": null,
     "reconciled_files": null,
     "reconciled_lines": null,
+    "reconciled_field_files": null,
+    "reconciled_field_lines": null,
     "unresolved": []
   },
   "promotion": {

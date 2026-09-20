@@ -278,6 +278,11 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         self.assert_invalid("finalization", payload, "version_inventory[1].kind")
 
         payload = fixture("finalization")
+        payload["version_inventory"][-1]["kind"] = "oxidex_package"
+        payload["version_inventory"][-1]["disposition"] = "current"
+        self.assert_invalid("finalization", payload, "version_inventory[8].kind")
+
+        payload = fixture("finalization")
         payload["version_inventory"][0]["line"] = 68
         payload["version_inventory"][0]["evidence_path"] = "README.md"
         self.assert_invalid("finalization", payload, "version_inventory[0].line")
@@ -286,6 +291,10 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         payload = fixture("finalization")
         payload["version_reconciliation"]["scan_sha256"] = "0" * 64
         self.assert_invalid("finalization", payload, "version_reconciliation.scan_sha256")
+
+        payload = fixture("finalization")
+        payload["version_reconciliation"]["fields_scan_sha256"] = "0" * 64
+        self.assert_invalid("finalization", payload, "version_reconciliation.fields_scan_sha256")
 
         payload = fixture("finalization")
         payload["version_reconciliation"]["sha256"] = "f" * 64
@@ -321,15 +330,17 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         prepare = workflow.split("- name: Prepare release assets", 1)[1].split(
             "- name: Extract version and create release notes", 1
         )[0]
-        sources = set(re.findall(r"cp artifacts/([^/\s]+)/", prepare))
+        copies = set(
+            re.findall(r"^\s*cp\s+(artifacts/\S+)\s+(release-assets/\S*)\s*$", prepare, re.MULTILINE)
+        )
         self.assertEqual(
-            sources,
+            copies,
             {
-                "oxidex-x86_64-unknown-linux-musl",
-                "oxidex-aarch64-unknown-linux-musl",
-                "oxidex-x86_64-pc-windows-gnu",
-                "oxidex-aarch64-apple-darwin",
-                "oxidex-dmg",
+                ("artifacts/oxidex-x86_64-unknown-linux-musl/oxidex-x86_64-unknown-linux-musl", "release-assets/"),
+                ("artifacts/oxidex-aarch64-unknown-linux-musl/oxidex-aarch64-unknown-linux-musl", "release-assets/"),
+                ("artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe", "release-assets/"),
+                ("artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin", "release-assets/"),
+                ("artifacts/oxidex-dmg/*.dmg", "release-assets/"),
             },
         )
 
