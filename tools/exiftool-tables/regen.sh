@@ -115,7 +115,10 @@ echo ">> differential expression oracle (must PASS before conversion rollout)"
 # grammar-shaped expression.  verify_exprs.py capability-probes the pinned
 # Perl library before evaluating any conversion (Image/ExifTool.pm:9378).
 python3 "$HERE/verify_exprs.py" "$JSON" \
-    --perl "$PERL" --et-lib "$LIB" --ledger-out "$EXPR_LEDGER"
+    --perl "$PERL" --et-lib "$LIB" --ledger-out "$EXPR_LEDGER" \
+    --allow-dirty-path "$(artifact_path setnewvalue-address-rules)" \
+    --allow-dirty-path "$(artifact_path setnewvalue-address-ledger)" \
+    --allow-dirty-path "$ADDRESS_OWNERSHIP"
 
 echo
 echo ">> capturing the Garmin FIT reader protocol"

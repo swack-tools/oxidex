@@ -116,7 +116,22 @@ def git_state(repo_root: Path | str | None = None) -> GitState:
     )
 
 
-def refuse_if_dirty(git: GitState, tool: str) -> bool:
+def _repo_relative_path(root: Path, path: Path | str) -> str:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        return candidate.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError as error:
+        raise ValueError(f"allowed dirty path escapes repository: {path}") from error
+
+
+def refuse_if_dirty(
+    git: GitState,
+    tool: str,
+    *,
+    allowed_dirty_paths: list[Path | str] | tuple[Path | str, ...] = (),
+) -> bool:
     """Refuse (exit) to measure against a dirty tree unless overridden.
 
     A dirty tree is ambiguous by construction: the binary under test may or
@@ -127,10 +142,15 @@ def refuse_if_dirty(git: GitState, tool: str) -> bool:
     """
     if not git.dirty:
         return False
+    allowed = {_repo_relative_path(git.repo_root, path) for path in allowed_dirty_paths}
+    unexpected = [path for path in git.dirty_files if path not in allowed]
+    if allowed and not unexpected:
+        return False
     if os.environ.get(DIRTY_OVERRIDE_ENV, "").strip().lower() in {"1", "true"}:
         return True
-    shown = ", ".join(git.dirty_files[:8])
-    more = f", +{len(git.dirty_files) - 8} more" if len(git.dirty_files) > 8 else ""
+    refused = unexpected if allowed else git.dirty_files
+    shown = ", ".join(refused[:8])
+    more = f", +{len(refused) - 8} more" if len(refused) > 8 else ""
     sys.exit(
         f"❌ {tool}: refusing to measure against a dirty working tree "
         f"({len(git.dirty_files)} modified file(s) in {git.repo_root}): {shown}{more}\n"
