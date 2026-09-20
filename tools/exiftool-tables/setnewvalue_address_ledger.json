@@ -2,7 +2,7 @@
   "emitted": true,
   "lookup_candidates": 1261,
   "owned_names": 561,
-  "ownership_ledger_sha256": "1e14873ffcd741394f84faaf0278009d65a2bcbfa5971432c6584937bfd93db1",
+  "ownership_ledger_sha256": "e5574d8d5041d5d02bc9126f763e809b7f025e367ec17749827c0a9243a0ddf7",
   "removed_owned_names": 0,
   "rows": 193,
   "runtime_status": "inactive_source_addressing_no_public_setnewvalue_admission",
@@ -941,10 +941,10 @@
         ],
         "sha256": "9112456c119a7a65ec7072c464230fb094863d17f029d4fca9f2af3384cedea4"
       },
-      "perl_path": "/private/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
+      "perl_path": "Perl 5.038002",
       "perl_version": "5.038002",
       "schema": "native_exiftool_capture_context_v1",
-      "selected_library": "/private/tmp/oxidex-exiftool-cache/exiftool/lib"
+      "selected_library": "ExifTool 13.59/lib"
     },
     "omitted_rows": [],
     "query_names_sha256": "6b7edb7e56d6dc872f010a103094fd4214114f6c4636aa5a30ac4950a6f72c61",
