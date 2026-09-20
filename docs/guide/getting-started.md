@@ -51,7 +51,7 @@ are recorded:
 | --- | --- |
 | Linux x86_64 (static, musl) | `oxidex-x86_64-unknown-linux-musl` |
 | Linux ARM64 (static, musl) | `oxidex-aarch64-unknown-linux-musl` |
-| macOS Apple Silicon | `oxidex-aarch64-apple-darwin`, or the `.dmg` |
+| macOS universal (Apple Silicon and Intel) | `oxidex-universal-apple-darwin`, or the `.dmg` |
 | Windows x86_64 | `oxidex-x86_64-pc-windows-gnu.exe` |
 
 Download the asset for your platform, make it executable (`chmod +x`) and

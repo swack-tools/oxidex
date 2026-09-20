@@ -96,7 +96,7 @@ matrix if that workflow intentionally changes. For v2.0.0-beta.1 it is:
 | `oxidex-x86_64-unknown-linux-musl` | Linux x86_64 static binary |
 | `oxidex-aarch64-unknown-linux-musl` | Linux arm64 static binary |
 | `oxidex-x86_64-pc-windows-gnu.exe` | Windows x86_64 binary |
-| `oxidex-aarch64-apple-darwin` | Signed macOS arm64 binary |
+| `oxidex-universal-apple-darwin` | Signed macOS universal binary (Apple Silicon and Intel) |
 | `oxidex-v2.0.0-beta.1.dmg` | Signed, notarized, stapled macOS disk image |
 
 Require no missing, zero-byte, or unexpected assets. If checksums are
@@ -126,7 +126,7 @@ docker buildx imagetools inspect "swackhamer/oxidex:$VERSION" \
 Run these on macOS against the actual GitHub release downloads, not the CI
 workspace artifact and not a locally rebuilt binary. First bind the downloads
 to the selected release run. The current workflow uploads the signed binary
-as `oxidex-aarch64-apple-darwin` and the stapled image as `oxidex-dmg`, then
+as `oxidex-universal-apple-darwin` and the stapled image as `oxidex-dmg`, then
 copies those same files into the release. Preserve the API artifact manifest
 (IDs, names, digests, expiry and workflow SHA), the run downloads, and their
 file hashes. The API `digest`, when present, describes the artifact archive,
@@ -138,7 +138,7 @@ gh api --paginate --slurp "repos/$REPO/actions/runs/$RELEASE_RUN_ID/artifacts" \
   > "$EVIDENCE_DIR/release-run-artifact-pages.json"
 jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" '
   [.[] | .artifacts[] | select(
-    .name == "oxidex-aarch64-apple-darwin" or .name == "oxidex-dmg"
+    .name == "oxidex-universal-apple-darwin" or .name == "oxidex-dmg"
   )] | select(length == 2)
   | select((map(.name) | unique | length) == 2)
   | select(all(.[]; .expired == false and
@@ -149,10 +149,10 @@ RUN_ARTIFACT_DIR="$EVIDENCE_DIR/release-run-$RELEASE_RUN_ID-artifacts"
 test ! -e "$RUN_ARTIFACT_DIR"
 mkdir "$RUN_ARTIFACT_DIR"
 gh run download "$RELEASE_RUN_ID" --repo "$REPO" \
-  --name oxidex-aarch64-apple-darwin --name oxidex-dmg --dir "$RUN_ARTIFACT_DIR"
-MAC_BIN="$EVIDENCE_DIR/assets/oxidex-aarch64-apple-darwin"
+  --name oxidex-universal-apple-darwin --name oxidex-dmg --dir "$RUN_ARTIFACT_DIR"
+MAC_BIN="$EVIDENCE_DIR/assets/oxidex-universal-apple-darwin"
 DMG="$EVIDENCE_DIR/assets/oxidex-v${VERSION}.dmg"
-RUN_MAC_BIN="$RUN_ARTIFACT_DIR/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin"
+RUN_MAC_BIN="$RUN_ARTIFACT_DIR/oxidex-universal-apple-darwin/oxidex-universal-apple-darwin"
 RUN_DMG="$RUN_ARTIFACT_DIR/oxidex-dmg/oxidex-v${VERSION}.dmg"
 test -s "$MAC_BIN" && test -s "$DMG" && test -s "$RUN_MAC_BIN" && test -s "$RUN_DMG"
 shasum -a 256 "$MAC_BIN" "$RUN_MAC_BIN" "$DMG" "$RUN_DMG" \
