@@ -25,6 +25,15 @@ SHA = "55090c9b1c86d90efa48719ee39a1c94177eb9a0"
 BINARY_SHA = "a" * 64
 
 
+def external_action_pin_violations(workflow: str) -> list[str]:
+    """Return non-local action references that are not full immutable IDs."""
+    references = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s+([^\s#]+)", workflow)
+    return [
+        ref for ref in references
+        if not ref.startswith("./") and re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref) is None
+    ]
+
+
 def result_row(command: str, *, candidate: bool = False) -> dict:
     times = [0.01] * 30
     return {
@@ -349,19 +358,33 @@ class ReceiptTests(unittest.TestCase):
 
 
 class QualificationWorkflowTests(unittest.TestCase):
+    def test_action_pin_guard_rejects_named_and_truncated_external_refs_but_accepts_local(self) -> None:
+        workflow = """\
+steps:
+  - uses: actions/checkout@v7
+    uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d
+  - uses: ./.github/actions/pinned-exiftool
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+"""
+
+        self.assertEqual(
+            external_action_pin_violations(workflow),
+            [
+                "actions/checkout@v7",
+                "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d",
+            ],
+        )
+
     def test_external_actions_are_pinned_to_full_immutable_git_object_ids(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        external_refs = [
-            ref for ref in re.findall(r"(?m)^\s+uses:\s+([^\s#]+)", workflow)
-            if not ref.startswith("./")
-        ]
-        action_refs = [ref.rsplit("@", 1)[1] if "@" in ref else "" for ref in external_refs]
-
-        self.assertTrue(action_refs, "qualification workflow must pin its external actions")
         self.assertEqual(
-            [ref for ref in action_refs if re.fullmatch(r"[0-9a-f]{40}", ref) is None],
+            external_action_pin_violations(workflow),
             [],
             "external action pins must be complete immutable 40-character Git object IDs",
+        )
+        self.assertIn(
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            workflow,
         )
 
     def test_manual_preflight_is_candidate_bound_and_never_times_a_benchmark(self) -> None:
