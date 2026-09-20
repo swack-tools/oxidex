@@ -557,7 +557,7 @@ The final `conformance.py` pair compares `92dac917` against integration
 468,002 to 468,012; missing rows fall from 12,268 to 12,258. Wrong-value rows
 remain 477, extra rows 1,562 and renames 22. The only per-file changes are ten
 `ImageNumber` fixes from the raw-ID repair. No missing, value or extra
-regressions were added. [The committed gate record](reference/sony-shared-pilot-gate.json)
+regressions were added. [The committed gate record](/reference/sony-shared-pilot-gate.json)
 contains the identities and individual changes. This is correctness evidence,
 not a measurement of the overall generated share.
 

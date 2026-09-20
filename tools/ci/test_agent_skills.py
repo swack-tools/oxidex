@@ -414,6 +414,56 @@ class SkillMirrorTests(unittest.TestCase):
         self.assertIsInstance(receipt["claims"], list)
         self.assertEqual(receipt["status"], "unverified")
         self.assertEqual(receipt["live_deployment"]["status"], "not_run")
+        for field in ("snapshot_manifest_sha256", "crawl_sha256", "server_log"):
+            self.assertIn(field, receipt["local_build"])
+        for field in ("automation_manifest_sha256", "visual_matrix", "visual_matrix_sha256", "screenshots_path"):
+            self.assertIn(field, receipt["visual_review"])
+
+    def test_release_documentation_uses_tracked_browser_audit(self):
+        package = json.loads((REPO / "docs/package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["devDependencies"]["playwright"], "1.63.0")
+        self.assertEqual(
+            package["scripts"]["docs:audit-release"],
+            "node ../tools/docs/release-audit.mjs",
+        )
+        audit = canonical("oxidex-release-documentation", "references/github-pages-audit.md")
+        for required in (
+            "--build-only", "--output", "snapshot-manifest.json",
+            "node tools/docs/release-audit.mjs", "automation-manifest.json", "crawl.json",
+            "visual-matrix.json", "server.log",
+            "tools/docs/release-audit-representatives.json",
+        ):
+            self.assertIn(required, audit)
+        representatives = json.loads(
+            (REPO / "tools/docs/release-audit-representatives.json").read_text(encoding="utf-8")
+        )["routes"]
+        for route in (
+            "/", "/changelog", "/guide", "/guide/getting-started",
+            "/guide/migrating-from-1x", "/reference", "/guide/exiftool-parity",
+            "/status", "/performance", "/reference/formats",
+        ):
+            self.assertIn(route, representatives)
+
+    def test_docs_benchmark_links_have_factual_no_artifact_fallbacks(self):
+        for relative in (
+            "report/index.html",
+            "single_extraction/report/index.html",
+            "batch_100_jpegs/report/index.html",
+            "format_comparison/report/index.html",
+            "format_detection/report/index.html",
+            "full_read_metadata/report/index.html",
+        ):
+            text = (REPO / "docs/public/benchmarks" / relative).read_text(encoding="utf-8")
+            with self.subTest(relative=relative):
+                self.assertIn("unavailable for this build", text)
+                self.assertIn("did not receive a Criterion benchmark artifact", text)
+                self.assertIn("No benchmark result is being claimed here", text)
+        workflow = (REPO / ".github/workflows/deploy-docs.yml").read_text(encoding="utf-8")
+        self.assertLess(
+            workflow.index("Build VitePress site"),
+            workflow.index("Copy benchmark reports to site"),
+            "real Criterion output must overwrite the public fallback pages",
+        )
 
     def test_release_documentation_verifies_local_candidate_without_deployment(self):
         receipt = json.loads(canonical(

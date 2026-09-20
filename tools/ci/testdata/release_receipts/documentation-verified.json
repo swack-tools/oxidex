@@ -25,11 +25,18 @@
     "rendered_inventory": "/evidence/rendered.json",
     "reconciliation": "/evidence/reconciliation.json",
     "crawl_evidence": "/evidence/crawl.json",
+    "snapshot_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "crawl_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "server_log": "/evidence/server.log",
     "evidence_path": "/evidence/build.json"
   },
   "visual_review": {
     "status": "verified",
-    "automation_manifest": "/evidence/visual-matrix.json",
+    "automation_manifest": "/evidence/automation-manifest.json",
+    "automation_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "visual_matrix": "/evidence/visual-matrix.json",
+    "visual_matrix_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "screenshots_path": "/evidence/screenshots",
     "samples": [{"route": "/", "viewport": "1440x1000", "theme": "light", "status": "verified"}],
     "findings": [],
     "human_review": {

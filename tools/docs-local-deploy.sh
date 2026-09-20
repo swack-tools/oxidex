@@ -25,6 +25,7 @@
 #   tools/docs-local-deploy.sh --bench auto          # + latest CI benchmark-results artifact
 #   tools/docs-local-deploy.sh --full-report         # + real ExifTool comparison (slow:
 #                                                    #   release build + full corpus run)
+#   tools/docs-local-deploy.sh --worktree --build-only --output /tmp/docs-snapshot
 #   tools/docs-local-deploy.sh --port 4180 --no-open --keep
 #
 # Environment passes through to the VitePress build, so a config that reads
@@ -40,6 +41,8 @@ BENCH=""
 PORT=4173
 OPEN=1
 KEEP=0
+BUILD_ONLY=0
+OUTPUT=""
 
 usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
@@ -52,10 +55,21 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2 ;;
     --no-open) OPEN=0; shift ;;
     --keep) KEEP=1; shift ;;
+    --build-only) BUILD_ONLY=1; OPEN=0; shift ;;
+    --output) OUTPUT="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage 64 ;;
   esac
 done
+
+if [ "$BUILD_ONLY" = 1 ] && [ -z "$OUTPUT" ]; then
+  echo "--build-only requires --output DIR" >&2
+  exit 64
+fi
+if [ -n "$OUTPUT" ] && [ "$BUILD_ONLY" != 1 ]; then
+  echo "--output requires --build-only" >&2
+  exit 64
+fi
 
 REPO=$(git rev-parse --show-toplevel)
 REPO_SLUG=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo swack-tools/oxidex)
@@ -75,16 +89,38 @@ step() { printf '\n==> %s\n' "$*"; }
 mkdir -p "$SRC"
 if [ "$USE_WORKTREE" = 1 ]; then
   step "snapshot: working tree $REPO (uncommitted edits included)"
-  SHA="$(git -C "$REPO" rev-parse HEAD)-dirty"
+  SHA=$(git -C "$REPO" rev-parse HEAD)
+  SOURCE_KIND=worktree
+  SOURCE_IDENTITY="${SHA}-worktree"
+  CANDIDATE_SHA=""
   # Tracked + untracked-but-not-ignored files, as they are on disk.
-  (cd "$REPO" && git ls-files -co --exclude-standard -z | tar --null -T - -cf -) | tar -xf - -C "$SRC"
+  (
+    cd "$REPO"
+    git ls-files -co --exclude-standard -z |
+      while IFS= read -r -d '' path; do
+        if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi
+      done |
+      tar --null -T - -cf -
+  ) | tar -xf - -C "$SRC"
 else
   if [[ "$REF" == origin/* ]]; then
     git -C "$REPO" fetch -q origin "${REF#origin/}" || echo "warning: fetch failed; using the local copy of $REF" >&2
   fi
   SHA=$(git -C "$REPO" rev-parse --verify "$REF^{commit}")
+  SOURCE_KIND=commit
+  SOURCE_IDENTITY="$SHA"
+  CANDIDATE_SHA="$SHA"
   step "snapshot: $REF @ ${SHA:0:12}"
   git -C "$REPO" archive "$SHA" | tar -xf - -C "$SRC"
+fi
+
+if [ "$USE_WORKTREE" = 1 ]; then
+  SNAPSHOT_TREE_HASH=$(
+    cd "$SRC"
+    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}'
+  )
+else
+  SNAPSHOT_TREE_HASH=$(git -C "$REPO" rev-parse "$SHA^{tree}")
 fi
 
 # --- 1. comparison report ---------------------------------------------------
@@ -139,6 +175,60 @@ DIST="$SRC/docs/.vitepress/dist"
 # --- 5. benchmark reports into the site ------------------------------------
 if [ -d "$SRC/target/criterion" ] && [ -n "$(ls -A "$SRC/target/criterion" 2>/dev/null)" ]; then
   mkdir -p "$DIST/benchmarks" && cp -R "$SRC/target/criterion/." "$DIST/benchmarks/"
+fi
+
+# --- durable build-only snapshot -------------------------------------------
+if [ "$BUILD_ONLY" = 1 ]; then
+  OUTPUT=$(mkdir -p "$OUTPUT" && cd "$OUTPUT" && pwd)
+  if [ -n "$(find "$OUTPUT" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "output directory must be empty: $OUTPUT" >&2
+    exit 1
+  fi
+  mkdir -p "$OUTPUT/dist"
+  cp -R "$DIST/." "$OUTPUT/dist/"
+  DIST_SHA256=$(
+    cd "$OUTPUT/dist"
+    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}'
+  )
+  node - "$OUTPUT/snapshot-manifest.json" "$CANDIDATE_SHA" "$SHA" "$SOURCE_KIND" "$SOURCE_IDENTITY" \
+    "$SNAPSHOT_TREE_HASH" "$DIST_SHA256" "$OUTPUT/dist" "${DOCS_BASE:-/}" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const [manifestPath, candidateSha, sourceHeadSha, sourceKind, sourceIdentity, treeHash, distSha256, dist, basePath] = process.argv.slice(2);
+function walk(directory, relative = '') {
+  return fs.readdirSync(path.join(directory, relative), { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap(entry => {
+      const child = path.join(relative, entry.name);
+      return entry.isDirectory() ? walk(directory, child) : [child];
+    });
+}
+function routeFor(filename) {
+  let route = `/${filename.split(path.sep).join('/')}`.replace(/\/index\.html$/, '/').replace(/\.html$/, '');
+  if (route.length > 1) route = route.replace(/\/$/, '');
+  return route;
+}
+const routes = walk(dist).filter(file => file.endsWith('.html')).map(routeFor).sort();
+const manifest = {
+  schema_version: 1,
+  status: 'built',
+  generated_at: new Date().toISOString(),
+  candidate_sha: candidateSha || null,
+  source_head_sha: sourceHeadSha,
+  source_kind: sourceKind,
+  source_identity: sourceIdentity,
+  base_path: basePath,
+  tree_hash: treeHash,
+  dist_sha256: distSha256,
+  dist: path.resolve(dist),
+  routes,
+};
+fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+  step "build-only snapshot: $OUTPUT"
+  echo "manifest: $OUTPUT/snapshot-manifest.json"
+  echo "dist: $OUTPUT/dist"
+  exit 0
 fi
 
 # --- serve + open -----------------------------------------------------------
