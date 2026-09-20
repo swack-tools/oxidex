@@ -207,7 +207,8 @@ impl TagSink {
         // invalidation now happens here, at the one place a occurrence's
         // `raw` can change without going through `record`.
         self.occurrences[idx].value = None;
-        // The stored form likewise stands for the old `raw`.
+        // The print and stored forms likewise stand for the old `raw`.
+        self.occurrences[idx].print = None;
         self.occurrences[idx].stored = None;
         Some(&mut self.occurrences[idx].raw)
     }
@@ -516,6 +517,35 @@ mod tests {
                 .as_deref(),
             Some(&TagValue::Float(4.0))
         );
+    }
+
+    #[test]
+    fn get_mut_invalidates_every_form_derived_from_the_old_raw_value() {
+        let mut sink = TagSink::new();
+        let mut occurrence =
+            TagOccurrence::from_insert_shim("File:FileSize", TagValue::new_string("26 kB"), 0);
+        occurrence.value = Some(TagValue::Integer(26_106));
+        occurrence.print = Some(TagValue::new_string("26 kB"));
+        occurrence.stored = Some(TagValue::Integer(26_106));
+        sink.record("File:FileSize".to_string(), occurrence);
+
+        *sink.get_mut("File:FileSize").unwrap() = TagValue::new_string("replacement display");
+
+        let occurrence = sink.winner_occurrence("File:FileSize").unwrap();
+        assert_eq!(occurrence.value, None);
+        assert_eq!(occurrence.print, None);
+        assert_eq!(occurrence.stored, None);
+        for channel in [
+            ValueChannel::Stored,
+            ValueChannel::ValueConv,
+            ValueChannel::PrintConv,
+        ] {
+            assert_eq!(
+                occurrence.project(channel).as_ref(),
+                &TagValue::new_string("replacement display"),
+                "{channel:?} must project the replacement after mutation"
+            );
+        }
     }
 
     /// Every winner projection yields keys in the file order of the

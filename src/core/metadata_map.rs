@@ -339,6 +339,7 @@ impl MetadataMap {
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         occurrence.value = Some(no_print_conv_value);
+        occurrence.print = Some(occurrence.raw.clone());
         occurrence.stored = stored;
         self.sink.record(key, occurrence);
         previous
@@ -380,7 +381,8 @@ impl MetadataMap {
     /// [`insert()`](Self::insert) of `source`'s value under `key` -- the
     /// shim's priority, group1 and instance, a fresh file-order slot -- that
     /// keeps `source`'s `--no-print-conv` form ([`TagOccurrence::value`])
-    /// and stored form ([`TagOccurrence::stored`]).
+    /// and print/stored forms ([`TagOccurrence::print`],
+    /// [`TagOccurrence::stored`]).
     /// For a parser that used to flatten another walk's winners through
     /// `iter()` + `insert()` (the PDF resource and DCT-image merges, MIFF's
     /// APP1 profile): exactly that copy, minus the loss of the form, which
@@ -398,6 +400,7 @@ impl MetadataMap {
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
         occurrence.value = source.value.clone();
+        occurrence.print = source.print.clone();
         occurrence.stored = source.stored.clone();
         self.sink.record(key, occurrence);
         previous
@@ -764,6 +767,113 @@ impl IntoIterator for MetadataMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_producer_records_the_known_display_as_explicit_print() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+
+        let mut map = MetadataMap::new();
+        map.insert_occurrence_with_raw(
+            "File:FileSize",
+            TagValue::new_string("26 kB"),
+            TagValue::Integer(26_106),
+            SHIM_DEFAULT_PRIORITY,
+            "System",
+            Instance::default(),
+        );
+
+        let occurrence = map.occurrences_for("File:FileSize")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("26 kB"))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("26 kB")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(26_106)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_string("26 kB")
+        );
+    }
+
+    #[test]
+    fn forms_producer_keeps_print_value_and_stored_channels_distinct() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+
+        let mut map = MetadataMap::new();
+        map.insert_occurrence_with_forms(
+            "ExifIFD:ExposureTime",
+            TagValue::new_string("1/80"),
+            TagValue::Float(0.0125),
+            Some(TagValue::new_rational(1, 80)),
+            SHIM_DEFAULT_PRIORITY,
+            "",
+            Instance::default(),
+        );
+
+        let occurrence = map.occurrences_for("ExifIFD:ExposureTime")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("1/80"))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("1/80")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(0.0125)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_rational(1, 80)
+        );
+    }
+
+    #[test]
+    fn copied_and_renamed_producer_occurrences_keep_their_print_form() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+
+        let mut source = MetadataMap::new();
+        source.insert_occurrence_with_raw(
+            "ExifIFD:ColorSpace",
+            TagValue::new_string("sRGB"),
+            TagValue::Integer(1),
+            SHIM_DEFAULT_PRIORITY,
+            "",
+            Instance::default(),
+        );
+        let source_occurrence = source.occurrences_for("ExifIFD:ColorSpace")[0];
+
+        let mut copied = MetadataMap::new();
+        copied.insert_carrying_forms("ExifIFD:ColorSpace", source_occurrence);
+        let copied_occurrence = copied.occurrences_for("ExifIFD:ColorSpace")[0];
+        assert_eq!(
+            copied_occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("sRGB")
+        );
+        assert_eq!(
+            copied_occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(1)
+        );
+
+        let mut renamed = MetadataMap::new();
+        renamed.insert_renamed_occurrence("EXIF:ColorSpace".to_string(), source_occurrence);
+        let renamed_occurrence = renamed.occurrences_for("EXIF:ColorSpace")[0];
+        assert_eq!(
+            renamed_occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("sRGB")
+        );
+        assert_eq!(
+            renamed_occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(1)
+        );
+    }
 
     #[test]
     fn project_occurrences_keeps_duplicate_order() {
