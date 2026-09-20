@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 import importlib.util
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).with_name("benchmark_qualification.py")
+WORKFLOW_PATH = MODULE_PATH.parents[1] / ".github" / "workflows" / "benchmark-qualification.yml"
 SPEC = importlib.util.spec_from_file_location("benchmark_qualification", MODULE_PATH)
 assert SPEC and SPEC.loader
 qualification = importlib.util.module_from_spec(SPEC)
@@ -20,6 +23,15 @@ SPEC.loader.exec_module(qualification)
 
 SHA = "55090c9b1c86d90efa48719ee39a1c94177eb9a0"
 BINARY_SHA = "a" * 64
+
+
+def external_action_pin_violations(workflow: str) -> list[str]:
+    """Return non-local action references that are not full immutable IDs."""
+    references = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s+([^\s#]+)", workflow)
+    return [
+        ref for ref in references
+        if not ref.startswith("./") and re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref) is None
+    ]
 
 
 def result_row(command: str, *, candidate: bool = False) -> dict:
@@ -273,6 +285,29 @@ class RunIdentityTests(unittest.TestCase):
                 qualification.require_new_run_directory(root / "repo", "run-2", root / "repo")
 
 
+class CandidateIdentityTests(unittest.TestCase):
+    def test_exact_clean_git_commit_is_accepted_as_the_candidate_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "--quiet", str(repository)], check=True)
+            subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repository), "config", "user.name", "Qualification Test"], check=True)
+            (repository / "candidate.txt").write_text("candidate\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repository), "add", "candidate.txt"], check=True)
+            subprocess.run(["git", "-C", str(repository), "commit", "--quiet", "-m", "candidate"], check=True)
+            candidate_sha = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            self.assertEqual(
+                qualification.git_identity(repository, candidate_sha),
+                {"sha": candidate_sha, "dirty": False},
+            )
+
+
 class BinaryIdentityTests(unittest.TestCase):
     def test_binary_must_be_the_explicit_release_target_and_match_its_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -320,6 +355,66 @@ class ReceiptTests(unittest.TestCase):
         self.assertIsNone(receipt["measured_at"])
         self.assertTrue(receipt["historical_results_untouched"])
         self.assertEqual(receipt["sampling"], {"warmups": 5, "timed_runs_per_row": 30})
+
+
+class QualificationWorkflowTests(unittest.TestCase):
+    def test_action_pin_guard_rejects_named_and_truncated_external_refs_but_accepts_local(self) -> None:
+        workflow = """\
+steps:
+  - uses: actions/checkout@v7
+    uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d
+  - uses: ./.github/actions/pinned-exiftool
+    uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+"""
+
+        self.assertEqual(
+            external_action_pin_violations(workflow),
+            [
+                "actions/checkout@v7",
+                "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d",
+            ],
+        )
+
+    def test_external_actions_are_pinned_to_full_immutable_git_object_ids(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertEqual(
+            external_action_pin_violations(workflow),
+            [],
+            "external action pins must be complete immutable 40-character Git object IDs",
+        )
+        self.assertIn(
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            workflow,
+        )
+
+    def test_manual_preflight_is_candidate_bound_and_never_times_a_benchmark(self) -> None:
+        self.assertTrue(
+            WORKFLOW_PATH.is_file(),
+            "candidate qualification must have a dedicated manual workflow",
+        )
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertRegex(workflow, r"(?m)^  workflow_dispatch:$")
+        self.assertRegex(
+            workflow,
+            r"(?m)^      candidate_sha:\n(?:^        [^\n]*\n)*^        required: true$",
+        )
+        self.assertIn("ref: ${{ inputs.candidate_sha }}", workflow)
+        self.assertIn("CANDIDATE_SHA: ${{ inputs.candidate_sha }}", workflow)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"', workflow)
+        self.assertIn('test -z "$(git status --porcelain=v1)"', workflow)
+        self.assertIn("python3 -m unittest benches/test_benchmark_qualification.py -v", workflow)
+        self.assertIn("cargo build --release --locked --bin oxidex", workflow)
+        self.assertIn("uses: ./.github/actions/pinned-exiftool", workflow)
+        self.assertIn("python3 benches/benchmark_qualification.py", workflow)
+        self.assertIn('--candidate-sha "$CANDIDATE_SHA"', workflow)
+        self.assertIn('--corpus "$EXIFTOOL_SOURCE/t/images"', workflow)
+        self.assertIn('--docx "$EXIFTOOL_SOURCE/t/images/OOXML.docx"', workflow)
+        self.assertIn("--warmups 5", workflow)
+        self.assertIn("--runs 30", workflow)
+        self.assertIn("name: benchmark-qualification-preflight", workflow)
+        self.assertNotIn("exiftool_comparison.sh", workflow)
+        self.assertNotRegex(workflow, re.compile(r"(?m)^          (?!#).*\bhyperfine\b", re.IGNORECASE))
 
 
 class OracleProbeTests(unittest.TestCase):
