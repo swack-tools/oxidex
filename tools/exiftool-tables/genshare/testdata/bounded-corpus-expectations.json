@@ -1,0 +1,30 @@
+{
+  "schema": "genshare-bounded-expectations/v1",
+  "review_status": "roles_only",
+  "fixtures": [
+    {
+      "relative_path": "ICC_Profile.icc",
+      "sha256": "a8d0d753bd6129357cc2647435ce675e8637a679eb526fa180fba460874ce1d3",
+      "roles": ["engine_generated_header_observation", "hand_payload_survival"]
+    },
+    {
+      "relative_path": "AAC.aac",
+      "sha256": "5eac3eb5435a37bcaaf4f81eb0f37e487e50b65b67d486ac7d671c3f0a1d4671",
+      "roles": ["hand_only_zero_loss_control"]
+    },
+    {
+      "relative_path": "OOXML.docx",
+      "sha256": "9d092c95902eb4b0cd7dc58252bd463441811b4478ebabf18895181c5b932662",
+      "roles": ["duplicate_order_control", "unset_empty_inertness"]
+    }
+  ],
+  "tokens": {
+    "engine": "observed_unreviewed",
+    "legacy-l1": "unexercised",
+    "legacy-l2": "unexercised",
+    "producers": "unexercised",
+    "serial": "unexercised",
+    "keyed": "unexercised_no_production_caller"
+  },
+  "exact_loss_expectations": null
+}

@@ -1,4 +1,4 @@
-# Retired temporary probe
+# Retired temporary probe (superseded by genshare-receipt/v3)
 
 `OXIDEX_PROBE_SILENCE` and this forward-port patch were retired by the
 maintained `src/exiftool_tables/attribution.rs` seam.  The canonical
@@ -6,4 +6,6 @@ instrument is now `census.sh`; it builds one binary and uses
 `OXIDEX_GENSHARE_SILENCE` for its paired control/probe executions.
 
 This file is deliberately not applicable: applying a historical patch would
-create a second, unreviewed attribution mechanism and invalidate the receipt.
+create a second, unreviewed attribution mechanism and invalidate the v3 raw
+child transcript.  The maintained census runs six individual tokens and their
+separately executed union against one binary.
