@@ -142,6 +142,141 @@ def write_signed_shaped_commit(repo: Path, branch: str) -> str:
     return sha
 
 
+def commit_from_parent(repo: Path, parent: str, message: str) -> str:
+    tree = git(repo, "rev-parse", f"{parent}^{{tree}}")
+    return git(
+        repo,
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        input_text=message + "\n",
+    )
+
+
+def write_fake_gh(root: Path, pull_requests: dict[int, dict]) -> Path:
+    payload = root / "pull-requests.json"
+    payload.write_text(
+        json.dumps({str(number): value for number, value in pull_requests.items()}),
+        encoding="utf-8",
+    )
+    executable = root / "fake-gh"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"payload = json.loads(pathlib.Path({str(payload)!r}).read_text())\n"
+        "if sys.argv[1:3] != ['pr', 'view']:\n"
+        "    raise SystemExit('repair and bound reconciliation must use gh pr view')\n"
+        "print(json.dumps(payload[sys.argv[3]]))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def write_repair_manifest(path: Path, manifest: dict) -> str:
+    path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return fleet.sha256_file(path)
+
+
+def repair_fixture(root: Path) -> dict:
+    repository = root / "repository"
+    current = initialize_git_repository(repository)
+    remote = root / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    git(repository, "remote", "add", "origin", str(remote))
+    task_metadata = {
+        3: (886, "typed-consumers", "staging/beta1/typed-consumers"),
+        4: (883, "conv-registry", "staging/beta1/conv-registry-integration-proof"),
+        6: (875, "conformance-receipts", "staging/beta1/conformance-receipts"),
+        7: (885, "file-session", "staging/beta1/file-session"),
+    }
+    facts: dict[int, dict] = {}
+    pull_requests: dict[int, dict] = {}
+    tasks: list[dict] = []
+    target_name = "staging/beta1-functional-integration"
+    for number, (pr, slug, branch) in task_metadata.items():
+        base_sha = current
+        head_sha = commit_from_parent(repository, base_sha, f"Task {number} head")
+        merge_sha = commit_from_parent(
+            repository, base_sha, f"Task {number} squash merge"
+        )
+        current = merge_sha
+        git(repository, "update-ref", f"refs/heads/{branch}", head_sha)
+        old_parent = f"{1000 + number:040x}"
+        value = task(number, "committed")
+        value["slug"] = slug
+        value["expected_merge_parent"] = old_parent
+        value["head_sha"] = head_sha
+        tasks.append(value)
+        facts[number] = {
+            "task": number,
+            "old_expected_merge_parent": old_parent,
+            "pr": pr,
+            "remote_branch": branch,
+            "github_base_sha": base_sha,
+            "merge_sha": merge_sha,
+            "head_sha": head_sha,
+        }
+        pull_requests[pr] = {
+            "number": pr,
+            "url": f"https://example.invalid/pr/{pr}",
+            "state": "MERGED",
+            "isDraft": False,
+            "headRefName": branch,
+            "headRefOid": head_sha,
+            "baseRefName": target_name,
+            "baseRefOid": base_sha,
+            "mergeCommit": {"oid": merge_sha},
+            "statusCheckRollup": [
+                {"status": "COMPLETED", "conclusion": "SUCCESS"}
+            ],
+        }
+    git(repository, "update-ref", f"refs/heads/{target_name}", current)
+    for _number, (_pr, _slug, branch) in task_metadata.items():
+        git(repository, "push", "-q", "origin", f"{branch}:{branch}")
+    git(repository, "push", "-q", "origin", f"{target_name}:{target_name}")
+
+    unrelated = task(9, "blocked", [8])
+    unrelated["blocker"] = "dependency"
+    unrelated["ruling"] = "preserve-unrelated-task"
+    tasks.append(unrelated)
+    controller_state = state(*tasks)
+    controller_state["target_sha"] = current
+    store = fleet.StateStore(root / "controller")
+    store.write_snapshot(controller_state)
+    store.append_event({"event": "before-repair"})
+    store.write_receipt_index({"preserved": {"sha256": "9" * 64}})
+    manifest = {
+        "schema_version": 1,
+        "transaction": "repair-merge-receipts",
+        "before": {
+            "fleet_state_sha256": fleet.sha256_file(store.snapshot_path),
+            "fleet_events_sha256": fleet.sha256_file(store.events_path),
+            "receipt_index_sha256": fleet.sha256_file(store.receipt_index_path),
+        },
+        "tasks": [
+            {key: value for key, value in facts[number].items() if key != "head_sha"}
+            for number in sorted(facts)
+        ],
+    }
+    manifest_path = root / "repair-manifest.json"
+    manifest_sha256 = write_repair_manifest(manifest_path, manifest)
+    return {
+        "store": store,
+        "repository": repository,
+        "facts": facts,
+        "pull_requests": pull_requests,
+        "manifest": manifest,
+        "manifest_path": manifest_path,
+        "manifest_sha256": manifest_sha256,
+        "fake_gh": write_fake_gh(root, pull_requests),
+        "unrelated": json.loads(json.dumps(unrelated)),
+    }
+
+
 class FleetControllerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = TEST_ROOT / self.id().rsplit(".", 1)[-1]
@@ -170,6 +305,7 @@ class FleetControllerTests(unittest.TestCase):
                 "materialize",
                 "event",
                 "checkpoint",
+                "repair-merge-receipts",
                 "reconcile",
                 "recover",
                 "launch",
@@ -181,6 +317,543 @@ class FleetControllerTests(unittest.TestCase):
                 "fixture",
             },
         )
+
+    def test_remote_branch_is_optional_validated_and_used_without_changing_slug(self) -> None:
+        canonical = task(4)
+        canonical["slug"] = "conv-registry"
+        fleet.validate_state(state(canonical))
+        self.assertEqual(fleet._task_branch(canonical), "staging/beta1/conv-registry")
+
+        renamed = json.loads(json.dumps(canonical))
+        renamed["remote_branch"] = "staging/beta1/conv-registry-integration-proof"
+        fleet.validate_state(state(renamed))
+        self.assertEqual(renamed["slug"], "conv-registry")
+        self.assertEqual(
+            fleet._task_branch(renamed),
+            "staging/beta1/conv-registry-integration-proof",
+        )
+
+        invalid = json.loads(json.dumps(canonical))
+        for branch in (
+            "refs/heads/main",
+            "staging/beta1/foo./bar",
+            "staging/beta1/foo/",
+        ):
+            invalid["remote_branch"] = branch
+            with self.subTest(branch=branch), self.assertRaisesRegex(
+                fleet.Refused, "remote_branch"
+            ):
+                fleet.validate_state(state(invalid))
+        schema = json.loads(MODULE.with_name("fleet-schema.json").read_text())
+        task_properties = schema["properties"]["tasks"]["additionalProperties"]["properties"]
+        self.assertEqual(
+            task_properties["remote_branch"]["pattern"],
+            "^staging/beta1/(?!.*(?:\\.\\.|//|/\\.|\\.(?:lock)?(?:/|$)|/$))[a-z0-9][a-z0-9._/-]*$",
+        )
+
+    def test_repair_merge_receipts_authenticates_then_normal_reconcile_succeeds(self) -> None:
+        fixture = repair_fixture(self.root)
+        store = fixture["store"]
+        before = store.read_snapshot()
+        environment = {
+            "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+            "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+        }
+        with mock.patch.dict(os.environ, environment, clear=False):
+            args = fleet.build_parser().parse_args(
+                [
+                    "repair-merge-receipts",
+                    "--root",
+                    str(store.root),
+                    "--repo",
+                    str(fixture["repository"]),
+                    "--manifest",
+                    str(fixture["manifest_path"]),
+                    "--manifest-sha256",
+                    fixture["manifest_sha256"],
+                ]
+            )
+            result = fleet.dispatch(args)
+
+        self.assertFalse(result["idempotent"])
+        self.assertEqual(result["manifest_sha256"], fixture["manifest_sha256"])
+        repaired = store.read_snapshot()
+        for number, facts in fixture["facts"].items():
+            value = repaired["tasks"][str(number)]
+            self.assertEqual(value["expected_merge_parent"], facts["github_base_sha"])
+            self.assertEqual(value["remote_branch"], facts["remote_branch"])
+            self.assertEqual(value["pr_ci_state"]["pr"], facts["pr"])
+            self.assertIsNone(value["merge_sha"])
+            self.assertEqual(value["slug"], before["tasks"][str(number)]["slug"])
+        self.assertEqual(repaired["tasks"]["9"], fixture["unrelated"])
+
+        events = [json.loads(line) for line in store.events_path.read_text().splitlines()]
+        repair_event = events[-1]
+        self.assertEqual(repair_event["event"], "repair-merge-receipts")
+        task4_event = repair_event["tasks"]["4"]
+        self.assertEqual(
+            task4_event["old"],
+            {
+                "expected_merge_parent": fixture["facts"][4]["old_expected_merge_parent"],
+                "pr": None,
+                "remote_branch": None,
+            },
+        )
+        self.assertEqual(
+            task4_event["new"],
+            {
+                "expected_merge_parent": fixture["facts"][4]["github_base_sha"],
+                "pr": 883,
+                "remote_branch": "staging/beta1/conv-registry-integration-proof",
+            },
+        )
+        index = store.read_receipt_index()
+        receipt = index["merge_receipt_repairs"][fixture["manifest_sha256"]]
+        self.assertEqual(receipt["manifest"], str(fixture["manifest_path"].resolve()))
+        self.assertEqual(receipt["tasks"], repair_event["tasks"])
+        self.assertEqual(index["preserved"], {"sha256": "9" * 64})
+        journal = json.loads(
+            fleet.repair_transaction_path(
+                store, fixture["manifest_sha256"]
+            ).read_text()
+        )
+        self.assertEqual(journal["phase"], "complete")
+
+        with mock.patch.dict(os.environ, environment, clear=False):
+            for number in (3, 4, 6, 7):
+                reconciled = fleet.dispatch(
+                    fleet.build_parser().parse_args(
+                        [
+                            "reconcile",
+                            "--root",
+                            str(store.root),
+                            "--task",
+                            str(number),
+                            "--repo",
+                            str(fixture["repository"]),
+                        ]
+                    )
+                )
+                self.assertEqual(reconciled["state"], "merged")
+                self.assertEqual(
+                    reconciled["merge_sha"], fixture["facts"][number]["merge_sha"]
+                )
+
+    def test_repair_merge_receipts_replay_is_exactly_idempotent(self) -> None:
+        fixture = repair_fixture(self.root)
+        environment = {
+            "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+            "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+        }
+        with mock.patch.dict(os.environ, environment, clear=False):
+            first = fleet.repair_merge_receipts(
+                fixture["store"],
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+            after_first = {
+                path.name: path.read_bytes()
+                for path in (
+                    fixture["store"].snapshot_path,
+                    fixture["store"].events_path,
+                    fixture["store"].receipt_index_path,
+                )
+            }
+            second = fleet.repair_merge_receipts(
+                fixture["store"],
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+        after_second = {
+            path.name: path.read_bytes()
+            for path in (
+                fixture["store"].snapshot_path,
+                fixture["store"].events_path,
+                fixture["store"].receipt_index_path,
+            )
+        }
+        self.assertFalse(first["idempotent"])
+        self.assertTrue(second["idempotent"])
+        self.assertEqual(after_second, after_first)
+
+    def test_repair_manifest_hashes_and_parses_the_same_bytes(self) -> None:
+        fixture = repair_fixture(self.root)
+        original = json.loads(json.dumps(fixture["manifest"]))
+        changed = json.loads(json.dumps(original))
+        changed["tasks"][0]["pr"] += 1
+        real_sha256_file = fleet.sha256_file
+
+        def hash_then_replace(path: Path) -> str:
+            digest = real_sha256_file(path)
+            path.write_text(
+                json.dumps(changed, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return digest
+
+        with mock.patch.object(fleet, "sha256_file", side_effect=hash_then_replace):
+            _path, loaded = fleet._load_repair_manifest(
+                fixture["manifest_path"], fixture["manifest_sha256"]
+            )
+        self.assertEqual(loaded, original)
+
+    def test_repair_replaces_stale_pr_metadata_with_only_authenticated_binding(self) -> None:
+        fixture = repair_fixture(self.root)
+        snapshot = fixture["store"].read_snapshot()
+        snapshot["tasks"]["4"]["pr_ci_state"] = {
+            "pr": 42,
+            "url": "https://example.invalid/pr/42",
+            "state": "open",
+            "draft": True,
+            "ci": "failure",
+        }
+        fixture["store"].write_snapshot(snapshot)
+        fixture["manifest"]["before"]["fleet_state_sha256"] = fleet.sha256_file(
+            fixture["store"].snapshot_path
+        )
+        manifest_sha256 = write_repair_manifest(
+            fixture["manifest_path"], fixture["manifest"]
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+                "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+            },
+            clear=False,
+        ):
+            fleet.repair_merge_receipts(
+                fixture["store"],
+                fixture["repository"],
+                fixture["manifest_path"],
+                manifest_sha256,
+            )
+        self.assertEqual(
+            fixture["store"].read_snapshot()["tasks"]["4"]["pr_ci_state"],
+            {"pr": 883},
+        )
+
+    def test_repair_transaction_resumes_after_each_durable_write_boundary(self) -> None:
+        for boundary in ("snapshot", "event", "receipt-index"):
+            with self.subTest(boundary=boundary):
+                fixture = repair_fixture(self.root / boundary)
+                store = fixture["store"]
+                environment = {
+                    "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+                    "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+                }
+                original_atomic_json = fleet.atomic_json
+                original_append_event = fleet._append_event_locked
+                failed = False
+
+                def fail_after_atomic(path: Path, value: dict) -> None:
+                    nonlocal failed
+                    original_atomic_json(path, value)
+                    target = (
+                        boundary == "snapshot" and path == store.snapshot_path
+                    ) or (
+                        boundary == "receipt-index"
+                        and path == store.receipt_index_path
+                    )
+                    if target and not failed:
+                        failed = True
+                        raise OSError(f"forced crash after {boundary}")
+
+                def fail_after_event(
+                    event_store: object, event: dict
+                ) -> dict:
+                    nonlocal failed
+                    record = original_append_event(event_store, event)
+                    if boundary == "event" and not failed:
+                        failed = True
+                        raise OSError("forced crash after event")
+                    return record
+
+                with mock.patch.dict(
+                    os.environ, environment, clear=False
+                ), mock.patch.object(
+                    fleet, "atomic_json", side_effect=fail_after_atomic
+                ), mock.patch.object(
+                    fleet, "_append_event_locked", side_effect=fail_after_event
+                ), self.assertRaisesRegex(OSError, "forced crash"):
+                    fleet.repair_merge_receipts(
+                        store,
+                        fixture["repository"],
+                        fixture["manifest_path"],
+                        fixture["manifest_sha256"],
+                    )
+                with mock.patch.dict(os.environ, environment, clear=False):
+                    resumed = fleet.repair_merge_receipts(
+                        store,
+                        fixture["repository"],
+                        fixture["manifest_path"],
+                        fixture["manifest_sha256"],
+                    )
+                self.assertFalse(resumed["idempotent"])
+                self.assertEqual(
+                    json.loads(
+                        fleet.repair_transaction_path(
+                            store, fixture["manifest_sha256"]
+                        ).read_text()
+                    )["phase"],
+                    "complete",
+                )
+                self.assertIn(
+                    fixture["manifest_sha256"],
+                    store.read_receipt_index()["merge_receipt_repairs"],
+                )
+
+    def test_repair_transaction_recovers_a_torn_event_append(self) -> None:
+        fixture = repair_fixture(self.root)
+        store = fixture["store"]
+        environment = {
+            "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+            "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+        }
+
+        def tear_event(event_store: object, event: dict) -> dict:
+            encoded = (json.dumps(event, sort_keys=True) + "\n").encode("utf-8")
+            with store.events_path.open("ab") as output:
+                output.write(encoded[: len(encoded) // 2])
+                output.flush()
+                os.fsync(output.fileno())
+            raise OSError("forced crash during event append")
+
+        with mock.patch.dict(
+            os.environ, environment, clear=False
+        ), mock.patch.object(
+            fleet, "_append_event_locked", side_effect=tear_event
+        ), self.assertRaisesRegex(OSError, "during event append"):
+            fleet.repair_merge_receipts(
+                store,
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+
+        with mock.patch.dict(os.environ, environment, clear=False):
+            resumed = fleet.repair_merge_receipts(
+                store,
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+        self.assertFalse(resumed["idempotent"])
+        events = [json.loads(line) for line in store.events_path.read_text().splitlines()]
+        self.assertEqual(events[-1]["event"], "repair-merge-receipts")
+        self.assertEqual(
+            fleet.sha256_file(store.events_path),
+            json.loads(
+                fleet.repair_transaction_path(
+                    store, fixture["manifest_sha256"]
+                ).read_text()
+            )["after"]["fleet_events_sha256"],
+        )
+
+    def test_pending_repair_fences_command_side_effects_before_dispatch(self) -> None:
+        fixture = repair_fixture(self.root)
+        store = fixture["store"]
+        original_atomic_json = fleet.atomic_json
+
+        def fail_before_snapshot(path: Path, value: dict) -> None:
+            if path == store.snapshot_path:
+                raise OSError("forced crash before snapshot")
+            original_atomic_json(path, value)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+                "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+            },
+            clear=False,
+        ), mock.patch.object(
+            fleet, "atomic_json", side_effect=fail_before_snapshot
+        ), self.assertRaisesRegex(OSError, "before snapshot"):
+            fleet.repair_merge_receipts(
+                store,
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+
+        parser = fleet.build_parser()
+        command_cases = (
+            (
+                "launch_task",
+                [
+                    "launch",
+                    "--root",
+                    str(store.root),
+                    "--task",
+                    "3",
+                    "--repo",
+                    str(fixture["repository"]),
+                    "--executable",
+                    "/usr/bin/false",
+                ],
+            ),
+            (
+                "materialize_prd",
+                [
+                    "materialize",
+                    "--root",
+                    str(store.root),
+                    "--task",
+                    "3",
+                    "--plan",
+                    str(fixture["manifest_path"]),
+                ],
+            ),
+            (
+                "stop_task",
+                ["stop", "--root", str(store.root), "--task", "3"],
+            ),
+        )
+        for operation_name, arguments in command_cases:
+            with self.subTest(command=arguments[0]), mock.patch.object(
+                fleet, operation_name
+            ) as operation, self.assertRaisesRegex(
+                fleet.Blocked, "pending merge-receipt repair"
+            ):
+                fleet.dispatch(parser.parse_args(arguments))
+            operation.assert_not_called()
+
+    def test_repair_merge_receipts_refuses_stale_before_hash_and_manifest_hash(self) -> None:
+        for case in ("before-state", "manifest"):
+            with self.subTest(case=case):
+                fixture = repair_fixture(self.root / case)
+                if case == "before-state":
+                    fixture["manifest"]["before"]["fleet_state_sha256"] = "0" * 64
+                    supplied_hash = write_repair_manifest(
+                        fixture["manifest_path"], fixture["manifest"]
+                    )
+                else:
+                    supplied_hash = "0" * 64
+                before = {
+                    path.name: path.read_bytes()
+                    for path in (
+                        fixture["store"].snapshot_path,
+                        fixture["store"].events_path,
+                        fixture["store"].receipt_index_path,
+                    )
+                }
+                environment = {
+                    "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+                    "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+                }
+                with mock.patch.dict(
+                    os.environ, environment, clear=False
+                ), self.assertRaisesRegex(fleet.Refused, "hash"):
+                    fleet.repair_merge_receipts(
+                        fixture["store"],
+                        fixture["repository"],
+                        fixture["manifest_path"],
+                        supplied_hash,
+                    )
+                after = {
+                    path.name: path.read_bytes()
+                    for path in (
+                        fixture["store"].snapshot_path,
+                        fixture["store"].events_path,
+                        fixture["store"].receipt_index_path,
+                    )
+                }
+                self.assertEqual(after, before)
+
+    def test_repair_merge_receipts_refuses_every_wrong_identity_without_partial_mutation(self) -> None:
+        for case in (
+            "pr",
+            "head",
+            "head-oid",
+            "base",
+            "merge",
+            "parent",
+            "old-parent",
+            "cross-task-pr",
+            "cross-task-branch",
+        ):
+            with self.subTest(case=case):
+                fixture = repair_fixture(self.root / case)
+                manifest = fixture["manifest"]
+                pull_requests = fixture["pull_requests"]
+                second = manifest["tasks"][1]
+                pr = second["pr"]
+                if case == "pr":
+                    pull_requests[pr]["number"] = pr + 1000
+                elif case == "head":
+                    pull_requests[pr]["headRefName"] = "staging/beta1/wrong-head"
+                elif case == "head-oid":
+                    snapshot = fixture["store"].read_snapshot()
+                    snapshot["tasks"]["4"]["head_sha"] = fixture["facts"][3][
+                        "head_sha"
+                    ]
+                    fixture["store"].write_snapshot(snapshot)
+                    manifest["before"]["fleet_state_sha256"] = fleet.sha256_file(
+                        fixture["store"].snapshot_path
+                    )
+                elif case == "base":
+                    pull_requests[pr]["baseRefOid"] = fixture["facts"][3][
+                        "github_base_sha"
+                    ]
+                elif case == "merge":
+                    pull_requests[pr]["mergeCommit"] = {
+                        "oid": fixture["facts"][3]["merge_sha"]
+                    }
+                elif case == "parent":
+                    second["github_base_sha"] = fixture["facts"][4]["head_sha"]
+                    pull_requests[pr]["baseRefOid"] = second["github_base_sha"]
+                else:
+                    if case == "old-parent":
+                        second["old_expected_merge_parent"] = "e" * 40
+                    else:
+                        snapshot = fixture["store"].read_snapshot()
+                        if case == "cross-task-pr":
+                            snapshot["tasks"]["9"]["pr_ci_state"] = {"pr": pr}
+                        else:
+                            snapshot["tasks"]["9"]["remote_branch"] = second[
+                                "remote_branch"
+                            ]
+                        fixture["store"].write_snapshot(snapshot)
+                        manifest["before"][
+                            "fleet_state_sha256"
+                        ] = fleet.sha256_file(fixture["store"].snapshot_path)
+                supplied_hash = write_repair_manifest(
+                    fixture["manifest_path"], manifest
+                )
+                fake_gh = write_fake_gh(self.root / case, pull_requests)
+                before = {
+                    path.name: path.read_bytes()
+                    for path in (
+                        fixture["store"].snapshot_path,
+                        fixture["store"].events_path,
+                        fixture["store"].receipt_index_path,
+                    )
+                }
+                environment = {
+                    "FLEET_GH_EXECUTABLE": str(fake_gh),
+                    "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+                }
+                with mock.patch.dict(
+                    os.environ, environment, clear=False
+                ), self.assertRaises((fleet.Refused, fleet.Blocked)):
+                    fleet.repair_merge_receipts(
+                        fixture["store"],
+                        fixture["repository"],
+                        fixture["manifest_path"],
+                        supplied_hash,
+                    )
+                after = {
+                    path.name: path.read_bytes()
+                    for path in (
+                        fixture["store"].snapshot_path,
+                        fixture["store"].events_path,
+                        fixture["store"].receipt_index_path,
+                    )
+                }
+                self.assertEqual(after, before)
 
     def test_production_cli_refuses_caller_supplied_remote_observations(self) -> None:
         """Only authenticated Git/GitHub inventory may drive CLI reconciliation."""
