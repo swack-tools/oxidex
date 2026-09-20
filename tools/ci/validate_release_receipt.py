@@ -10,6 +10,7 @@ when its identity, evidence, floors, workflows, or authorization are missing.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import re
@@ -28,12 +29,68 @@ SCHEMAS = {
     "finalization": ROOT / ".claude/skills/oxidex-release-finalization/templates/release-finalization-receipt.schema.json",
 }
 
+TARGET_ASSETS = {
+    "aarch64-apple-darwin": ("oxidex-aarch64-apple-darwin", "oxidex-v{version}.dmg"),
+    "x86_64-unknown-linux-musl": ("oxidex-x86_64-unknown-linux-musl",),
+    "aarch64-unknown-linux-musl": ("oxidex-aarch64-unknown-linux-musl",),
+    "x86_64-pc-windows-gnu": ("oxidex-x86_64-pc-windows-gnu.exe",),
+}
+
 
 def load_receipt(path: str | pathlib.Path) -> dict[str, Any]:
     payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("receipt: expected a JSON object")
     return payload
+
+
+def _evidence_path(value: str) -> pathlib.Path:
+    path = pathlib.Path(value)
+    return path if path.is_absolute() else ROOT / path
+
+
+def _file_sha256(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _validate_upstream_receipt(
+    checks: "_Checks",
+    *,
+    prefix: str,
+    kind: str,
+    expected_version: str | None,
+    expected_sha: str | None,
+    expected_tree: str | None,
+) -> None:
+    raw_path = checks.string(f"{prefix}.path")
+    declared_hash = checks.sha256(f"{prefix}.sha256")
+    if raw_path is None:
+        return
+    path = _evidence_path(raw_path)
+    try:
+        actual_hash = _file_sha256(path)
+        upstream = load_receipt(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        checks.error(f"{prefix}.path", f"cannot load referenced receipt: {exc}")
+        return
+    if declared_hash is not None and declared_hash != actual_hash:
+        checks.error(f"{prefix}.sha256", f"does not match referenced receipt {actual_hash}")
+    for error in validate_receipt(
+        kind, upstream, expected_version=expected_version, expected_sha=expected_sha
+    ):
+        checks.error(f"{prefix}.receipt", error)
+    identity_field = "oxidex_sha" if kind == "parity" else "candidate_sha"
+    tree_field = "oxidex_tree" if kind == "parity" else "candidate_tree"
+    if checks.value(f"{prefix}.measured_sha") is not None and upstream.get(
+        identity_field
+    ) != checks.value(f"{prefix}.measured_sha"):
+        checks.error(f"{prefix}.measured_sha", f"does not match receipt {identity_field}")
+    if expected_tree is not None and upstream.get(tree_field) != expected_tree:
+        checks.error(f"{prefix}.measured_tree", f"receipt {tree_field} must match {expected_tree}")
+    if checks.value(f"{prefix}.measured_tree") is not None and upstream.get(
+        tree_field
+    ) != checks.value(f"{prefix}.measured_tree"):
+        checks.error(f"{prefix}.measured_tree", f"does not match receipt {tree_field}")
 
 
 class _Checks:
@@ -363,11 +420,17 @@ def _validate_documentation(
     )
     checks.commit("candidate_tree")
     checks.equal("parity_receipt.status", "verified")
-    checks.string("parity_receipt.path")
-    checks.sha256("parity_receipt.sha256")
     measured = checks.commit("parity_receipt.measured_sha")
     if measured is not None and measured != payload.get("candidate_sha"):
         checks.error("parity_receipt.measured_sha", "must match candidate_sha")
+    _validate_upstream_receipt(
+        checks,
+        prefix="parity_receipt",
+        kind="parity",
+        expected_version=payload.get("version"),
+        expected_sha=payload.get("candidate_sha"),
+        expected_tree=payload.get("candidate_tree"),
+    )
     claims = checks.object_list("claims")
     for index, claim in enumerate(claims):
         for field in ("claim", "evidence_path"):
@@ -450,13 +513,12 @@ def _validate_finalization(
     candidate_tree = checks.commit("candidate_tree")
     main_sha = checks.commit("main_sha")
     main_tree = checks.commit("main_tree")
+    checks.string("candidate_cargo_target_dir")
     tag = checks.string("tag")
     if version is not None and tag is not None and tag != f"v{version}":
         checks.error("tag", f"expected 'v{version}'")
     for receipt in ("parity", "documentation"):
         checks.equal(f"receipts.{receipt}.status", "verified")
-        checks.string(f"receipts.{receipt}.path")
-        checks.sha256(f"receipts.{receipt}.sha256")
         measured_sha = checks.commit(f"receipts.{receipt}.measured_sha")
         measured_tree = checks.commit(f"receipts.{receipt}.measured_tree")
         expected_receipt_sha = (
@@ -469,6 +531,14 @@ def _validate_finalization(
             )
         if measured_tree is not None and measured_tree != main_tree:
             checks.error(f"receipts.{receipt}.measured_tree", "must match main_tree")
+        _validate_upstream_receipt(
+            checks,
+            prefix=f"receipts.{receipt}",
+            kind=receipt,
+            expected_version=payload.get("version"),
+            expected_sha=expected_receipt_sha,
+            expected_tree=main_tree,
+        )
     expected_prerelease = isinstance(payload.get("version"), str) and "-" in payload["version"]
     checks.equal("packaging.prerelease", expected_prerelease)
     checks.equal("packaging.latest", not expected_prerelease)
@@ -476,13 +546,39 @@ def _validate_finalization(
     expected_assets = checks.string_list("packaging.expected_assets")
     if len(targets) != len(set(targets)):
         checks.error("packaging.targets", "contains duplicates")
+    derived_assets: list[str] = []
+    for target in targets:
+        patterns = TARGET_ASSETS.get(target)
+        if patterns is None:
+            checks.error("packaging.targets", f"unsupported release target {target!r}")
+            continue
+        for pattern in patterns:
+            derived_assets.append(pattern.format(version=payload.get("version")))
+    if sorted(expected_assets) != sorted(derived_assets):
+        checks.error(
+            "packaging.expected_assets",
+            f"must equal assets derived from targets: {sorted(derived_assets)!r}",
+        )
     inventory = checks.object_list("version_inventory")
+    current_packages = 0
     for index, item in enumerate(inventory):
-        for field in ("path", "version"):
+        for field in ("path", "version", "kind", "disposition"):
             if not isinstance(item.get(field), str) or not item[field].strip():
                 checks.error(f"version_inventory[{index}].{field}", "expected a non-empty string")
         if item.get("status") != "verified":
             checks.error(f"version_inventory[{index}].status", "expected 'verified'")
+        if item.get("disposition") not in {
+            "current", "historical", "independent", "dependency", "excluded"
+        }:
+            checks.error(f"version_inventory[{index}].disposition", "unsupported disposition")
+        if item.get("kind") == "oxidex_package" and item.get("disposition") == "current":
+            current_packages += 1
+            if item.get("version") != payload.get("version"):
+                checks.error(
+                    f"version_inventory[{index}].version", "current OxiDex package must match release version"
+                )
+    if current_packages == 0:
+        checks.error("version_inventory", "missing a current oxidex_package entry")
     checks.string("promotion.pr_url")
     checks.equal("promotion.review_decision", "APPROVED")
     checks.equal("promotion.required_checks_status", "success")
@@ -491,6 +587,8 @@ def _validate_finalization(
     checks.sha256("promotion.review_threads_sha256")
     checks.string("promotion.pr_state_evidence")
     checks.sha256("promotion.pr_state_sha256")
+    checks.string("promotion.required_checks_evidence")
+    checks.sha256("promotion.required_checks_sha256")
     for path in (
         "authorization.authorized_by",
         "authorization.authorized_at",
@@ -543,12 +641,14 @@ def _validate_finalization(
     )
     artifacts = checks.object_list("artifacts")
     artifact_names: list[str] = []
+    artifacts_by_name: dict[str, dict[str, Any]] = {}
     for index, artifact in enumerate(artifacts):
         name = artifact.get("name")
         if not isinstance(name, str) or not name.strip():
             checks.error(f"artifacts[{index}].name", "expected a non-empty string")
         else:
             artifact_names.append(name)
+            artifacts_by_name[name] = artifact
         value = artifact.get("sha256")
         if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
             checks.error(f"artifacts[{index}].sha256", "expected a lowercase 64-character SHA-256")
@@ -564,6 +664,8 @@ def _validate_finalization(
         checks.error("macos_verification.release_run_id", "must match Release workflow run_id")
     for path in (
         "macos_verification.run_artifact_manifest",
+        "macos_verification.raw_binary_artifact",
+        "macos_verification.dmg_artifact",
         "macos_verification.expected_developer_id",
         "macos_verification.expected_team_identifier",
         "macos_verification.observed_developer_id",
@@ -596,6 +698,19 @@ def _validate_finalization(
     checks.equal("macos_verification.stapler_status", "validated")
     checks.equal("macos_verification.cleanup_status", "verified")
     checks.string_list("macos_verification.evidence")
+    for field, hash_field in (
+        ("raw_binary_artifact", "raw_binary_sha256"),
+        ("dmg_artifact", "dmg_sha256"),
+    ):
+        name = checks.value(f"macos_verification.{field}")
+        artifact = artifacts_by_name.get(name) if isinstance(name, str) else None
+        if artifact is None:
+            checks.error(f"macos_verification.{field}", "must name a published artifact")
+            continue
+        if artifact.get("sha256") != checks.value(f"macos_verification.{hash_field}"):
+            checks.error(f"macos_verification.{field}", f"published artifact hash must match {hash_field}")
+        if artifact.get("source_run_id") != release_run_id:
+            checks.error(f"macos_verification.{field}", "artifact must come from Release workflow run")
     return checks.errors
 
 

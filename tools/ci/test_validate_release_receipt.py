@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import pathlib
 import tempfile
@@ -190,18 +191,73 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         payload["receipts"]["parity"]["measured_sha"] = "f" * 40
         self.assert_invalid("finalization", payload, "receipts.parity.measured_sha")
 
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            payload = fixture("finalization")
+            payload["main_tree"] = "e" * 40
+            for kind, identity, tree_field in (
+                ("parity", "oxidex_sha", "oxidex_tree"),
+                ("documentation", "candidate_sha", "candidate_tree"),
+            ):
+                upstream = fixture(kind)
+                upstream[identity] = payload["main_sha"]
+                upstream[tree_field] = payload["main_tree"]
+                if kind == "parity":
+                    upstream["regressions"]["head_sha"] = payload["main_sha"]
+                else:
+                    parity_path = root / "parity.json"
+                    upstream["parity_receipt"]["path"] = str(parity_path)
+                    upstream["parity_receipt"]["sha256"] = hashlib.sha256(
+                        parity_path.read_bytes()
+                    ).hexdigest()
+                    upstream["parity_receipt"]["measured_sha"] = payload["main_sha"]
+                    upstream["local_build"]["candidate_sha"] = payload["main_sha"]
+                    upstream["pages_pipeline"]["workflow_sha"] = payload["main_sha"]
+                path = root / f"{kind}.json"
+                path.write_text(json.dumps(upstream), encoding="utf-8")
+                payload["receipts"][kind]["path"] = str(path)
+                payload["receipts"][kind]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                payload["receipts"][kind]["measured_sha"] = payload["main_sha"]
+                payload["receipts"][kind]["measured_tree"] = payload["main_tree"]
+            self.assertEqual(
+                validator.validate_receipt(
+                    "finalization", payload, expected_version=VERSION, expected_sha=SHA
+                ),
+                [],
+            )
+
+    def test_finalization_rejects_missing_tampered_or_stale_upstream_receipts(self):
         payload = fixture("finalization")
-        payload["main_tree"] = "e" * 40
-        payload["receipts"]["parity"]["measured_sha"] = payload["main_sha"]
-        payload["receipts"]["parity"]["measured_tree"] = payload["main_tree"]
-        payload["receipts"]["documentation"]["measured_sha"] = payload["main_sha"]
-        payload["receipts"]["documentation"]["measured_tree"] = payload["main_tree"]
-        self.assertEqual(
-            validator.validate_receipt(
-                "finalization", payload, expected_version=VERSION, expected_sha=SHA
-            ),
-            [],
-        )
+        payload["receipts"]["parity"]["path"] = "/missing/parity.json"
+        self.assert_invalid("finalization", payload, "receipts.parity.path")
+
+        payload = fixture("finalization")
+        payload["receipts"]["parity"]["sha256"] = "f" * 64
+        self.assert_invalid("finalization", payload, "receipts.parity.sha256")
+
+        payload = fixture("finalization")
+        payload["receipts"]["parity"]["measured_tree"] = "f" * 40
+        self.assert_invalid("finalization", payload, "receipts.parity.measured_tree")
+
+    def test_finalization_links_packaging_inventory_and_macos_artifacts(self):
+        for dotted, value in (
+            ("packaging.targets", ["made-up-target"]),
+            ("packaging.expected_assets", ["made-up-asset"]),
+            ("version_inventory[0].version", "1.0.0"),
+            ("macos_verification.raw_binary_artifact", "wrong-name"),
+            ("macos_verification.dmg_artifact", "wrong.dmg"),
+        ):
+            payload = fixture("finalization")
+            if dotted.startswith("version_inventory"):
+                payload["version_inventory"][0]["version"] = value
+            else:
+                target = payload
+                parts = dotted.split(".")
+                for part in parts[:-1]:
+                    target = target[part]
+                target[parts[-1]] = value
+            with self.subTest(path=dotted):
+                self.assert_invalid("finalization", payload, dotted.split("[")[0])
 
     def test_cli_returns_two_and_prints_field_paths_for_invalid_receipt(self):
         payload = fixture("parity")

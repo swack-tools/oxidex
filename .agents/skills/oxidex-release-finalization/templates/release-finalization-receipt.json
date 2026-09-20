@@ -26,7 +26,9 @@
     "review_threads_evidence": null,
     "review_threads_sha256": null,
     "pr_state_evidence": null,
-    "pr_state_sha256": null
+    "pr_state_sha256": null,
+    "required_checks_evidence": null,
+    "required_checks_sha256": null
   },
   "authorization": {
     "authorized_by": null,
@@ -50,6 +52,8 @@
     "status": "unverified",
     "release_run_id": null,
     "run_artifact_manifest": null,
+    "raw_binary_artifact": null,
+    "dmg_artifact": null,
     "expected_developer_id": null,
     "expected_team_identifier": null,
     "observed_developer_id": null,

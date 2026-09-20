@@ -20,13 +20,11 @@ class PrGateError(RuntimeError):
     """The reviewed-promotion evidence is incomplete or contradictory."""
 
 
-def _load(path: pathlib.Path, label: str) -> dict[str, Any]:
+def _load(path: pathlib.Path, label: str) -> Any:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PrGateError(f"{label}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise PrGateError(f"{label}: expected a JSON object")
     return value
 
 
@@ -37,6 +35,7 @@ def _sha256(path: pathlib.Path) -> str:
 def validate(
     pr_state_path: pathlib.Path,
     review_threads_path: pathlib.Path,
+    required_checks_path: pathlib.Path,
     expected_head: str,
 ) -> dict[str, Any]:
     if COMMIT_RE.fullmatch(expected_head) is None:
@@ -77,6 +76,21 @@ def validate(
             unresolved += 1
     if unresolved:
         raise PrGateError(f"review-threads.unresolved: found {unresolved} actionable thread(s)")
+
+    required_checks = _load(required_checks_path, "required-checks")
+    if not isinstance(required_checks, list) or not required_checks:
+        raise PrGateError("required-checks: expected a non-empty JSON array")
+    for index, check in enumerate(required_checks):
+        if not isinstance(check, dict):
+            raise PrGateError(f"required-checks[{index}]: expected an object")
+        if not isinstance(check.get("name"), str) or not check["name"].strip():
+            raise PrGateError(f"required-checks[{index}].name: expected a non-empty string")
+        if check.get("state") != "SUCCESS":
+            raise PrGateError(
+                f"required-checks[{index}].state: expected 'SUCCESS', got {check.get('state')!r}"
+            )
+        if not isinstance(check.get("link"), str) or not check["link"].strip():
+            raise PrGateError(f"required-checks[{index}].link: expected a non-empty string")
     return {
         "schema_version": 1,
         "status": "verified",
@@ -88,6 +102,10 @@ def validate(
         "pr_state_sha256": _sha256(pr_state_path),
         "review_threads_path": str(review_threads_path.resolve()),
         "review_threads_sha256": _sha256(review_threads_path),
+        "required_checks_path": str(required_checks_path.resolve()),
+        "required_checks_sha256": _sha256(required_checks_path),
+        "required_checks_count": len(required_checks),
+        "required_checks_status": "success",
     }
 
 
@@ -95,11 +113,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr-state", type=pathlib.Path, required=True)
     parser.add_argument("--review-threads", type=pathlib.Path, required=True)
+    parser.add_argument("--required-checks", type=pathlib.Path, required=True)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args(argv)
     try:
-        result = validate(args.pr_state, args.review_threads, args.expected_head)
+        result = validate(
+            args.pr_state, args.review_threads, args.required_checks, args.expected_head
+        )
     except PrGateError as exc:
         print(f"release PR gate refused: {exc}", file=sys.stderr)
         return 1

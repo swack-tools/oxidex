@@ -172,7 +172,8 @@ PR=$(gh pr view "$PR_URL" --json number --jq '.number')
 test -n "$PR"
 gh pr view "$PR" --json url,baseRefName,headRefOid,reviewDecision,mergeStateStatus,statusCheckRollup \
   | tee "$EVIDENCE_DIR/pr-state.json"
-gh pr checks "$PR" --required
+gh pr checks "$PR" --required --json name,state,link \
+  | tee "$EVIDENCE_DIR/required-checks.json"
 REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
 REPO_NAME=$(gh repo view --json name --jq '.name')
 gh api graphql \
@@ -190,6 +191,7 @@ gh api graphql \
 python3 tools/ci/release_pr_gate.py \
   --pr-state "$EVIDENCE_DIR/pr-state.json" \
   --review-threads "$EVIDENCE_DIR/review-threads.json" \
+  --required-checks "$EVIDENCE_DIR/required-checks.json" \
   --expected-head "$CANDIDATE_SHA" \
   --output "$EVIDENCE_DIR/reviewed-promotion.json"
 jq -er '.unresolved_actionable_threads' "$EVIDENCE_DIR/reviewed-promotion.json" \

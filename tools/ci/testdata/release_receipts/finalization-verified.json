@@ -8,11 +8,11 @@
   "main_sha": "dddddddddddddddddddddddddddddddddddddddd",
   "main_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "receipts": {
-    "parity": {"path": "/evidence/parity.json", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"},
-    "documentation": {"path": "/evidence/docs.json", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"}
+    "parity": {"path": "tools/ci/testdata/release_receipts/parity-verified.json", "sha256": "aa7a7ad7b9559c53a6d161bc1984a266cc77d94e57a3fb283a9827ea4372f94c", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"},
+    "documentation": {"path": "tools/ci/testdata/release_receipts/documentation-verified.json", "sha256": "3d53c2d66617d8e9fafc42215edc0e75f9233a7d6be9f6b30aec54da35363538", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"}
   },
-  "packaging": {"prerelease": true, "latest": false, "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], "expected_assets": ["oxidex-aarch64-apple-darwin"]},
-  "version_inventory": [{"path": "Cargo.toml", "version": "2.0.0-beta.1", "status": "verified"}],
+  "packaging": {"prerelease": true, "latest": false, "targets": ["aarch64-apple-darwin"], "expected_assets": ["oxidex-aarch64-apple-darwin", "oxidex-v2.0.0-beta.1.dmg"]},
+  "version_inventory": [{"path": "Cargo.toml", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "status": "verified"}],
   "promotion": {
     "pr_url": "https://github.com/swack-tools/oxidex/pull/999",
     "review_decision": "APPROVED",
@@ -21,7 +21,9 @@
     "review_threads_evidence": "/evidence/review-threads.json",
     "review_threads_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
     "pr_state_evidence": "/evidence/pr-state.json",
-    "pr_state_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    "pr_state_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "required_checks_evidence": "/evidence/required-checks.json",
+    "required_checks_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
   },
   "authorization": {"authorized_by": "maintainer", "authorized_at": "2026-09-19T00:00:00Z", "version": "2.0.0-beta.1", "tag": "v2.0.0-beta.1", "main_sha": "dddddddddddddddddddddddddddddddddddddddd", "evidence_path": "/evidence/authorization.txt"},
   "tag_verification": {"status": "verified", "tag": "v2.0.0-beta.1", "target_sha": "dddddddddddddddddddddddddddddddddddddddd", "signature": "good", "evidence_path": "/evidence/tag.txt"},
@@ -30,11 +32,16 @@
     {"name": "Release", "status": "completed", "conclusion": "success", "head_branch": "v2.0.0-beta.1", "head_sha": "dddddddddddddddddddddddddddddddddddddddd", "event": "push", "run_id": 1001, "evidence_path": "/evidence/release-run.json"},
     {"name": "Docker", "status": "completed", "conclusion": "success", "head_branch": "v2.0.0-beta.1", "head_sha": "dddddddddddddddddddddddddddddddddddddddd", "event": "push", "run_id": 1002, "evidence_path": "/evidence/docker-run.json"}
   ],
-  "artifacts": [{"name": "oxidex-aarch64-apple-darwin", "sha256": "3333333333333333333333333333333333333333333333333333333333333333", "size": 12345, "source_run_id": 1001}],
+  "artifacts": [
+    {"name": "oxidex-aarch64-apple-darwin", "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "size": 12345, "source_run_id": 1001},
+    {"name": "oxidex-v2.0.0-beta.1.dmg", "sha256": "5555555555555555555555555555555555555555555555555555555555555555", "size": 23456, "source_run_id": 1001}
+  ],
   "macos_verification": {
     "status": "verified",
     "release_run_id": 1001,
     "run_artifact_manifest": "/evidence/macos-run-artifact-manifest.json",
+    "raw_binary_artifact": "oxidex-aarch64-apple-darwin",
+    "dmg_artifact": "oxidex-v2.0.0-beta.1.dmg",
     "expected_developer_id": "Developer ID Application: Example (TEAMID1234)",
     "expected_team_identifier": "TEAMID1234",
     "observed_developer_id": "Developer ID Application: Example (TEAMID1234)",

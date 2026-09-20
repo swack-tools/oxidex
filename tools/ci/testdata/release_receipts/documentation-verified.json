@@ -5,8 +5,8 @@
   "candidate_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "main_equivalence": {"main_sha": null, "main_tree": null, "matches_candidate_tree": null, "evidence_path": null},
   "parity_receipt": {
-    "path": "/evidence/parity.json",
-    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "path": "tools/ci/testdata/release_receipts/parity-verified.json",
+    "sha256": "aa7a7ad7b9559c53a6d161bc1984a266cc77d94e57a3fb283a9827ea4372f94c",
     "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "status": "verified"
   },
