@@ -671,6 +671,7 @@ def _materialized_footer(task: Mapping[str, Any], base_sha: str) -> str:
 - Report: `{paths['report']}`
 - Review: `{paths['review']}`
 - Dependencies: `{task['dependencies']}`
+- Worker policy: `{task['worker']['kind']}` / `{task['worker']['model']}` / `{task['worker']['effort']}`
 
 ### Exact file lease
 
@@ -725,12 +726,22 @@ def materialize_prd(
         for value in paths.values():
             require_operational_path(Path(value))
     _, task_section = sections[task_number]
+    planned_worker = _parse_worker(task_section)
+    existing_worker = task["worker"]
+    policy_fields = ("kind", "model", "effort")
+    if all(
+        existing_worker.get(field) == planned_worker[field]
+        for field in policy_fields
+    ):
+        planned_worker["identity"] = existing_worker.get("identity")
+    materialized_task = dict(task)
+    materialized_task["worker"] = planned_worker
     content = (
         "# Materialized Beta 1 Functional Task PRD\n\n"
         + global_constraints
         + "\n"
         + task_section
-        + _materialized_footer(task, base_sha)
+        + _materialized_footer(materialized_task, base_sha)
     )
     path = require_operational_path(Path(task["paths"]["prd"]))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -751,6 +762,7 @@ def materialize_prd(
         current["base_sha"] = base_sha
         current["target_sha"] = base_sha
         current["expected_merge_parent"] = base_sha
+        current["worker"] = dict(planned_worker)
         current["prd_sha256"] = digest
         current["next_command"] = f"launch --task {task_number}"
 
@@ -3270,6 +3282,11 @@ def _recover_controller(
                             )
                         )
             worktree = Path(task["paths"]["worktree"])
+            if task["state"] in {"completed", "merged"}:
+                # Terminal worktrees may intentionally retain post-merge edits.
+                # Their historical lease no longer authorizes a recovery check,
+                # and terminal state is already authenticated by its receipts.
+                continue
             if not worktree.exists():
                 continue
             observation = inspect_worktree(task)
