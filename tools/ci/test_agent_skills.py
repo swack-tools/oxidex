@@ -181,6 +181,9 @@ class SkillMirrorTests(unittest.TestCase):
             "isOutdated",
             "unresolved-actionable-review-threads",
             "review-threads.json",
+            "python3 tools/ci/release_pr_gate.py",
+            '--expected-head "$CANDIDATE_SHA"',
+            "reviewed-promotion.json",
         ):
             self.assertIn(required, text)
 
@@ -239,6 +242,9 @@ class SkillMirrorTests(unittest.TestCase):
                 schema = json.loads(schema_path.read_text(encoding="utf-8"))
                 self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
                 self.assertEqual(schema["title"], f"OxiDex {kind} release receipt")
+                self.assertIs(schema["additionalProperties"], False)
+                self.assertTrue(schema["allOf"], "verified receipts need conditional constraints")
+                self.assertIn("$defs", schema)
                 self.assertEqual(
                     validate_release_receipt.validate_receipt(kind, template, template=True),
                     [],

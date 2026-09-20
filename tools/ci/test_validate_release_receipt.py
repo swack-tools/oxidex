@@ -43,6 +43,7 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
     def test_verified_fixtures_pass_and_bind_identity(self):
         for kind in TEMPLATES:
             with self.subTest(kind=kind):
+                self.assertEqual(validator.validate_schema(kind, fixture(kind)), [])
                 self.assertEqual(
                     validator.validate_receipt(
                         kind, fixture(kind), expected_version=VERSION, expected_sha=SHA
@@ -84,6 +85,27 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         payload["refusals"] = ["oracle fallback"]
         self.assert_invalid("parity", payload, "refusals")
 
+        for dotted, value in (
+            ("oracle.perl_version", "v5.40.0"),
+            ("oracle.exiftool_version", "13.58"),
+            ("oracle.docx_file_type", "ZIP"),
+            ("oracle.probes", [None]),
+            ("corpora", [None]),
+            ("runs", [None]),
+            ("conformance.artifacts", [None]),
+            ("generated_catalog.ratchet_exit_code", 1),
+            ("write_matrix.report_exit_code", 1),
+            ("regressions.new_losses", 999),
+        ):
+            payload = fixture("parity")
+            target = payload
+            parts = dotted.split(".")
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+            with self.subTest(path=dotted, adversarial=True):
+                self.assert_invalid("parity", payload, dotted)
+
     def test_documentation_requires_upstream_hash_browser_human_and_pages_proof(self):
         for dotted, value in (
             ("parity_receipt.sha256", None),
@@ -100,6 +122,23 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
                 target = target[part]
             target[parts[-1]] = value
             with self.subTest(path=dotted):
+                self.assert_invalid("documentation", payload, dotted)
+
+        for dotted, value in (
+            ("claims", [None]),
+            ("pages", [None]),
+            ("local_build.candidate_sha", "f" * 40),
+            ("visual_review.samples", [None]),
+            ("visual_review.findings", ["broken layout"]),
+            ("pages_pipeline.workflow_sha", "not-a-sha"),
+        ):
+            payload = fixture("documentation")
+            target = payload
+            parts = dotted.split(".")
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+            with self.subTest(path=dotted, adversarial=True):
                 self.assert_invalid("documentation", payload, dotted)
 
     def test_finalization_requires_receipts_review_authorization_tag_workflows_and_macos(self):
@@ -127,6 +166,43 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         payload["workflows"][0]["head_sha"] = "f" * 40
         self.assert_invalid("finalization", payload, "workflows[0].head_sha")
 
+        for dotted, value in (
+            ("packaging.prerelease", False),
+            ("packaging.targets", [None]),
+            ("version_inventory", [None]),
+            ("gates", [None]),
+            ("artifacts", [{"sha256": "3" * 64}]),
+            ("macos_verification.dmg_payload_sha256", "6" * 64),
+            ("macos_verification.reported_version", "oxidex 1.0.0"),
+            ("macos_verification.release_run_id", 9999),
+        ):
+            payload = fixture("finalization")
+            target = payload
+            parts = dotted.split(".")
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+            with self.subTest(path=dotted, adversarial=True):
+                self.assert_invalid("finalization", payload, dotted)
+
+    def test_finalization_receipts_follow_candidate_or_regenerated_main_tree(self):
+        payload = fixture("finalization")
+        payload["receipts"]["parity"]["measured_sha"] = "f" * 40
+        self.assert_invalid("finalization", payload, "receipts.parity.measured_sha")
+
+        payload = fixture("finalization")
+        payload["main_tree"] = "e" * 40
+        payload["receipts"]["parity"]["measured_sha"] = payload["main_sha"]
+        payload["receipts"]["parity"]["measured_tree"] = payload["main_tree"]
+        payload["receipts"]["documentation"]["measured_sha"] = payload["main_sha"]
+        payload["receipts"]["documentation"]["measured_tree"] = payload["main_tree"]
+        self.assertEqual(
+            validator.validate_receipt(
+                "finalization", payload, expected_version=VERSION, expected_sha=SHA
+            ),
+            [],
+        )
+
     def test_cli_returns_two_and_prints_field_paths_for_invalid_receipt(self):
         payload = fixture("parity")
         payload["authenticated_reads"]["native_occurrence_floor"] = 0
@@ -141,6 +217,14 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
                     ]
                 ),
                 2,
+            )
+
+    def test_cli_requires_release_identity_outside_template_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "receipt.json"
+            path.write_text(json.dumps(fixture("parity")), encoding="utf-8")
+            self.assertEqual(
+                validator.main(["--kind", "parity", "--receipt", str(path)]), 2
             )
 
 

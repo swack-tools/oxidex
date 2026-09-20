@@ -16,8 +16,11 @@
     "perl_sha256": null,
     "tree_path": null,
     "script_sha256": null,
+    "exiftool_version": null,
+    "docx_file_type": null,
     "library_fingerprint_path": null,
     "library_fingerprint_sha256": null,
+    "library_file_count": null,
     "probes": []
   },
   "corpora": [],

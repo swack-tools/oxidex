@@ -128,7 +128,11 @@ schema's equivalent identity/status fields instead of weakening the check.
 | Version/tag or packaging decision differs | Block and reconcile documentation plus inventory. |
 | Receipt is verified and bound to the frozen candidate | Accept provisionally; post-merge tree/SHA checks still apply. |
 
-Store the receipt paths and SHA-256 hashes in the finalization receipt.
+Store each receipt's path, SHA-256, measured commit, and measured tree in the
+finalization receipt. When candidate and `main` trees match, the measured
+commit may remain the candidate SHA with that tree-equivalence proof. When the
+trees differ, both upstream receipts must name the regenerated `MAIN_SHA` and
+`MAIN_TREE`.
 
 ## 4. Locked local gates and workflow audit
 
@@ -183,18 +187,19 @@ gh api graphql \
       }
     }
   }' > "$EVIDENCE_DIR/review-threads.json"
-jq -e '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false' \
-  "$EVIDENCE_DIR/review-threads.json" > /dev/null
-jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-    | select(.isResolved == false and .isOutdated == false)] | length' \
-  "$EVIDENCE_DIR/review-threads.json" \
+python3 tools/ci/release_pr_gate.py \
+  --pr-state "$EVIDENCE_DIR/pr-state.json" \
+  --review-threads "$EVIDENCE_DIR/review-threads.json" \
+  --expected-head "$CANDIDATE_SHA" \
+  --output "$EVIDENCE_DIR/reviewed-promotion.json"
+jq -er '.unresolved_actionable_threads' "$EVIDENCE_DIR/reviewed-promotion.json" \
   | tee "$EVIDENCE_DIR/unresolved-actionable-review-threads.txt"
-test "$(<"$EVIDENCE_DIR/unresolved-actionable-review-threads.txt")" -eq 0
 ```
 
 Require review approval, all required checks, a complete review-thread page,
-and zero unresolved non-outdated review threads. A general review decision does
-not prove that inline comments were resolved. After the authorized merge:
+and zero unresolved non-outdated review threads. The verified promotion JSON
+also records SHA-256 identities for both raw inputs. A general review decision
+does not prove that inline comments were resolved. After the authorized merge:
 
 ```bash
 set -euo pipefail

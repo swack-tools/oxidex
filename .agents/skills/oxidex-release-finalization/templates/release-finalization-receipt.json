@@ -8,13 +8,14 @@
   "main_sha": null,
   "main_tree": null,
   "receipts": {
-    "parity": {"path": null, "sha256": null, "status": "unverified"},
-    "documentation": {"path": null, "sha256": null, "status": "unverified"}
+    "parity": {"path": null, "sha256": null, "measured_sha": null, "measured_tree": null, "status": "unverified"},
+    "documentation": {"path": null, "sha256": null, "measured_sha": null, "measured_tree": null, "status": "unverified"}
   },
   "packaging": {
     "prerelease": true,
     "latest": false,
-    "targets": []
+    "targets": [],
+    "expected_assets": []
   },
   "version_inventory": [],
   "promotion": {
@@ -22,7 +23,10 @@
     "review_decision": null,
     "required_checks_status": null,
     "unresolved_actionable_threads": null,
-    "review_threads_evidence": null
+    "review_threads_evidence": null,
+    "review_threads_sha256": null,
+    "pr_state_evidence": null,
+    "pr_state_sha256": null
   },
   "authorization": {
     "authorized_by": null,

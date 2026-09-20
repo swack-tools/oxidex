@@ -84,6 +84,22 @@ def _sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def _library_fingerprint(library: pathlib.Path) -> tuple[str, int]:
+    """Hash every regular library file by relative path and content identity."""
+
+    digest = hashlib.sha256()
+    files = sorted(path for path in library.rglob("*") if path.is_file())
+    if not files:
+        raise OracleProbeError(f"library_path: contains no files: {library}")
+    for path in files:
+        relative = path.relative_to(library).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        digest.update(_sha256(path).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest(), len(files)
+
+
 def probe_oracle(
     repo: pathlib.Path, perl_path: pathlib.Path, tree_path: pathlib.Path
 ) -> dict[str, Any]:
@@ -148,6 +164,7 @@ def probe_oracle(
             f"DOCX capability: expected 'DOCX', got {docx_type!r}"
         )
 
+    library_fingerprint, library_file_count = _library_fingerprint(library)
     return {
         "schema_version": 1,
         "status": "verified",
@@ -158,6 +175,9 @@ def probe_oracle(
         "tree_path": str(tree_path),
         "script_path": str(script),
         "script_sha256": _sha256(script),
+        "library_fingerprint_path": str(library),
+        "library_fingerprint_sha256": library_fingerprint,
+        "library_file_count": library_file_count,
         "exiftool_version": version,
         "docx_path": str(docx),
         "docx_sha256": _sha256(docx),

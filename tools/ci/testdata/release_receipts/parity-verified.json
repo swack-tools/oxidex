@@ -21,12 +21,20 @@
     "perl_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
     "tree_path": "/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool",
     "script_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "exiftool_version": "13.59",
+    "docx_file_type": "DOCX",
     "library_fingerprint_path": "/evidence/library.sha256",
     "library_fingerprint_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
-    "probes": ["perl-v5.38.2", "modules", "exiftool-13.59", "docx-DOCX"]
+    "library_file_count": 100,
+    "probes": ["perl-version", "required-modules", "exiftool-version", "docx"]
   },
   "corpora": [{"path": "/corpus", "manifest_sha256": "6666666666666666666666666666666666666666666666666666666666666666", "files": 200}],
-  "runs": [{"instrument": "conformance", "artifact_sha256": "7777777777777777777777777777777777777777777777777777777777777777"}],
+  "runs": [
+    {"instrument": "conformance", "artifact_sha256": "7777777777777777777777777777777777777777777777777777777777777777"},
+    {"instrument": "authenticated_reads", "artifact_sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+    {"instrument": "generated_catalog", "artifact_sha256": "9999999999999999999999999999999999999999999999999999999999999999"},
+    {"instrument": "write_matrix", "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+  ],
   "conformance": {"status": "verified", "artifacts": ["/evidence/conformance.json"], "files": 200, "native_scored_denominator": 10000},
   "authenticated_reads": {
     "status": "verified",

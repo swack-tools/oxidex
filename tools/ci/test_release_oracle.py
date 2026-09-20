@@ -17,6 +17,7 @@ class ReleaseOracleTests(unittest.TestCase):
         repo.mkdir()
         (repo / ".exiftool-version").write_text("13.59\n", encoding="utf-8")
         (tree / "lib").mkdir(parents=True)
+        (tree / "lib/strict.pm").write_text("fixture\n", encoding="utf-8")
         (tree / "t/images").mkdir(parents=True)
         (tree / "exiftool").write_text("fixture\n", encoding="utf-8")
         (tree / "t/images/OOXML.docx").write_bytes(b"fixture")
@@ -52,6 +53,11 @@ class ReleaseOracleTests(unittest.TestCase):
             self.assertEqual(receipt["perl_version"], "v5.38.2")
             self.assertEqual(receipt["exiftool_version"], "13.59")
             self.assertEqual(receipt["docx_file_type"], "DOCX")
+            self.assertGreater(receipt["library_file_count"], 0)
+            self.assertRegex(receipt["library_fingerprint_sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                pathlib.Path(receipt["library_fingerprint_path"]), (tree / "lib").resolve()
+            )
             self.assertEqual(pathlib.Path(receipt["perl_path"]), perl.resolve())
             self.assertEqual(pathlib.Path(receipt["tree_path"]), tree.resolve())
 

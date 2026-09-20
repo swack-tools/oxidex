@@ -38,9 +38,10 @@ python3 tools/ci/release_oracle.py --repo . --perl "$PARITY_PERL" \
 
 Stop on any nonzero command, recording that exit and the failing prerequisite
 in the receipt. Do not continue a partially executed shell recipe. Record
-interpreter/script SHA-256 and library fingerprint from the authenticated
-receipt; before that exists, use explicit file hashes and record the library
-tree identity. The shared Python resolver obeys `EXIFTOOL_PERL`; its generic
+interpreter/script SHA-256 and the deterministic library-path/file-count/
+fingerprint fields emitted by `release_oracle.py`; map those exact fields into
+the release receipt rather than reconstructing them by hand. The shared Python
+resolver obeys `EXIFTOOL_PERL`; its generic
 fallback suggestions are not permission to change the release oracle.
 Direct probes and authenticated reads use `-config ''`. The conformance and
 library harnesses do not add that flag: the empty `EXIFTOOL_HOME` and refusal
@@ -270,4 +271,5 @@ python3 tools/ci/validate_release_receipt.py --kind parity \
 ```
 
 A hand-edited or structurally plausible JSON file is not a verified receipt
-until this command succeeds. Preserve validator stdout/stderr and exit status.
+until this command succeeds. Both identity arguments are mandatory outside
+template mode. Preserve validator stdout/stderr and exit status.
