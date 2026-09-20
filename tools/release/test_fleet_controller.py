@@ -1317,7 +1317,7 @@ class FleetControllerTests(unittest.TestCase):
             "- Modify: `src/cli/output_formatter.rs`\n"
             "- Add: `tests/typed_value_projection_tests.rs`\n"
             "- Do not modify Task 2 core files or generated/engine files\n"
-            "- Add: tools/ambiguous.rs\n",
+            "- Do not modify: `tools/exiftool-tables/conformance.py`\n",
             encoding="utf-8",
         )
         spec_file.write_text("# Spec\n", encoding="utf-8")
@@ -1341,7 +1341,7 @@ class FleetControllerTests(unittest.TestCase):
             footer,
         )
         self.assertNotIn("Task 2 core files", " ".join(task_value["file_lease"]))
-        self.assertNotIn("ambiguous.rs", " ".join(task_value["file_lease"]))
+        self.assertNotIn("conformance.py", " ".join(task_value["file_lease"]))
 
     def test_canonical_plan_preserves_controller_owned_task_and_full_dag(self) -> None:
         repository = MODULE.parents[2]
@@ -1438,6 +1438,138 @@ class FleetControllerTests(unittest.TestCase):
         content = prd.read_text(encoding="utf-8")
         self.assertIn("Worker policy: `CLI` / `gpt-5.6-terra` / `medium`", content)
         self.assertNotIn("--enable fast_mode", content)
+
+    def test_materialize_refreshes_file_lease_from_task8_style_plan(self) -> None:
+        store = fleet.StateStore(self.root)
+        current = task(8)
+        current["file_lease"] = ["stale/retired-lease-entry.rs"]
+        store.write_snapshot(state(current))
+        plan = MODULE.parents[2] / "docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md"
+
+        prd = fleet.materialize_prd(store, plan, 8, SHA_A)
+
+        expected = [
+            "src/exiftool_tables/attribution.rs",
+            "tools/exiftool-tables/genshare/attribute.py",
+            "tools/exiftool-tables/genshare/census.sh",
+            "tools/exiftool-tables/genshare/probe.patch",
+            "tools/exiftool-tables/genshare/README.md",
+            "tools/exiftool-tables/genshare/test_attribute.py",
+            "tools/exiftool-tables/genshare/test_census.py",
+            "tools/exiftool-tables/genshare/testdata/bounded-corpus.txt",
+            "src/exiftool_tables/mod.rs",
+            "src/exiftool_tables/engine.rs",
+            "src/exiftool_tables/ifd_engine.rs",
+            "src/exiftool_tables/keyed_engine.rs",
+            "src/exiftool_tables/serial_engine.rs",
+            "src/exiftool_tables/runtime.rs",
+        ]
+        expected.sort()
+        materialized = store.read_snapshot()["tasks"]["8"]
+        self.assertEqual(materialized["file_lease"], expected)
+        self.assertEqual(len(materialized["file_lease"]), 14)
+        self.assertNotIn("stale/retired-lease-entry.rs", materialized["file_lease"])
+        self.assertIn("- `tools/exiftool-tables/genshare/probe.patch`", prd.read_text())
+
+    def test_file_lease_refuses_nonliteral_file_operation(self) -> None:
+        section = "**Files:**\n\n- Add: tools/exiftool-tables/genshare/test_attribute.py\n"
+
+        with self.assertRaisesRegex(fleet.Refused, "literal backtick path"):
+            fleet._parse_file_lease(section)
+
+    def test_file_lease_refuses_suffix_after_literal_operation_path(self) -> None:
+        for entry in (
+            "- Add: `a.py` or `b.py`",
+            "- Modify: `a.py` only after approval",
+        ):
+            with self.subTest(entry=entry), self.assertRaisesRegex(
+                fleet.Refused, "literal backtick path"
+            ):
+                fleet._parse_file_lease("**Files:**\n\n" + entry + "\n")
+
+    def test_rendered_prd_file_lease_refuses_mixed_none_and_paths_in_both_orders(self) -> None:
+        prd = self.root / "prds/mixed-none.md"
+        prd.parent.mkdir(parents=True, exist_ok=True)
+        for lines in (
+            "- none\n- `a.py`\n",
+            "- `a.py`\n- none\n",
+        ):
+            with self.subTest(lines=lines):
+                prd.write_text(
+                    "# Materialized Beta 1 Functional Task PRD\n\n"
+                    "### Exact file lease\n\n" + lines,
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(fleet.Blocked, "ambiguous file lease"):
+                    fleet._rendered_prd_file_lease(prd)
+
+    def test_launch_preflight_refuses_prd_lease_that_differs_from_state(self) -> None:
+        repository = self.root / "launch-preflight-repository"
+        sha = initialize_git_repository(repository)
+        git(repository, "checkout", "-qb", "staging/beta1/task-0")
+        current = task(0)
+        current["paths"]["worktree"] = str(repository)
+        current["base_sha"] = sha
+        current["target_sha"] = sha
+        current["expected_merge_parent"] = sha
+        prd = Path(current["paths"]["prd"])
+        prd.parent.mkdir(parents=True, exist_ok=True)
+        prd.write_text(
+            "# Materialized Beta 1 Functional Task PRD\n\n"
+            "### Exact file lease\n\n"
+            "- `different-file.txt`\n",
+            encoding="utf-8",
+        )
+        current["prd_sha256"] = fleet.sha256_file(prd)
+        value = state(current)
+        value["target_sha"] = sha
+        value["expected_merge_parent"] = sha
+
+        with self.assertRaisesRegex(fleet.Blocked, "PRD file lease"):
+            fleet.validate_launch_preflight(current, value)
+
+    def test_launch_preflight_requires_all_five_materialized_identities(self) -> None:
+        repository = self.root / "aligned-launch-preflight-repository"
+        sha = initialize_git_repository(repository)
+        git(repository, "checkout", "-qb", "staging/beta1/task-0")
+        (repository / "HANDOFF.md").write_text("untracked but allowed\n", encoding="utf-8")
+        current = task(0)
+        current["paths"]["worktree"] = str(repository)
+        for field in ("base_sha", "target_sha", "expected_merge_parent"):
+            current[field] = sha
+        prd = Path(current["paths"]["prd"])
+        prd.parent.mkdir(parents=True, exist_ok=True)
+        prd.write_text(
+            "# Materialized Beta 1 Functional Task PRD\n\n"
+            "### Exact file lease\n\n"
+            "- `task-0.txt`\n",
+            encoding="utf-8",
+        )
+        current["prd_sha256"] = fleet.sha256_file(prd)
+        aligned = state(current)
+        aligned["target_sha"] = sha
+
+        fleet.validate_launch_preflight(current, aligned)
+
+        for location, field in (
+            ("task", "base_sha"),
+            ("task", "target_sha"),
+            ("task", "expected_merge_parent"),
+            ("controller", "target_sha"),
+        ):
+            broken = json.loads(json.dumps(aligned))
+            target = broken["tasks"]["0"] if location == "task" else broken
+            target[field] = SHA_A
+            with self.subTest(identity=f"{location} {field}"), self.assertRaisesRegex(
+                fleet.Blocked, "launch identities diverged"
+            ):
+                fleet.validate_launch_preflight(broken["tasks"]["0"], broken)
+
+        (repository / "owned.txt").write_text("new head\n", encoding="utf-8")
+        git(repository, "add", "owned.txt")
+        git(repository, "commit", "-qm", "different head")
+        with self.assertRaisesRegex(fleet.Blocked, "launch identities diverged"):
+            fleet.validate_launch_preflight(current, aligned)
 
     def test_materialize_preserves_identity_when_worker_policy_is_unchanged(self) -> None:
         store = fleet.StateStore(self.root)
@@ -2724,8 +2856,19 @@ class FleetControllerTests(unittest.TestCase):
         self.assertFalse((self.root / "processes/00/process-1.json").exists())
         os.kill(pid, signal.SIGCONT)
         deadline = time.monotonic() + 5
-        while not fleet.launch_handshake_path(intent_path).exists() and time.monotonic() < deadline:
+        children: list[dict] = []
+        while time.monotonic() < deadline:
+            if fleet.launch_handshake_path(intent_path).exists():
+                intent = json.loads(intent_path.read_text(encoding="utf-8"))
+                children = fleet._find_intent_children(intent)
+                if len(children) == 1:
+                    break
             time.sleep(0.01)
+        self.assertEqual(
+            len(children),
+            1,
+            intent_path.read_text(encoding="utf-8"),
+        )
         recovered = fleet.recover_controller(store, self.root)
         adopted = store.read_snapshot()["tasks"]["0"]["process"]
         self.processes.append(adopted["pid"])
