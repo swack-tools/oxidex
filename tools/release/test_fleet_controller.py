@@ -1200,6 +1200,132 @@ class FleetControllerTests(unittest.TestCase):
             store.events_path.read_text(encoding="utf-8"), before_events
         )
 
+    def test_refresh_plan_spec_updates_only_global_hashes_and_preserves_history(self) -> None:
+        store = fleet.StateStore(self.root)
+        original = state(task(0, "running"))
+        store.write_snapshot(original)
+        store.append_event({"event": "existing", "value": "preserve"})
+        store.write_receipt_index({"receipt": {"sha256": "c" * 64}})
+        plan = self.root / "new-plan.md"
+        spec_file = self.root / "new-spec.md"
+        plan.write_text("# Plan v2\n", encoding="utf-8")
+        spec_file.write_text("# Spec v2\n", encoding="utf-8")
+        before_state_sha = fleet.sha256_file(store.snapshot_path)
+
+        result = fleet.refresh_plan_spec(
+            store,
+            plan,
+            spec_file,
+            old_plan_sha256=original["plan_sha256"],
+            old_spec_sha256=original["spec_sha256"],
+            before_state_sha256=before_state_sha,
+        )
+
+        updated = store.read_snapshot()
+        self.assertEqual(updated["plan_sha256"], fleet.sha256_file(plan))
+        self.assertEqual(updated["spec_sha256"], fleet.sha256_file(spec_file))
+        preserved = dict(original)
+        preserved["plan_sha256"] = updated["plan_sha256"]
+        preserved["spec_sha256"] = updated["spec_sha256"]
+        self.assertEqual(updated, preserved)
+        self.assertEqual(store.read_receipt_index(), {"receipt": {"sha256": "c" * 64}})
+        events = [json.loads(line) for line in store.events_path.read_text().splitlines()]
+        self.assertEqual(events[0]["event"], "existing")
+        self.assertEqual(events[0]["value"], "preserve")
+        self.assertEqual(events[-1]["event"], "refresh-plan-spec")
+        self.assertEqual(events[-1]["before_state_sha256"], before_state_sha)
+        self.assertEqual(result["idempotent"], False)
+
+    def test_refresh_plan_spec_refuses_stale_or_tampered_before_state(self) -> None:
+        store = fleet.StateStore(self.root)
+        original = state(task(0))
+        store.write_snapshot(original)
+        plan = self.root / "new-plan.md"
+        spec_file = self.root / "new-spec.md"
+        plan.write_text("# Plan v2\n", encoding="utf-8")
+        spec_file.write_text("# Spec v2\n", encoding="utf-8")
+        before = store.snapshot_path.read_bytes()
+        with self.assertRaisesRegex(fleet.Refused, "old plan SHA"):
+            fleet.refresh_plan_spec(
+                store, plan, spec_file, old_plan_sha256="d" * 64,
+                old_spec_sha256=original["spec_sha256"],
+                before_state_sha256=fleet.sha256_file(store.snapshot_path),
+            )
+        with self.assertRaisesRegex(fleet.Refused, "before-state SHA"):
+            fleet.refresh_plan_spec(
+                store, plan, spec_file, old_plan_sha256=original["plan_sha256"],
+                old_spec_sha256=original["spec_sha256"], before_state_sha256="e" * 64,
+            )
+        self.assertEqual(store.snapshot_path.read_bytes(), before)
+
+    def test_refresh_plan_spec_exact_replay_is_idempotent_and_other_replay_refused(self) -> None:
+        store = fleet.StateStore(self.root)
+        original = state(task(0))
+        store.write_snapshot(original)
+        plan = self.root / "new-plan.md"
+        spec_file = self.root / "new-spec.md"
+        plan.write_text("# Plan v2\n", encoding="utf-8")
+        spec_file.write_text("# Spec v2\n", encoding="utf-8")
+        before = fleet.sha256_file(store.snapshot_path)
+        first = fleet.refresh_plan_spec(
+            store, plan, spec_file, old_plan_sha256=original["plan_sha256"],
+            old_spec_sha256=original["spec_sha256"], before_state_sha256=before,
+        )
+        replay = fleet.refresh_plan_spec(
+            store, plan, spec_file, old_plan_sha256=original["plan_sha256"],
+            old_spec_sha256=original["spec_sha256"], before_state_sha256=before,
+        )
+        self.assertFalse(first["idempotent"])
+        self.assertTrue(replay["idempotent"])
+        other_plan = self.root / "other-plan.md"
+        other_plan.write_text("# Plan v3\n", encoding="utf-8")
+        with self.assertRaises(fleet.Refused):
+            fleet.refresh_plan_spec(
+                store, other_plan, spec_file,
+                old_plan_sha256=original["plan_sha256"],
+                old_spec_sha256=original["spec_sha256"], before_state_sha256=before,
+            )
+
+    def test_refresh_plan_spec_resumes_after_snapshot_write_interruption(self) -> None:
+        store = fleet.StateStore(self.root)
+        original = state(task(0))
+        store.write_snapshot(original)
+        plan = self.root / "new-plan.md"
+        spec_file = self.root / "new-spec.md"
+        plan.write_text("# Plan v2\n", encoding="utf-8")
+        spec_file.write_text("# Spec v2\n", encoding="utf-8")
+        before = fleet.sha256_file(store.snapshot_path)
+        real_atomic_json = fleet.atomic_json
+
+        def interrupt_snapshot(path: Path, value: object) -> None:
+            if path == store.snapshot_path:
+                raise RuntimeError("simulated interruption")
+            real_atomic_json(path, value)
+
+        with mock.patch.object(fleet, "atomic_json", side_effect=interrupt_snapshot):
+            with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                fleet.refresh_plan_spec(
+                    store, plan, spec_file,
+                    old_plan_sha256=original["plan_sha256"],
+                    old_spec_sha256=original["spec_sha256"], before_state_sha256=before,
+                )
+        resumed = fleet.refresh_plan_spec(
+            store, plan, spec_file,
+            old_plan_sha256=original["plan_sha256"],
+            old_spec_sha256=original["spec_sha256"], before_state_sha256=before,
+        )
+        self.assertFalse(resumed["idempotent"])
+        self.assertEqual(store.read_snapshot()["plan_sha256"], fleet.sha256_file(plan))
+
+    def test_refresh_plan_spec_cli_requires_explicit_before_state_contract(self) -> None:
+        args = fleet.build_parser().parse_args([
+            "refresh-plan-spec", "--root", str(self.root),
+            "--plan", str(self.root / "plan.md"), "--spec", str(self.root / "spec.md"),
+            "--old-plan-sha256", "a" * 64, "--old-spec-sha256", "b" * 64,
+            "--before-state-sha256", "c" * 64,
+        ])
+        self.assertEqual(args.command, "refresh-plan-spec")
+
     def test_schema_requires_every_controller_and_task_recovery_field(self) -> None:
         complete = state(task(0))
         fleet.validate_state(complete)
