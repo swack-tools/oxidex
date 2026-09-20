@@ -299,10 +299,15 @@ The bindings use proper resource management:
 The C FFI follows these thread safety rules:
 
 - **Handle creation** (`exiftool_create`): Thread-safe, each call returns an independent handle
-- **Handle operations**: Not thread-safe - do not use the same handle from multiple threads
+- **Handle operations**: The wrapper exposes read-only operations; shared-handle
+  C getters are safe concurrently, but reads, writes, mutations, and destruction
+  must not overlap on one handle
 - **Error messages**: Thread-safe - each thread has its own error message storage
 
-**Recommendation**: Create one `Oxidex` instance per thread.
+**Recommendation**: Create one `Oxidex` instance per thread as a conservative
+usage pattern. The underlying C API permits concurrent read-only getters on a
+shared handle, but `read_file`, writes, mutations, and destruction must not
+overlap with any other operation on that handle.
 
 ## License
 

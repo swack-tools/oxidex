@@ -669,7 +669,9 @@ if (make_ptr) {
 
 ### Thread Safety
 
-One handle per thread:
+One handle per thread is a conservative usage pattern. Shared-handle
+read-only getters are also supported, but reads, writes, mutations, and
+destruction must not overlap with any other operation on that handle:
 
 ```c
 // Thread function
@@ -691,7 +693,9 @@ void* worker_thread(void* arg) {
 2. **Using returned strings after next call** - Copy immediately
 3. **Ignoring return codes** - Always check for errors
 4. **NULL input strings** - All strings must be null-terminated
-5. **Sharing handle across threads** - Use one handle per thread
+5. **Sharing handle across threads** - Shared read-only getters are safe, but
+   use one handle per thread when reads, writes, mutations, or destruction may
+   overlap.
 
 ## Performance Considerations
 

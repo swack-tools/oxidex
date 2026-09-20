@@ -413,7 +413,9 @@ int exiftool_remove_tag(struct ExifToolHandle *handle, const char *tag_name);
  - `EXIFTOOL_ERR_INVALID_TAG_VALUE`: Metadata validation failed
 
  # Thread Safety
- Thread-safe for read-only access to handle.
+ Not thread-safe with respect to the handle. Do not call concurrently with
+ any other operation on the same handle, including getters, mutations, or
+ destruction.
  */
 int exiftool_write_file(const struct ExifToolHandle *handle, const char *filepath);
 
