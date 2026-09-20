@@ -80,6 +80,11 @@ else:
     elif name=='verify_exprs.py':
         dump(args[0]);assert flag('--et-lib')==lib
         assert flag('--perl')==pathlib.Path(os.environ['EXIFTOOL_PERL'])
+        allowed=[pathlib.Path(args[i+1]).resolve() for i,arg in enumerate(args)
+                 if arg=='--allow-dirty-path']
+        assert allowed==[artifact_path('setnewvalue-address-rules'),
+                         artifact_path('setnewvalue-address-ledger'),
+                         artifact_path('setnewvalue-ownership-ledger')]
         pathlib.Path(os.environ['CARGO_TARGET_DIR']).mkdir(parents=True,exist_ok=True)
         output(flag('--ledger-out'),'expr-ledger')
     elif name=='codegen.py':
