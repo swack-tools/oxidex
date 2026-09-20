@@ -422,40 +422,50 @@ class Transaction:
                 raise Refused("selected ExifTool source changed during transaction")
 
     def variant(self, label, version, regenerate):
+        if not regenerate:
+            raise Refused(f"{label}: variants must always regenerate from their selected source")
         base = self.run / label
         tree, cache, target = base / "repo", base / "cache", base / "target"
         base.mkdir()
         source = Path(self.doc["sources"]["old" if label == "before" else "new"]["tree"])
         self.command(f"clone-{label}", ["git", "clone", "--no-local", "--no-checkout", self.root, tree])
         self.command(f"checkout-{label}", ["git", "checkout", "--detach", self.start["identity"]["head"]], tree)
+        clean_tree = {"head": git(tree, "rev-parse", "HEAD").decode().strip(),
+                      "status": git(tree, "status", "--porcelain", "--untracked-files=all").decode(),
+                      "clean": True}
+        if clean_tree["status"]:
+            raise Refused(f"{label}: cloned variant is not clean")
         cache.mkdir()
         env = {**self.env, "OXIDEX_ET_CACHE": str(cache), "EXIFTOOL_CACHE_DIR": str(cache),
                "OXIDEX_EXIFTOOL_LIB": str(source / "lib"), "CARGO_TARGET_DIR": str(base / "oracle-target"),
                "OXIDEX_ALLOW_DIRTY_TREE": "1"}
-        if regenerate:
-            (tree / PIN).write_text(version + "\n")
+        (tree / PIN).write_text(version + "\n")
         saved = artifacts.snapshot(tree, "all", [])
         dump = cache / f"tables-{version}.json"
-        # A unique, freshly written dump, even for the unregenerated baseline.
+        # A unique, freshly written dump bound to the selected immutable source.
         self.command(f"dump-{label}", [self.perl, tree / "tools/exiftool-tables/dump_tables.pl", source / "lib"], tree, env, stdout_file=dump)
         json.loads(dump.read_text())
         first_dump = digest(dump)
-        if regenerate:
-            try:
-                self.command(f"generate-{label}", ["bash", tree / "tools/exiftool-tables/regen-all.sh"], tree, env)
-            finally:
-                # Failed producers are checked too, and their scratch is retained.
-                artifacts.check(tree, saved)
-            if digest(dump) != first_dump:
-                raise Refused(f"{label}: generation replaced the bound fresh dump with different data")
-            self.command(f"verify-{label}", [sys.executable, tree / "tools/exiftool-tables/verify.py",
-                         tree / next(a.path for a in artifacts.select() if a.key == "binary"),
-                         source / "lib", "--oracle", tree / "tools/exiftool-tables/oracle.pl"], tree, env)
+        generator = tree / "tools/exiftool-tables/regen-all.sh"
+        generator_sha256 = digest(generator)
+        try:
+            self.command(f"generate-{label}", ["bash", generator], tree, env)
+        finally:
+            # Failed producers are checked too, and their scratch is retained.
+            artifacts.check(tree, saved)
+        if digest(dump) != first_dump:
+            raise Refused(f"{label}: generation replaced the bound fresh dump with different data")
+        self.command(f"verify-{label}", [sys.executable, tree / "tools/exiftool-tables/verify.py",
+                     tree / next(a.path for a in artifacts.select(root=tree) if a.key == "binary"),
+                     source / "lib", "--oracle", tree / "tools/exiftool-tables/oracle.pl"], tree, env)
         artifacts.check(tree, saved)
         source_state = artifacts.state(tree, [])
+        output_sha256 = {a.path: digest(tree / a.path) for a in artifacts.select(root=tree)}
+        output_sha256[PIN] = digest(tree / PIN)
         self.doc["variants"][label] = {"tree": str(tree), "target": str(target), "version": version,
-            "regenerated": regenerate, "source": str(source), "dump": str(dump), "dump_sha256": digest(dump),
-            "state": source_state}
+            "regenerated": True, "source": str(source), "source_sha256": digest(source / "exiftool"),
+            "generator_sha256": generator_sha256, "output_sha256": output_sha256,
+            "clean_tree": clean_tree, "dump": str(dump), "dump_sha256": digest(dump), "state": source_state}
         save(self.report, self.doc)
         snapshot = self.run / f"tables-{version}.{label}.snapshot.json"
         shutil.copyfile(dump, snapshot)
@@ -574,6 +584,9 @@ class Transaction:
     def promote(self, tree):
         assert_entry(self.root, self.start)
         self.identities()
+        generated_paths = [a.path for a in artifacts.select(root=tree)] + [PIN]
+        if generated_paths != self.paths:
+            raise Refused("generated artifact path set changed; live promotion cannot safely add or remove split modules")
         # Durable payloads on both sides; prepared identity before first write.
         after = {}
         for rel in self.paths:
@@ -603,7 +616,7 @@ class Transaction:
     def execute(self):
         try:
             self.sources()
-            before = self.variant("before", self.old, self.old != self.pin)
+            before = self.variant("before", self.old, True)
             after = self.variant("after", self.new, True)
             complete = self.grade(before, after)
             assert_entry(self.root, self.start)
