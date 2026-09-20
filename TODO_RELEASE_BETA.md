@@ -163,6 +163,21 @@ Notes:
 > rules. Delete or archive it only after external-consumer verification and
 > explicit approval; do not fix it in place. See the [coverage-loop review](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/claude-policy-audit/coverage-loop-review.md).
 
+> **2026-09-19 — Claude-only boundary and legacy fleet status verified.**
+> The final boundary audit records that `CLAUDE.md` is a non-duplicating
+> routing pointer to authoritative shared policy in `AGENTS.md`; it is not an
+> import surface and does not duplicate or override those rules. Its remaining
+> content is Claude-specific skills, model-routing, and fast-mode guidance, and
+> the legacy coverage loop is quarantined rather than an active beta workflow.
+> The legacy runtime remains
+> a retirement candidate only: the 102-file `tools/fleet/**` surface still has
+> direct `justfile`, service/unit, hook, and Keel consumers. Keep
+> `tools/release/fleet_controller.py` in scope as the new local durable release
+> controller, not as legacy fleet code. No destructive retirement, deletion,
+> extraction, credential revocation, or supervisor change is authorized until
+> a durable zero-consumer proof covers live hosts and external consumers and a
+> maintainer gives explicit approval.
+
 ## 2. Finish functional and ExifTool-parity work
 
 Implementation design:
