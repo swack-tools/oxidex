@@ -423,7 +423,25 @@ class ArtifactValidationTests(unittest.TestCase):
             proof["artifact"] = attribute._artifact_record(proof_path)
             receipt["pre_seam"] = proof
             receipt["artifact_index"] = attribute._artifact_index(root)
-            attribute.validate_v3_receipt(receipt, root, replay=True)
+            observed_key_orders = []
+            original_project_file = attribute.project_file
+
+            def record_project_order(oracle, candidate):
+                observed_key_orders.append((list(oracle), list(candidate)))
+                return original_project_file(oracle, candidate)
+
+            with mock.patch.object(
+                attribute, "project_file", side_effect=record_project_order
+            ):
+                attribute.validate_v3_receipt(receipt, root, replay=True)
+            self.assertTrue(observed_key_orders)
+            self.assertTrue(
+                all(
+                    oracle_keys == sorted(oracle_keys)
+                    and candidate_keys == sorted(candidate_keys)
+                    for oracle_keys, candidate_keys in observed_key_orders
+                )
+            )
             mutated = copy.deepcopy(receipt)
             mutated["pre_seam"]["resolution"]["parent_commit"] = "0" * 40
             with self.assertRaisesRegex(attribute.ReceiptError, "pre-seam"):

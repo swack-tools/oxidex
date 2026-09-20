@@ -712,7 +712,10 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
                 )
                 if parsed != retained:
                     raise ReceiptError(f"run {mode} {side} parsed output does not match raw stdout")
-                sides[side] = parsed
+                # Measurement loads the canonical retained JSON written by
+                # capture_process. Replay must use that same key order: the
+                # comparator's duplicate pairing is order-sensitive.
+                sides[side] = retained
             relative = child["relative_path"]
             per_file[relative] = project_file(
                 normalize_access_date_output(sides["oracle"], oracle=True),
