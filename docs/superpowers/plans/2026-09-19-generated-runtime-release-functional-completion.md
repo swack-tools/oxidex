@@ -662,8 +662,9 @@ selects the newest process record and refuses `--last`.
 - Create: `docs/reference/durable-release-storage.md`
 - Create: `docs/reference/beta-fleet-controller.md`
 - Modify: `scripts/exiftool_oracle.py`
-- Modify: `justfile` recipes `docs-coverage`, `duplicate-loss-scan`,
-  `compare-exiftool-full`, and `compare-exiftool-full-update`
+- Modify: `justfile`
+  Add or update the `docs-coverage`, `duplicate-loss-scan`,
+  `compare-exiftool-full`, and `compare-exiftool-full-update` recipes.
 - Modify: `.agents/skills/exiftool-parity/SKILL.md`
 - Do not commit downloaded sources, corpora, Perl installations, or secrets
 
@@ -840,7 +841,8 @@ squash-merges Task 0 before creating any other task worktree.
 
 - Create: `tools/exiftool-tables/runtime_ownership.py`
 - Create: `tools/exiftool-tables/runtime_ownership.json`
-- Create: `tools/exiftool-tables/runtime_ownership.d/` source fragments
+- Create: `tools/exiftool-tables/runtime_ownership.d/`
+  Add source fragments beneath this directory.
 - Create: `tools/exiftool-tables/test_runtime_ownership.py`
 - Modify: `justfile`
 - Do not modify: `src/exiftool_tables/conv/**`, engine files, generated tables
@@ -1447,10 +1449,12 @@ Record schema/reconciliation totals, test output, commit SHA, and
 
 - Modify: `src/exiftool_tables/session.rs`
 - Modify: `src/exiftool_tables/ifd_engine.rs`
-- Modify: `src/exiftool_tables/cond.rs` only for required session access
+- Modify: `src/exiftool_tables/cond.rs`
+  Limit changes to required session access.
 - Modify: `src/core/exif_dir_engine.rs`
-- Modify: `src/core/tiff_helpers.rs` and `src/core/jpeg_helpers.rs` only at
-  session-construction/call boundaries
+- Modify: `src/core/tiff_helpers.rs`
+- Modify: `src/core/jpeg_helpers.rs`
+  Limit both helper changes to session-construction/call boundaries.
 - Add: `tests/generated_file_session.rs`
 - Add focused Rust unit tests in those modules
 - Do not change conversion registry generation or occurrence consumer APIs
@@ -1992,9 +1996,10 @@ The controller freezes the shared adapter interfaces after this task integrates.
 **Files:**
 
 - Modify: `src/parsers/tiff/makernotes/nikon.rs`
-- Modify only beneath: `src/parsers/tiff/makernotes/nikon/`
+- Modify: `src/parsers/tiff/makernotes/nikon/`
 - Modify: `tests/integration/nikon_makernotes_tests.rs`
-- Modify: `tests/integration/makernote_integration.rs` only for Nikon cases
+- Modify: `tests/integration/makernote_integration.rs`
+  Limit changes to Nikon cases.
 - Add: `tests/nikon_main_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/nikon.json`
 - Do not modify shared engines, helpers, central registries, or generated output
@@ -2440,7 +2445,8 @@ the shared stage.
 - Create: `tools/exiftool-tables/runtime_deletion_ledger.py`
 - Create: `tools/exiftool-tables/test_runtime_deletion_ledger.py`
 - Add: `tests/generated_runtime_deletion_controls.rs`
-- Modify: `justfile` to add `verify-runtime-deletions`
+- Modify: `justfile`
+  Add the `verify-runtime-deletions` recipe.
 
 **Interfaces:** Consumes Task 1 ownership rows, Task 8 generated-on/off
 receipts, Task 10 refusal closure, Task 11 deletion candidates, Tasks 12-16
