@@ -95,7 +95,7 @@ fn align2(value: usize) -> usize {
 /// payload but its parent sets state that prevents the final primary field.
 fn afinfo2_child(order: Endian, point_count: u16, primary: u16) -> Vec<u8> {
     let n = usize::from(point_count);
-    let bit_words = (n + 15) / 16;
+    let bit_words = n.div_ceil(16);
     let word_count = 8 + (4 * n) + bit_words + (bit_words + 1) + 1;
     let size = u16::try_from(word_count * 2).expect("test child stays within u16 size");
     let mut words = Vec::with_capacity(word_count);
@@ -116,15 +116,11 @@ fn afinfo2_child(order: Endian, point_count: u16, primary: u16) -> Vec<u8> {
     }
     if bit_words > 0 {
         words.push(0x8001); // point 0 and point 15
-        for _ in 1..bit_words {
-            words.push(1); // point 16 for the n=17 control
-        }
+        words.extend(std::iter::repeat_n(1, bit_words - 1)); // point 16 for the n=17 control
     }
     // On non-EOS bodies key 13 is an Unknown field, but ProcessSerialData
     // still consumes its ceil(n/16)+1 words before key 14.
-    for _ in 0..bit_words + 1 {
-        words.push(0);
-    }
+    words.extend(std::iter::repeat_n(0, bit_words + 1));
     words.push(primary);
 
     let mut bytes = Vec::with_capacity(words.len() * 2);

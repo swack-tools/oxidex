@@ -7,10 +7,7 @@
 //! live in the module unit tests; these cover the parser through the public
 //! entry point across each plist value type.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::specialized::plist::{PlistParser, parse_plist_metadata};
 

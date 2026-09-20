@@ -1,7 +1,4 @@
-#[path = "../../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::core::FormatParser;
 use oxidex::parsers::audio::flac::FlacParser;
 
