@@ -11,6 +11,7 @@ import unittest
 
 REPO = Path(__file__).resolve().parents[2]
 README = (REPO / "README.md").read_text(encoding="utf-8")
+CARGO_TOML = (REPO / "Cargo.toml").read_text(encoding="utf-8")
 PACKAGING_GUIDE = (REPO / "docs/reference/packaging/packaging-guide.md").read_text(
     encoding="utf-8"
 )
@@ -30,6 +31,26 @@ class DistributionSurfaceTests(unittest.TestCase):
         self.assertNotIn("crates.io/crates/oxidex", README)
         self.assertNotIn("docs.rs/oxidex", README)
         self.assertIn("not published to crates.io", README)
+
+    def test_beta_docs_keep_format_and_detection_scopes_explicit(self):
+        self.assertIn("16,684 generated metadata tag", README)
+        self.assertIn("131 formats for detection and 129 to a", README)
+        self.assertNotIn("140+ formats", README)
+        package_description = next(
+            line for line in CARGO_TOML.splitlines() if line.startswith("description =")
+        )
+        self.assertNotIn("300+", package_description)
+        self.assertNotIn("~99% accuracy", README)
+        self.assertIn("does\nnot make an accuracy or performance claim", README)
+        self.assertNotIn("Static binaries for Linux, macOS, and Windows", README)
+
+    def test_beta_docs_do_not_reintroduce_unreceipted_magika_or_file_parity(self):
+        changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
+        cli_usage = (REPO / "docs/guide/cli-usage.md").read_text(encoding="utf-8")
+        self.assertNotIn("~99% detection accuracy", changelog)
+        self.assertNotIn("Benchmarks included for signature vs Magika", changelog)
+        self.assertNotIn("all 156 tags", cli_usage)
+        self.assertIn("does\nnot make a per-file or corpus parity claim", cli_usage)
 
     def test_package_guide_states_beta_policy_and_has_no_stale_release_literals(self):
         self.assertRegex(

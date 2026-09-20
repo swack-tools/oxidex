@@ -49,10 +49,10 @@ oxidex -j -a -G1 photo.jpg     # every occurrence, family-1 keys: compare with `
 
 JSON keys are always group-qualified. Numbers are emitted as JSON numbers
 and text as JSON strings, as ExifTool does. With `-j -a -G1`, keys and
-values line up with `exiftool -j -a -G1`. On the pinned corpus file
-`t/images/Canon.jpg`, all 156 tags OxiDex emits match ExifTool 13.59 exactly,
-and ExifTool emits 14 more (white-balance levels and four Composite tags).
-`-a` keeps every occurrence of a tag rather than only the priority winner.
+values are formatted for comparison with `exiftool -j -a -G1`. This page does
+not make a per-file or corpus parity claim; see [ExifTool parity](/guide/exiftool-parity)
+for the named instrument and receipt behind each measured result. `-a` keeps
+every occurrence of a tag rather than only the priority winner.
 
 With more than one file, the output is an array with a `SourceFile` per
 entry.
