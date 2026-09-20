@@ -1754,6 +1754,8 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 - Modify: `src/core/exif_dir_engine.rs`
 - Modify: `src/core/tiff_helpers.rs`
 - Modify: `src/core/jpeg_helpers.rs`
+- Modify: `src/core/format_dispatch.rs`
+- Modify: `src/core/operations.rs`
 - Modify: `src/exiftool_tables/enabled_ifd.rs`
 - Add focused tests in these modules
 - Add: `tests/exif_shared_pipeline.rs`
@@ -1779,6 +1781,10 @@ Pin:
 
 Also test duplicate order, group 1, requested edge tags, nested directories,
 and a non-UTF-8 reported scalar that currently declines at the text boundary.
+The staged-effect matrix must cover commit and discard for option mutation,
+typed Make/Model mutation, arbitrary member removal, warning order, and
+scope/processed-state preservation. Assertions must observe production
+residual output/state rather than counters detached from the residual path.
 
 - [ ] **Step 2: Run focused engine tests red**
 
@@ -1801,12 +1807,19 @@ requires them.
 
 Replace replay/drain ownership ambiguity with one generated-first route and at
 most one named residual. Preserve structural walker ownership for offset,
-SubIFD, MakerNote, IPTC, GeoTIFF, and PrintIM edges.
+SubIFD, MakerNote, IPTC, GeoTIFF, and PrintIM edges. If ExifIFD and the next-IFD
+pointer alias the same physical directory, guard the entire repeated adapter
+before any structural handler can replay while preserving bounded next-chain
+traversal. Pin the alias with an observable structural child and add one
+four-directory owner/group/order fixture.
 
 - [ ] **Step 5: Make request-aware edge behavior explicit**
 
 An explicitly requested edge tag is not discarded merely because its normal
-directory behavior is silent. Add the paired default/requested test.
+directory behavior is silent. Thread the existing `ReadOptions` through the
+real operations and format-dispatch paths for JPEG and standalone TIFF; a
+helper-only seam is insufficient. Add a paired public-path test proving the
+default read omits the edge and the explicit request retains it.
 
 - [ ] **Step 6: Run tests, fmt, Clippy, commit, and measure**
 
@@ -1820,7 +1833,9 @@ task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-sh
 ```
 
 Commit the signed task candidate after tests/formatting/Clippy and before the
-conformance/read-receipt portions of the standard commands.
+conformance/read-receipt portions of the standard commands. Rebuild the
+release binary after the commit so its candidate-bound staleness check passes.
+Record an explicit performance disposition for the full-session staging copy.
 
 - [ ] **Step 7: Commit, update handoff, and report**
 
@@ -1828,6 +1843,7 @@ conformance/read-receipt portions of the standard commands.
 git add src/exiftool_tables/conv/mod.rs src/exiftool_tables/ifd_engine.rs \
   src/exiftool_tables/enabled_ifd.rs src/core/exif_dir_engine.rs \
   src/core/tiff_helpers.rs src/core/jpeg_helpers.rs \
+  src/core/format_dispatch.rs src/core/operations.rs \
   tests/exif_shared_pipeline.rs
 git commit -S -m "refactor: route Exif directories through one tag pipeline"
 ```
