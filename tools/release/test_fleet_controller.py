@@ -315,6 +315,7 @@ class FleetControllerTests(unittest.TestCase):
                 "event",
                 "checkpoint",
                 "repair-merge-receipts",
+                "refresh-plan-spec",
                 "reconcile",
                 "recover",
                 "launch",
@@ -953,7 +954,7 @@ class FleetControllerTests(unittest.TestCase):
             except BaseException as exc:
                 results[name] = exc
 
-        def authenticated_kill(_pid: int, _signal: int) -> None:
+        def authenticated_kill(_record: dict, _signal: int) -> None:
             worker_running.clear()
 
         patches = (
@@ -963,7 +964,11 @@ class FleetControllerTests(unittest.TestCase):
             ),
             mock.patch.object(fleet, "process_start_time", return_value="start"),
             mock.patch.object(fleet, "process_command", return_value="worker token-0"),
-            mock.patch.object(fleet.os, "kill", side_effect=authenticated_kill),
+            mock.patch.object(
+                fleet,
+                "_terminate_authenticated_process",
+                side_effect=authenticated_kill,
+            ),
             mock.patch.object(fleet.time, "sleep", side_effect=controlled_sleep),
         )
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
@@ -2976,6 +2981,17 @@ class FleetControllerTests(unittest.TestCase):
             ],
         )
         self.assertEqual(intent["argv"], argv)
+        recovery = (self.root / "processes/00/recovery-prompt.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"Canonical PRD: {prd}", recovery)
+        self.assertIn(
+            f"Canonical PRD SHA-256: {current['prd_sha256']}", recovery
+        )
+        self.assertIn(
+            "Required recovery action: reread the canonical PRD in full before acting",
+            recovery,
+        )
 
     def test_fresh_controller_adopts_post_spawn_pre_record_worker_without_duplicate(self) -> None:
         """Real SIGKILL leaves only an intent; a fresh controller adopts its exact child."""
@@ -3129,6 +3145,31 @@ class FleetControllerTests(unittest.TestCase):
         self.assertIn(str(self.root / "recovery.md"), argv[-1])
         stopped = fleet.stop_task(store, 0, "TERM")
         self.assertEqual(stopped, {"stopped": False, "reason": "not-live"})
+
+    def test_stop_terminates_the_authenticated_process_group(self) -> None:
+        store = fleet.StateStore(self.root)
+        value = state(task(0, "running"))
+        record = process_record(0, self.root / "events.jsonl", "recorded-session")
+        record["process_group"] = record["pid"]
+        value["tasks"]["0"]["process"] = record
+        store.write_snapshot(value)
+
+        with (
+            mock.patch.object(fleet, "worker_is_live", return_value=True),
+            mock.patch.object(
+                fleet, "process_start_time", return_value=record["start_time"]
+            ),
+            mock.patch.object(
+                fleet, "process_command", return_value=record["observed_command"]
+            ),
+            mock.patch.object(fleet, "_terminate_authenticated_process") as terminate,
+            mock.patch.object(os, "kill") as kill_pid,
+        ):
+            stopped = fleet.stop_task(store, 0, "TERM")
+
+        self.assertEqual(stopped, {"stopped": True, "signal": "TERM"})
+        terminate.assert_called_once_with(record, signal.SIGTERM)
+        kill_pid.assert_not_called()
 
     def test_resume_authenticates_replacement_before_durable_state_changes(self) -> None:
         worktree = self.root / "worktree"
