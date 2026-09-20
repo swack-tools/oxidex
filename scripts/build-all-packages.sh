@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Quick Package Building Script for OxiDex
-# This script builds all package types in the correct order
+# Quick local package-building script for OxiDex
+# This script creates optional local Debian/RPM artifacts. The beta release
+# workflow does not publish those artifacts or a Homebrew formula.
 #
 # Usage: ./scripts/build-all-packages.sh [VERSION]
-# Example: ./scripts/build-all-packages.sh 0.1.0
+# Without VERSION, the value is derived from the root Cargo package.
 
 set -euo pipefail
 
@@ -25,10 +26,12 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Get version from Cargo.toml if not provided
+# Get the product version from Cargo metadata if not provided. An explicit
+# argument remains useful for a local package rehearsal, but is never a
+# release publication claim.
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
-    VERSION=$(grep '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "oxidex"))')
     log_info "Using version from Cargo.toml: $VERSION"
 fi
 
@@ -143,36 +146,9 @@ build_rpm_package() {
     echo ""
 }
 
-# Verify Homebrew formula
-verify_homebrew_formula() {
-    log_info "Step 4: Verifying Homebrew formula..."
-
-    local formula_path="packaging/homebrew/oxidex.rb"
-
-    if [[ ! -f "$formula_path" ]]; then
-        log_error "Homebrew formula not found at $formula_path"
-        return 1
-    fi
-
-    log_info "✓ Homebrew formula exists: $formula_path"
-
-    # Check if formula needs SHA256 update
-    if grep -q "UPDATE_THIS_SHA256_AFTER_RELEASE" "$formula_path"; then
-        log_warn "  Homebrew formula SHA256 needs to be updated after creating a GitHub release"
-        log_info "  Run: curl -sL https://github.com/oxidex/oxidex/archive/refs/tags/v$VERSION.tar.gz | shasum -a 256"
-    fi
-
-    # Audit formula if brew is available
-    if command -v brew &> /dev/null; then
-        if brew audit --formula "$formula_path" 2>&1 | grep -v "bottle" > /dev/null; then
-            log_info "  Formula audit: PASSED"
-        else
-            log_warn "  Formula audit has warnings (may be acceptable)"
-        fi
-    else
-        log_warn "  Homebrew not installed, skipping formula audit"
-    fi
-
+# Homebrew is intentionally not a beta distribution channel.
+report_homebrew_policy() {
+    log_info "Step 4: Homebrew distribution is not enabled for this beta; no formula was checked."
     echo ""
 }
 
@@ -235,10 +211,7 @@ print_summary() {
         echo "  ✗ RPM package: not built"
     fi
 
-    # Homebrew formula
-    if [[ -f "packaging/homebrew/oxidex.rb" ]]; then
-        echo "  ✓ Homebrew formula: packaging/homebrew/oxidex.rb"
-    fi
+    echo "  - Homebrew formula: not published for this beta"
 
     # Checksums
     if [[ -f "target/CHECKSUMS.txt" ]]; then
@@ -246,12 +219,10 @@ print_summary() {
     fi
 
     echo ""
-    log_info "Next steps:"
-    echo "  1. Test packages: ./scripts/test-packages.sh all"
-    echo "  2. Create git tag: git tag -a v$VERSION -m 'Release v$VERSION'"
-    echo "  3. Push tag: git push origin v$VERSION"
-    echo "  4. Upload packages to GitHub Release"
-    echo "  5. Update Homebrew formula SHA256"
+    log_info "Next steps for local validation:"
+    echo "  1. Test locally generated packages: ./scripts/test-packages.sh all"
+    echo "  2. Use the signed binaries and checksums from the GitHub release workflow"
+    echo "     for beta distribution; Debian/RPM/Homebrew publication is not enabled."
     echo ""
 }
 
@@ -263,7 +234,7 @@ main() {
     build_release_binary
     build_deb_package
     build_rpm_package
-    verify_homebrew_formula
+    report_homebrew_policy
     generate_checksums
 
     print_summary
