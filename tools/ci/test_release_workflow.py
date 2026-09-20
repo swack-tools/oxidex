@@ -980,7 +980,7 @@ class TagRecipeTests(unittest.TestCase):
     SHA = "1" * 40
 
     def run_rendered_tag(self, *, authorization: str = "", dry_run: bool = False,
-                         remote: str = "absent"):
+                         remote: str = "absent", local: str = "absent"):
         rendered = subprocess.run(
             ["just", "--dry-run", "tag", "2.0.0-beta.1", self.SHA], cwd=REPO,
             text=True, capture_output=True, check=False)
@@ -994,7 +994,9 @@ class TagRecipeTests(unittest.TestCase):
             git.write_text(
                 "#!/usr/bin/env bash\nset -u\nprintf 'git %s\\n' \"$*\" >> \"$CALL_LOG\"\n"
                 "case \"$*\" in\n"
-                "  'rev-parse -q --verify refs/tags/'*) exit 1;;\n"
+                "  'rev-parse -q --verify refs/tags/'*)\n"
+                "    if [ \"$FAKE_LOCAL\" = failure ]; then exit 128; fi\n"
+                "    exit 1;;\n"
                 "  'ls-remote --exit-code --tags origin '*)\n"
                 "    if [ \"$FAKE_REMOTE\" = failure ]; then exit 128; fi\n"
                 "    if [ \"$FAKE_REMOTE\" = tag ] && [[ \"$*\" != *'^{}'* ]]; then\n"
@@ -1026,6 +1028,7 @@ class TagRecipeTests(unittest.TestCase):
                 "PATH": f"{fake_bin}:{env['PATH']}",
                 "CALL_LOG": str(log), "EXPECTED_SHA": self.SHA,
                 "FAKE_REMOTE": remote,
+                "FAKE_LOCAL": local,
                 "OXIDEX_TAG_AUTHORIZATION": authorization,
                 "OXIDEX_TAG_DRY_RUN": "1" if dry_run else "0",
             })
@@ -1090,6 +1093,14 @@ class TagRecipeTests(unittest.TestCase):
         result, calls = self.run_rendered_tag(dry_run=True, remote="failure")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("could not prove remote tag absence", result.stderr)
+        self.assertNotIn("git tag -s", calls)
+        self.assertNotIn("git push", calls)
+
+    def test_local_tag_query_failure_stops_before_local_tag_creation(self):
+        result, calls = self.run_rendered_tag(dry_run=True, local="failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not prove local tag absence", result.stderr)
+        self.assertNotIn("git ls-remote", calls)
         self.assertNotIn("git tag -s", calls)
         self.assertNotIn("git push", calls)
 

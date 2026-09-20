@@ -501,6 +501,12 @@ tag version sha:
     echo "tag $TAG -> $SHA"
     if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
       echo "refusing: tag $TAG already exists" >&2; exit 1
+    else
+      LOCAL_REF_STATUS=$?
+    fi
+    if [ "$LOCAL_REF_STATUS" -ne 1 ]; then
+      echo "refusing: could not prove local tag absence for refs/tags/$TAG (git rev-parse exited $LOCAL_REF_STATUS)" >&2
+      exit 1
     fi
     remote_ref_absent() {
       local ref="$1" status
