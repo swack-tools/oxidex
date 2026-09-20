@@ -198,14 +198,17 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
 
     let reported = metadata.get_string("File:FileType");
     let ours_is_authoritative = is_placeholder(reported) || reported == Some(id.file_type.as_ref());
-    if is_placeholder(reported) {
+    let suppress_producer = crate::exiftool_tables::attribution::silenced(
+        crate::exiftool_tables::attribution::Token::Producers,
+    );
+    if is_placeholder(reported) && !suppress_producer {
         metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
     }
 
     // The on-disk extension is a placeholder whenever it disagrees with
     // ExifTool's canonical one (`aif` where ExifTool says `aiff`), which is
     // exactly when it should be corrected.
-    if ours_is_authoritative {
+    if ours_is_authoritative && !suppress_producer {
         let current = metadata.get_string("File:FileTypeExtension");
         if is_placeholder(current) || current != Some(id.extension.as_ref()) {
             metadata.insert(
@@ -217,6 +220,7 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
 
     if let Some(mime) = id.mime_type
         && ours_is_authoritative
+        && !suppress_producer
         && is_placeholder(metadata.get_string("File:MIMEType"))
     {
         metadata.insert("File:MIMEType", TagValue::new_string(mime));

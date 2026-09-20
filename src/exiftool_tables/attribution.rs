@@ -30,8 +30,13 @@ impl Token {
 
 fn parse(spec: &str) -> Result<u8, String> {
     let mut bits = 0;
-    for word in spec.split(',').filter(|word| !word.is_empty()) {
-        bits |= match word {
+    for word in spec.split(',') {
+        if word.is_empty() || word.trim() != word {
+            return Err(format!(
+                "invalid OXIDEX_GENSHARE_SILENCE component {word:?}"
+            ));
+        }
+        let bit = match word {
             "engine" => Token::Engine.bit(),
             "legacy-l1" => Token::LegacyL1.bit(),
             "legacy-l2" => Token::LegacyL2.bit(),
@@ -41,6 +46,10 @@ fn parse(spec: &str) -> Result<u8, String> {
             "conv" => return Err("OXIDEX_GENSHARE_SILENCE=conv is unsafe".into()),
             other => return Err(format!("unknown OXIDEX_GENSHARE_SILENCE token {other:?}")),
         };
+        if bits & bit != 0 {
+            return Err(format!("duplicate OXIDEX_GENSHARE_SILENCE token {word:?}"));
+        }
+        bits |= bit;
     }
     Ok(bits)
 }
@@ -77,5 +86,20 @@ mod tests {
     fn refuses_unsafe_or_unknown_tokens() {
         assert!(parse("conv").is_err());
         assert!(parse("made-up").is_err());
+    }
+
+    #[test]
+    fn refuses_ambiguous_components() {
+        for spec in [
+            "engine,engine",
+            "engine,,serial",
+            ",engine",
+            "engine,",
+            "engine, serial",
+            " engine",
+            "",
+        ] {
+            assert!(parse(spec).is_err(), "{spec:?} must be rejected");
+        }
     }
 }

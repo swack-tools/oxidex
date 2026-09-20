@@ -144,7 +144,11 @@ fn set_macho_file_type(header: &MachHeader, is_fat: bool, metadata: &mut Metadat
     // `application/octet-stream` through `$mimeType{$baseType}`, and EXE is
     // the base type `%fileTypeLookup` routes this family to. Without it the
     // file falls through to `application/unknown`.
-    if let Some(mime) = crate::filetype::mime_for_type("EXE") {
+    if let Some(mime) = crate::filetype::mime_for_type("EXE")
+        && !crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Producers,
+        )
+    {
         metadata.insert(
             "File:MIMEType".to_string(),
             TagValue::String(mime.to_string()),

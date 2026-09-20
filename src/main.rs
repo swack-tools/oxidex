@@ -18,6 +18,11 @@ use oxidex::core::read_report::ParseStatus;
 use std::process;
 
 fn main() {
+    if let Err(error) = oxidex::exiftool_tables::attribution::validate() {
+        eprintln!("Error: {error}");
+        process::exit(2);
+    }
+
     // Parse command-line arguments after normalizing supported ExifTool-style options.
     let args = match CliArgs::parse() {
         Ok(args) => args,

@@ -128,6 +128,14 @@ impl FITSParser {
     /// Standard names are generated from `Image::ExifTool::FITS::Main`. Any
     /// other valid keyword is lowercased, title-cased, and has underscores
     /// removed while capitalizing the following character.
+    fn suppress_generated_keyword(keyword: &str) -> bool {
+        crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Producers,
+        ) && FITS_TAG_NAMES
+            .iter()
+            .any(|(candidate, _)| *candidate == keyword)
+    }
+
     fn tag_name(keyword: &str) -> String {
         if let Some((_, name)) = FITS_TAG_NAMES
             .iter()
@@ -201,21 +209,25 @@ impl FITSParser {
                             // already retains every occurrence (`TagSink::record`
                             // pushes each one); only the missing group prefix
                             // needed fixing here, not the retention mechanism.
-                            metadata.insert(
-                                format!("FITS:{}", Self::tag_name(&keyword)),
-                                TagValue::String(value),
-                            );
-                        }
-                        k if k.starts_with("NAXIS") && k.len() > 5 => {
-                            if let Ok(axis_val) = value.parse::<i64>() {
+                            if !Self::suppress_generated_keyword(&keyword) {
                                 metadata.insert(
                                     format!("FITS:{}", Self::tag_name(&keyword)),
-                                    TagValue::Integer(axis_val),
+                                    TagValue::String(value),
                                 );
                             }
                         }
+                        k if k.starts_with("NAXIS") && k.len() > 5 => {
+                            if let Ok(axis_val) = value.parse::<i64>() {
+                                if !Self::suppress_generated_keyword(&keyword) {
+                                    metadata.insert(
+                                        format!("FITS:{}", Self::tag_name(&keyword)),
+                                        TagValue::Integer(axis_val),
+                                    );
+                                }
+                            }
+                        }
                         _ => {
-                            if !value.is_empty() {
+                            if !value.is_empty() && !Self::suppress_generated_keyword(&keyword) {
                                 // Same table and family-1 group as the
                                 // COMMENT/HISTORY arm above: `FITS`.
                                 // ProcessFITS hands HandleTag the card's text
@@ -845,7 +857,11 @@ pub fn parse_dicom_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         }
 
         if let Some(entry) = dicom_dict_entry(element.group, element.element) {
-            if let Some(value) = dicom_value(&element, encoding, entry) {
+            if let Some(value) = dicom_value(&element, encoding, entry)
+                && !crate::exiftool_tables::attribution::silenced(
+                    crate::exiftool_tables::attribution::Token::Producers,
+                )
+            {
                 metadata.insert(format!("DICOM:{}", entry.name), value);
             }
         }

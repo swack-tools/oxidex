@@ -267,6 +267,12 @@ pub fn extract_file_metadata(path: &Path) -> Result<MetadataMap> {
         let header = read_header(path);
         let (file_type, file_type_ext, mime_type) = identify_extension(&ext_lower, &header);
 
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Producers,
+        ) {
+            return Ok(metadata);
+        }
+
         // File type extension. ExifTool reports the format's canonical
         // extension rather than echoing the filename, so `clip.m2ts` reports
         // `mts`.

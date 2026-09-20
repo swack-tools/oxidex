@@ -675,6 +675,9 @@ fn parse_sony_makernote_impl(
                 if main_tag(entry.tag_id).is_none() && main_extra::has(entry.tag_id) {
                     if let Some((name, printed, low)) =
                         main_extra::render(entry.tag_id, &value, byte_order, &mut cipher_ctx)
+                        && !crate::exiftool_tables::attribution::silenced(
+                            crate::exiftool_tables::attribution::Token::LegacyL2,
+                        )
                     {
                         found.push(Found::new(
                             format!("Sony:{}", name),
