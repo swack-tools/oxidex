@@ -21,9 +21,6 @@ import stat
 import subprocess
 import sys
 
-import conv_codegen
-
-
 @dataclass(frozen=True)
 class Artifact:
     key: str
@@ -53,6 +50,7 @@ class Artifact:
 # regenerated tree, and a member may only appear or disappear together with
 # its `mod` line.
 MODULE_FAMILIES = ("binary", "ifd")
+CONVERSION_REGISTRY_BEGIN = "// BEGIN GENERATED CONVERSION REGISTRY"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # HUB and table_modules.MOD_LINE_RE, restated so this file
 # stays importable on its own (tests copy it into scratch repositories);
@@ -188,9 +186,15 @@ STATIC_ARTIFACTS = (
 def conversion_artifacts(root=REPO_ROOT):
     """Per-table outputs beyond the historical Exif::Main manifest rows."""
     hub = Path(root) / "src/exiftool_tables/conv/mod.rs"
-    if not hub.is_file() or conv_codegen.REGISTRY_BEGIN not in hub.read_text(encoding="utf-8"):
+    if (not hub.is_file()
+            or CONVERSION_REGISTRY_BEGIN not in hub.read_text(encoding="utf-8")):
         # Older-release rehearsal fixtures have no generated registry yet.
         return ()
+    # Keep this manifest importable on its own in scratch repositories.  The
+    # registry generator is required only after its marker proves the checkout
+    # has the generated registry whose entries need discovery.
+    import conv_codegen
+
     entries = conv_codegen.discover_registry(root)
     extra = tuple(
         entry for entry in entries
