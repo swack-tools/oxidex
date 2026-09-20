@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,8 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import conv_codegen as C  # noqa: E402
+import artifacts as A  # noqa: E402
+import conv_oracle as O  # noqa: E402
 
 
 class RegexTranslation(unittest.TestCase):
@@ -168,6 +171,174 @@ class Fields(unittest.TestCase):
                                           "directives": {"PrintHex": 1}}}
         with self.assertRaises(C.Refuse):
             compile_one(tag)
+
+    def test_non_ifd_key_shapes_are_refused_not_coerced(self):
+        for key in ("01", "0x1", "name", "65536", "-1"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as td:
+                dump = Path(td) / "dump.json"
+                dump.write_text(json.dumps({
+                    "exiftool_version": "13.59",
+                    "modules": {"Synthetic": {"tables": {"Second": {
+                        "tags": {key: {"Name": "X", "ValueConv": {
+                            "kind": "expr", "expr": "$val + 1"}}}
+                    }}}},
+                }))
+                with self.assertRaisesRegex(C.Refuse, "non-IFD tag key"):
+                    C.generate(dump, "Synthetic::Second")
+
+
+class Registry(unittest.TestCase):
+    def entry(self, module, table, stem=None):
+        return C.RegistryEntry(module, table, stem or C.table_stem(module, table))
+
+    def test_multi_table_registry_is_sorted_and_routes_each_own_functions(self):
+        text = C.render_registry([
+            self.entry("Synthetic", "Second"),
+            self.entry("Exif", "Main"),
+        ])
+        self.assertLess(text.index('module: "Exif"'), text.index('module: "Synthetic"'))
+        self.assertIn("decode: synthetic_second::decode", text)
+        self.assertIn("claims: synthetic_second::claims", text)
+        self.assertNotIn("claims: exif_main::claims,\n        },\n        Entry {\n            module: \"Synthetic\"", text)
+
+    def test_registry_rejects_duplicate_table_identity_and_stem(self):
+        with self.assertRaisesRegex(ValueError, "duplicate conversion table identity"):
+            C.render_registry([self.entry("Exif", "Main"), self.entry("Exif", "Main")])
+        with self.assertRaisesRegex(ValueError, "duplicate conversion module stem"):
+            C.render_registry([
+                self.entry("One", "Main", "same"),
+                self.entry("Two", "Main", "same"),
+            ])
+        with self.assertRaisesRegex(ValueError, "duplicate conversion module stem"):
+            C.registry_with_candidate(
+                [self.entry("One", "Main", "one_main")],
+                self.entry("Different", "Table", "one_main"),
+            )
+
+    def test_registry_discovery_rejects_missing_orphan_and_stale_outputs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            tools = root / "tools/exiftool-tables"
+            conv.mkdir(parents=True)
+            tools.mkdir(parents=True)
+            ledger = {
+                "schema": C.LEDGER_SCHEMA,
+                "table": "Exif::Main",
+            }
+            (tools / "conv_exif_main_ledger.json").write_text(json.dumps(ledger))
+            with self.assertRaisesRegex(ValueError, "missing conversion module"):
+                C.discover_registry(root)
+            (conv / "exif_main.rs").write_text("// generated")
+            (conv / "orphan.rs").write_text("// generated")
+            with self.assertRaisesRegex(ValueError, "orphan conversion module"):
+                C.discover_registry(root)
+            (conv / "orphan.rs").unlink()
+            entries = C.discover_registry(root)
+            stale = C.replace_registry("prefix\n// BEGIN GENERATED CONVERSION REGISTRY\nstale\n"
+                                       "// END GENERATED CONVERSION REGISTRY\nsuffix\n", entries)
+            self.assertNotIn("stale", stale)
+            self.assertEqual(stale, C.replace_registry(stale, entries))
+
+    def test_table_identity_not_source_row_position_drives_stem(self):
+        before = self.entry("Synthetic", "Second")
+        after = self.entry("Synthetic", "Second")
+        self.assertEqual(before.stem, after.stem)
+        self.assertEqual(before.identity, "Synthetic::Second")
+
+    def test_artifact_and_oracle_discovery_share_registry_identities(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            tools = root / "tools/exiftool-tables"
+            conv.mkdir(parents=True)
+            (tools / "testdata").mkdir(parents=True)
+            entries = [
+                self.entry("Exif", "Main"),
+                self.entry("Synthetic", "Second"),
+            ]
+            (conv / "mod.rs").write_text(C.render_registry(entries) + "\n")
+            for module, table in (("Exif", "Main"), ("Synthetic", "Second")):
+                stem = C.table_stem(module, table)
+                (conv / f"{stem}.rs").write_text("// generated")
+                (tools / f"conv_{stem}_ledger.json").write_text(json.dumps({
+                    "schema": C.LEDGER_SCHEMA,
+                    "table": f"{module}::{table}",
+                }))
+            self.assertEqual(
+                [a.key for a in A.conversion_artifacts(root)],
+                ["conv-registry", "conv-synthetic_second", "conv-synthetic_second-ledger",
+                 "conv-synthetic_second-oracle"],
+            )
+            self.assertEqual(list(O.discover_tables(root)), ["Exif::Main", "Synthetic::Second"])
+
+    def test_single_table_inventory_owns_generated_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            tools = root / "tools/exiftool-tables"
+            conv.mkdir(parents=True)
+            tools.mkdir(parents=True)
+            entry = self.entry("Exif", "Main")
+            (conv / "mod.rs").write_text(C.render_registry([entry]) + "\n")
+            (conv / "exif_main.rs").write_text("// generated")
+            (tools / "conv_exif_main_ledger.json").write_text(json.dumps({
+                "schema": C.LEDGER_SCHEMA,
+                "table": "Exif::Main",
+            }))
+            self.assertEqual(
+                [a.key for a in A.conversion_artifacts(root)],
+                ["conv-registry"],
+            )
+
+    def test_oracle_discovery_refuses_invalid_emitted_registry(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            tools = root / "tools/exiftool-tables"
+            conv.mkdir(parents=True)
+            tools.mkdir(parents=True)
+            entry = self.entry("Exif", "Main")
+            (conv / "exif_main.rs").write_text("// generated")
+            ledger = tools / "conv_exif_main_ledger.json"
+            ledger.write_text(json.dumps({"schema": C.LEDGER_SCHEMA, "table": "Exif::Main"}))
+            hub = conv / "mod.rs"
+            valid = C.render_registry([entry]) + "\n"
+            hub.write_text(valid)
+            self.assertEqual(list(O.discover_tables(root)), ["Exif::Main"])
+            invalid = {
+                "missing": "pub mod exif_main;\n",
+                "stale": valid.replace('table: "Main"', 'table: "Old"'),
+                "duplicate": valid + C.render_registry([entry]) + "\n",
+                "extra": valid.replace(C.REGISTRY_END,
+                    '    Entry { module: "Extra", table: "Main", '
+                    'decode: exif_main::decode, claims: exif_main::claims },\n'
+                    + C.REGISTRY_END),
+                "decode": valid.replace("decode: exif_main::decode", "decode: wrong::decode"),
+                "claims": valid.replace("claims: exif_main::claims", "claims: wrong::claims"),
+            }
+            for name, text in invalid.items():
+                with self.subTest(name=name):
+                    hub.write_text(text)
+                    with self.assertRaisesRegex(ValueError, "generated conversion registry"):
+                        O.discover_tables(root)
+
+    def test_oracle_discovery_refuses_empty_registry_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            conv = root / "src/exiftool_tables/conv"
+            (root / "tools/exiftool-tables").mkdir(parents=True)
+            conv.mkdir(parents=True)
+            (conv / "mod.rs").write_text(C.render_registry([]) + "\n")
+            with self.assertRaisesRegex(ValueError, "nonempty"):
+                O.discover_tables(root)
+
+    def test_oracle_check_ignores_only_interpreter_install_path(self):
+        want = {"capture": {"perl": "/old/perl", "exiftool_version": "13.59"}, "fields": {}}
+        got = {"capture": {"perl": "/new/perl", "exiftool_version": "13.59"}, "fields": {}}
+        self.assertTrue(O.capture_matches(want, got))
+        got["capture"]["exiftool_version"] = "13.60"
+        self.assertFalse(O.capture_matches(want, got))
 
 
 class CommittedOutputs(unittest.TestCase):

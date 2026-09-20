@@ -22,6 +22,8 @@ import artifacts
 import upgrade_transaction as tx
 
 HERE = Path(__file__).resolve().parent
+CONV_REGISTRY = HERE.parents[1] / "src/exiftool_tables/conv/mod.rs"
+CONV_LEDGER_SCHEMA = "oxidex_conv_ledger_v1"
 
 
 def write(path, text, executable=False):
@@ -34,6 +36,13 @@ def write(path, text, executable=False):
 def output_text(version, artifact):
     """A synthetic generated output; a split table hub also names its module
     files, as a generated one does (artifacts.family_errors)."""
+    if artifact.key == "conv-registry":
+        return f"// synthetic registry {version}\n" + CONV_REGISTRY.read_text()
+    if artifact.key == "conv-exif-main-ledger":
+        return json.dumps({"schema": CONV_LEDGER_SCHEMA, "table": "Exif::Main",
+                           "synthetic_version": version}) + "\n"
+    if artifact.key == "conv-exif-main-oracle":
+        return json.dumps({"synthetic_version": version}) + "\n"
     stems = artifacts.module_stems(artifact.key) if artifact.key in artifacts.MODULE_FAMILIES else ()
     return f"{version}|{artifact.key}\n" + "".join(f"mod {stem};\n" for stem in stems)
 
@@ -47,8 +56,10 @@ class UpgradeTransactionTests(unittest.TestCase):
         self.root.mkdir()
         self.tools = self.root / "tools/exiftool-tables"
         self.tools.mkdir(parents=True)
-        for name in ("artifacts.py", "upgrade_transaction.py", "process_groups.py", "bump-exiftool.sh", "bump_conformance_gate.py"):
+        for name in ("artifacts.py", "conv_codegen.py", "upgrade_transaction.py", "process_groups.py", "bump-exiftool.sh", "bump_conformance_gate.py"):
             shutil.copy2(HERE / name, self.tools / name)
+        (self.tools / "spike").mkdir()
+        shutil.copy2(HERE / "spike/perl_subset.py", self.tools / "spike/perl_subset.py")
         for a in artifacts.select():
             write(self.root / a.path, output_text("committed-13.59", a))
         write(self.root / tx.PIN, "13.59\n")
@@ -87,7 +98,17 @@ label=root.parent.name; fail=os.environ.get('TX_FAIL','')
 pathlib.Path(os.environ['CARGO_TARGET_DIR']).mkdir(parents=True,exist_ok=True)
 for a in artifacts.select():
     # A split table hub keeps naming its module files (artifacts.family_errors).
-    (root/a.path).write_text(version+'|'+a.key+'\\n'+''.join('mod %s;\\n'%s for s in (artifacts.module_stems(a.key) if a.key in artifacts.MODULE_FAMILIES else ())))
+    path=root/a.path
+    if a.key=='conv-registry':
+        lines=path.read_text().splitlines(True)
+        if lines and lines[0].startswith('// synthetic registry '): lines=lines[1:]
+        path.write_text('// synthetic registry '+version+'\\n'+''.join(lines))
+    elif a.key=='conv-exif-main-ledger':
+        path.write_text(json.dumps({'schema':'oxidex_conv_ledger_v1','table':'Exif::Main','synthetic_version':version})+'\\n')
+    elif a.key=='conv-exif-main-oracle':
+        path.write_text(json.dumps({'synthetic_version':version})+'\\n')
+    else:
+        path.write_text(version+'|'+a.key+'\\n'+''.join('mod %s;\\n'%s for s in (artifacts.module_stems(a.key) if a.key in artifacts.MODULE_FAMILIES else ())))
     if fail=='generate-'+label and a.tier==1: sys.exit(7)
 if fail=='undeclared': (root/'surprise.rs').write_text('oops')
 if fail in ('added-module','removed-module'):
@@ -127,8 +148,9 @@ if fail=='hang-build':
     import subprocess,time
     child=subprocess.Popen([sys.executable,'-c',"import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); time.sleep(60)"])
     pathlib.Path(os.environ['TX_CHILD']).write_text(str(child.pid));time.sleep(60)
-versions={(root/a.path).read_text().splitlines()[0].split('|')[0] for a in artifacts.select()}
-assert all((root/a.path).read_text().splitlines()[0].split('|')[1]==a.key for a in artifacts.select())
+versioned=[a for a in artifacts.select() if a.producer not in ('conv_codegen','conv_oracle')]
+versions={(root/a.path).read_text().splitlines()[0].split('|')[0] for a in versioned}
+assert all((root/a.path).read_text().splitlines()[0].split('|')[1]==a.key for a in versioned)
 assert len(versions)==1, 'mixed-tier comparison binary'
 version=versions.pop();target=pathlib.Path(sys.argv[sys.argv.index('--target-dir')+1]); assert str(target)==os.environ['CARGO_TARGET_DIR']
 binary=target/'actual/custom/oxidex'; binary.parent.mkdir(parents=True)
@@ -195,6 +217,12 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
 
     def unchanged(self):
         self.assertEqual(tx.entry(self.root),self.before)
+
+    def test_transaction_fixture_preserves_generated_registry_artifact_identity(self):
+        self.assertEqual(
+            [a.path for a in artifacts.select(root=self.root)],
+            [a.path for a in artifacts.select()],
+        )
 
     def test_ordinary_before_is_committed_after_regenerates_every_manifest_output(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)

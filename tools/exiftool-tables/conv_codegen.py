@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -48,6 +49,153 @@ import perl_subset as P  # noqa: E402
 LEDGER_SCHEMA = "oxidex_conv_ledger_v1"
 DEFAULT_TABLE = "Exif::Main"
 READ_SLOTS = ("RawConv", "ValueConv", "PrintConv")
+REGISTRY_BEGIN = "// BEGIN GENERATED CONVERSION REGISTRY"
+REGISTRY_END = "// END GENERATED CONVERSION REGISTRY"
+_IFD_KEY = re.compile(r"^(?:0|[1-9][0-9]*)$")
+
+
+@dataclass(frozen=True, order=True)
+class RegistryEntry:
+    module: str
+    table: str
+    stem: str
+
+    @property
+    def identity(self):
+        return f"{self.module}::{self.table}"
+
+
+def table_stem(module, table):
+    """Stable Rust/file identity derived only from the ExifTool table identity."""
+    if not module or not table:
+        raise ValueError(f"conversion table identity requires module and table: {module!r}::{table!r}")
+    stem = re.sub(r"[^a-z0-9]+", "_", f"{module}_{table}".lower()).strip("_")
+    if not stem:
+        raise ValueError(f"conversion table has no usable identity: {module!r}::{table!r}")
+    return stem
+
+
+def ifd_tag_id(key):
+    """A typed IFD key, never a coercion of a named/indexed record key."""
+    if not isinstance(key, str) or not _IFD_KEY.fullmatch(key):
+        raise Refuse(f"non-IFD tag key {key!r}: typed key interface required")
+    value = int(key)
+    if value > 0xFFFF:
+        raise Refuse(f"non-IFD tag key {key!r}: outside u16 IFD domain")
+    return value
+
+
+def _validated_registry(entries):
+    entries = sorted(entries, key=lambda e: (e.module, e.table))
+    identities = [e.identity for e in entries]
+    duplicate_identities = sorted({x for x in identities if identities.count(x) > 1})
+    if duplicate_identities:
+        raise ValueError(f"duplicate conversion table identity: {duplicate_identities}")
+    stems = [e.stem for e in entries]
+    duplicate_stems = sorted({x for x in stems if stems.count(x) > 1})
+    if duplicate_stems:
+        raise ValueError(f"duplicate conversion module stem: {duplicate_stems}")
+    return entries
+
+
+def registry_with_candidate(entries, candidate):
+    """Validate a generated table before its stable paths can overwrite an
+    existing table with a colliding stem."""
+    retained = [entry for entry in entries if entry.identity != candidate.identity]
+    return _validated_registry([*retained, candidate])
+
+
+def render_registry(entries):
+    entries = _validated_registry(entries)
+    lines = [REGISTRY_BEGIN]
+    lines += [f"pub mod {entry.stem};" for entry in entries]
+    if len(entries) == 1:
+        entry = entries[0]
+        lines += [
+            "",
+            "pub static REGISTRY: &[Entry] = &[Entry {",
+            f"    module: {rust_str(entry.module)},",
+            f"    table: {rust_str(entry.table)},",
+            f"    decode: {entry.stem}::decode,",
+            f"    claims: {entry.stem}::claims,",
+            "}];",
+            REGISTRY_END,
+        ]
+        return "\n".join(lines)
+    lines += ["", "pub static REGISTRY: &[Entry] = &["]
+    for entry in entries:
+        lines += [
+            "    Entry {",
+            f"        module: {rust_str(entry.module)},",
+            f"        table: {rust_str(entry.table)},",
+            f"        decode: {entry.stem}::decode,",
+            f"        claims: {entry.stem}::claims,",
+            "    },",
+        ]
+    lines += ["];", REGISTRY_END]
+    return "\n".join(lines)
+
+
+def replace_registry(text, entries):
+    generated = render_registry(entries)
+    if REGISTRY_BEGIN not in text or REGISTRY_END not in text:
+        raise ValueError("conv/mod.rs has no generated registry markers")
+    before, rest = text.split(REGISTRY_BEGIN, 1)
+    _old, after = rest.split(REGISTRY_END, 1)
+    return before + generated + after
+
+
+def discover_registry(root=REPO):
+    """Discover enabled conversion outputs from per-table ledgers."""
+    root = Path(root)
+    conv_dir = root / "src/exiftool_tables/conv"
+    ledger_dir = root / "tools/exiftool-tables"
+    entries = []
+    for path in sorted(ledger_dir.glob("conv_*_ledger.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("schema") != LEDGER_SCHEMA:
+            continue
+        identity = data.get("table", "")
+        if identity.count("::") != 1:
+            raise ValueError(f"invalid conversion table identity in {path}: {identity!r}")
+        module, table = identity.split("::")
+        stem = table_stem(module, table)
+        expected_ledger = ledger_dir / f"conv_{stem}_ledger.json"
+        if path != expected_ledger:
+            raise ValueError(f"stale conversion ledger name {path.name}; expected {expected_ledger.name}")
+        if not (conv_dir / f"{stem}.rs").is_file():
+            raise ValueError(f"missing conversion module {stem}.rs for {identity}")
+        entries.append(RegistryEntry(module, table, stem))
+    entries = _validated_registry(entries)
+    owned = {e.stem for e in entries}
+    reserved = {"mod", "rt", "tests"}
+    on_disk = {p.stem for p in conv_dir.glob("*.rs")} - reserved
+    orphan = sorted(on_disk - owned)
+    if orphan:
+        raise ValueError(f"orphan conversion module(s): {orphan}")
+    return entries
+
+
+def verify_emitted_registry(root=REPO):
+    """Require the emitted generated block to be exactly the deterministic
+    ledger-derived registry before any consumer trusts its identities."""
+    root = Path(root)
+    entries = discover_registry(root)
+    if not entries:
+        raise ValueError("generated conversion registry requires a nonempty ledger set")
+    hub = root / "src/exiftool_tables/conv/mod.rs"
+    if not hub.is_file():
+        raise ValueError("generated conversion registry hub is missing")
+    text = hub.read_text(encoding="utf-8")
+    if text.count(REGISTRY_BEGIN) != 1 or text.count(REGISTRY_END) != 1:
+        raise ValueError("generated conversion registry markers are missing or duplicated")
+    start = text.index(REGISTRY_BEGIN)
+    end = text.index(REGISTRY_END, start) + len(REGISTRY_END)
+    actual = text[start:end]
+    expected = render_registry(entries)
+    if actual != expected:
+        raise ValueError("generated conversion registry differs from ledger-derived rendering")
+    return entries
 
 # The #824 helper library, by fully qualified Perl sub: how the backend calls
 # each port. Only subs listed in helpers.rs's PORTS may appear here (checked
@@ -1442,11 +1590,14 @@ def generate(dump_path, table_name):
     missing = sorted(set(HELPER_CALLS) - ported)
     if missing:
         raise SystemExit(f"HELPER_CALLS names subs helpers.rs does not port: {missing}")
+    keyed_tags = []
+    for key, tag in tbl["tags"].items():
+        keyed_tags.append((ifd_tag_id(key), tag))
     mod = Module()
     arms, generated, refused, skipped = [], [], [], []
-    for key in sorted(tbl["tags"], key=lambda k: int(k)):
-        tag = tbl["tags"][key]
-        tid = int(key)
+    hand_owned = HAND_OWNED if table_name == DEFAULT_TABLE else {}
+    refusal_notes = REFUSAL_NOTES if table_name == DEFAULT_TABLE else {}
+    for tid, tag in sorted(keyed_tags, key=lambda row: row[0]):
         if not isinstance(tag, dict):
             continue
         name = tag.get("Name") or "/".join(
@@ -1462,8 +1613,8 @@ def generate(dump_path, table_name):
         if truthy_key(tag, "Unknown"):
             skipped.append(dict(id=tid, name=name, reason="Unknown => 1: reported only under -u"))
             continue
-        if tid in HAND_OWNED:
-            refused.append(dict(id=tid, name=name, reason=HAND_OWNED[tid],
+        if tid in hand_owned:
+            refused.append(dict(id=tid, name=name, reason=hand_owned[tid],
                                 slots=sorted(s for s in READ_SLOTS if tag.get(s) is not None)))
             continue
         try:
@@ -1480,7 +1631,8 @@ def generate(dump_path, table_name):
     table_sha = hashlib.sha256(
         json.dumps(tbl, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return dict(version=version, module=module, table=table, mod=mod, arms=arms, table_sha=table_sha,
-                generated=generated, refused=refused, skipped=skipped)
+                generated=generated, refused=refused, skipped=skipped,
+                refusal_notes=refusal_notes)
 
 
 def render_rust(g, dump_sha):
@@ -1606,7 +1758,8 @@ def hash_keys(source):
 
 
 def ledger(g, dump_sha, rust_sha):
-    stale = sorted(set(REFUSAL_NOTES) - {r["id"] for r in g["refused"]})
+    refusal_notes = g["refusal_notes"]
+    stale = sorted(set(refusal_notes) - {r["id"] for r in g["refused"]})
     if stale:
         raise SystemExit(f"REFUSAL_NOTES names fields that are no longer refused: "
                          f"{[hex(i) for i in stale]}")
@@ -1626,7 +1779,7 @@ def ledger(g, dump_sha, rust_sha):
                                source_text(r["source"]).encode()).hexdigest())
                       for r in g["generated"]],
         "refused": [dict(id=f"0x{r['id']:04x}", name=r["name"], reason=r["reason"],
-                         **({"note": REFUSAL_NOTES[r["id"]]} if r["id"] in REFUSAL_NOTES else {}))
+                         **({"note": refusal_notes[r["id"]]} if r["id"] in refusal_notes else {}))
                     for r in g["refused"]],
         "not_conversion_fields": [dict(id=f"0x{r['id']:04x}", name=r["name"], reason=r["reason"])
                                   for r in g["skipped"]],
@@ -1637,24 +1790,37 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("dump")
     ap.add_argument("--table", default=DEFAULT_TABLE)
-    ap.add_argument("-o", "--output", default=str(REPO / "src/exiftool_tables/conv/exif_main.rs"))
-    ap.add_argument("--ledger", default=str(HERE / "conv_exif_main_ledger.json"))
+    ap.add_argument("-o", "--output")
+    ap.add_argument("--ledger")
+    ap.add_argument("--registry", default=str(REPO / "src/exiftool_tables/conv/mod.rs"))
     ap.add_argument("--check", action="store_true",
                     help="regenerate in memory and require the committed files to match")
     args = ap.parse_args()
+    module, table = args.table.split("::")
+    stem = table_stem(module, table)
+    candidate = RegistryEntry(module, table, stem)
+    registry_with_candidate(discover_registry(REPO), candidate)
+    output = Path(args.output or REPO / f"src/exiftool_tables/conv/{stem}.rs")
+    ledger_path = Path(args.ledger or HERE / f"conv_{stem}_ledger.json")
+    registry_path = Path(args.registry)
     g = generate(args.dump, args.table)
     dump_sha = g["table_sha"]
     text = rustfmt(render_rust(g, dump_sha))
     rust_sha = hashlib.sha256(text.encode()).hexdigest()
     led = json.dumps(ledger(g, dump_sha, rust_sha), indent=1, sort_keys=True, ensure_ascii=False) + "\n"
     if args.check:
-        ok = Path(args.output).read_text() == text and Path(args.ledger).read_text() == led
+        entries = discover_registry(REPO)
+        expected_registry = replace_registry(registry_path.read_text(), entries)
+        ok = (output.read_text() == text and ledger_path.read_text() == led
+              and registry_path.read_text() == expected_registry)
         print("PASS" if ok else "MISMATCH: committed conversion arms differ from a regeneration")
         return 0 if ok else 1
-    Path(args.output).write_text(text)
-    Path(args.ledger).write_text(led)
+    output.write_text(text)
+    ledger_path.write_text(led)
+    entries = discover_registry(REPO)
+    registry_path.write_text(replace_registry(registry_path.read_text(), entries))
     print(f"{args.table}: {len(g['generated'])} generated, {len(g['refused'])} refused, "
-          f"{len(g['skipped'])} not conversion fields -> {args.output}")
+          f"{len(g['skipped'])} not conversion fields -> {output}")
     return 0
 
 

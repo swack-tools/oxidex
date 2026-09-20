@@ -186,7 +186,10 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(Path(bash[-1]).resolve(), self.checkout.resolve() / "tools/exiftool-tables/regen-all.sh")
         self.assertEqual(Path(env["EXIFTOOL_PERL"]).resolve(), self.perl.resolve()); self.assertEqual(Path(env["OXIDEX_EXIFTOOL_LIB"]).resolve(), (self.native / "lib").resolve()); self.assertEqual(Path(env["OXIDEX_ET_CACHE"]).resolve(), (self.target / "exiftool-cache").resolve()); self.assertEqual(Path(env["CARGO_TARGET_DIR"]).resolve(), self.target.resolve())
         self.assertEqual(env["OXIDEX_ALLOW_DIRTY_TREE"], "1")
-        self.assertEqual(len(result["generated_artifacts"]), len(artifacts.ARTIFACTS))
+        self.assertEqual(
+            [row["path"] for row in result["generated_artifacts"]],
+            [item.path for item in artifacts.inventory(self.checkout)],
+        )
 
     def test_build_and_actual_read_bind_binary_fixture_and_zero_mismatches(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
