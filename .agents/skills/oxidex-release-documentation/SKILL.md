@@ -38,13 +38,14 @@ evidence. Record command, exit status, UTC time, full SHA, and evidence path.
    candidate commit for each current benchmark claim. Record measured SHA,
    profile, machine, corpus, oracle, artifact identity and disposition. An older
    fallback may remain only as visibly historical, never as candidate results.
-5. Read [github-pages-audit.md](references/github-pages-audit.md). Reproduce the
-   production build using `tools/docs-local-deploy.sh`, real comparison output
-   and candidate benchmark inputs. Crawl every rendered route and referenced
-   asset with browser automation (Playwright preferred, equivalent tooling
-   acceptable); inspect representative pages at desktop and mobile widths in
-   light and dark theme. Save screenshots and console/network findings, then
-   obtain human screenshot review of the complete representative matrix.
+5. Read [github-pages-audit.md](references/github-pages-audit.md). Use the
+   tracked `tools/docs-local-deploy.sh --build-only --output` and
+   `tools/docs/release-audit.mjs` commands with real comparison output and
+   candidate benchmark inputs. Their snapshot, crawl and visual manifests must
+   cover every rendered route, local asset and fragment plus the tracked
+   desktop/mobile light/dark representative matrix. Preserve screenshots,
+   console/page/request findings and server logs, then obtain human review of
+   the complete matrix.
 6. Inspect Pages API `build_type`, `deploy-docs.yml`, and `release.yml`.
    Validate syntax/tests, triggers/path filters, permissions, generated-report
    and benchmark handoff, artifact/deploy actions, domain/base/HTTPS and current

@@ -9,7 +9,7 @@
   "main_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "receipts": {
     "parity": {"path": "tools/ci/testdata/release_receipts/parity-verified.json", "sha256": "aa7a7ad7b9559c53a6d161bc1984a266cc77d94e57a3fb283a9827ea4372f94c", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"},
-    "documentation": {"path": "tools/ci/testdata/release_receipts/documentation-verified.json", "sha256": "3d53c2d66617d8e9fafc42215edc0e75f9233a7d6be9f6b30aec54da35363538", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"}
+    "documentation": {"path": "tools/ci/testdata/release_receipts/documentation-verified.json", "sha256": "9b0d78eef96efed8416ef40b539152fc1aaf7193fe07e61fdcbce9d925df452f", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"}
   },
   "packaging": {"prerelease": true, "latest": false, "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-pc-windows-gnu"], "expected_assets": ["oxidex-aarch64-apple-darwin", "oxidex-v2.0.0-beta.1.dmg", "oxidex-x86_64-unknown-linux-musl", "oxidex-aarch64-unknown-linux-musl", "oxidex-x86_64-pc-windows-gnu.exe"]},
   "version_inventory": [
@@ -28,17 +28,17 @@
     "reviewer": "release-skill-test-fixture",
     "reviewed_at": "2026-09-20T00:00:00Z",
     "path": "tools/ci/testdata/release_receipts/version-reconciliation-verified.json",
-    "sha256": "23117a14c002160e68621444482e1336285d4678d99dbf7cce683f512db461d8",
-    "scan_sha256": "86dcdb82341cc240a0d9dbd259ea7bebc3b63fad2134ed9fa7cb0d1cff391cff",
-    "tracked_files": 284,
-    "matching_lines": 18075,
-    "fields_scan_sha256": "611505143b41be6ffc85c92d555fe2dbe565411f4cfa9d03fef2836e345af73d",
-    "fields_tracked_files": 347,
-    "fields_matching_lines": 1883,
-    "reconciled_files": 284,
-    "reconciled_lines": 18075,
-    "reconciled_field_files": 347,
-    "reconciled_field_lines": 1883,
+    "sha256": "c33afb0ca6787a9e5f3b0ebdd6037d5e46839eeda3ef82be27d6348f0eb03d7a",
+    "scan_sha256": "74167c7ea6514fac505e129059fb6bea11339e55b61484d97233969095cd3fd5",
+    "tracked_files": 286,
+    "matching_lines": 18088,
+    "fields_scan_sha256": "be8c06ae5d3182dc2efb6e28acf78dd3b01114c337e325eea7e37bc527029b5f",
+    "fields_tracked_files": 348,
+    "fields_matching_lines": 1885,
+    "reconciled_files": 286,
+    "reconciled_lines": 18088,
+    "reconciled_field_files": 348,
+    "reconciled_field_lines": 1885,
     "unresolved": []
   },
   "promotion": {

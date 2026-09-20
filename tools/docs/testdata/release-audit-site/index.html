@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Release audit fixture</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <button class="VPNavBarHamburger" aria-label="Menu" aria-expanded="false">Menu</button>
+    <nav class="VPNavScreen" hidden><a href="/guide#target">Guide</a></nav>
+    <button class="DocSearch-Button" aria-label="Search">Search</button>
+    <dialog id="search-dialog"><button aria-label="Close search">Close</button></dialog>
+    <main>
+      <h1>Release audit fixture</h1>
+      <p><a href="/guide#target">Read the guide</a>.</p>
+      <pre><code>oxidex --version</code></pre>
+      <div class="wide-table"><table><tr><th>Field</th><th>Value</th></tr><tr><td>status</td><td>verified</td></tr></table></div>
+      <img src="/assets/pixel.svg" alt="fixture pixel">
+    </main>
+    <script>
+      document.querySelector('.VPNavBarHamburger').addEventListener('click', event => {
+        const nav = document.querySelector('.VPNavScreen');
+        nav.hidden = !nav.hidden;
+        event.currentTarget.setAttribute('aria-expanded', String(!nav.hidden));
+      });
+      document.querySelector('.DocSearch-Button').addEventListener('click', () => {
+        document.querySelector('#search-dialog').showModal();
+      });
+    </script>
+  </body>
+</html>

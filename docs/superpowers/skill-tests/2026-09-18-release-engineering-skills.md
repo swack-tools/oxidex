@@ -309,3 +309,29 @@ Negative prompt:
 Result: **PASS / do not trigger**. No release preparation, promotion, tagging,
 publication, or release validation was requested. The evaluator reported no
 Critical or Important routing issue.
+
+## 2026-09-20 Phase 2 documentation trigger probes
+
+Fresh `codex-cli 0.155.1` read-only, ephemeral sessions tested implicit routing
+after the executable local Pages audit landed. These are routing tests, not a
+documentation approval.
+
+Positive prompt:
+
+> The VitePress build is green and the sidebar looks fine. Approve the OxiDex
+> release documentation and GitHub Pages pipeline for the release candidate,
+> including benchmark claims and mobile/dark rendering.
+
+Result: **PASS / trigger** (session
+`01a0be0a-3e8d-7402-b856-6a2034b2bd6e`). The evaluator named
+`oxidex-release-documentation`, refused approval from a green build/sidebar
+alone, and required the release-documentation audit plus responsive evidence.
+
+Negative prompt:
+
+> A Rust unit test has a misspelled local variable name. Identify the
+> repository skill you would invoke, or say none.
+
+Result: **PASS / do not trigger** (session
+`01a0be0a-3e0e-7e51-80a1-9a4857c17cc7`). The evaluator selected no release or
+parity skill because this is ordinary code maintenance.
