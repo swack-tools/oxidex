@@ -95,8 +95,10 @@ jobs:
       - name: Verify the preview rendered
         run: |
           set -euo pipefail
-          grep -q 'oxidex-preview-banner' docs/.vitepress/dist/index.html \
+          grep -q '<div class="oxidex-preview-banner" role="note">' docs/.vitepress/dist/index.html \
             || { echo "::error::preview build has no preview banner"; exit 1; }
+          grep -Fq "href=\"https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}\"" docs/.vitepress/dist/index.html \
+            || { echo "::error::preview banner does not link its source commit"; exit 1; }
           # Branch-based Pages runs Jekyll unless told not to.
           touch docs/.vitepress/dist/.nojekyll
 
@@ -146,6 +148,34 @@ jobs:
           name: docs-preview-site
           path: site
 
+      # Treat the downloaded artifact as hostile. In particular, never run Git
+      # inside it: upload-artifact includes hidden files, and `git init` keeps
+      # an existing .git/config whose hooks, filters or fsmonitor could execute
+      # while the deploy key is in the environment. Validate and commit a copy
+      # in a fresh repository before the secret-bearing push step begins.
+      - name: Prepare trusted publish repository
+        if: steps.configured.outputs.ok == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -f site/index.html || { echo "::error::downloaded site has no index.html"; exit 1; }
+          test -f site/.nojekyll || { echo "::error::downloaded site has no .nojekyll"; exit 1; }
+          if find site -name .git -print -quit | grep -q .; then
+            echo "::error::downloaded site contains an untrusted .git entry"; exit 1
+          fi
+          PUBLISH="$RUNNER_TEMP/docs-preview-publish"
+          test ! -e "$PUBLISH" || { echo "::error::trusted publish path already exists"; exit 1; }
+          mkdir "$PUBLISH"
+          cp -R site/. "$PUBLISH/"
+          git -C "$PUBLISH" init -q -b gh-pages
+          git -C "$PUBLISH" config core.hooksPath /dev/null
+          git -C "$PUBLISH" config user.name "github-actions[bot]"
+          git -C "$PUBLISH" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$PUBLISH" add -A
+          git -C "$PUBLISH" commit -q -m "Docs preview of refactor/tag-machinery at ${SHA:0:8}" \
+            -m "Built from https://github.com/${GITHUB_REPOSITORY}/commit/${SHA} by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
       # One orphan commit, force-pushed: the preview is a moving view of the
       # tip, and the source history already lives in this repository. Keeping
       # every build would only grow oxidex-next without bound.
@@ -159,23 +189,17 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          test -f site/index.html || { echo "::error::downloaded site has no index.html"; exit 1; }
-          test -f site/.nojekyll || { echo "::error::downloaded site has no .nojekyll"; exit 1; }
+          PUBLISH="$RUNNER_TEMP/docs-preview-publish"
+          test -d "$PUBLISH/.git" || { echo "::error::trusted publish repository is missing"; exit 1; }
           umask 077
           SSHDIR="$RUNNER_TEMP/ssh"
           mkdir -p "$SSHDIR"
           printf '%s\n' "$KEY" > "$SSHDIR/key"
+          trap 'rm -f "$SSHDIR/key"' EXIT
           curl -fsSL https://api.github.com/meta \
             | jq -r '.ssh_keys[] | "github.com " + .' > "$SSHDIR/known_hosts"
           test -s "$SSHDIR/known_hosts"
           export GIT_SSH_COMMAND="ssh -i $SSHDIR/key -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile=$SSHDIR/known_hosts -o StrictHostKeyChecking=yes"
-          cd site
-          git init -q -b gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "Docs preview of refactor/tag-machinery at ${SHA:0:8}" \
-            -m "Built from https://github.com/${GITHUB_REPOSITORY}/commit/${SHA} by run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          git push --force "git@github.com:${PREVIEW_REPO}.git" "HEAD:refs/heads/gh-pages"
-          rm -f "$SSHDIR/key"
+          git -C "$PUBLISH" push --force \
+            "git@github.com:${PREVIEW_REPO}.git" "HEAD:refs/heads/gh-pages"
           echo "Published ${SHA:0:8} to ${DOCS_PREVIEW_URL}" >> "$GITHUB_STEP_SUMMARY"

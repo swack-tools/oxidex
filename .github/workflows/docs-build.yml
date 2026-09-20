@@ -97,8 +97,10 @@ jobs:
       - name: Verify the channel rendered
         run: |
           if [ "$DOCS_CHANNEL" = preview ]; then
-            grep -q 'oxidex-preview-banner' docs/.vitepress/dist/index.html \
+            grep -q '<div class="oxidex-preview-banner" role="note">' docs/.vitepress/dist/index.html \
               || { echo "::error::preview build has no preview banner"; exit 1; }
+            grep -Fq "href=\"https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}\"" docs/.vitepress/dist/index.html \
+              || { echo "::error::preview banner does not link its source commit"; exit 1; }
           elif grep -rq 'oxidex-preview-banner' docs/.vitepress/dist; then
             echo "::error::stable build carries the preview banner"; exit 1
           fi
