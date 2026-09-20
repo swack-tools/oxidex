@@ -979,7 +979,8 @@ class TagRecipeTests(unittest.TestCase):
     text = (REPO / "justfile").read_text()
     SHA = "1" * 40
 
-    def run_rendered_tag(self, *, authorization: str = "", dry_run: bool = False):
+    def run_rendered_tag(self, *, authorization: str = "", dry_run: bool = False,
+                         remote: str = "absent"):
         rendered = subprocess.run(
             ["just", "--dry-run", "tag", "2.0.0-beta.1", self.SHA], cwd=REPO,
             text=True, capture_output=True, check=False)
@@ -994,6 +995,15 @@ class TagRecipeTests(unittest.TestCase):
                 "#!/usr/bin/env bash\nset -u\nprintf 'git %s\\n' \"$*\" >> \"$CALL_LOG\"\n"
                 "case \"$*\" in\n"
                 "  'rev-parse -q --verify refs/tags/'*) exit 1;;\n"
+                "  'ls-remote --exit-code --tags origin '*)\n"
+                "    if [ \"$FAKE_REMOTE\" = failure ]; then exit 128; fi\n"
+                "    if [ \"$FAKE_REMOTE\" = tag ] && [[ \"$*\" != *'^{}'* ]]; then\n"
+                "      echo '1111111111111111111111111111111111111111\\trefs/tags/v2.0.0-beta.1'; exit 0\n"
+                "    fi\n"
+                "    if [ \"$FAKE_REMOTE\" = peeled ] && [[ \"$*\" = *'^{}'* ]]; then\n"
+                "      echo '1111111111111111111111111111111111111111\\trefs/tags/v2.0.0-beta.1^{}'; exit 0\n"
+                "    fi\n"
+                "    exit 2;;\n"
                 "  'rev-parse --verify '*'^{commit}') echo \"$EXPECTED_SHA\";;\n"
                 "  'merge-base --is-ancestor '*) exit 0;;\n"
                 "  'show '*) echo 'version = \"2.0.0-beta.1\"';;\n"
@@ -1015,6 +1025,7 @@ class TagRecipeTests(unittest.TestCase):
             env.update({
                 "PATH": f"{fake_bin}:{env['PATH']}",
                 "CALL_LOG": str(log), "EXPECTED_SHA": self.SHA,
+                "FAKE_REMOTE": remote,
                 "OXIDEX_TAG_AUTHORIZATION": authorization,
                 "OXIDEX_TAG_DRY_RUN": "1" if dry_run else "0",
             })
@@ -1027,12 +1038,26 @@ class TagRecipeTests(unittest.TestCase):
         recipe = self.text[
             self.text.index("tag version"):
             self.text.index("# macOS packaging", self.text.index("tag version"))]
-        self.assertIn('commit="origin/main"', recipe)
+        self.assertIn('tag version sha:', recipe)
+        self.assertNotIn('commit="origin/main"', recipe)
         self.assertIn('git merge-base --is-ancestor "$SHA" origin/main', recipe)
         self.assertNotIn('origin/refactor/tag-machinery', recipe)
         self.assertIn('OXIDEX_TAG_AUTHORIZATION', recipe)
         self.assertIn('"$TAG@$SHA"', recipe)
         self.assertIn('OXIDEX_TAG_DRY_RUN', recipe)
+
+    def test_tag_requires_an_explicit_frozen_sha(self):
+        result = subprocess.run(
+            ["just", "--dry-run", "tag", "2.0.0-beta.1"], cwd=REPO,
+            text=True, capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_no_alternate_implicit_tagging_recipe_exists(self):
+        listed = subprocess.run(
+            ["just", "--list"], cwd=REPO, text=True, capture_output=True, check=False)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertNotRegex(listed.stdout, r"(?m)^\s+release(?:\s|$)")
+        self.assertNotRegex(self.text, r"(?m)^release\s+version")
 
     def test_remote_tag_deletion_recipe_is_absent(self):
         listed = subprocess.run(
@@ -1046,11 +1071,35 @@ class TagRecipeTests(unittest.TestCase):
         self.assertNotIn("git tag -s", calls)
         self.assertNotIn("git push", calls)
 
+    def test_remote_lightweight_tag_stops_before_local_tag_creation(self):
+        result, calls = self.run_rendered_tag(dry_run=True, remote="tag")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("remote tag already exists", result.stderr)
+        self.assertNotIn("git tag -s", calls)
+        self.assertNotIn("git push", calls)
+
+    def test_remote_peeled_tag_stops_before_local_tag_creation(self):
+        result, calls = self.run_rendered_tag(dry_run=True, remote="peeled")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("remote tag already exists", result.stderr)
+        self.assertIn("refs/tags/v2.0.0-beta.1^{}", calls)
+        self.assertNotIn("git tag -s", calls)
+        self.assertNotIn("git push", calls)
+
+    def test_remote_tag_query_failure_stops_before_local_tag_creation(self):
+        result, calls = self.run_rendered_tag(dry_run=True, remote="failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not prove remote tag absence", result.stderr)
+        self.assertNotIn("git tag -s", calls)
+        self.assertNotIn("git push", calls)
+
     def test_dry_run_signs_and_verifies_but_never_pushes(self):
         result, calls = self.run_rendered_tag(dry_run=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("git tag -s", calls)
         self.assertIn("tag -v", calls)
+        self.assertIn("git ls-remote --exit-code --tags origin refs/tags/v2.0.0-beta.1", calls)
+        self.assertIn("git ls-remote --exit-code --tags origin refs/tags/v2.0.0-beta.1^{}", calls)
         self.assertNotIn("git push", calls)
 
     def test_exact_authorization_signs_verifies_then_pushes_non_forcing_ref(self):

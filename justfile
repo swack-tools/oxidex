@@ -487,18 +487,35 @@ log:
 # This is a deliberate confirmation of the separately granted, exact-tag
 # authorization; it is not needed for the local dry run, which occurs before
 # that authorization is requested.
-# Usage: just tag 2.0.0-beta.1 [<commit-sha>]   (default: origin/main)
+# Usage: just tag 2.0.0-beta.1 <full-commit-sha>
 # OXIDEX_TAG_DRY_RUN=1 runs every check and signs + verifies, then deletes the tag instead of pushing.
-tag version commit="origin/main":
+tag version sha:
     #!/usr/bin/env bash
     set -euo pipefail
     TAG="v{{version}}"
+    if ! [[ "{{sha}}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      echo "refusing: tag requires an explicit frozen full 40-hex commit SHA" >&2; exit 1
+    fi
     git fetch -q origin main --tags
-    SHA=$(git rev-parse --verify "{{commit}}^{commit}")
+    SHA=$(git rev-parse --verify "{{sha}}^{commit}")
     echo "tag $TAG -> $SHA"
     if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
       echo "refusing: tag $TAG already exists" >&2; exit 1
     fi
+    remote_ref_absent() {
+      local ref="$1" status
+      if git ls-remote --exit-code --tags origin "$ref" >/dev/null; then
+        echo "refusing: remote tag already exists: $ref" >&2; exit 1
+      else
+        status=$?
+      fi
+      if [ "$status" -ne 2 ]; then
+        echo "refusing: could not prove remote tag absence for $ref (git ls-remote exited $status)" >&2
+        exit 1
+      fi
+    }
+    remote_ref_absent "refs/tags/$TAG"
+    remote_ref_absent "refs/tags/$TAG^{}"
     if ! git merge-base --is-ancestor "$SHA" origin/main; then
       echo "refusing: $SHA is not reachable from origin/main" >&2; exit 1
     fi
@@ -561,13 +578,6 @@ create-dmg version binary:
 release-check: ci
     @echo "Release checks passed!"
     @echo "Ready for release."
-
-# Full release workflow: check, build release, create tag
-release version: release-check
-    @echo "Creating release v{{version}}..."
-    cargo build --release
-    just tag {{version}}
-    @echo "Release v{{version}} created and tagged!"
 
 # C FFI header generation
 # -----------------------
