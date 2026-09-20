@@ -10,10 +10,12 @@ when its identity, evidence, floors, workflows, or authorization are missing.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -35,6 +37,7 @@ TARGET_ASSETS = {
     "aarch64-unknown-linux-musl": ("oxidex-aarch64-unknown-linux-musl",),
     "x86_64-pc-windows-gnu": ("oxidex-x86_64-pc-windows-gnu.exe",),
 }
+REQUIRED_TARGETS = tuple(TARGET_ASSETS)
 
 
 def load_receipt(path: str | pathlib.Path) -> dict[str, Any]:
@@ -51,6 +54,23 @@ def _evidence_path(value: str) -> pathlib.Path:
 
 def _file_sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def _workspace_packages() -> dict[str, tuple[str, str]]:
+    result = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+    packages: dict[str, tuple[str, str]] = {}
+    for package in payload["packages"]:
+        manifest = pathlib.Path(package["manifest_path"]).resolve().relative_to(ROOT)
+        packages[manifest.as_posix()] = (package["name"], package["version"])
+    return packages
 
 
 def _validate_upstream_receipt(
@@ -546,6 +566,11 @@ def _validate_finalization(
     expected_assets = checks.string_list("packaging.expected_assets")
     if len(targets) != len(set(targets)):
         checks.error("packaging.targets", "contains duplicates")
+    if sorted(targets) != sorted(REQUIRED_TARGETS):
+        checks.error(
+            "packaging.targets",
+            f"must exactly match the reviewed release matrix: {sorted(REQUIRED_TARGETS)!r}",
+        )
     derived_assets: list[str] = []
     for target in targets:
         patterns = TARGET_ASSETS.get(target)
@@ -561,10 +586,18 @@ def _validate_finalization(
         )
     inventory = checks.object_list("version_inventory")
     current_packages = 0
+    inventory_packages: dict[str, dict[str, Any]] = {}
+    try:
+        workspace_packages = _workspace_packages()
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        checks.error("version_inventory", f"cannot inspect cargo workspace: {exc}")
+        workspace_packages = {}
     for index, item in enumerate(inventory):
-        for field in ("path", "version", "kind", "disposition"):
+        for field in ("path", "version", "literal", "kind", "disposition", "reason", "evidence_path"):
             if not isinstance(item.get(field), str) or not item[field].strip():
                 checks.error(f"version_inventory[{index}].{field}", "expected a non-empty string")
+        if isinstance(item.get("line"), bool) or not isinstance(item.get("line"), int) or item["line"] <= 0:
+            checks.error(f"version_inventory[{index}].line", "expected an integer greater than zero")
         if item.get("status") != "verified":
             checks.error(f"version_inventory[{index}].status", "expected 'verified'")
         if item.get("disposition") not in {
@@ -577,8 +610,44 @@ def _validate_finalization(
                 checks.error(
                     f"version_inventory[{index}].version", "current OxiDex package must match release version"
                 )
+        raw_path = item.get("path")
+        if isinstance(raw_path, str) and raw_path:
+            path = _evidence_path(raw_path)
+            try:
+                relative = path.resolve().relative_to(ROOT).as_posix()
+            except (OSError, ValueError):
+                checks.error(f"version_inventory[{index}].path", "must resolve inside the release checkout")
+                relative = None
+            if not path.is_file():
+                checks.error(f"version_inventory[{index}].path", "referenced file does not exist")
+            if relative is not None and item.get("kind") in {"oxidex_package", "independent_package"}:
+                if relative in inventory_packages:
+                    checks.error(f"version_inventory[{index}].path", "duplicate workspace manifest")
+                inventory_packages[relative] = item
+                package = workspace_packages.get(relative)
+                if package is None:
+                    checks.error(f"version_inventory[{index}].path", "not a cargo workspace manifest")
+                elif item.get("version") != package[1]:
+                    checks.error(
+                        f"version_inventory[{index}].version",
+                        f"does not match cargo metadata version {package[1]!r}",
+                    )
+            if path.is_file() and isinstance(item.get("line"), int) and item["line"] > 0:
+                lines = path.read_text(encoding="utf-8").splitlines()
+                if item["line"] > len(lines) or str(item.get("literal", "")) not in lines[item["line"] - 1]:
+                    checks.error(f"version_inventory[{index}].literal", "not present at the recorded line")
+        evidence_path = item.get("evidence_path")
+        if isinstance(evidence_path, str) and evidence_path and not _evidence_path(evidence_path).is_file():
+            checks.error(f"version_inventory[{index}].evidence_path", "referenced evidence does not exist")
     if current_packages == 0:
         checks.error("version_inventory", "missing a current oxidex_package entry")
+    if set(inventory_packages) != set(workspace_packages):
+        missing = sorted(set(workspace_packages) - set(inventory_packages))
+        extra = sorted(set(inventory_packages) - set(workspace_packages))
+        checks.error(
+            "version_inventory",
+            f"workspace manifest coverage mismatch; missing={missing!r}, extra={extra!r}",
+        )
     checks.string("promotion.pr_url")
     checks.equal("promotion.review_decision", "APPROVED")
     checks.equal("promotion.required_checks_status", "success")
@@ -698,6 +767,10 @@ def _validate_finalization(
     checks.equal("macos_verification.stapler_status", "validated")
     checks.equal("macos_verification.cleanup_status", "verified")
     checks.string_list("macos_verification.evidence")
+    checks.equal("macos_verification.raw_binary_artifact", "oxidex-aarch64-apple-darwin")
+    checks.equal(
+        "macos_verification.dmg_artifact", f"oxidex-v{payload.get('version')}.dmg"
+    )
     for field, hash_field in (
         ("raw_binary_artifact", "raw_binary_sha256"),
         ("dmg_artifact", "dmg_sha256"),

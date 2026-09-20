@@ -11,8 +11,18 @@
     "parity": {"path": "tools/ci/testdata/release_receipts/parity-verified.json", "sha256": "aa7a7ad7b9559c53a6d161bc1984a266cc77d94e57a3fb283a9827ea4372f94c", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"},
     "documentation": {"path": "tools/ci/testdata/release_receipts/documentation-verified.json", "sha256": "3d53c2d66617d8e9fafc42215edc0e75f9233a7d6be9f6b30aec54da35363538", "measured_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "measured_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "verified"}
   },
-  "packaging": {"prerelease": true, "latest": false, "targets": ["aarch64-apple-darwin"], "expected_assets": ["oxidex-aarch64-apple-darwin", "oxidex-v2.0.0-beta.1.dmg"]},
-  "version_inventory": [{"path": "Cargo.toml", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "status": "verified"}],
+  "packaging": {"prerelease": true, "latest": false, "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-pc-windows-gnu"], "expected_assets": ["oxidex-aarch64-apple-darwin", "oxidex-v2.0.0-beta.1.dmg", "oxidex-x86_64-unknown-linux-musl", "oxidex-aarch64-unknown-linux-musl", "oxidex-x86_64-pc-windows-gnu.exe"]},
+  "version_inventory": [
+    {"path": "Cargo.toml", "line": 18, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "root release package", "evidence_path": "Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-camera/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-camera/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-core/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-core/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-document/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-document/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-image/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-image/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-media/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-media/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-specialty/Cargo.toml", "line": 3, "literal": "2.0.0-beta.1", "version": "2.0.0-beta.1", "kind": "oxidex_package", "disposition": "current", "reason": "workspace release package", "evidence_path": "oxidex-tags-specialty/Cargo.toml", "status": "verified"},
+    {"path": "oxidex-tags-shared/Cargo.toml", "line": 3, "literal": "0.1.0", "version": "0.1.0", "kind": "independent_package", "disposition": "independent", "reason": "intentionally independent package version", "evidence_path": "oxidex-tags-shared/Cargo.toml", "status": "verified"}
+  ],
   "promotion": {
     "pr_url": "https://github.com/swack-tools/oxidex/pull/999",
     "review_decision": "APPROVED",
@@ -34,7 +44,10 @@
   ],
   "artifacts": [
     {"name": "oxidex-aarch64-apple-darwin", "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "size": 12345, "source_run_id": 1001},
-    {"name": "oxidex-v2.0.0-beta.1.dmg", "sha256": "5555555555555555555555555555555555555555555555555555555555555555", "size": 23456, "source_run_id": 1001}
+    {"name": "oxidex-v2.0.0-beta.1.dmg", "sha256": "5555555555555555555555555555555555555555555555555555555555555555", "size": 23456, "source_run_id": 1001},
+    {"name": "oxidex-x86_64-unknown-linux-musl", "sha256": "9999999999999999999999999999999999999999999999999999999999999999", "size": 34567, "source_run_id": 1001},
+    {"name": "oxidex-aarch64-unknown-linux-musl", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 45678, "source_run_id": 1001},
+    {"name": "oxidex-x86_64-pc-windows-gnu.exe", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size": 56789, "source_run_id": 1001}
   ],
   "macos_verification": {
     "status": "verified",

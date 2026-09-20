@@ -259,6 +259,46 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
             with self.subTest(path=dotted):
                 self.assert_invalid("finalization", payload, dotted.split("[")[0])
 
+        payload = fixture("finalization")
+        payload["packaging"]["targets"].pop()
+        self.assert_invalid("finalization", payload, "packaging.targets")
+
+        payload = fixture("finalization")
+        payload["version_inventory"].pop()
+        self.assert_invalid("finalization", payload, "version_inventory")
+
+        payload = fixture("finalization")
+        payload["version_inventory"][0]["path"] = "/does/not/exist/Cargo.toml"
+        self.assert_invalid("finalization", payload, "version_inventory[0].path")
+
+        payload = fixture("finalization")
+        mac = payload["macos_verification"]
+        mac["raw_binary_artifact"], mac["dmg_artifact"] = (
+            mac["dmg_artifact"], mac["raw_binary_artifact"]
+        )
+        mac["raw_binary_sha256"], mac["dmg_sha256"] = (
+            mac["dmg_sha256"], mac["raw_binary_sha256"]
+        )
+        mac["dmg_payload_sha256"] = mac["raw_binary_sha256"]
+        self.assert_invalid(
+            "finalization", payload, "macos_verification.raw_binary_artifact"
+        )
+
+    def test_release_asset_contract_matches_workflow(self):
+        workflow = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        for target in validator.REQUIRED_TARGETS:
+            with self.subTest(target=target):
+                self.assertIn(target, workflow)
+        for asset in (
+            "oxidex-x86_64-unknown-linux-musl",
+            "oxidex-aarch64-unknown-linux-musl",
+            "oxidex-x86_64-pc-windows-gnu.exe",
+            "oxidex-aarch64-apple-darwin",
+            "oxidex-v${{ steps.version.outputs.version }}.dmg",
+        ):
+            with self.subTest(asset=asset):
+                self.assertIn(asset, workflow)
+
     def test_cli_returns_two_and_prints_field_paths_for_invalid_receipt(self):
         payload = fixture("parity")
         payload["authenticated_reads"]["native_occurrence_floor"] = 0

@@ -87,6 +87,13 @@ class ReleasePrGateTests(unittest.TestCase):
                 with self.assertRaisesRegex(release_pr_gate.PrGateError, "required-checks"):
                     release_pr_gate.validate(state, threads, checks, SHA)
 
+    def test_rejects_non_object_pr_state_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state, threads, checks = self.fixtures(pathlib.Path(tmp))
+            state.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(release_pr_gate.PrGateError, "pr-state.*object"):
+                release_pr_gate.validate(state, threads, checks, SHA)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,8 @@ def validate(
     if COMMIT_RE.fullmatch(expected_head) is None:
         raise PrGateError("expected_head: expected a full lowercase commit SHA")
     state = _load(pr_state_path, "pr-state")
+    if not isinstance(state, dict):
+        raise PrGateError("pr-state: expected a JSON object")
     for field, expected in (
         ("baseRefName", "main"),
         ("headRefOid", expected_head),
@@ -52,6 +54,8 @@ def validate(
             )
 
     payload = _load(review_threads_path, "review-threads")
+    if not isinstance(payload, dict):
+        raise PrGateError("review-threads: expected a JSON object")
     try:
         threads = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
         has_next = threads["pageInfo"]["hasNextPage"]
