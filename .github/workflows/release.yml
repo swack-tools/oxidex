@@ -9,6 +9,14 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Gates every other job. Refuses a tag that disagrees with the crate version
   # in Cargo.toml, and classifies the tag: a SemVer pre-release (any '-' suffix,
@@ -28,6 +36,14 @@ jobs:
       - name: Classify tag
         id: classify
         run: python3 tools/ci/release_version.py --tag "$GITHUB_REF_NAME" --cargo-toml Cargo.toml
+
+      - name: Require tag commit on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "refusing: tag commit is not reachable from origin/main" >&2
+            exit 1
+          fi
 
   build-linux:
     name: Build Linux (${{ matrix.target }})
@@ -85,7 +101,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: oxidex-${{ matrix.target }}
+          name: oxidex-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/oxidex-${{ matrix.target }}
           retention-days: 1
 
@@ -129,16 +145,16 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: oxidex-x86_64-pc-windows-gnu
+          name: oxidex-x86_64-pc-windows-gnu-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/oxidex-x86_64-pc-windows-gnu.exe
           retention-days: 1
 
   build-macos:
-    name: Build and Sign macOS (aarch64)
+    name: Build and Sign macOS (universal)
     needs: verify-version
     runs-on: macos-15
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,84 +163,100 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
       - name: Install dependencies
         run: |
           brew install just create-dmg
 
-      # This job has no rust-toolchain step -- it builds with the runner
-      # image's preinstalled Rust, which is what the cache key hashes.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
           shared-key: release-macos
 
-      - name: Import signing certificate
+      # Compile all repository-controlled code before importing any signing
+      # material. Cargo build scripts must never inherit access to the key.
+      - name: Build universal release binary
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p artifacts
+          APP_PATH="artifacts/oxidex-universal-apple-darwin"
+          lipo -create -output "$APP_PATH" \
+            target/aarch64-apple-darwin/release/oxidex \
+            target/x86_64-apple-darwin/release/oxidex
+          test "$(lipo -archs "$APP_PATH")" = "aarch64 x86_64"
+
+      - name: Import signing certificate and sign binary
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-          security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-          echo "Available signing identities:"
-          security find-identity -v -p codesigning $KEYCHAIN_PATH
-
-      - name: Build release
-        env:
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
         run: |
-          just build-release
+          : "${BUILD_CERTIFICATE_BASE64:?missing BUILD_CERTIFICATE_BASE64}"
+          : "${P12_PASSWORD:?missing P12_PASSWORD}"
+          : "${KEYCHAIN_PASSWORD:?missing KEYCHAIN_PASSWORD}"
+          : "${DEVELOPMENT_TEAM:?missing DEVELOPMENT_TEAM}"
+          APP_PATH="artifacts/oxidex-universal-apple-darwin"
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
 
-      - name: Sign binary
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          APP_PATH="./target/release/oxidex"
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          cleanup_signing_material() {
+            status=$?
+            rm -f -- "$CERTIFICATE_PATH"
+            if [ -e "$KEYCHAIN_PATH" ]; then
+              security delete-keychain "$KEYCHAIN_PATH" || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup_signing_material EXIT
 
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          umask 077
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 300 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -x -T /usr/bin/codesign \
+            -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          IDENTITY=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | grep -o '".*"' | tr -d '"')
-
-          if [ -z "$IDENTITY" ]; then
-            echo "Error: No Developer ID Application certificate found"
+          IDENTITY_LINES=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -F 'Developer ID Application:' \
+            | grep -F "($DEVELOPMENT_TEAM)" \
+            | sed -n 's/^[[:space:]]*[0-9]*) \([0-9A-F]*\) "Developer ID Application:.*"$/\1/p')
+          IDENTITY_COUNT=$(printf '%s\n' "$IDENTITY_LINES" | sed '/^$/d' | wc -l | tr -d '[:space:]')
+          if [ "$IDENTITY_COUNT" -ne 1 ]; then
+            echo "refusing: expected exactly one Developer ID Application identity" >&2
             exit 1
           fi
+          IDENTITY="$IDENTITY_LINES"
 
-          echo "Found signing identity: $IDENTITY"
-          echo "Signing binary with Developer ID certificate..."
           codesign --sign "$IDENTITY" \
             --timestamp \
             --options runtime \
             --verbose \
-            --keychain $KEYCHAIN_PATH \
+            --keychain "$KEYCHAIN_PATH" \
             "$APP_PATH"
-
-          echo "Verifying signature..."
-          codesign --verify --verbose "$APP_PATH"
-
-          echo "Displaying signature details..."
-          codesign --display --verbose=4 "$APP_PATH"
-
-          echo "✓ Binary signed successfully"
+          codesign --verify --strict --verbose=4 "$APP_PATH"
+          SIGNATURE_DETAILS=$(codesign --display --verbose=4 "$APP_PATH" 2>&1)
+          printf '%s\n' "$SIGNATURE_DETAILS"
+          printf '%s\n' "$SIGNATURE_DETAILS" | grep -Fx "TeamIdentifier=$DEVELOPMENT_TEAM"
+          printf '%s\n' "$SIGNATURE_DETAILS" | grep -F 'Runtime Version='
+          printf '%s\n' "$SIGNATURE_DETAILS" | grep -F 'Timestamp='
+          codesign -d --entitlements :- "$APP_PATH" > entitlements.plist 2>/dev/null || true
+          test ! -s entitlements.plist
 
       - name: Create DMG
         run: |
-          just create-dmg v${{ steps.version.outputs.version }}
+          just create-dmg v${{ steps.version.outputs.version }} artifacts/oxidex-universal-apple-darwin
 
       - name: Notarize DMG
         env:
@@ -233,6 +265,9 @@ jobs:
           NOTARIZATION_TEAM_ID: ${{ secrets.NOTARIZATION_TEAM_ID }}
         run: |
           DMG_PATH="dist/oxidex-v${{ steps.version.outputs.version }}.dmg"
+          : "${NOTARIZATION_APPLE_ID:?missing NOTARIZATION_APPLE_ID}"
+          : "${NOTARIZATION_PASSWORD:?missing NOTARIZATION_PASSWORD}"
+          : "${NOTARIZATION_TEAM_ID:?missing NOTARIZATION_TEAM_ID}"
 
           echo "Submitting DMG for notarization..."
           SUBMISSION_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
@@ -241,23 +276,22 @@ jobs:
             --team-id "$NOTARIZATION_TEAM_ID" \
             --wait 2>&1)
 
-          echo "$SUBMISSION_OUTPUT"
-
-          SUBMISSION_ID=$(echo "$SUBMISSION_OUTPUT" | grep -E "^\s+id:" | head -1 | awk '{print $2}' | tr -d '[:space:]')
-
-          echo "Extracted submission ID: $SUBMISSION_ID"
+          SUBMISSION_ID=$(printf '%s\n' "$SUBMISSION_OUTPUT" \
+            | awk '!found && /^[[:space:]]+id:/ { print $2; found=1 }' \
+            | tr -d '[:space:]')
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "refusing: notarization returned no submission id" >&2
+            exit 1
+          fi
 
           if echo "$SUBMISSION_OUTPUT" | grep -q "status: Accepted"; then
             echo "✓ Notarization accepted"
           else
-            echo "❌ Notarization failed, fetching log..."
-            xcrun notarytool log "$SUBMISSION_ID" developer_log.json \
+            xcrun notarytool log "$SUBMISSION_ID" notarization-log.json \
               --apple-id "$NOTARIZATION_APPLE_ID" \
               --password "$NOTARIZATION_PASSWORD" \
               --team-id "$NOTARIZATION_TEAM_ID"
 
-            echo "Notarization error details:"
-            cat developer_log.json
             exit 1
           fi
 
@@ -266,35 +300,28 @@ jobs:
 
           echo "Verifying DMG notarization..."
           xcrun stapler validate "$DMG_PATH"
-
-          echo "✓ DMG notarized and stapled successfully"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
 
       - name: Create artifact directory
         run: mkdir -p artifacts
 
       - name: Copy signed binary and DMG to artifacts
         run: |
-          cp target/release/oxidex artifacts/oxidex-aarch64-apple-darwin
           cp dist/oxidex-v${{ steps.version.outputs.version }}.dmg artifacts/
 
       - name: Upload signed binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: oxidex-aarch64-apple-darwin
-          path: artifacts/oxidex-aarch64-apple-darwin
+          name: oxidex-universal-apple-darwin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/oxidex-universal-apple-darwin
           retention-days: 1
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: oxidex-dmg
+          name: oxidex-dmg-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/oxidex-v${{ steps.version.outputs.version }}.dmg
           retention-days: 1
-
-      - name: Clean up keychain
-        if: always()
-        run: |
-          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
 
   create-release:
     name: Create GitHub Release
@@ -304,6 +331,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
+    outputs:
+      release-id: ${{ steps.create-draft.outputs.release_id }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -312,6 +342,9 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
+          pattern: oxidex-*-${{ github.run_id }}-${{ github.run_attempt }}
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Display artifact structure
         run: ls -R artifacts
@@ -320,21 +353,42 @@ jobs:
         run: |
           mkdir -p release-assets
           # Linux x64 (musl static binary)
-          cp artifacts/oxidex-x86_64-unknown-linux-musl/oxidex-x86_64-unknown-linux-musl release-assets/
+          cp artifacts/oxidex-x86_64-unknown-linux-musl-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-x86_64-unknown-linux-musl release-assets/
           # Linux ARM64 (musl static binary)
-          cp artifacts/oxidex-aarch64-unknown-linux-musl/oxidex-aarch64-unknown-linux-musl release-assets/
+          cp artifacts/oxidex-aarch64-unknown-linux-musl-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-aarch64-unknown-linux-musl release-assets/
           # Windows x64
-          cp artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe release-assets/
-          # macOS signed binary (ARM64)
-          cp artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin release-assets/
+          cp artifacts/oxidex-x86_64-pc-windows-gnu-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-x86_64-pc-windows-gnu.exe release-assets/
+          # macOS signed universal binary (aarch64 and x86_64)
+          cp artifacts/oxidex-universal-apple-darwin-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-universal-apple-darwin release-assets/
           # macOS DMG (signed and notarized)
-          cp artifacts/oxidex-dmg/*.dmg release-assets/
+          find artifacts/oxidex-dmg-${{ github.run_id }}-${{ github.run_attempt }} -maxdepth 1 -type f -name '*.dmg' -exec cp {} release-assets/ \;
+
+      - name: Create independent release provenance
+        run: |
+          python3 tools/ci/release_assets.py create-provenance \
+            --assets release-assets \
+            --provenance release-provenance \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" \
+            --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      # This Actions artifact is immutable run evidence and is deliberately
+      # uploaded before the independently mutable GitHub Release assets.
+      - name: Upload independent release provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-provenance
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Extract version and create release notes
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
           cat > release-notes.md << 'EOF'
           ## OxiDex v$VERSION
@@ -349,8 +403,9 @@ jobs:
           - `oxidex-x86_64-pc-windows-gnu.exe` - Windows x86_64
 
           **macOS:**
-          - `oxidex-aarch64-apple-darwin` - Signed macOS ARM64 binary
+          - `oxidex-universal-apple-darwin` - Signed universal macOS binary (Apple Silicon and Intel)
           - `oxidex-v$VERSION.dmg` - Signed and notarized macOS DMG installer
+          - `SHA256SUMS` - SHA-256 checksums for every release asset
 
           ### Installation
 
@@ -376,26 +431,163 @@ jobs:
           # Replace $VERSION in the file with actual version
           sed -i "s/\$VERSION/$VERSION/g" release-notes.md
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
-        with:
-          name: Release v${{ steps.version.outputs.version }}
-          body_path: release-notes.md
-          draft: false
-          # A '-' in the tag (v2.0.0-beta.1) is a SemVer pre-release: publish it
-          # as a GitHub pre-release and never let it take the Latest badge, so
-          # /releases/latest and anything that follows it stay on the last
-          # stable release.
-          prerelease: ${{ needs.verify-version.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.verify-version.outputs.prerelease == 'true' && 'false' || 'true' }}
-          files: |
-            release-assets/*
+      # A failed run may leave a draft. Inspect it manually; do not delete,
+      # reuse, or overwrite it. Resolve the incident and obtain authorization
+      # for a new immutable tag. A rerun intentionally fails at this POST.
+      - name: Create fail-closed draft release
+        id: create-draft
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.verify-version.outputs.prerelease }}
+        run: |
+          if [ "$PRERELEASE" = true ]; then MAKE_LATEST=false; else MAKE_LATEST=true; fi
+          RELEASE_BODY=$(cat release-notes.md)
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            --raw-field "tag_name=$GITHUB_REF_NAME" \
+            --raw-field "target_commitish=$GITHUB_SHA" \
+            --raw-field "name=Release v${{ steps.version.outputs.version }}" \
+            --raw-field "body=$RELEASE_BODY" \
+            --field draft=true \
+            --field "prerelease=$PRERELEASE" \
+            --raw-field "make_latest=$MAKE_LATEST" > created-release.json
+          RELEASE_ID=$(python3 -c 'import json; print(json.load(open("created-release.json"))["id"])')
+          test -n "$RELEASE_ID"
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact release assets without replacement
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" release-assets/* --repo "$GITHUB_REPOSITORY"
+
+      - name: Bind draft to exact release ID and asset set
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.create-draft.outputs.release_id }}
+        run: |
+          RESOLVED_TARGET=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > draft-release.json
+          python3 tools/ci/release_assets.py verify-release \
+            --release-json draft-release.json --release-id "$RELEASE_ID" \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --draft true --prerelease "${{ needs.verify-version.outputs.prerelease }}" \
+            --resolved-target "$RESOLVED_TARGET"
+
+  verify-release-assets:
+    name: Verify downloaded release assets
+    needs: [verify-version, create-release]
+    runs-on: macos-15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download exact-run independent provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-provenance
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download draft release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir downloaded-assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir downloaded-assets
+
+      - name: Verify exact-run provenance and exact draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+        run: |
+          python3 tools/ci/release_assets.py verify-assets \
+            --assets downloaded-assets --provenance release-provenance \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          RESOLVED_TARGET=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > draft-release.json
+          python3 tools/ci/release_assets.py verify-release \
+            --release-json draft-release.json --release-id "$RELEASE_ID" \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --draft true --prerelease "${{ needs.verify-version.outputs.prerelease }}" \
+            --resolved-target "$RESOLVED_TARGET"
+
+      - name: Verify downloaded macOS release behavior
+        env:
+          ASSET_DIR: downloaded-assets
+          VERSION: ${{ needs.verify-version.outputs.version }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: bash tools/ci/verify_macos_release.sh
+
+  publish-release:
+    name: Publish verified GitHub Release
+    needs: [verify-version, create-release, verify-release-assets]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout repository verification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download exact-run independent provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-provenance
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download exact draft release assets again
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir downloaded-assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir downloaded-assets
+
+      - name: Reverify and publish exact release ID
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+        run: |
+          python3 tools/ci/release_assets.py verify-assets \
+            --assets downloaded-assets --provenance release-provenance \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          RESOLVED_TARGET=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > draft-release.json
+          python3 tools/ci/release_assets.py verify-release \
+            --release-json draft-release.json --release-id "$RELEASE_ID" \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --draft true --prerelease "${{ needs.verify-version.outputs.prerelease }}" \
+            --resolved-target "$RESOLVED_TARGET"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --field draft=false > published-release.json
+          python3 tools/ci/release_assets.py verify-release \
+            --release-json published-release.json --release-id "$RELEASE_ID" \
+            --version "${{ needs.verify-version.outputs.version }}" \
+            --tag "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --draft false --prerelease "${{ needs.verify-version.outputs.prerelease }}" \
+            --resolved-target "$RESOLVED_TARGET"
 
   update-docs:
     name: Update GitHub Pages
-    needs: [verify-version, create-release]
+    needs: [verify-version, publish-release]
     # Stable releases only. A pre-release must not relabel the stable docs
     # site's version dropdown, and the dropdown's sed pattern below
     # (v[0-9.]*) cannot match a pre-release label, so once written a beta
@@ -416,7 +608,7 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
       - name: Fetch main branch changelog
