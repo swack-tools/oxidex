@@ -28,6 +28,7 @@ pub mod text_info;
 use crate::const_decoder;
 use crate::core::{MetadataMap, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{Ctx, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
@@ -470,6 +471,31 @@ impl MakerNoteParser for OlympusParser {
         absolutise_preview_image_start(preview_image_start_base(ctx), tags);
         Ok(())
     }
+
+    fn parse_with_context_and_values_and_session(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_located_with_session(
+            ctx.window(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            ctx.tiff_base(),
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+        )?;
+        absolutise_preview_image_start(preview_image_start_base(ctx), tags);
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -601,6 +627,35 @@ impl OlympusParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        self.parse_located_with_session(
+            data,
+            byte_order,
+            model,
+            data_base,
+            0,
+            &mut session,
+            &mut cond_ctx,
+            tags,
+            value_forms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_located_with_session(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        data_base: Option<u32>,
+        data_domain: u64,
+        session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
         }
@@ -655,7 +710,10 @@ impl OlympusParser {
         if let Some(table) = main_table {
             walk_main_through_engine(
                 table,
+                session,
+                cond_ctx,
                 data,
+                data_domain,
                 ifd_start,
                 base,
                 effective_byte_order,
@@ -807,7 +865,18 @@ impl OlympusParser {
         if let Some(table) = main_table
             && let Some((start, order)) = main_info
         {
-            walk_main_through_engine(table, data, start, base, order, model, tags);
+            walk_main_through_engine(
+                table,
+                session,
+                cond_ctx,
+                data,
+                data_domain,
+                start,
+                base,
+                order,
+                model,
+                tags,
+            );
             // The same remainder as for the top level: the withheld rows
             // (a MainInfo directory carries SpecialMode and DigitalZoom
             // too) and the overrides, in the same order relative to the
@@ -913,29 +982,34 @@ fn engine_walks(main_walked: bool, table: Option<&'static IfdTable>) -> bool {
 /// cannot carry faithfully is dropped rather than approximated.
 fn walk_main_through_engine(
     table: &'static IfdTable,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
     data: &[u8],
+    data_domain: u64,
     ifd_start: usize,
     base: Option<i64>,
     order: ByteOrder,
     model: Option<&str>,
     tags: &mut HashMap<String, String>,
 ) {
-    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     if let Some(model) = model {
-        members.insert("Model", MemberValue::Str(model.to_string()));
+        let model = model.to_string();
+        ctx.members.insert("Model", MemberValue::Str(model.clone()));
+        let _ = session.set_member("Model", MemberVal::Str(model));
     }
-    let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
     process_exif(
         table,
         IfdDir {
             data,
+            data_domain,
             ifd_start,
             base,
             byte_order: order.to_io_byte_order(),
             group1: Some("Olympus"),
         },
-        &mut ctx,
+        session,
+        ctx,
         &mut emitted,
     );
     for tag in emitted {

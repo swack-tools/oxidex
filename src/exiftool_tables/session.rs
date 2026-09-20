@@ -13,10 +13,10 @@
 //! plus a map of Perl scalars for the rest, and the ExifTool options a helper
 //! sub reads.
 //!
-//! `Ctx` is not replaced here. The IFD walk (`ifd_engine`) builds one
-//! `Session` per directory ([`Session::for_ifd`]) for the generated
-//! conversion arms (`conv`), which the helper library ([`super::helpers`])
-//! reads and mutates as ExifTool's subs mutate `$self`.
+//! `Ctx` is not replaced here. The file-level reader owns one `Session` and
+//! each IFD walk enters a [`DirectoryScope`] for the generated conversion
+//! arms (`conv`), which the helper library ([`super::helpers`]) reads and
+//! mutates as ExifTool's subs mutate `$self`.
 //!
 //! # Perl scalar semantics
 //!
@@ -48,7 +48,9 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 
+use super::engine::Guard;
 use super::exprs::perl_num;
 
 /// One Perl scalar: a `$$self{...}` data member, an ExifTool option, or a
@@ -362,6 +364,65 @@ pub struct Session {
     members: HashMap<String, MemberVal>,
     options: HashMap<String, MemberVal>,
     warnings: Vec<Warning>,
+    processed: Guard,
+}
+
+/// One `ProcessDirectory` frame over a file-scoped [`Session`].
+///
+/// ExifTool temporarily replaces directory identity and entry-evaluation
+/// fields while it walks a directory, then restores their exact prior state.
+/// Everything else in the session is deliberately left alone: DataMembers,
+/// options, warnings, values and processed-directory state belong to the
+/// input file rather than to one IFD. The scope itself is intentionally not
+/// cloneable, so it has one LIFO exit and [`Drop`] covers every return path.
+pub struct DirectoryScope<'a> {
+    session: &'a mut Session,
+    saved_dir_name: Option<MemberVal>,
+    saved_compression: Option<MemberVal>,
+    saved_subfile_type: Option<MemberVal>,
+    saved_byte_order: Option<ByteOrder>,
+    saved_count: Option<i64>,
+    saved_format: Option<String>,
+}
+
+impl Deref for DirectoryScope<'_> {
+    type Target = Session;
+
+    fn deref(&self) -> &Self::Target {
+        self.session
+    }
+}
+
+impl DerefMut for DirectoryScope<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.session
+    }
+}
+
+impl Drop for DirectoryScope<'_> {
+    fn drop(&mut self) {
+        restore_member(self.session, "DIR_NAME", self.saved_dir_name.take());
+        restore_member(self.session, "Compression", self.saved_compression.take());
+        restore_member(self.session, "SubfileType", self.saved_subfile_type.take());
+        self.session.byte_order = self.saved_byte_order;
+        self.session.count = self.saved_count;
+        self.session.format = self.saved_format.take();
+    }
+}
+
+fn saved_member(session: &Session, key: &str) -> Option<MemberVal> {
+    session.has_member(key).then(|| session.member(key))
+}
+
+fn restore_member(session: &mut Session, key: &str, saved: Option<MemberVal>) {
+    match saved {
+        Some(value) => {
+            session
+                .set_member(key, value)
+                .expect("directory-local members accept every Perl scalar");
+        }
+        None => session.remove_member(key),
+    }
 }
 
 /// One `$self->Warn($str [, $ignorable])` request a helper made, recorded
@@ -455,6 +516,52 @@ impl Session {
             members: HashMap::new(),
             options,
             warnings: Vec::new(),
+            processed: Guard::new(),
+        }
+    }
+
+    /// Enter one IFD directory while retaining the surrounding file state.
+    ///
+    /// `DIR_NAME`, `Compression`, `SubfileType`, byte order and the current
+    /// entry's `$count`/`$format` are directory/evaluation-local. Their exact
+    /// prior presence and values are restored when the returned guard drops.
+    /// All other members and side effects remain file-scoped.
+    pub fn enter_directory(
+        &mut self,
+        byte_order: ByteOrder,
+        dir_name: Option<&str>,
+    ) -> DirectoryScope<'_> {
+        let saved_dir_name = saved_member(self, "DIR_NAME");
+        let saved_compression = saved_member(self, "Compression");
+        let saved_subfile_type = saved_member(self, "SubfileType");
+        let saved_byte_order = self.byte_order;
+        let saved_count = self.count;
+        let saved_format = self.format.take();
+
+        self.byte_order = Some(byte_order);
+        self.count = None;
+        match dir_name {
+            Some(name) => {
+                self.members
+                    .insert("DIR_NAME".to_string(), MemberVal::Str(name.to_string()));
+            }
+            None => {
+                self.members.remove("DIR_NAME");
+            }
+        }
+        for key in ["Compression", "SubfileType"] {
+            self.members
+                .insert(key.to_string(), MemberVal::Str(String::new()));
+        }
+
+        DirectoryScope {
+            session: self,
+            saved_dir_name,
+            saved_compression,
+            saved_subfile_type,
+            saved_byte_order,
+            saved_count,
+            saved_format,
         }
     }
 
@@ -589,6 +696,13 @@ impl Session {
     #[must_use]
     pub fn warnings(&self) -> &[Warning] {
         &self.warnings
+    }
+
+    /// The file's `$$self{PROCESSED}` state. It is deliberately not part of
+    /// [`DirectoryScope`]'s snapshot: a directory reached once stays reached
+    /// when its caller resumes or a later root walk starts.
+    pub(super) fn processed(&mut self) -> &mut Guard {
+        &mut self.processed
     }
 }
 

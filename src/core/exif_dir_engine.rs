@@ -52,6 +52,7 @@ use crate::core::metadata_map::MetadataMap;
 use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
 use crate::core::tag_value::TagValue;
 use crate::core::tiff_helpers::trimmed_data_member;
+use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{
     Ctx, Emitted, EntryRead, IfdDir, IfdEntry, IfdTable, MAX_IFD_ENTRIES, MemberValue, declares,
     engine_reports, process_exif_decoded, read_ifd,
@@ -403,21 +404,34 @@ fn ifd0_key(name: &str) -> String {
 ///
 /// `None` when the generated `Exif::Main` is not in force (Gate A or the
 /// allowlist): then every entry is the hand arm's, as before the slice.
-pub(crate) fn ifd0_walk(
+pub(crate) fn ifd0_walk_with_session(
     tiff: &[u8],
+    data_domain: u64,
     ifd0: u64,
     order: ByteOrder,
     metadata: &MetadataMap,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
 ) -> Option<DirEngineRows> {
     // The lookup is spelled with literal arguments because
     // `tools/exiftool-tables/reachability.py` counts literal call sites;
     // `enabled()` re-checks Gate A and the allowlist at runtime.
     let table = crate::exiftool_tables::find_ifd_table("Exif", "Main").filter(|t| t.enabled())?;
     Some(
-        walk(table, tiff, ifd0, order, "IFD0", metadata)
-            .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
-            .keep_hand(IFD0_HAND_KEPT)
-            .with_stored_forms(),
+        walk_with_session(
+            table,
+            tiff,
+            data_domain,
+            ifd0,
+            order,
+            "IFD0",
+            metadata,
+            session,
+            ctx,
+        )
+        .at_uniform_priority(SHIM_DEFAULT_PRIORITY)
+        .keep_hand(IFD0_HAND_KEPT)
+        .with_stored_forms(),
     )
 }
 
@@ -453,13 +467,16 @@ fn record(row: &Row, stored_forms: bool, metadata: &mut MetadataMap, key: String
 ///   Condition list reads them (`trimmed_data_member`). No compiled
 ///   `Exif::Main` condition can tell trimmed from untrimmed today
 ///   (`ifd1_engine_rows` seeds the untrimmed string).
-pub(crate) fn walk(
+pub(crate) fn walk_with_session(
     table: &'static IfdTable,
     tiff: &[u8],
+    data_domain: u64,
     ifd_start: u64,
     order: ByteOrder,
     dir: &'static str,
     metadata: &MetadataMap,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
 ) -> DirEngineRows {
     let mut rows = DirEngineRows::empty(table);
     let Ok(start) = usize::try_from(ifd_start) else {
@@ -472,25 +489,28 @@ pub(crate) fn walk(
     } else {
         rows.refused_as_exiftool = directory_refused_as_exiftool(tiff, start, order);
     }
-    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     for (member, key) in [("Make", "IFD0:Make"), ("Model", "IFD0:Model")] {
         let text = trimmed_data_member(metadata, key);
         if !text.is_empty() {
-            members.insert(member, MemberValue::Str(text));
+            ctx.members.insert(member, MemberValue::Str(text.clone()));
+            session
+                .set_member(member, MemberVal::Str(text))
+                .expect("Make and Model are UTF-8 metadata strings");
         }
     }
-    let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
     let root = process_exif_decoded(
         table,
         IfdDir {
             data: tiff,
+            data_domain,
             ifd_start: start,
             base: Some(0),
             byte_order: order.to_io_byte_order(),
             group1: Some(dir),
         },
-        &mut ctx,
+        session,
+        ctx,
         &mut emitted,
     )
     .unwrap_or_default();
@@ -552,6 +572,44 @@ pub(crate) fn walk(
         });
     }
     rows
+}
+
+#[cfg(test)]
+pub(crate) fn ifd0_walk(
+    tiff: &[u8],
+    ifd0: u64,
+    order: ByteOrder,
+    metadata: &MetadataMap,
+) -> Option<DirEngineRows> {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    ifd0_walk_with_session(tiff, 0, ifd0, order, metadata, &mut session, &mut ctx)
+}
+
+#[cfg(test)]
+pub(crate) fn walk(
+    table: &'static IfdTable,
+    tiff: &[u8],
+    ifd_start: u64,
+    order: ByteOrder,
+    dir: &'static str,
+    metadata: &MetadataMap,
+) -> DirEngineRows {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    walk_with_session(
+        table,
+        tiff,
+        0,
+        ifd_start,
+        order,
+        dir,
+        metadata,
+        &mut session,
+        &mut ctx,
+    )
 }
 
 /// The value `entry` stores, typed as the hand arm types an ExifIFD entry
