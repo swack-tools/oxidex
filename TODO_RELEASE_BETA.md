@@ -30,6 +30,11 @@ The release is complete only when all of these statements are true:
 - [ ] Signed tag `v2.0.0-beta.1` points to the verified release commit on
       `main` and is not moved or recreated.
 
+Until every box above is complete, `CHANGELOG.md` remains `Unreleased`; the
+release notes are a checklist rather than a receipt; the branch/development
+installation instructions are pre-tag only; and historical benchmark or parity
+material must not be presented as v2.0.0-beta.1 evidence.
+
 ## Current snapshot
 
 Refresh this section whenever the candidate changes. Historical green runs are
