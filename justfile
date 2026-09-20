@@ -478,27 +478,29 @@ log:
 # -------------
 
 # Create and push a SIGNED release tag. Refuses anything it cannot prove:
-#   - the commit must be on origin/refactor/tag-machinery or origin/main
-#     (so it has been pushed and reviewed), and GitHub must report the
+#   - the commit must be reachable from origin/main, and GitHub must report the
 #     commit's own signature as verified;
 #   - Cargo.toml at that commit must carry exactly `version`;
 #   - the tag is created with `git tag -s` (your configured signing key)
 #     and its signature is verified locally before anything is pushed.
-# Usage: just tag 2.0.0-beta.1 [<commit-sha>]   (default: origin/refactor/tag-machinery)
+# The real push additionally requires OXIDEX_TAG_AUTHORIZATION=vTAG@FULL_SHA.
+# This is a deliberate confirmation of the separately granted, exact-tag
+# authorization; it is not needed for the local dry run, which occurs before
+# that authorization is requested.
+# Usage: just tag 2.0.0-beta.1 [<commit-sha>]   (default: origin/main)
 # OXIDEX_TAG_DRY_RUN=1 runs every check and signs + verifies, then deletes the tag instead of pushing.
-tag version commit="origin/refactor/tag-machinery":
+tag version commit="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
     TAG="v{{version}}"
-    git fetch -q origin --tags
+    git fetch -q origin main --tags
     SHA=$(git rev-parse --verify "{{commit}}^{commit}")
     echo "tag $TAG -> $SHA"
     if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
       echo "refusing: tag $TAG already exists" >&2; exit 1
     fi
-    if ! git merge-base --is-ancestor "$SHA" origin/refactor/tag-machinery \
-       && ! git merge-base --is-ancestor "$SHA" origin/main; then
-      echo "refusing: $SHA is not on origin/refactor/tag-machinery or origin/main" >&2; exit 1
+    if ! git merge-base --is-ancestor "$SHA" origin/main; then
+      echo "refusing: $SHA is not reachable from origin/main" >&2; exit 1
     fi
     REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
     VERIFIED=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.verification.verified')
@@ -528,6 +530,11 @@ tag version commit="origin/refactor/tag-machinery":
       git tag -d "$TAG" >/dev/null
       echo "dry run: signature verified; $TAG deleted locally, nothing pushed"; exit 0
     fi
+    if [ "${OXIDEX_TAG_AUTHORIZATION:-}" != "$TAG@$SHA" ]; then
+      git tag -d "$TAG" >/dev/null
+      echo "refusing: set OXIDEX_TAG_AUTHORIZATION=$TAG@$SHA only after explicit authorization for this exact tag and commit; tag deleted locally" >&2
+      exit 1
+    fi
     echo "signature verified; pushing $TAG"
     git push origin "refs/tags/$TAG"
 
@@ -540,11 +547,11 @@ untag version:
 # macOS packaging
 # ----------------
 
-# Create macOS DMG installer
-create-dmg version:
+# Create macOS DMG installer from an explicitly supplied signed binary.
+create-dmg version binary:
     @echo "Creating DMG for {{version}}..."
     mkdir -p dist/dmg-contents
-    cp target/release/oxidex dist/dmg-contents/
+    cp "{{binary}}" dist/dmg-contents/oxidex
     create-dmg \
       --volname "OxiDex {{version}}" \
       --no-internet-enable \

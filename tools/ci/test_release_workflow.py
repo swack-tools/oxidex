@@ -131,6 +131,78 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertRegex(
             block, r"(?m)^    if: needs\.verify-version\.outputs\.prerelease != 'true'\s*$")
 
+    def test_release_refuses_tags_not_reachable_from_origin_main(self):
+        block = job_block(self.text, "verify-version")
+        self.assertIn('git fetch --no-tags origin main', block)
+        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', block)
+
+    def test_macos_release_builds_and_asserts_a_universal_binary(self):
+        block = job_block(self.text, "build-macos")
+        self.assertIn('targets: aarch64-apple-darwin,x86_64-apple-darwin', block)
+        self.assertIn('cargo build --release --target aarch64-apple-darwin', block)
+        self.assertIn('cargo build --release --target x86_64-apple-darwin', block)
+        self.assertIn('lipo -create -output "$APP_PATH"', block)
+        self.assertIn('lipo -archs "$APP_PATH"', block)
+        self.assertIn('aarch64 x86_64', block)
+
+    def test_universal_build_uses_only_explicit_target_outputs(self):
+        block = job_block(self.text, "build-macos")
+        self.assertIn('target/aarch64-apple-darwin/release/oxidex', block)
+        self.assertIn('target/x86_64-apple-darwin/release/oxidex', block)
+        self.assertNotIn('target/release', block)
+
+    def test_gatekeeper_assesses_only_stapled_dmg_after_notarization(self):
+        block = job_block(self.text, "build-macos")
+        self.assertNotIn('spctl --assess --type execute', block)
+        staple = block.index('xcrun stapler staple "$DMG_PATH"')
+        validate = block.index('xcrun stapler validate "$DMG_PATH"')
+        assess = block.index('spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"')
+        self.assertLess(staple, validate)
+        self.assertLess(validate, assess)
+
+    def test_macos_signing_and_notarization_are_strict_and_fail_closed(self):
+        block = job_block(self.text, "build-macos")
+        for secret in (
+                "BUILD_CERTIFICATE_BASE64", "P12_PASSWORD", "KEYCHAIN_PASSWORD",
+                "DEVELOPMENT_TEAM", "NOTARIZATION_APPLE_ID", "NOTARIZATION_PASSWORD",
+                "NOTARIZATION_TEAM_ID"):
+            with self.subTest(secret=secret):
+                self.assertIn(secret, block)
+        self.assertIn('expected exactly one Developer ID Application identity', block)
+        self.assertIn('codesign --verify --strict --verbose=4 "$APP_PATH"', block)
+        self.assertIn('codesign -d --entitlements :- "$APP_PATH"', block)
+        self.assertIn('spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"', block)
+        self.assertIn('xcrun stapler validate "$DMG_PATH"', block)
+        self.assertIn('spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"', block)
+
+    def test_release_assets_have_a_checksum_manifest(self):
+        block = job_block(self.text, "create-release")
+        self.assertIn('shasum -a 256', block)
+        self.assertIn('(cd release-assets && shasum -a 256 ./* > SHA256SUMS)', block)
+        self.assertIn('SHA256SUMS', block)
+
+    def test_macos_builder_has_no_release_write_permission(self):
+        block = job_block(self.text, "build-macos")
+        self.assertRegex(block, r"(?m)^    permissions:\n      contents: read$")
+
+    def test_downloaded_release_assets_are_verified_before_publication(self):
+        verify = job_block(self.text, "verify-release-assets")
+        publish = job_block(self.text, "publish-release")
+        self.assertIn("create-release", job_needs(verify))
+        self.assertIn('gh release download "$GITHUB_REF_NAME"', verify)
+        self.assertIn('shasum -a 256 -c SHA256SUMS', verify)
+        self.assertIn('lipo -archs oxidex-universal-apple-darwin', verify)
+        self.assertIn('codesign --verify --strict --verbose=4 oxidex-universal-apple-darwin', verify)
+        self.assertIn('xcrun stapler validate "$DMG_PATH"', verify)
+        self.assertIn('hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DMG_PATH"', verify)
+        self.assertIn('cmp -s "$PAYLOAD_PATH" oxidex-universal-apple-darwin', verify)
+        self.assertIn('shasum -a 256 "$PAYLOAD_PATH"', verify)
+        self.assertIn('lipo -archs "$PAYLOAD_PATH"', verify)
+        self.assertIn('codesign --verify --strict --verbose=4 "$PAYLOAD_PATH"', verify)
+        self.assertNotIn('spctl --assess --type execute', verify)
+        self.assertIn("verify-release-assets", job_needs(publish))
+        self.assertIn('gh release edit "$GITHUB_REF_NAME" --draft=false', publish)
+
 
 class DockerWorkflowTests(unittest.TestCase):
     text = (WORKFLOWS / "docker.yml").read_text()
@@ -161,6 +233,19 @@ class DockerWorkflowTests(unittest.TestCase):
         step = self.meta_step()
         self.assertIn("type=ref,event=tag", step)
         self.assertIn("type=semver,pattern={{version}}", step)
+
+
+class TagRecipeTests(unittest.TestCase):
+    text = (REPO / "justfile").read_text()
+
+    def test_tag_recipe_requires_main_and_exact_authorization(self):
+        recipe = self.text[self.text.index("tag version"):self.text.index("# Delete a tag", self.text.index("tag version"))]
+        self.assertIn('commit="origin/main"', recipe)
+        self.assertIn('git merge-base --is-ancestor "$SHA" origin/main', recipe)
+        self.assertNotIn('origin/refactor/tag-machinery', recipe)
+        self.assertIn('OXIDEX_TAG_AUTHORIZATION', recipe)
+        self.assertIn('"$TAG@$SHA"', recipe)
+        self.assertIn('OXIDEX_TAG_DRY_RUN', recipe)
 
 
 class CratesIoTests(unittest.TestCase):
