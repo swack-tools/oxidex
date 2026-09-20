@@ -358,8 +358,25 @@ class StateStore:
                     "pending merge-receipt repair must be resumed before controller mutation"
                 )
 
+    def _require_no_pending_refresh(
+        self, *, allowed_journal: Path | None = None
+    ) -> None:
+        transactions = self.root / "refresh-transactions"
+        if not transactions.is_dir():
+            return
+        for path in transactions.glob("*.json"):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise Refused(f"malformed plan/spec refresh journal: {path}") from exc
+            if (not isinstance(value, Mapping) or value.get("phase") != "complete") and path != allowed_journal:
+                raise Blocked(
+                    "pending plan/spec refresh must be resumed before controller mutation"
+                )
+
     def write_snapshot(self, state: Mapping[str, Any]) -> None:
         self._require_no_pending_repair()
+        self._require_no_pending_refresh()
         validate_state(state)
         atomic_json(self.snapshot_path, state)
 
@@ -373,6 +390,7 @@ class StateStore:
     def mutate(self, callback: Callable[[dict[str, Any]], Any]) -> Any:
         with self._locked():
             self._require_no_pending_repair()
+            self._require_no_pending_refresh()
             state = self.read_snapshot()
             result = callback(state)
             validate_state(state)
@@ -382,6 +400,7 @@ class StateStore:
     def append_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
         with self._locked() as lock:
             self._require_no_pending_repair()
+            self._require_no_pending_refresh()
             lock.seek(0)
             sequence = 1
             if self.events_path.exists():
@@ -396,6 +415,7 @@ class StateStore:
 
     def write_receipt_index(self, value: Mapping[str, Any]) -> None:
         self._require_no_pending_repair()
+        self._require_no_pending_refresh()
         atomic_json(self.receipt_index_path, value)
 
     def read_receipt_index(self) -> dict[str, Any]:
@@ -602,6 +622,167 @@ def initialize_controller(
         store.write_receipt_index({})
     store.append_event({"event": "init", "target_sha": target_sha})
     return candidate
+
+
+def _refresh_journal_path(store: StateStore, plan_sha256: str, spec_sha256: str) -> Path:
+    return store.root / "refresh-transactions" / f"{plan_sha256}-{spec_sha256}.json"
+
+
+def _refresh_request(
+    plan: Path,
+    spec: Path,
+    old_plan_sha256: str,
+    old_spec_sha256: str,
+    before_state_sha256: str,
+) -> dict[str, Any]:
+    plan = require_operational_path(plan)
+    spec = require_operational_path(spec)
+    for path, name in ((plan, "plan"), (spec, "spec")):
+        if not path.is_file() or path.is_symlink():
+            raise Refused(f"{name} must be a regular non-symlink file")
+    old_plan_sha256 = require_hash(old_plan_sha256, "old plan SHA-256")
+    old_spec_sha256 = require_hash(old_spec_sha256, "old spec SHA-256")
+    before_state_sha256 = require_hash(before_state_sha256, "before-state SHA-256")
+    return {
+        "plan": str(plan),
+        "spec": str(spec),
+        "old_plan_sha256": old_plan_sha256,
+        "old_spec_sha256": old_spec_sha256,
+        "before_state_sha256": before_state_sha256,
+        "new_plan_sha256": sha256_file(plan),
+        "new_spec_sha256": sha256_file(spec),
+    }
+
+
+def _refresh_receipt_matches(journal: Mapping[str, Any], request: Mapping[str, Any]) -> bool:
+    return all(journal.get(field) == request.get(field) for field in (
+        "plan", "spec", "old_plan_sha256", "old_spec_sha256",
+        "before_state_sha256", "new_plan_sha256", "new_spec_sha256",
+    ))
+
+
+def _resume_plan_spec_refresh(
+    store: StateStore, journal_path: Path, journal: dict[str, Any]
+) -> dict[str, Any]:
+    before_state = journal["before_state_sha256"]
+    after_state = journal["after_state_sha256"]
+    before_events = journal["before_events_sha256"]
+    after_events = journal["after_events_sha256"]
+    state_hash = sha256_file(store.snapshot_path)
+    events_bytes = store.events_path.read_bytes() if store.events_path.exists() else b""
+    if state_hash not in {before_state, after_state}:
+        raise Refused("refresh state matches neither journaled before nor after identity")
+    if hashlib.sha256(events_bytes).hexdigest() not in {before_events, after_events}:
+        raise Refused("refresh events match neither journaled before nor after identity")
+    if state_hash == before_state:
+        state = store.read_snapshot()
+        if state["plan_sha256"] != journal["old_plan_sha256"] or state["spec_sha256"] != journal["old_spec_sha256"]:
+            raise Refused("refresh old plan/spec identity no longer matches state")
+        state["plan_sha256"] = journal["new_plan_sha256"]
+        state["spec_sha256"] = journal["new_spec_sha256"]
+        validate_state(state)
+        atomic_json(store.snapshot_path, state)
+        if sha256_file(store.snapshot_path) != after_state:
+            raise Refused("refresh snapshot write did not produce journaled hash")
+    if hashlib.sha256(events_bytes).hexdigest() == before_events:
+        current = store.events_path.read_bytes() if store.events_path.exists() else b""
+        if current != journal["before_events_bytes"].encode("utf-8"):
+            raise Refused("refresh event prefix changed before append")
+        atomic_bytes(store.events_path, journal["after_events_bytes"].encode("utf-8"))
+        if sha256_file(store.events_path) != after_events:
+            raise Refused("refresh event append did not produce journaled hash")
+    journal["phase"] = "complete"
+    atomic_json(journal_path, journal)
+    return {**journal["receipt"], "idempotent": False}
+
+
+def refresh_plan_spec(
+    store: StateStore,
+    plan: Path,
+    spec: Path,
+    *,
+    old_plan_sha256: str,
+    old_spec_sha256: str,
+    before_state_sha256: str,
+) -> dict[str, Any]:
+    """Atomically refresh controller plan/spec identities with a durable journal."""
+    request = _refresh_request(
+        plan, spec, old_plan_sha256, old_spec_sha256, before_state_sha256
+    )
+    journal_path = _refresh_journal_path(
+        store, request["new_plan_sha256"], request["new_spec_sha256"]
+    )
+    with store._locked():
+        store._require_no_pending_repair()
+        store._require_no_pending_refresh(allowed_journal=journal_path)
+        if journal_path.exists():
+            try:
+                journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise Refused(f"malformed plan/spec refresh journal: {journal_path}") from exc
+            if not isinstance(journal, dict) or not _refresh_receipt_matches(journal, request):
+                raise Refused("different refresh request conflicts with existing journal")
+            if journal.get("phase") == "complete":
+                _resume_plan_spec_refresh(store, journal_path, journal)
+                return {**journal["receipt"], "idempotent": True}
+            if journal.get("phase") != "prepared":
+                raise Refused("plan/spec refresh journal has invalid lifecycle")
+            return _resume_plan_spec_refresh(store, journal_path, journal)
+
+        state = store.read_snapshot()
+        actual_before = sha256_file(store.snapshot_path)
+        if actual_before != request["before_state_sha256"]:
+            raise Refused("before-state SHA-256 does not match controller snapshot")
+        if state["plan_sha256"] != request["old_plan_sha256"]:
+            raise Refused("old plan SHA-256 does not match controller state")
+        if state["spec_sha256"] != request["old_spec_sha256"]:
+            raise Refused("old spec SHA-256 does not match controller state")
+        before_events_bytes = store.events_path.read_bytes() if store.events_path.exists() else b""
+        if before_events_bytes and not before_events_bytes.endswith(b"\n"):
+            raise Refused("event log lacks a final newline before plan/spec refresh")
+        sequence = len(before_events_bytes.splitlines()) + 1
+        event = {
+            "sequence": sequence,
+            "timestamp": utc_now(),
+            "event": "refresh-plan-spec",
+            "before_state_sha256": request["before_state_sha256"],
+            "old_plan_sha256": request["old_plan_sha256"],
+            "old_spec_sha256": request["old_spec_sha256"],
+            "new_plan_sha256": request["new_plan_sha256"],
+            "new_spec_sha256": request["new_spec_sha256"],
+        }
+        encoded_event = (json.dumps(event, sort_keys=True) + "\n").encode("utf-8")
+        after_events_bytes = before_events_bytes + encoded_event
+        after_state = dict(state)
+        after_state["plan_sha256"] = request["new_plan_sha256"]
+        after_state["spec_sha256"] = request["new_spec_sha256"]
+        validate_state(after_state)
+        receipt = {
+            "transaction": "refresh-plan-spec",
+            "event_sequence": sequence,
+            "before_state_sha256": request["before_state_sha256"],
+            "old_plan_sha256": request["old_plan_sha256"],
+            "old_spec_sha256": request["old_spec_sha256"],
+            "new_plan_sha256": request["new_plan_sha256"],
+            "new_spec_sha256": request["new_spec_sha256"],
+        }
+        journal = {
+            "schema_version": 1,
+            "phase": "prepared",
+            **request,
+            "before_events_sha256": hashlib.sha256(before_events_bytes).hexdigest(),
+            "after_state_sha256": _bytes_hash(_json_document_bytes(after_state)),
+            "after_events_sha256": hashlib.sha256(after_events_bytes).hexdigest(),
+            "before_events_bytes": before_events_bytes,
+            "after_events_bytes": after_events_bytes,
+            "receipt": receipt,
+        }
+        # JSON cannot encode bytes; retain the exact event bytes as base64-free
+        # UTF-8 text because the event log is UTF-8 JSONL by contract.
+        journal["before_events_bytes"] = before_events_bytes.decode("utf-8")
+        journal["after_events_bytes"] = after_events_bytes.decode("utf-8")
+        atomic_json(journal_path, journal)
+        return _resume_plan_spec_refresh(store, journal_path, journal)
 
 
 def _transition(task: dict[str, Any], state_name: str, *, detail: str | None = None) -> None:
@@ -3663,6 +3844,7 @@ def build_parser() -> argparse.ArgumentParser:
         "event",
         "checkpoint",
         "repair-merge-receipts",
+        "refresh-plan-spec",
         "reconcile",
         "recover",
         "launch",
@@ -3679,6 +3861,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name not in {
             "init",
             "repair-merge-receipts",
+            "refresh-plan-spec",
             "recover",
             "status",
             "fixture",
@@ -3702,6 +3885,12 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "repair-merge-receipts":
             command.add_argument("--manifest", type=Path, required=True)
             command.add_argument("--manifest-sha256", required=True)
+        if name == "refresh-plan-spec":
+            command.add_argument("--plan", type=Path, required=True)
+            command.add_argument("--spec", type=Path, required=True)
+            command.add_argument("--old-plan-sha256", required=True)
+            command.add_argument("--old-spec-sha256", required=True)
+            command.add_argument("--before-state-sha256", required=True)
         if name in {
             "checkpoint",
             "repair-merge-receipts",
@@ -3747,6 +3936,15 @@ def _dispatch(store: StateStore, args: argparse.Namespace) -> Any:
             args.manifest,
             args.manifest_sha256,
         )
+    if args.command == "refresh-plan-spec":
+        return refresh_plan_spec(
+            store,
+            args.plan,
+            args.spec,
+            old_plan_sha256=args.old_plan_sha256,
+            old_spec_sha256=args.old_spec_sha256,
+            before_state_sha256=args.before_state_sha256,
+        )
     if args.command == "reconcile":
         repository = require_operational_path(args.repo)
         inventory = read_remote_inventory(
@@ -3790,13 +3988,14 @@ def _dispatch_monitor_follow(store: StateStore, args: argparse.Namespace) -> Any
 
 def dispatch(args: argparse.Namespace) -> Any:
     store = StateStore(args.root)
-    if args.command == "repair-merge-receipts":
+    if args.command in {"repair-merge-receipts", "refresh-plan-spec"}:
         return _dispatch(store, args)
     if args.command == "monitor" and args.follow:
         return _dispatch_monitor_follow(store, args)
     with store._locked():
         if args.command != "status":
             store._require_no_pending_repair()
+            store._require_no_pending_refresh()
         return _dispatch(store, args)
 
 
