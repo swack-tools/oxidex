@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import ctypes
 import datetime as dt
 import hashlib
 import importlib.util
@@ -19,6 +20,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -56,6 +58,33 @@ RECEIPT_FILES = {
     "validator.json",
     ".complete",
 }
+TASK8_RUST_BOUNDARY = (
+    "src/exiftool_tables/attribution.rs",
+    "src/exiftool_tables/engine.rs",
+    "src/exiftool_tables/ifd_engine.rs",
+    "src/exiftool_tables/keyed_engine.rs",
+    "src/exiftool_tables/mod.rs",
+    "src/exiftool_tables/runtime.rs",
+    "src/exiftool_tables/serial_engine.rs",
+    "src/main.rs",
+    "src/composite/compute.rs",
+    "src/composite/mod.rs",
+    "src/core/file_metadata.rs",
+    "src/core/operations.rs",
+    "src/parsers/archive/ar.rs",
+    "src/parsers/canon_vrd/mod.rs",
+    "src/parsers/elf/metadata_extractor.rs",
+    "src/parsers/flir_fpf.rs",
+    "src/parsers/jpeg/app_segments/infiray.rs",
+    "src/parsers/macho/metadata_extractor.rs",
+    "src/parsers/specialized/fits.rs",
+    "src/parsers/tiff/geotiff_parser.rs",
+    "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
+    "src/parsers/tiff/makernotes/nikon/settings.rs",
+    "src/parsers/tiff/makernotes/shared/binary_subdir.rs",
+    "src/parsers/tiff/makernotes/sony.rs",
+    "src/parsers/tiff/makernotes/sony/binary_data.rs",
+)
 
 
 class ReceiptError(ValueError):
@@ -306,6 +335,58 @@ def _artifact_record(path: Path) -> dict:
     return {"path": str(path.resolve()), **_file_identity(path)}
 
 
+def _kernel_process_identity(pid: int) -> dict:
+    """Read a non-display kernel identity for one exact PID instance."""
+    if sys.platform.startswith("linux"):
+        try:
+            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+            fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+            start_ticks = fields[19]
+        except (OSError, IndexError, ValueError) as exc:
+            raise ReceiptError(f"cannot read Linux kernel identity for PID {pid}: {exc}") from exc
+        if not boot_id or not start_ticks.isdigit():
+            raise ReceiptError(f"Linux kernel identity for PID {pid} is incomplete")
+        return {"platform": "linux", "boot_id": boot_id, "start_token": start_ticks}
+    if sys.platform == "darwin":
+        try:
+            # proc_bsdinfo is 136 bytes; its start timeval occupies bytes 120..136.
+            info = ctypes.create_string_buffer(136)
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+            size = libproc.proc_pidinfo(pid, 3, 0, info, 136)
+            if size < 136:
+                raise ReceiptError(
+                    f"macOS libproc returned {size} bytes for PID {pid}, expected 136"
+                )
+            raw = info.raw
+            seconds = int.from_bytes(raw[120:128], sys.byteorder)
+            microseconds = int.from_bytes(raw[128:136], sys.byteorder)
+        except (OSError, AttributeError) as exc:
+            raise ReceiptError(f"cannot read macOS kernel identity for PID {pid}: {exc}") from exc
+        if seconds <= 0 or not (0 <= microseconds < 1_000_000):
+            raise ReceiptError(f"macOS kernel identity for PID {pid} is incomplete")
+        return {
+            "platform": "darwin",
+            "boot_id": None,
+            "start_token": f"{seconds}:{microseconds}",
+        }
+    raise ReceiptError(f"unsupported platform for kernel process identity: {sys.platform}")
+
+
+def _validate_process_identity_record(record: dict) -> None:
+    identity = record.get("process_identity")
+    if not isinstance(record.get("pid"), int) or not isinstance(identity, dict):
+        raise ReceiptError("child record lacks PID-bound kernel identity")
+    captured = identity.get("captured")
+    verified = identity.get("verified_before_communicate")
+    if identity.get("pid") != record["pid"] or not isinstance(captured, dict) \
+            or captured != verified or not captured.get("start_token"):
+        raise ReceiptError("child PID kernel identity is absent or unstable")
+    if captured.get("platform") not in ("linux", "darwin"):
+        raise ReceiptError("child PID kernel identity platform is invalid")
+    if captured["platform"] == "linux" and not captured.get("boot_id"):
+        raise ReceiptError("Linux child PID identity lacks boot ID")
+
+
 def capture_process(
     argv: list[str],
     cwd: Path,
@@ -337,23 +418,39 @@ def capture_process(
     started_ns = time.time_ns()
     timed_out = False
     signal = None
+    identity_error = None
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=process_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    pid = process.pid
     try:
-        completed = subprocess.run(
-            argv,
-            cwd=cwd,
-            env=process_env,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        stdout, stderr, returncode = completed.stdout, completed.stderr, completed.returncode
-        if returncode < 0:
-            signal = -returncode
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or b""
-        stderr = exc.stderr or b""
-        returncode = None
-        timed_out = True
+        captured_identity = _kernel_process_identity(pid)
+        verified_identity = _kernel_process_identity(pid)
+        if captured_identity != verified_identity:
+            identity_error = (
+                f"{side} child PID {pid} identity changed before communicate: "
+                f"{captured_identity!r} != {verified_identity!r}"
+            )
+            process.kill()
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            stdout, stderr = process.communicate()
+    except (ReceiptError, OSError) as exc:
+        identity_error = f"{side} child PID {pid} identity unavailable: {exc}"
+        process.kill()
+        stdout, stderr = process.communicate()
+        captured_identity = None
+        verified_identity = None
+    returncode = None if timed_out else process.returncode
+    if returncode is not None and returncode < 0:
+        signal = -returncode
     _atomic_write(stdout_path, stdout)
     _atomic_write(stderr_path, stderr)
     _atomic_write(returncode_path, f"{returncode if returncode is not None else 'timeout'}\n".encode())
@@ -366,6 +463,12 @@ def capture_process(
         "started_at": started_at,
         "completed_at": utc_now(),
         "elapsed_ns": time.time_ns() - started_ns,
+        "pid": pid,
+        "process_identity": {
+            "pid": pid,
+            "captured": captured_identity,
+            "verified_before_communicate": verified_identity,
+        },
         "timeout_seconds": timeout,
         "timed_out": timed_out,
         "signal": signal,
@@ -379,6 +482,9 @@ def capture_process(
     if timed_out:
         write_json(child_dir / f"{side}.process.json", record)
         raise ChildProcessError(f"{side} child timed out after {timeout}s")
+    if identity_error is not None:
+        write_json(child_dir / f"{side}.process.json", record)
+        raise ChildProcessError(identity_error)
     if returncode != 0:
         write_json(child_dir / f"{side}.process.json", record)
         raise ChildProcessError(f"{side} child returned return code {returncode}")
@@ -500,7 +606,8 @@ def validate_v3_receipt(receipt: dict, run_root: Path, *, replay: bool = True) -
     root = Path(run_root).resolve(strict=True)
     required = {
         "schema", "status", "run_root", "token_contract", "artifact_index",
-        "projections", "reconciliations", "failed_stage", "failure",
+        "projections", "reconciliations", "pre_seam", "pre_seam_control",
+        "failed_stage", "failure",
     }
     missing = sorted(required - receipt.keys())
     if missing:
@@ -551,7 +658,9 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
     if not isinstance(projections, dict) or not isinstance(reconciliations, dict):
         raise ReceiptError("receipt lacks replayable projections/reconciliations")
     runs = receipt.get("runs")
-    if not isinstance(runs, dict) or set(runs) != {"control-unset", "control-empty", *TOKENS, "union"}:
+    if not isinstance(runs, dict) or set(runs) != {
+        "pre-seam-control", "control-unset", "control-empty", *TOKENS, "union"
+    }:
         raise ReceiptError("run mode set is not exact")
     recomputed = {}
     expected_paths = receipt.get("selection", {}).get("ordered_paths")
@@ -578,6 +687,7 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
                         or record.get("timed_out") or record.get("signal") is not None \
                         or record.get("parse_status") != "ok":
                     raise ReceiptError(f"run {mode} {side} child outcome is not successful")
+                _validate_process_identity_record(record)
                 for artifact_name in ("stdout", "stderr", "returncode_artifact", "parsed"):
                     artifact = record.get(artifact_name)
                     path = Path(artifact.get("path", "")) if isinstance(artifact, dict) else Path("")
@@ -638,6 +748,9 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
             raise ReceiptError(f"reconciliation residual is nonzero: {mode}")
     if _validate_inertness(runs, selection) != receipt.get("inertness"):
         raise ReceiptError("inertness claim does not replay")
+    if _validate_pre_seam_control(runs, selection) != receipt.get("pre_seam_control"):
+        raise ReceiptError("pre-seam ordinary-binary control does not replay")
+    _validate_pre_seam_proof(receipt.get("pre_seam"), root, live=False)
     fixture = receipt.get("fixture_contract")
     if not isinstance(fixture, dict):
         raise ReceiptError("fixture contract is required")
@@ -681,6 +794,8 @@ def _failure_receipt(root: Path, stage: str, message: str, started: int = 0) -> 
         "runs": None,
         "fixture_contract": None,
         "inertness": None,
+        "pre_seam": None,
+        "pre_seam_control": None,
         "projections": {},
         "reconciliations": {},
         "artifact_index": _artifact_index(root),
@@ -730,6 +845,45 @@ def _source_identity(repository: Path) -> dict:
     }
 
 
+def _resolve_pre_seam(repository: Path) -> dict:
+    """Resolve the unique commit that introduced the attribution seam and its parent."""
+    path = "src/exiftool_tables/attribution.rs"
+    additions = _git(
+        repository,
+        "log",
+        "--follow",
+        "--diff-filter=A",
+        "--format=%H",
+        "HEAD",
+        "--",
+        path,
+    ).splitlines()
+    if len(additions) != 1:
+        raise ReceiptError(
+            f"expected exactly one introducing commit for {path}, found {len(additions)}"
+        )
+    introducing = additions[0]
+    parents = _git(repository, "show", "-s", "--format=%P", introducing).split()
+    if len(parents) != 1:
+        raise ReceiptError("attribution introducing commit must have exactly one parent")
+    parent = parents[0]
+    absent = subprocess.run(
+        ["git", "-C", str(repository), "cat-file", "-e", f"{parent}:{path}"],
+        capture_output=True,
+        check=False,
+    )
+    if absent.returncode == 0:
+        raise ReceiptError("resolved pre-seam parent already contains attribution.rs")
+    return {
+        "path": path,
+        "introducing_commit": introducing,
+        "introducing_tree": _git(repository, "rev-parse", f"{introducing}^{{tree}}"),
+        "introducing_parents": parents,
+        "parent_commit": parent,
+        "parent_tree": _git(repository, "rev-parse", f"{parent}^{{tree}}"),
+    }
+
+
 def _append_stage(root: Path, stage: str, event: str, *, exit_code: int | None = None) -> None:
     row = {"at": utc_now(), "stage": stage, "event": event, "exit_code": exit_code}
     path = root / "stages.jsonl"
@@ -773,6 +927,121 @@ def _run_raw(
     if result.returncode != 0:
         raise ChildProcessError(f"{label} returned return code {result.returncode}")
     return record
+
+
+def _build_pre_seam(repository: Path, root: Path) -> dict:
+    resolution = _resolve_pre_seam(repository)
+    checkout = root.parent / f"{root.name}.pre-seam-source"
+    target = root.parent / f"{root.name}.pre-seam-target"
+    for path in (checkout, target):
+        if path.exists() or path.is_symlink():
+            raise ReceiptError(f"pre-seam run-owned path already exists: {path}")
+    proof_root = root / "pre-seam"
+    clone = _run_raw(
+        ["git", "clone", "--shared", "--no-checkout", str(repository), str(checkout)],
+        repository,
+        proof_root,
+        "clone",
+    )
+    checkout_record = _run_raw(
+        ["git", "checkout", "--detach", resolution["parent_commit"]],
+        checkout,
+        proof_root,
+        "checkout",
+    )
+    checkout_identity = _source_identity(checkout)
+    if checkout_identity["commit"] != resolution["parent_commit"] \
+            or checkout_identity["tree"] != resolution["parent_tree"] \
+            or not checkout_identity["clean"]:
+        raise ReceiptError("pre-seam checkout identity does not match resolved parent")
+    target.mkdir(mode=0o755)
+    build = _run_raw(
+        ["cargo", "build", "--release", "--bin", "oxidex"],
+        checkout,
+        proof_root,
+        "cargo",
+        timeout=3600,
+        environment={"CARGO_TARGET_DIR": str(target.resolve())},
+    )
+    built_binary = target / "release/oxidex"
+    if not built_binary.is_file():
+        raise ReceiptError(f"pre-seam build did not produce expected binary {built_binary}")
+    retained_binary = proof_root / "oxidex"
+    shutil.copy2(built_binary, retained_binary)
+    proof = {
+        "resolution": resolution,
+        "source_repository": str(repository.resolve()),
+        "strategy": "run-owned shared clone with detached checkout; no protected ref mutation",
+        "checkout": checkout_identity,
+        "target_dir": str(target.resolve()),
+        "clone": clone,
+        "checkout_process": checkout_record,
+        "build": build,
+        "built_binary": _artifact_record(built_binary),
+        "binary": _artifact_record(retained_binary),
+        "run_mode": "pre-seam-control",
+        "environment": _mode_environment("pre-seam-control"),
+    }
+    proof_path = proof_root / "proof.json"
+    write_json(proof_path, proof)
+    proof["artifact"] = _artifact_record(proof_path)
+    return proof
+
+
+def _validate_pre_seam_proof(proof: dict, root: Path, *, live: bool) -> None:
+    if not isinstance(proof, dict):
+        raise ReceiptError("pre-seam build proof is missing")
+    resolution = proof.get("resolution")
+    checkout = proof.get("checkout")
+    if not isinstance(resolution, dict) or not isinstance(checkout, dict):
+        raise ReceiptError("pre-seam commit/tree proof is incomplete")
+    hashes = (
+        resolution.get("introducing_commit"),
+        resolution.get("introducing_tree"),
+        resolution.get("parent_commit"),
+        resolution.get("parent_tree"),
+    )
+    if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value) for value in hashes):
+        raise ReceiptError("pre-seam commit/tree proof contains an invalid object ID")
+    if resolution.get("introducing_parents") != [resolution["parent_commit"]] \
+            or checkout.get("commit") != resolution["parent_commit"] \
+            or checkout.get("tree") != resolution["parent_tree"] \
+            or checkout.get("clean") is not True \
+            or proof.get("run_mode") != "pre-seam-control" \
+            or proof.get("environment") != _mode_environment("pre-seam-control"):
+        raise ReceiptError("pre-seam parent checkout or mode proof does not reconcile")
+    for label in ("clone", "checkout_process", "build"):
+        process = proof.get(label)
+        if not isinstance(process, dict) or process.get("returncode") != 0:
+            raise ReceiptError(f"pre-seam {label} proof is not successful")
+        for stream in ("stdout", "stderr"):
+            artifact = process.get(stream)
+            path = Path(artifact.get("path", "")) if isinstance(artifact, dict) else Path("")
+            if not _inside(root, path) or _artifact_record(path) != artifact:
+                raise ReceiptError(f"pre-seam {label} {stream} artifact does not verify")
+    binary = proof.get("binary")
+    binary_path = Path(binary.get("path", "")) if isinstance(binary, dict) else Path("")
+    if not _inside(root, binary_path) or _artifact_record(binary_path) != binary:
+        raise ReceiptError("retained pre-seam binary does not verify")
+    proof_artifact = proof.get("artifact")
+    proof_path = Path(proof_artifact.get("path", "")) if isinstance(proof_artifact, dict) else Path("")
+    if not _inside(root, proof_path) or _artifact_record(proof_path) != proof_artifact:
+        raise ReceiptError("pre-seam proof artifact does not verify")
+    retained = json.loads(
+        proof_path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_pairs
+    )
+    if retained != {key: value for key, value in proof.items() if key != "artifact"}:
+        raise ReceiptError("retained pre-seam proof differs from receipt")
+    if live:
+        current_repository = Path(proof.get("source_repository", ""))
+        if _resolve_pre_seam(current_repository) != resolution:
+            raise ReceiptError("live pre-seam resolution changed")
+        if _source_identity(Path(checkout["root"])) != checkout:
+            raise ReceiptError("live pre-seam checkout identity changed")
+        built = proof.get("built_binary")
+        built_path = Path(built.get("path", "")) if isinstance(built, dict) else Path("")
+        if _artifact_record(built_path) != built or _artifact_record(binary_path) != binary:
+            raise ReceiptError("live pre-seam binary identity changed")
 
 
 def _source_manifest_rows(root: Path) -> list[dict]:
@@ -829,6 +1098,7 @@ def _recheck_live_inputs(receipt: dict) -> None:
     oracle_root = Path(oracle["source_root"])
     if canonical_sha256(_source_manifest_rows(oracle_root)) != oracle["source_manifest"]["sha256"]:
         raise ReceiptError("live ExifTool source manifest does not match receipt")
+    _validate_pre_seam_proof(receipt.get("pre_seam"), Path(receipt["run_root"]), live=True)
 
 
 def _sum_projection(per_file: dict[str, dict]) -> dict:
@@ -851,7 +1121,7 @@ def _load_parsed(record: dict) -> dict:
 
 
 def _mode_environment(mode: str) -> dict:
-    if mode == "control-unset":
+    if mode in ("control-unset", "pre-seam-control"):
         declaration = {"state": "absent"}
     elif mode == "control-empty":
         declaration = {"state": "empty", "value": ""}
@@ -935,7 +1205,9 @@ def _run_mode(
     _atomic_write(driver_stderr, b"")
     mode_record = {
         "mode": mode,
-        "tokens": list(TOKENS) if mode == "union" else ([] if mode.startswith("control-") else [mode]),
+        "tokens": list(TOKENS) if mode == "union" else (
+            [] if mode in ("control-unset", "control-empty", "pre-seam-control") else [mode]
+        ),
         "started_at": started,
         "completed_at": utc_now(),
         "driver_returncode": 0,
@@ -990,14 +1262,12 @@ def _load_expectations(manifest: Path, selection: dict, root: Path) -> dict:
 
 
 def _route_ledger(repository: Path, root: Path) -> dict:
-    names = [
-        "src/exiftool_tables/engine.rs",
-        "src/exiftool_tables/ifd_engine.rs",
-        "src/exiftool_tables/runtime.rs",
-        "src/exiftool_tables/serial_engine.rs",
-        "src/exiftool_tables/keyed_engine.rs",
-        "src/exiftool_tables/mod.rs",
-    ]
+    names = list(TASK8_RUST_BOUNDARY)
+    missing_sources = [name for name in names if not (repository / name).is_file()]
+    if missing_sources:
+        raise ReceiptError(
+            "Task8 Rust boundary is incomplete: " + ",".join(missing_sources)
+        )
     rows = [{"path": name, "sha256": sha256_file(repository / name)} for name in names]
     variant_to_token = {
         "Engine": "engine",
@@ -1024,10 +1294,10 @@ def _route_ledger(repository: Path, root: Path) -> dict:
 
     def external_calls(symbol: str, engine_file: str) -> list[dict]:
         calls = []
-        for path in sorted((repository / "src").rglob("*.rs")):
-            relative = path.relative_to(repository).as_posix()
+        for relative in names:
             if relative == engine_file:
                 continue
+            path = repository / relative
             in_tests = False
             for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if line.strip().startswith("#[cfg(test)]"):
@@ -1187,6 +1457,46 @@ def _validate_inertness(runs: dict, selection: dict) -> dict:
     }
 
 
+def _validate_pre_seam_control(runs: dict, selection: dict) -> dict:
+    differences = []
+    for relative in selection["ordered_paths"]:
+        maintained = _candidate_sequence(runs["control-unset"], relative)
+        pre_seam = _candidate_sequence(runs["pre-seam-control"], relative)
+        maintained_child = next(
+            row for row in runs["control-unset"]["children"]
+            if row["relative_path"] == relative
+        )
+        pre_seam_child = next(
+            row for row in runs["pre-seam-control"]["children"]
+            if row["relative_path"] == relative
+        )
+        maintained_process = json.loads(
+            Path(maintained_child["process"]["path"]).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_pairs,
+        )
+        pre_seam_process = json.loads(
+            Path(pre_seam_child["process"]["path"]).read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_pairs,
+        )
+        same_stderr = (
+            maintained_process["candidate"]["stderr"]["sha256"]
+            == pre_seam_process["candidate"]["stderr"]["sha256"]
+        )
+        if maintained != pre_seam or not same_stderr:
+            differences.append(relative)
+    if differences:
+        raise ReceiptError(f"pre-seam ordinary control differs from maintained unset: {differences}")
+    return {
+        "equal": True,
+        "maintained_mode": "control-unset",
+        "ordinary_binary_mode": "pre-seam-control",
+        "environment_state": "absent",
+        "comparison": "normalized ordered candidate occurrences and raw stderr SHA-256",
+        "differences": [],
+        "path_set_sha256": path_set_sha256(selection["ordered_paths"]),
+    }
+
+
 def census_main(argv: list[str]) -> int:
     args = _parse_census(argv)
     root = Path(args.output).expanduser()
@@ -1294,14 +1604,24 @@ def census_main(argv: list[str]) -> int:
         build.update({"target_dir": str(target), "binary": binary_identity})
         _append_stage(root, stage, "end", exit_code=0)
 
+        stage = "pre-seam-build"
+        _append_stage(root, stage, "start")
+        pre_seam = _build_pre_seam(repository, root)
+        pre_seam_binary = Path(pre_seam["binary"]["path"])
+        pre_seam_repository = Path(pre_seam["checkout"]["root"])
+        _validate_pre_seam_proof(pre_seam, root, live=True)
+        _append_stage(root, stage, "end", exit_code=0)
+
         stage = "measurement"
         _append_stage(root, stage, "start")
-        modes = ["control-unset", "control-empty", *TOKENS, "union"]
+        modes = ["pre-seam-control", "control-unset", "control-empty", *TOKENS, "union"]
         runs = {}
         projections = {}
         for mode in modes:
+            mode_repository = pre_seam_repository if mode == "pre-seam-control" else repository
+            mode_binary = pre_seam_binary if mode == "pre-seam-control" else binary
             run, projection = _run_mode(
-                root, mode, selection, repository, binary, perl, exiftool_root
+                root, mode, selection, mode_repository, mode_binary, perl, exiftool_root
             )
             runs[mode] = run
             projections[mode] = projection
@@ -1329,6 +1649,7 @@ def census_main(argv: list[str]) -> int:
             if result["oracle_residual"] or result["candidate_residual"]:
                 raise ReceiptError(f"Task 6 reconciliation failed for {mode}")
         inertness = _validate_inertness(runs, selection)
+        pre_seam_control = _validate_pre_seam_control(runs, selection)
         fixture_contract = _fixture_observations(
             runs, projections, reconciliations, expectations
         )
@@ -1341,6 +1662,7 @@ def census_main(argv: list[str]) -> int:
             raise ReceiptError("source repository changed during census")
         if _file_identity(binary) != {key: binary_identity[key] for key in ("size", "mode", "sha256")}:
             raise ReceiptError("candidate binary changed during census")
+        _validate_pre_seam_proof(pre_seam, root, live=True)
         if _source_manifest(exiftool_root, oracle_dir / "source-manifest.recheck.json")["sha256"] != oracle_manifest["sha256"]:
             raise ReceiptError("oracle source changed during census")
         _append_stage(root, stage, "end", exit_code=0)
@@ -1357,12 +1679,18 @@ def census_main(argv: list[str]) -> int:
             "run_root": str(root),
             "source": source,
             "build": build,
+            "pre_seam": pre_seam,
+            "pre_seam_control": pre_seam_control,
             "comparator": comparator,
             "oracle": oracle,
             "selection": selection,
             "floors": {"min_files": args.min_files, "min_tags": args.min_tags},
             "token_contract": token_contract,
-            "controls": {"unset": "control-unset", "empty": "control-empty"},
+            "controls": {
+                "ordinary_pre_seam": "pre-seam-control",
+                "unset": "control-unset",
+                "empty": "control-empty",
+            },
             "runs": runs,
             "fixture_contract": fixture_contract,
             "route_ledger": route_ledger,

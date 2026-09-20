@@ -8,6 +8,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -119,6 +120,28 @@ class ParsingAndProjectionTests(unittest.TestCase):
             ).hexdigest())
             self.assertIn(b"diagnostic", (child / "candidate.stderr").read_bytes())
             self.assertEqual(record["argv"][0], sys.executable)
+            self.assertEqual(record["process_identity"]["pid"], record["pid"])
+            self.assertEqual(
+                record["process_identity"]["captured"],
+                record["process_identity"]["verified_before_communicate"],
+            )
+
+    def test_child_refuses_pid_identity_change_before_communicate(self):
+        identities = [
+            {"platform": "linux", "boot_id": "boot", "start_token": "100"},
+            {"platform": "linux", "boot_id": "boot", "start_token": "101"},
+        ]
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td, mock.patch.object(
+            attribute, "_kernel_process_identity", side_effect=identities, create=True
+        ):
+            with self.assertRaisesRegex(attribute.ChildProcessError, "identity changed"):
+                attribute.capture_process(
+                    [sys.executable, "-c", "print('[{\"File:FileType\":\"ICC\"}]')"],
+                    pathlib.Path(td),
+                    pathlib.Path(td),
+                    "candidate",
+                    {},
+                )
 
     def test_nonzero_child_is_retained_and_fails_closed(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
@@ -158,6 +181,8 @@ class ArtifactValidationTests(unittest.TestCase):
                 }],
                 "projections": {},
                 "reconciliations": {},
+                "pre_seam": None,
+                "pre_seam_control": None,
                 "failed_stage": None,
                 "failure": None,
             }
@@ -204,7 +229,9 @@ class ArtifactValidationTests(unittest.TestCase):
                 })
             runs = {}
             projections = {}
-            for mode in ("control-unset", "control-empty", *attribute.TOKENS, "union"):
+            for mode in (
+                "pre-seam-control", "control-unset", "control-empty", *attribute.TOKENS, "union"
+            ):
                 children = []
                 per_file = {}
                 for number, relative in enumerate(relative_paths, 1):
@@ -278,19 +305,186 @@ class ArtifactValidationTests(unittest.TestCase):
                 "runs": runs,
                 "projections": projections,
                 "reconciliations": reconciliations,
+                "pre_seam": None,
+                "pre_seam_control": None,
                 "failed_stage": None,
                 "failure": None,
             }
             receipt["inertness"] = attribute._validate_inertness(runs, receipt["selection"])
+            receipt["pre_seam_control"] = attribute._validate_pre_seam_control(
+                runs, receipt["selection"]
+            )
             receipt["fixture_contract"] = attribute._fixture_observations(
                 runs, projections, reconciliations, {"sha256": "f" * 64}
             )
+            proof_root = root / "pre-seam"
+            proof_root.mkdir()
+            retained_binary = proof_root / "oxidex"
+            retained_binary.write_bytes(b"ordinary binary")
+            process_records = {}
+            for label in ("clone", "checkout", "cargo"):
+                stdout = proof_root / f"{label}.stdout"
+                stderr = proof_root / f"{label}.stderr"
+                stdout.write_bytes(b"")
+                stderr.write_bytes(b"")
+                process_records[label] = {
+                    "returncode": 0,
+                    "stdout": attribute._artifact_record(stdout),
+                    "stderr": attribute._artifact_record(stderr),
+                }
+            parent = "1" * 40
+            tree = "2" * 40
+            proof = {
+                "resolution": {
+                    "path": "src/exiftool_tables/attribution.rs",
+                    "introducing_commit": "3" * 40,
+                    "introducing_tree": "4" * 40,
+                    "introducing_parents": [parent],
+                    "parent_commit": parent,
+                    "parent_tree": tree,
+                },
+                "source_repository": str(root),
+                "strategy": "run-owned shared clone with detached checkout; no protected ref mutation",
+                "checkout": {
+                    "root": str(root / "outside-checkout"),
+                    "commit": parent,
+                    "tree": tree,
+                    "clean": True,
+                    "dirty_files": [],
+                },
+                "target_dir": str(root / "outside-target"),
+                "clone": process_records["clone"],
+                "checkout_process": process_records["checkout"],
+                "build": process_records["cargo"],
+                "built_binary": attribute._artifact_record(retained_binary),
+                "binary": attribute._artifact_record(retained_binary),
+                "run_mode": "pre-seam-control",
+                "environment": attribute._mode_environment("pre-seam-control"),
+            }
+            proof_path = proof_root / "proof.json"
+            attribute.write_json(proof_path, proof)
+            proof["artifact"] = attribute._artifact_record(proof_path)
+            receipt["pre_seam"] = proof
             receipt["artifact_index"] = attribute._artifact_index(root)
             attribute.validate_v3_receipt(receipt, root, replay=True)
+            mutated = copy.deepcopy(receipt)
+            mutated["pre_seam"]["resolution"]["parent_commit"] = "0" * 40
+            with self.assertRaisesRegex(attribute.ReceiptError, "pre-seam"):
+                attribute.validate_v3_receipt(mutated, root, replay=True)
             mutated = copy.deepcopy(receipt)
             mutated["projections"]["engine"]["aggregate"]["matched_occurrences"] += 1
             with self.assertRaisesRegex(attribute.ReceiptError, "equation|replay"):
                 attribute.validate_v3_receipt(mutated, root, replay=True)
+
+
+class RouteLedgerTests(unittest.TestCase):
+    EXPECTED_BOUNDARY = (
+        "src/exiftool_tables/attribution.rs",
+        "src/exiftool_tables/engine.rs",
+        "src/exiftool_tables/ifd_engine.rs",
+        "src/exiftool_tables/keyed_engine.rs",
+        "src/exiftool_tables/mod.rs",
+        "src/exiftool_tables/runtime.rs",
+        "src/exiftool_tables/serial_engine.rs",
+        "src/main.rs",
+        "src/composite/compute.rs",
+        "src/composite/mod.rs",
+        "src/core/file_metadata.rs",
+        "src/core/operations.rs",
+        "src/parsers/archive/ar.rs",
+        "src/parsers/canon_vrd/mod.rs",
+        "src/parsers/elf/metadata_extractor.rs",
+        "src/parsers/flir_fpf.rs",
+        "src/parsers/jpeg/app_segments/infiray.rs",
+        "src/parsers/macho/metadata_extractor.rs",
+        "src/parsers/specialized/fits.rs",
+        "src/parsers/tiff/geotiff_parser.rs",
+        "src/parsers/tiff/makernotes/canon/custom_functions2.rs",
+        "src/parsers/tiff/makernotes/nikon/settings.rs",
+        "src/parsers/tiff/makernotes/shared/binary_subdir.rs",
+        "src/parsers/tiff/makernotes/sony.rs",
+        "src/parsers/tiff/makernotes/sony/binary_data.rs",
+    )
+
+    def test_exact_task8_boundary_finds_repair_guards_and_keyed_stays_unreachable(self):
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            repository = pathlib.Path(td) / "repo"
+            run_root = pathlib.Path(td) / "run"
+            (run_root / "contracts").mkdir(parents=True)
+            for relative in self.EXPECTED_BOUNDARY:
+                path = repository / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("// exact Task8 boundary fixture\n", encoding="utf-8")
+            guards = {
+                "src/exiftool_tables/engine.rs": "attribution::Token::Engine",
+                "src/exiftool_tables/ifd_engine.rs": "attribution::Token::LegacyL1",
+                "src/exiftool_tables/serial_engine.rs": "attribution::Token::Serial",
+                "src/exiftool_tables/keyed_engine.rs": "attribution::Token::Keyed",
+                "src/parsers/tiff/makernotes/sony.rs": "attribution::Token::LegacyL2",
+                "src/composite/mod.rs": "attribution::Token::Producers",
+            }
+            for relative, source in guards.items():
+                with (repository / relative).open("a", encoding="utf-8") as handle:
+                    handle.write(source + "\n")
+            with (repository / "src/main.rs").open("a", encoding="utf-8") as handle:
+                handle.write("process_serial_directory(input);\n")
+
+            ledger = attribute._route_ledger(repository, run_root)
+
+            self.assertEqual(
+                [row["path"] for row in ledger["sources"]],
+                list(self.EXPECTED_BOUNDARY),
+            )
+            self.assertTrue(all(ledger["guard_sites"][token] for token in attribute.TOKENS))
+            self.assertTrue(ledger["production_reachable"]["serial"])
+            self.assertFalse(ledger["production_reachable"]["keyed"])
+
+
+class PreSeamControlTests(unittest.TestCase):
+    def test_introducing_commit_resolves_to_integration_parent(self):
+        self.assertTrue(hasattr(attribute, "_resolve_pre_seam"))
+        proof = attribute._resolve_pre_seam(ROOT)
+        self.assertEqual(
+            proof["introducing_commit"],
+            "718df53832221cf9b9e803aa6ce5e00cbedfac38",
+        )
+        self.assertEqual(
+            proof["parent_commit"],
+            "3ba91cc934b55bac32537e8c537d3dcfc7d16c38",
+        )
+        self.assertEqual(proof["parent_tree"], attribute._git(ROOT, "rev-parse", "3ba91cc9^{tree}"))
+
+    def test_pre_seam_control_requires_normalized_output_and_stderr_equality(self):
+        self.assertTrue(hasattr(attribute, "_validate_pre_seam_control"))
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as td:
+            root = pathlib.Path(td)
+            runs = {}
+            for mode, value, stderr in (
+                ("control-unset", "same", b""),
+                ("pre-seam-control", "different", b""),
+            ):
+                child = root / mode
+                child.mkdir()
+                stderr_path = child / "candidate.stderr"
+                stderr_path.write_bytes(stderr)
+                process_path = child / "process.json"
+                process_path.write_text(json.dumps({
+                    "candidate_occurrences": [{"raw_key": "X:Y", "value": value}],
+                    "candidate": {"stderr": {
+                        "path": str(stderr_path),
+                        "size": len(stderr),
+                        "mode": stderr_path.stat().st_mode & 0o777,
+                        "sha256": hashlib.sha256(stderr).hexdigest(),
+                    }},
+                }), encoding="utf-8")
+                runs[mode] = {"children": [{
+                    "relative_path": "ICC_Profile.icc",
+                    "process": {"path": str(process_path)},
+                }]}
+            with self.assertRaisesRegex(attribute.ReceiptError, "pre-seam"):
+                attribute._validate_pre_seam_control(
+                    runs, {"ordered_paths": ["ICC_Profile.icc"]}
+                )
 
 
 if __name__ == "__main__":

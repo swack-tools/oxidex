@@ -11,9 +11,11 @@ this exact order:
 engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
-It executes two controls (environment absent and explicitly empty), each token
-individually, and the six-token union as a separate run. The union is never
-computed by summing individual losses. A zero-loss token is reported as
+It executes maintained-binary controls with the environment absent and
+explicitly empty, plus a true pre-seam ordinary-binary control built from the
+parent of the commit that introduced `src/exiftool_tables/attribution.rs`.
+Each token and the six-token union run separately. The union is never computed
+by summing individual losses. A zero-loss token is reported as
 `unexercised`, not authenticated coverage. In particular, `keyed` remains
 unexercised until a production caller reaches the keyed engine.
 
@@ -65,6 +67,11 @@ keys, invalid UTF-8, malformed shape, timeout, signal, or nonzero return fail th
 entire run. Selected, oracle-success, candidate-success, and scored path sets
 must be identical.
 
+Each corpus child is launched with `Popen` and bound, while unreaped, to its PID
+and kernel start identity. Linux records boot ID plus `/proc` start ticks;
+macOS records the libproc start timeval. An unsupported query, failed query, or
+identity change before output collection fails closed.
+
 The projection imports only the pure comparison rules from the pinned
 `conformance.py`; it does not use that wrapper's child runners. Counts are
 occurrences: one `missing` `[group, value]` pair is one missing occurrence.
@@ -76,6 +83,11 @@ Unset/empty inertness compares distinct child runs from the same binary. It
 preserves order, typed values, duplicate identity, raw keys, and stderr. The
 only normalization replaces the value of the exact key
 `System:FileAccessDate`; no other key or value is dropped or rewritten.
+The pre-seam control uses the identical staged selection with the environment
+absent and must match the maintained unset control in normalized ordered output
+and raw stderr. Its introducing commit, one-parent relationship, parent tree,
+run-owned detached checkout, isolated target, build logs, and binary are
+retained as distinct proof; it is not a maintained-binary self-comparison.
 
 Source commit/tree/clean state, binary content/size/mode/mtime, comparator,
 Perl, complete ExifTool `exiftool`+`lib/` manifest, corpus originals, staged
@@ -93,7 +105,9 @@ python3 tools/exiftool-tables/genshare/attribute.py validate \
 ```
 
 The validator recomputes the exact artifact set, hashes, parsed outputs,
-projections, path sets, token/mode set, and reconciliation counters. Use
+projections, path sets, token/mode set, and reconciliation counters. It also
+authenticates every PID/start binding and replays the pre-seam build proof and
+ordinary-binary equality claim. Use
 `--require-success` only for a later controller-reviewed receipt; it correctly
 rejects `observed_unreviewed`.
 
