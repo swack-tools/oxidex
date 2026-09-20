@@ -408,11 +408,21 @@ def measurement_contract(corpus_paths, recursive, only, exts, excluded,
     }
 
 
+def transcript_tags(tags, split):
+    """Return exactly the stable tag surface authenticated by scoring."""
+    return {
+        key: value
+        for key, value in tags.items()
+        if split(key)[1] not in IGNORE
+    }
+
+
 def transcript_row(path, oracle_tags, candidate_tags=None, result=None):
+    scored_oracle = transcript_tags(oracle_tags, split_oracle_key)
     row = {
         "path": str(Path(path).resolve()),
         "scored": bool(oracle_tags),
-        "oracle_sha256": _canonical_digest(oracle_tags),
+        "oracle_sha256": _canonical_digest(scored_oracle),
         "oracle_occurrences": occurrence_count(oracle_tags, split_oracle_key),
     }
     if not oracle_tags:
@@ -427,8 +437,9 @@ def transcript_row(path, oracle_tags, candidate_tags=None, result=None):
             "rename_target_occurrences": 0,
         })
         return row
+    scored_candidate = transcript_tags(candidate_tags, split_oxidex_key)
     row.update({
-        "candidate_sha256": _canonical_digest(candidate_tags),
+        "candidate_sha256": _canonical_digest(scored_candidate),
         "candidate_occurrences": occurrence_count(candidate_tags, split_oxidex_key),
         "matched_occurrences": len(result["matched"]),
         "missing_occurrences": len(result["missing"]),

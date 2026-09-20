@@ -409,24 +409,16 @@ pub static ENABLED_IFD: &[(&str, &str)] = &[
     // alone restores the hand arms.
     //
     // Decision D-3 (its own commit, after D-2): an ExifIFD `SubDirectory`
-    // edge id other than the 0xa005 pointer reports nothing
+    // edge id other than the 0xa005 pointer reports nothing by default
     // (Exif.pm:7103-7104). Same instrument, control = D-2:
     //     D-3        TOTAL 150 15925 0 47 928 157
     // exactly DJI_XT2's ApplicationNotes EXTRA gone; `-j`/`-n`/`-x` over 457
-    // files: only that row removed. Accepted loss: ExifTool still reports an
-    // edge tag requested BY NAME (Exif.pm:7104 `$$et{REQ_TAG_LOOKUP}`;
-    // pinned `-j -ApplicationNotes` on DJI_XT2.jpg prints its binary
-    // placeholder), and so did oxidex before D-3; a silenced edge has no row,
-    // so `-ExifIFD:ApplicationNotes` now returns nothing (27 edge ids; the
-    // default listing, which the census scores, gains), and `-TagsFromFile
-    // DJI_XT2.jpg -ExifIFD:ApplicationNotes` copies nothing where control
-    // and pinned 13.59 copy the 1,035 bytes (the CLI still says "1 tags
-    // copied"). Writes to the file itself are control's: `-ExifIFD:
-    // ApplicationNotes=abc` and `-ExifIFD:ApplicationNotes=` reach the entry
-    // through the writers' row-less rule (the call site's); 4 by-name writes
-    // and 2 other -TagsFromFile copies onto and from DJI_XT2.jpg keep
-    // control's bytes and status. Reverting D-3's commit alone restores the
-    // rows.
+    // files: only that row removed. Task 9's shared route preserves this
+    // default silence but lets a request-aware caller hand-produce that exact
+    // physical occurrence when `ReadOptions` names the edge, matching
+    // Exif.pm:7104's `REQ_TAG_LOOKUP` exception. The compatibility wrapper
+    // remains default-only until its caller supplies those options. Writes to
+    // the file itself remain the writers' row-less structural path.
     //
     // Gate B of record, E-2 (i7-missing-census.sh: conformance.py over 4,238
     // files, pinned 13.59, clean trees, on the i7; per-file diff

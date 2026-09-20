@@ -6,30 +6,27 @@
 //! One IFD-engine walk of the generated `IFD_EXIF_MAIN`
 //! (`%Image::ExifTool::Exif::Main`, Exif.pm:411-4723, pinned 13.59) over one
 //! directory the hand path in `tiff_helpers` already walks, buffered so the
-//! hand walk can put each row into the map at its own entry's position
-//! ([`DirEngineRows::replay`]); rows whose entry the hand walk never reached
-//! go in after it ([`DirEngineRows::drain`]). This is
-//! `canon/main_engine.rs`'s owns/replay/drain reshaped for [`MetadataMap`].
+//! shared route can decide one owner for each physical entry position
+//! ([`DirEngineRows::route_entry`]); rows whose entry the hand parser never
+//! reached go in after it ([`DirEngineRows::finish`]).
 //!
 //! Landing E-1 wires the InteropIFD (`tiff_helpers::parse_interop_subifd`);
-//! E-2 wires the ExifIFD (`parse_exif_subifd`) through the same [`walk`],
-//! [`DirEngineRows::owner`] and fence, plus what the ExifIFD needs beyond
-//! it: [`DirEngineRows::undecoded`] (an absence the engine can vouch for,
-//! or not), [`DirEngineRows::keep_hand`] (an engine-reported id moved one
-//! landing at a time) and [`tag_priority_is_zero`] (a residual row's own
-//! priority). `ifd1_engine_rows` can move here later; it already shares
-//! [`engine_row_value`].
+//! Task 9 routes IFD0, IFD1, ExifIFD, and InteropIFD through that same
+//! occurrence-indexed decision. [`DirEngineRows::keep_hand`] preserves the
+//! named hand-owned exceptions and [`tag_priority_is_zero`] preserves a
+//! residual row's own priority. The older id/name replay entry points remain
+//! only for the unleased embedded-EXIF compatibility adapter and focused
+//! legacy tests.
 //!
-//! # Why replay, not "engine rows, then residual rows"
+//! # Why routing follows physical entries
 //!
 //! Every row keeps the `order` slot (`MetadataMap`'s sink counter) the hand
 //! walk gave that entry, so the bare-name, `-TAG` and Composite folds
 //! (`tag_resolution.rs`, `composite/mod.rs`) see the same sequence as
 //! before: only a changed value, never a changed position, can move a
-//! winner. And same-key pairs stay exact in an unsorted IFD: 24 names are
-//! declared by two ids inside `Exif::Main`, all landing under one
-//! `<Dir>:<Name>` key, and replay keeps ExifTool's entry order -- and so its
-//! winner -- in every case.
+//! winner. Duplicate ids and same-key pairs stay exact in an unsorted IFD:
+//! each generated row carries the zero-based source entry index, so a
+//! declined first occurrence cannot consume a later occurrence's row.
 //!
 //! # The fence
 //!
@@ -55,13 +52,17 @@ use crate::core::tiff_helpers::trimmed_data_member;
 use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{
     Ctx, Emitted, EntryRead, IfdDir, IfdEntry, IfdTable, MAX_IFD_ENTRIES, MemberValue, declares,
-    engine_reports, process_exif_decoded, read_ifd,
+    engine_reports, read_ifd,
 };
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
 /// One engine row, held until the hand walk reaches its entry.
 #[derive(Debug)]
 struct Row {
+    /// Physical zero-based entry position in this directory. Ownership is
+    /// occurrence-based: duplicate ids and same-name ids must never borrow
+    /// one another's generated row.
+    entry_index: usize,
     name: &'static str,
     /// `Emitted::value` through [`engine_row_value`].
     display: TagValue,
@@ -128,6 +129,10 @@ pub(crate) struct DirEngineRows {
     /// Whether rows are recorded with their stored form
     /// ([`Self::with_stored_forms`]).
     stored_forms: bool,
+    /// The session guard had already processed this exact directory. Its
+    /// legacy residual must also stay silent or the second edge would replay
+    /// tags the shared walk intentionally de-duplicated.
+    already_processed: bool,
 }
 
 impl DirEngineRows {
@@ -142,6 +147,7 @@ impl DirEngineRows {
             hand_kept: Vec::new(),
             unrenderable: Vec::new(),
             stored_forms: false,
+            already_processed: false,
         }
     }
 
@@ -161,17 +167,73 @@ impl DirEngineRows {
         }
     }
 
+    /// Resolve and publish one physical directory entry exactly once.
+    ///
+    /// `entry_index` is the shared identity between `read_ifd` and the hand
+    /// parser. It replaces id/name replay, which cannot distinguish a
+    /// declined occurrence from a later generated occurrence of the same
+    /// tag. The caller invokes its one named residual only when this returns
+    /// [`Owner::Hand`].
+    pub(crate) fn route_entry(
+        &mut self,
+        entry_index: usize,
+        id: u16,
+        silence_edges: bool,
+        requested_edge: bool,
+        refused_owner: Owner,
+        metadata: &mut MetadataMap,
+        key: impl Fn(&str) -> String,
+        keep: impl Fn(&str, &MetadataMap) -> bool,
+    ) -> Owner {
+        let owner = if self.already_processed {
+            Owner::Silent
+        } else if self.hand_kept.contains(&id) {
+            Owner::Hand
+        } else if engine_reports(self.table, id) {
+            if self
+                .rows
+                .iter()
+                .any(|row| !row.consumed && row.entry_index == entry_index)
+            {
+                Owner::Engine
+            } else {
+                match self.reads.get(entry_index).copied() {
+                    Some(EntryRead::Unread) | None => Owner::Hand,
+                    Some(EntryRead::Refused) => refused_owner,
+                    Some(EntryRead::Decoded) => Owner::Silent,
+                }
+            }
+        } else if silence_edges && is_edge_only(self.table, id) && !requested_edge {
+            Owner::Silent
+        } else {
+            Owner::Hand
+        };
+
+        if owner == Owner::Engine {
+            for row in self
+                .rows
+                .iter_mut()
+                .filter(|row| !row.consumed && row.entry_index == entry_index)
+            {
+                row.consumed = true;
+                if keep(row.name, metadata) {
+                    record(row, self.stored_forms, metadata, key(row.name));
+                }
+            }
+        }
+        owner
+    }
+
+    /// Compatibility route for the unleased embedded-EXIF adapter and
+    /// focused legacy tests. Standard Exif directories use
+    /// [`Self::route_entry`], whose physical index distinguishes duplicate
+    /// occurrences.
+    ///
     /// The engine's row for the entry `id` the hand walk has just reached:
     /// the next unconsumed row whose name `id` declares goes into `metadata`
     /// now, at this entry's position, under `key(name)`. When `keep(name,
     /// metadata)` is false the row is dropped (the yield-to-IFD0 rule), but
     /// consumed either way, so [`Self::drain`] cannot resurrect it.
-    ///
-    /// Names are not unique per id in `Exif::Main` (24 are declared by two
-    /// ids), but the n-th-visit pairing is still exact: emission order is
-    /// entry order, and two ids sharing a name share one key, so taking a
-    /// same-named row one entry "early" changes neither the key nor the
-    /// relative order of the two rows.
     ///
     /// Returns whether a row existed (recorded or dropped by `keep`). `false`
     /// means the engine reported nothing for the entry, and the caller
@@ -300,7 +362,7 @@ impl DirEngineRows {
     /// malformed entry the engine's `read_ifd` may accept), in emission
     /// order, with the same `key`/`keep`. Later in IFD order than anything
     /// the hand walk visited, so last is their place.
-    pub(crate) fn drain(
+    pub(crate) fn finish(
         self,
         metadata: &mut MetadataMap,
         key: impl Fn(&str) -> String,
@@ -313,6 +375,18 @@ impl DirEngineRows {
         }
     }
 
+    /// Compatibility name for focused legacy tests. Standard Exif directory
+    /// callers use [`Self::route_entry`] plus [`Self::finish`].
+    #[cfg(test)]
+    pub(crate) fn drain(
+        self,
+        metadata: &mut MetadataMap,
+        key: impl Fn(&str) -> String,
+        keep: impl Fn(&str, &MetadataMap) -> bool,
+    ) {
+        self.finish(metadata, key, keep);
+    }
+
     /// Records every row at `priority`, including the rows
     /// [`Self::at_priority`] leaves at their own (`keeps_priority`): for a
     /// directory whose hand arm recorded every entry at one priority (IFD0's
@@ -320,6 +394,28 @@ impl DirEngineRows {
     pub(crate) fn at_uniform_priority(mut self, priority: u8) -> Self {
         for row in &mut self.rows {
             row.priority = priority;
+        }
+        self
+    }
+
+    /// Preserve the forms the pre-shared IFD1 adapter exposed while using
+    /// the common occurrence route. That adapter kept EXIF date text as a
+    /// string and used the engine's integral/float display form for an
+    /// unconverted rational; ExifIFD intentionally keeps its typed datetime
+    /// and exact rational form for writers and composites.
+    pub(crate) fn with_ifd1_forms(mut self) -> Self {
+        for row in &mut self.rows {
+            if let TagValue::DateTime(value) = &row.display {
+                row.display = TagValue::new_string(value.format("%Y:%m:%d %H:%M:%S").to_string());
+            }
+            if let TagValue::DateTime(value) = &row.no_print_conv {
+                row.no_print_conv =
+                    TagValue::new_string(value.format("%Y:%m:%d %H:%M:%S").to_string());
+            } else if matches!(row.no_print_conv, TagValue::Rational { .. })
+                && matches!(row.display, TagValue::Integer(_) | TagValue::Float(_))
+            {
+                row.no_print_conv = row.display.clone();
+            }
         }
         self
     }
@@ -339,13 +435,27 @@ impl DirEngineRows {
     }
 
     /// [`Self::drain`] for IFD0: rows whose entry the hand walk never reached.
+    pub(crate) fn finish_ifd0(self, metadata: &mut MetadataMap) {
+        self.finish(metadata, ifd0_key, |_, _| true);
+    }
+
+    /// Compatibility entry point for the unleased embedded-EXIF adapter.
+    /// JPEG and standalone TIFF use the exact-once route directly.
     pub(crate) fn drain_ifd0(self, metadata: &mut MetadataMap) {
-        self.drain(metadata, ifd0_key, |_, _| true);
+        self.finish_ifd0(metadata);
     }
 
     /// The table this walk read.
     pub(crate) fn table(&self) -> &'static IfdTable {
         self.table
+    }
+
+    /// Whether the file-scoped session had already walked this exact table at
+    /// this exact address. Callers must stop the whole directory adapter in
+    /// this case, including structural hand arms that run before or after the
+    /// ordinary per-entry route (MakerNotes, previews and nested edges).
+    pub(crate) fn already_processed(&self) -> bool {
+        self.already_processed
     }
 
     /// The entry count the engine's `read_ifd` accepted (`None` = refused):
@@ -499,7 +609,7 @@ pub(crate) fn walk_with_session(
         }
     }
     let mut emitted = Vec::new();
-    let root = process_exif_decoded(
+    let root = crate::exiftool_tables::ifd_engine::process_exif_decoded_outcome(
         table,
         IfdDir {
             data: tiff,
@@ -512,8 +622,15 @@ pub(crate) fn walk_with_session(
         session,
         ctx,
         &mut emitted,
-    )
-    .unwrap_or_default();
+    );
+    let root = match root {
+        crate::exiftool_tables::ifd_engine::ProcessExifDecoded::Read(root) => root,
+        crate::exiftool_tables::ifd_engine::ProcessExifDecoded::AlreadyProcessed => {
+            rows.already_processed = true;
+            Default::default()
+        }
+        crate::exiftool_tables::ifd_engine::ProcessExifDecoded::Refused => Default::default(),
+    };
     rows.reads = root.entries;
     // Which entry each root row came from, for its stored form.
     let row_entry: HashMap<usize, usize> = root.rows.into_iter().collect();
@@ -558,6 +675,9 @@ pub(crate) fn walk_with_session(
             (None, None) => display.clone(),
         };
         rows.rows.push(Row {
+            entry_index: *row_entry
+                .get(&index)
+                .expect("a fenced root row has a root entry"),
             name: row.name,
             display,
             no_print_conv,
@@ -983,6 +1103,75 @@ mod tests {
             "engine (incl. generated arms) + hand-withheld + edges + unknown must cover every \
              declared id once"
         );
+    }
+
+    #[test]
+    fn four_standard_directories_name_every_owner_outcome() {
+        let tiff = le_tiff(&[
+            ascii(0x010f, b"Canon\0"),
+            (0x927c, 7, 4, vec![1, 2, 3, 4]),
+            (0x8769, 4, 1, 8u32.to_le_bytes().to_vec()),
+        ]);
+        for directory in ["IFD0", "IFD1", "ExifIFD", "InteropIFD"] {
+            let mut rows = walk(
+                &IFD_EXIF_MAIN,
+                &tiff,
+                8,
+                ByteOrder::LittleEndian,
+                directory,
+                &MetadataMap::new(),
+            );
+            let mut metadata = MetadataMap::new();
+            let key = |name: &str| format!("{directory}:{name}");
+            assert_eq!(
+                rows.route_entry(
+                    0,
+                    0x010f,
+                    true,
+                    false,
+                    Owner::Hand,
+                    &mut metadata,
+                    key,
+                    |_, _| true,
+                ),
+                Owner::Engine,
+                "{directory}: physical Make occurrence is Owner::Engine"
+            );
+            assert_eq!(
+                rows.route_entry(
+                    1,
+                    0x927c,
+                    true,
+                    false,
+                    Owner::Hand,
+                    &mut metadata,
+                    key,
+                    |_, _| true,
+                ),
+                Owner::Hand,
+                "{directory}: physical MakerNote occurrence is Owner::Hand"
+            );
+            assert_eq!(
+                rows.route_entry(
+                    2,
+                    0x8769,
+                    true,
+                    false,
+                    Owner::Hand,
+                    &mut metadata,
+                    key,
+                    |_, _| true,
+                ),
+                Owner::Silent,
+                "{directory}: physical unrequested parent edge is Owner::Silent"
+            );
+            assert_eq!(
+                metadata.get_string(&format!("{directory}:Make")),
+                Some("Canon")
+            );
+            assert!(metadata.get(&format!("{directory}:MakerNote")).is_none());
+            assert!(metadata.get(&format!("{directory}:ExifOffset")).is_none());
+        }
     }
 
     /// Spec 4.1 item 3: the fence, on hand-built rows.

@@ -28,6 +28,17 @@
 //! existing path produces that entry exactly as before, so no read is lost;
 //! the walk (`ifd_engine::walk`) calls the arm first and falls through.
 //!
+//! # Transactional effects
+//!
+//! A decoder receives mutable [`Session`] state because ExifTool conversions
+//! may assign data members before a later condition reads them. The IFD engine
+//! runs each attempt against `ifd_engine::StagedEffects`, never the live
+//! session: [`Arm::Report`] and [`Arm::Suppress`] commit source-required
+//! writes in order, while [`Arm::Decline`] discards the attempt before the
+//! caller invokes its one hand residual. This makes the outcome and its state
+//! transition one ownership decision; a declined generated attempt cannot
+//! leak warnings or members into the fallback path.
+//!
 //! # Proof
 //!
 //! `tools/exiftool-tables/conv_oracle.py` evaluates every generated arm's
