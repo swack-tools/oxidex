@@ -1268,6 +1268,19 @@ fn process_depth(
         let vc_text = val.text();
         let printed = apply_pc(tag.pc, val, tag.print_hex);
         let value_form = (printed != vc_text).then_some(vc_text);
+        let is_l2 = std::ptr::eq(
+            tables.as_ptr(),
+            super::super::minolta_a100_tables::TABLES.as_ptr(),
+        ) || std::ptr::eq(tables.as_ptr(), super::plain_tables::TABLES.as_ptr());
+        // Enciphered tables have no managed L2 generator, so they remain
+        // unsuppressed by this L2 boundary.
+        if is_l2
+            && crate::exiftool_tables::attribution::silenced(
+                crate::exiftool_tables::attribution::Token::LegacyL2,
+            )
+        {
+            continue;
+        }
         out.push(Found {
             name: tag.name,
             value: printed,

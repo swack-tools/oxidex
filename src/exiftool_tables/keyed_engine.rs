@@ -800,25 +800,27 @@ fn emit_resolved_scalar(
             None => (unconverted(), None),
         }
     };
-    sink.emit(Emitted {
-        module: table.module,
-        table: table.table,
-        group0: tag.groups.g0.unwrap_or(table.group0),
-        group1: scope
-            .group1_override
-            .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
-        group2: tag.groups.g2.unwrap_or(table.group2),
-        name: tag.name,
-        value,
-        value_conv,
-        // The keyed compiler has already folded table PRIORITY and AVOID into
-        // the tag flags. Only ExifTool's final Avoid default remains here.
-        low_priority: effective_priority(tag.flags) == Some(0),
-        avoid: tag.flags.avoid,
-        // `Emitted::rational` is for IFD tables only (the binary walk sets
-        // `None` too); a keyed directory never keeps the raw fraction.
-        rational: None,
-    });
+    if !super::attribution::silenced(super::attribution::Token::Keyed) {
+        sink.emit(Emitted {
+            module: table.module,
+            table: table.table,
+            group0: tag.groups.g0.unwrap_or(table.group0),
+            group1: scope
+                .group1_override
+                .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
+            group2: tag.groups.g2.unwrap_or(table.group2),
+            name: tag.name,
+            value,
+            value_conv,
+            // The keyed compiler has already folded table PRIORITY and AVOID into
+            // the tag flags. Only ExifTool's final Avoid default remains here.
+            low_priority: effective_priority(tag.flags) == Some(0),
+            avoid: tag.flags.avoid,
+            // `Emitted::rational` is for IFD tables only (the binary walk sets
+            // `None` too); a keyed directory never keeps the raw fraction.
+            rational: None,
+        });
+    }
     result.emitted += 1;
     ScalarAction::Continue
 }

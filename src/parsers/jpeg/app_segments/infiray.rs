@@ -207,6 +207,12 @@ pub(crate) fn read_record(group: &str, data: &[u8], fields: &[Field]) -> Metadat
         let Some(raw) = read_value(data, field.offset, field.format, field.count, more) else {
             continue;
         };
+        // Keep the preceding walk state; suppress only the emitted row.
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::LegacyL2,
+        ) {
+            continue;
+        }
         metadata.insert_with_group1(
             format!("{}:{}", group, field.name),
             print_conv(field.conv, &raw),

@@ -211,6 +211,9 @@ impl DecodedField {
     /// (AGENTS.md, "never approximate a conversion").
     #[must_use]
     pub fn emit(&self) -> Option<TagValue> {
+        if super::attribution::silenced(super::attribution::Token::LegacyL1) {
+            return None;
+        }
         if self.field.omitted.any() {
             return None;
         }

@@ -528,6 +528,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             } else {
                 compute::compute(comp.module, comp.name, &inputs, make.as_deref())
             };
+            // Suppress only after the computation ran, so its inputs and the
+            // surrounding fixpoint state retain their normal behavior.
+            let computed = computed.filter(|_| {
+                !(crate::exiftool_tables::attribution::silenced(
+                    crate::exiftool_tables::attribution::Token::Producers,
+                ) && compute::is_generated_compute(comp.module, comp.name))
+            });
             if let Some(c) = computed {
                 // Count only genuine changes, so the fixpoint still terminates.
                 let changed = map.get_string(key) != Some(c.print.as_str());

@@ -297,7 +297,12 @@ pub fn parse_nikon_settings(
         } else {
             value
         };
-        tags.insert(format!("Nikon:{}", tag.name), apply_conv(tag.conv, masked));
+        // Keep the DataMember update above; only the outward tag row is late-suppressed.
+        if !crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::LegacyL2,
+        ) {
+            tags.insert(format!("Nikon:{}", tag.name), apply_conv(tag.conv, masked));
+        }
     }
 }
 
