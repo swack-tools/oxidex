@@ -57,6 +57,7 @@ use std::collections::HashMap;
 
 #[cfg(test)]
 use crate::exiftool_tables::IfdTag;
+use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{Ctx, Emitted, IfdDir, IfdTable, MemberValue, process_exif};
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::shared::engine_value::engine_value_text;
@@ -170,15 +171,19 @@ pub(super) fn insert_rows(
     data: &[u8],
     ifd_start: usize,
     model: Option<&str>,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
     tags: &mut HashMap<String, String>,
     mut forms: Option<&mut HashMap<String, String>>,
 ) {
     let order = ByteOrder::LittleEndian.to_io_byte_order();
-    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     if let Some(model) = model.filter(|m| !m.is_empty()) {
-        members.insert("Model", MemberValue::Str(model.to_string()));
+        ctx.members
+            .insert("Model", MemberValue::Str(model.to_string()));
+        session
+            .set_member("Model", MemberVal::Str(model.to_string()))
+            .expect("FujiFilm model is a UTF-8 string");
     }
-    let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
     process_exif(
         table,
@@ -189,7 +194,8 @@ pub(super) fn insert_rows(
             byte_order: order,
             group1: Some("FujiFilm"),
         },
-        &mut ctx,
+        session,
+        ctx,
         &mut emitted,
     );
     for row in emitted {
@@ -694,6 +700,7 @@ mod tests {
         let note = le_note(&[version(b"0130"), short(0x1001, 3)]);
         let mut members = HashMap::new();
         let mut ctx = Ctx::new(&mut members);
+        let mut session = Session::new();
         let mut out = Vec::new();
         process_exif(
             fuji_main(),
@@ -704,6 +711,7 @@ mod tests {
                 byte_order: ByteOrder::LittleEndian.to_io_byte_order(),
                 group1: Some("FujiFilm"),
             },
+            &mut session,
             &mut ctx,
             &mut out,
         );
@@ -927,6 +935,10 @@ mod tests {
             let mut members = HashMap::new();
             members.insert("Make", MemberValue::Str(make.to_string()));
             let mut ctx = Ctx::new(&mut members);
+            let mut session = Session::new();
+            session
+                .set_member("Make", MemberVal::Str(make.to_string()))
+                .expect("Make is a string");
             let mut out = Vec::new();
             process_exif(
                 fuji_main(),
@@ -937,6 +949,7 @@ mod tests {
                     byte_order: ByteOrder::LittleEndian.to_io_byte_order(),
                     group1: Some("FujiFilm"),
                 },
+                &mut session,
                 &mut ctx,
                 &mut out,
             );

@@ -10,7 +10,11 @@
 
 use crate::core::MetadataMap;
 use crate::core::tag_conversion::exif_entry_to_tag_value;
-use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd, parse_ifd1_directory};
+use crate::core::tiff_helpers::{
+    parse_exif_subifd_with_session, parse_gps_subifd, parse_ifd1_directory,
+};
+use crate::exiftool_tables::Ctx;
+use crate::exiftool_tables::session::Session;
 use crate::io::buffered_reader::BufferedReader;
 use crate::io::{ByteOrder as IoByteOrder, EndianReader};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
@@ -110,13 +114,22 @@ pub fn parse_embedded_exif_at(
     let mut exif_ifd_offset = None;
     let mut gps_ifd_offset = None;
     let mut full_resolution_ifd0 = false;
+    let mut session = Session::new();
+    let mut members = std::collections::HashMap::new();
+    let mut cond_ctx = Ctx::new(&mut members);
 
     // Slice v2-ifd0: the generated `Exif::Main` produces every ordinary IFD0
     // entry it reports; the hand arm below keeps the rest, and
     // `EMBEDDED_IFD0_HAND_KEPT`.
-    let mut engine =
-        crate::core::exif_dir_engine::ifd0_walk(tiff_data, ifd0_offset, byte_order, metadata)
-            .map(|engine| engine.keep_hand(EMBEDDED_IFD0_HAND_KEPT));
+    let mut engine = crate::core::exif_dir_engine::ifd0_walk_with_session(
+        tiff_data,
+        ifd0_offset,
+        byte_order,
+        metadata,
+        &mut session,
+        &mut cond_ctx,
+    )
+    .map(|engine| engine.keep_hand(EMBEDDED_IFD0_HAND_KEPT));
 
     for (tag_id, field_type, value_count, raw_bytes) in &entries {
         let bytes = raw_bytes.as_ref();
@@ -184,12 +197,14 @@ pub fn parse_embedded_exif_at(
     if let Some(offset) = exif_ifd_offset {
         // `tiff_data` itself is the enclosing block (ExifTool's `$dataLen`);
         // `tiff_base` only shifts the offsets that get *reported*, see above.
-        parse_exif_subifd(
+        parse_exif_subifd_with_session(
             &reader,
             offset,
             byte_order,
             tiff_base,
             tiff_data.len() as u64,
+            &mut session,
+            &mut cond_ctx,
             metadata,
         );
     }

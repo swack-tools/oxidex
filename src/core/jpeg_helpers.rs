@@ -8,8 +8,11 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::exif_entry_to_tag_value;
-use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
-use crate::exiftool_tables::{decode_binary_table, find_table};
+use crate::core::tiff_helpers::{
+    parse_exif_subifd_with_session, parse_gps_subifd, parse_ifd1_with_session,
+};
+use crate::exiftool_tables::session::Session;
+use crate::exiftool_tables::{Ctx, decode_binary_table, find_table};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
@@ -173,6 +176,10 @@ pub fn process_exif_segments(
     metadata: &mut MetadataMap,
     diagnostics: &mut DiagnosticSink,
 ) {
+    let mut session = Session::new();
+    let mut members = std::collections::HashMap::new();
+    let mut cond_ctx = Ctx::new(&mut members);
+
     // Find all APP1 segments (EXIF/XMP/FLIR)
     let app1_segments: Vec<_> = segments.iter().filter(|s| s.is_app1()).collect();
 
@@ -255,8 +262,13 @@ pub fn process_exif_segments(
                     // generated `Exif::Main` produces every ordinary entry it
                     // reports (per-field mixed mode, slice v2-ifd0); the hand
                     // arm keeps the rest, the pointers and the order.
-                    let mut engine = crate::core::exif_dir_engine::ifd0_walk(
-                        tiff_data, ifd_offset, byte_order, metadata,
+                    let mut engine = crate::core::exif_dir_engine::ifd0_walk_with_session(
+                        tiff_data,
+                        ifd_offset,
+                        byte_order,
+                        metadata,
+                        &mut session,
+                        &mut cond_ctx,
                     );
                     let (exif_ifd_offset, gps_ifd_offset) = process_ifd0_tags(
                         &tags,
@@ -279,12 +291,14 @@ pub fn process_exif_segments(
                     // of the two limits and keeps a MakerNote out of the JPEG's
                     // compressed scan data.
                     if let Some(offset) = exif_ifd_offset {
-                        parse_exif_subifd(
+                        parse_exif_subifd_with_session(
                             &tiff_reader,
                             offset,
                             byte_order,
                             tiff_offset,
                             tiff_data.len() as u64,
+                            &mut session,
+                            &mut cond_ctx,
                             metadata,
                         );
                     }
@@ -320,7 +334,7 @@ pub fn process_exif_segments(
                     // the stored ThumbnailOffset. IFD1 is a `LOW_PRIORITY_DIR`
                     // for a JPEG (ExifTool.pm:7317), so its rows never
                     // displace IFD0's for a bare request.
-                    crate::core::tiff_helpers::parse_ifd1(
+                    parse_ifd1_with_session(
                         &tiff_reader,
                         tiff_data,
                         ifd_offset,
@@ -328,6 +342,8 @@ pub fn process_exif_segments(
                         byte_order,
                         tiff_offset,
                         true,
+                        &mut session,
+                        &mut cond_ctx,
                         metadata,
                     );
 

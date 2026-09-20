@@ -387,6 +387,7 @@ impl<'a> Dir<'a> {
 /// an IFD walk that descends into a `ProcessBinaryData` table hands its
 /// guard down rather than starting a fresh one -- otherwise the depth cap
 /// would restart at every engine boundary.
+#[derive(Clone, Debug)]
 pub(super) struct Guard {
     processed: Vec<(usize, i64)>,
     pub(super) depth: u32,

@@ -157,6 +157,26 @@ impl MakerNoteParser for FujifilmParser {
         // forward the payload to `parse_with_model`.
         self.parse_note(ctx.payload(), model, tags, Some(value_forms))
     }
+
+    fn parse_with_context_and_values_and_session(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        _byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut crate::exiftool_tables::session::Session,
+        cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_note_with_session(
+            ctx.payload(),
+            model,
+            session,
+            cond_ctx,
+            tags,
+            Some(value_forms),
+        )
+    }
 }
 
 impl FujifilmParser {
@@ -169,6 +189,22 @@ impl FujifilmParser {
         &self,
         data: &[u8],
         model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        forms: Option<&mut HashMap<String, String>>,
+    ) -> std::result::Result<(), String> {
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        self.parse_note_with_session(data, model, &mut session, &mut ctx, tags, forms)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_note_with_session(
+        &self,
+        data: &[u8],
+        model: Option<&str>,
+        session: &mut crate::exiftool_tables::session::Session,
+        ctx: &mut crate::exiftool_tables::Ctx<'_>,
         tags: &mut HashMap<String, String>,
         forms: Option<&mut HashMap<String, String>>,
     ) -> std::result::Result<(), String> {
@@ -372,7 +408,7 @@ impl FujifilmParser {
 
         // Engine rows LAST, in emission order (= IFD entry order).
         if let Some(table) = main_table {
-            main_engine::insert_rows(table, data, ifd_offset, model, tags, forms);
+            main_engine::insert_rows(table, data, ifd_offset, model, session, ctx, tags, forms);
         }
 
         Ok(())

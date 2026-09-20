@@ -176,6 +176,32 @@ pub fn dispatch_makernote_with_context_and_values(
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) -> Result<(), String> {
+    let mut session = crate::exiftool_tables::session::Session::new();
+    let mut members = HashMap::new();
+    let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+    dispatch_makernote_with_context_and_values_and_session(
+        make,
+        model,
+        ctx,
+        byte_order,
+        &mut session,
+        &mut cond_ctx,
+        tags,
+        value_forms,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_makernote_with_context_and_values_and_session(
+    make: &str,
+    model: Option<&str>,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    session: &mut crate::exiftool_tables::session::Session,
+    cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
     let data = ctx.payload();
@@ -194,7 +220,15 @@ pub fn dispatch_makernote_with_context_and_values(
     // table so it wins regardless of brand.
     if phaseone::is_phaseone_makernote(data) {
         let parser = phaseone::PhaseOneMakerNoteParser;
-        parser.parse_with_context(ctx, byte_order, model, tags)?;
+        parser.parse_with_context_and_values_and_session(
+            ctx,
+            byte_order,
+            model,
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+        )?;
         return Ok(());
     }
 
@@ -215,7 +249,15 @@ pub fn dispatch_makernote_with_context_and_values(
             // `Composite:DOF`. The trait's default implementation ignores
             // `value_forms` and calls `parse_with_context`, so Pentax, Ricoh,
             // GE and Samsung are unaffected.
-            parser.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms)?;
+            parser.parse_with_context_and_values_and_session(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+            )?;
         }
         return Ok(());
     }
@@ -331,7 +373,15 @@ pub fn dispatch_makernote_with_context_and_values(
         // whether or not the decoder goes on to use the wider window.
         if parser.validate_header(data) {
             // Parse MakerNote data
-            parser.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms)?;
+            parser.parse_with_context_and_values_and_session(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+            )?;
         }
     }
 

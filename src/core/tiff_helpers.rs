@@ -12,6 +12,7 @@ use crate::core::tag_conversion::{
     raw_bytes_to_tag_value,
 };
 use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{
     Ctx, Emitted, EntryRead, IfdDir, IfdTable, MemberValue, engine_reports, find_ifd_table,
     process_exif_decoded, read_ifd,
@@ -21,7 +22,7 @@ use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
     ByteOrder, find_entry_position, ifd_entry_count, parse_ifd,
 };
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values;
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session;
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
@@ -293,6 +294,9 @@ pub fn parse_ifd_chain(
 ) -> crate::error::Result<()> {
     let mut ifd_offset = first_offset;
     let mut ifd_index = 0;
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut cond_ctx = Ctx::new(&mut members);
 
     while ifd_offset != 0 {
         // Determine IFD name based on index
@@ -310,7 +314,14 @@ pub fn parse_ifd_chain(
             .flatten()
             .and_then(|len| reader.read(0, len).ok());
         let mut engine = tiff.as_deref().and_then(|tiff| {
-            crate::core::exif_dir_engine::ifd0_walk(tiff, ifd_offset, byte_order, metadata)
+            crate::core::exif_dir_engine::ifd0_walk_with_session(
+                tiff,
+                ifd_offset,
+                byte_order,
+                metadata,
+                &mut session,
+                &mut cond_ctx,
+            )
         });
 
         // Process IFD tags and get sub-IFD information
@@ -324,7 +335,16 @@ pub fn parse_ifd_chain(
         // at file offset 0, so the TIFF base ExifTool adds to stored offsets
         // is 0 here, and the whole file is the enclosing TIFF block.
         if let Some(offset) = exif_offset {
-            parse_exif_subifd(reader, offset, byte_order, 0, reader.size(), metadata);
+            parse_exif_subifd_with_session(
+                reader,
+                offset,
+                byte_order,
+                0,
+                reader.size(),
+                &mut session,
+                &mut cond_ctx,
+                metadata,
+            );
         }
 
         // Parse GPS Sub-IFD if present
@@ -344,7 +364,7 @@ pub fn parse_ifd_chain(
                 reader.size(),
                 makernote_bytes,
             );
-            parse_makernote(&ctx, byte_order, metadata);
+            parse_makernote_with_session(&ctx, byte_order, &mut session, &mut cond_ctx, metadata);
         }
 
         // Read next IFD offset. This MUST be the on-disk entry count, not
@@ -880,12 +900,38 @@ pub fn parse_exif_subifd(
     tiff_len: u64,
     metadata: &mut MetadataMap,
 ) {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    parse_exif_subifd_with_session(
+        reader,
+        offset,
+        byte_order,
+        tiff_base,
+        tiff_len,
+        &mut session,
+        &mut ctx,
+        metadata,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_exif_subifd_with_session(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
+    metadata: &mut MetadataMap,
+) {
     // Slice E-2. The lookup is spelled with literal arguments because
     // `tools/exiftool-tables/reachability.py` counts literal call sites;
     // `enabled()` re-checks Gate A and the allowlist at runtime.
     let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
-    parse_exif_directory(
-        reader, offset, byte_order, tiff_base, tiff_len, table, metadata,
+    parse_exif_directory_with_session(
+        reader, offset, byte_order, tiff_base, tiff_len, table, session, ctx, metadata,
     );
 }
 
@@ -952,13 +998,15 @@ fn exif_ifd_keep(name: &str, metadata: &MetadataMap) -> bool {
 
 /// [`parse_exif_subifd`] with the table decision made: `table` is the
 /// enabled `Exif::Main`, or `None` for the hand arm alone.
-fn parse_exif_directory(
+fn parse_exif_directory_with_session(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
     tiff_base: u64,
     tiff_len: u64,
     table: Option<&'static IfdTable>,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
 ) {
     if let Ok(exif_tags) = parse_ifd(reader, offset, byte_order) {
@@ -1007,12 +1055,14 @@ fn parse_exif_directory(
                 // but oxidex records JFIF at 1 where ExifTool's JFIF priority
                 // is -1 (ExifTool.pm:2218-2233), so a 0 would lose to a JFIF
                 // copy that ExifTool ranks below it (slice E-1's finding).
-                exif_dir_engine::walk(table, tiff, offset, byte_order, "ExifIFD", metadata)
-                    .at_priority(SHIM_DEFAULT_PRIORITY)
-                    .keep_hand(EXIF_IFD_HAND_KEPT)
-                    // The typed value the hand arm stored, for the writers
-                    // that serialize it (see `with_stored_forms`).
-                    .with_stored_forms()
+                exif_dir_engine::walk_with_session(
+                    table, tiff, offset, byte_order, "ExifIFD", metadata, session, ctx,
+                )
+                .at_priority(SHIM_DEFAULT_PRIORITY)
+                .keep_hand(EXIF_IFD_HAND_KEPT)
+                // The typed value the hand arm stored, for the writers
+                // that serialize it (see `with_stored_forms`).
+                .with_stored_forms()
             });
 
         // First pass: convert tags and capture special pointers
@@ -1130,7 +1180,7 @@ fn parse_exif_directory(
         // MakerNote's value offsets are measured from the TIFF header and
         // routinely address bytes past the payload's declared end.
         for makernote_bytes in exif_makernote_data {
-            let ctx = makernote_context(
+            let maker_ctx = makernote_context(
                 reader,
                 offset,
                 byte_order,
@@ -1138,7 +1188,7 @@ fn parse_exif_directory(
                 tiff_len,
                 makernote_bytes,
             );
-            parse_makernote(&ctx, byte_order, metadata);
+            parse_makernote_with_session(&maker_ctx, byte_order, session, ctx, metadata);
         }
 
         // Third pass: Parse Interoperability IFD if pointer was found
@@ -1154,8 +1204,8 @@ fn parse_exif_directory(
             && iop_offset != offset
             && Some(iop_offset) != tiff_ifd0_offset(reader, byte_order)
         {
-            parse_interop_subifd(
-                reader, iop_offset, byte_order, tiff_base, tiff_len, metadata,
+            parse_interop_subifd_with_session(
+                reader, iop_offset, byte_order, tiff_base, tiff_len, session, ctx, metadata,
             );
         }
     }
@@ -1291,32 +1341,36 @@ fn interop_keep(name: &str, metadata: &MetadataMap) -> bool {
 ///   (ExifTool's `$dataLen`, as for [`parse_exif_subifd`]): the bytes the
 ///   engine walks
 /// * `metadata` - MetadataMap to populate with Interop tags
-fn parse_interop_subifd(
+fn parse_interop_subifd_with_session(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
     tiff_base: u64,
     tiff_len: u64,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
 ) {
     // Slice E-1. The lookup is spelled with literal arguments because
     // `tools/exiftool-tables/reachability.py` counts literal call sites;
     // `enabled()` re-checks Gate A and the allowlist at runtime.
     let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
-    parse_interop_directory(
-        reader, offset, byte_order, tiff_base, tiff_len, table, metadata,
+    parse_interop_directory_with_session(
+        reader, offset, byte_order, tiff_base, tiff_len, table, session, ctx, metadata,
     );
 }
 
 /// [`parse_interop_subifd`] with the table decision made: `table` is the
 /// enabled `Exif::Main`, or `None` for the hand arms alone.
-fn parse_interop_directory(
+fn parse_interop_directory_with_session(
     reader: &dyn FileReader,
     offset: u64,
     byte_order: ByteOrder,
     tiff_base: u64,
     tiff_len: u64,
     table: Option<&'static IfdTable>,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
 ) {
     // Attempt to parse the Interoperability IFD structure
@@ -1348,8 +1402,17 @@ fn parse_interop_directory(
             // At the hand arms' priority, not the table's `Priority => 0`
             // for X/YResolution and ResolutionUnit: see `at_priority` (JFIF's
             // `Priority => -1` is not modelled, so 0 would lose to JFIF).
-            exif_dir_engine::walk(table, tiff, offset, byte_order, "InteropIFD", metadata)
-                .at_priority(SHIM_DEFAULT_PRIORITY)
+            exif_dir_engine::walk_with_session(
+                table,
+                tiff,
+                offset,
+                byte_order,
+                "InteropIFD",
+                metadata,
+                session,
+                ctx,
+            )
+            .at_priority(SHIM_DEFAULT_PRIORITY)
         });
 
     let mut other_image_start: Option<u64> = None;
@@ -2928,6 +2991,36 @@ pub fn parse_ifd1(
     low_priority_dir: bool,
     metadata: &mut MetadataMap,
 ) {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    parse_ifd1_with_session(
+        reader,
+        tiff_data,
+        ifd0_offset,
+        ifd0_entry_count,
+        byte_order,
+        tiff_base,
+        low_priority_dir,
+        &mut session,
+        &mut ctx,
+        metadata,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_ifd1_with_session(
+    reader: &dyn FileReader,
+    tiff_data: &[u8],
+    ifd0_offset: u64,
+    ifd0_entry_count: usize,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    low_priority_dir: bool,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
+    metadata: &mut MetadataMap,
+) {
     let Some(ifd1_offset) = legal_ifd1_offset(reader, ifd0_offset, ifd0_entry_count, byte_order)
     else {
         return;
@@ -2975,6 +3068,8 @@ pub fn parse_ifd1(
         ifd1_offset,
         byte_order,
         low_priority_dir,
+        session,
+        ctx,
         metadata,
     );
 
@@ -3021,18 +3116,22 @@ fn ifd1_engine_rows(
     ifd1_offset: u64,
     byte_order: ByteOrder,
     low_priority_dir: bool,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
     metadata: &mut MetadataMap,
 ) -> Vec<u16> {
     let Ok(ifd_start) = usize::try_from(ifd1_offset) else {
         return Vec::new();
     };
-    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     for (member, key) in [("Make", "IFD0:Make"), ("Model", "IFD0:Model")] {
         if let Some(text) = metadata.get(key).and_then(TagValue::as_string) {
-            members.insert(member, MemberValue::Str(text.to_string()));
+            ctx.members
+                .insert(member, MemberValue::Str(text.to_string()));
+            session
+                .set_member(member, MemberVal::Str(text.to_string()))
+                .expect("Make and Model are UTF-8 metadata strings");
         }
     }
-    let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
     let reads = process_exif_decoded(
         table,
@@ -3046,7 +3145,8 @@ fn ifd1_engine_rows(
             // SET_GROUP1: `ifd_engine::group1_of` reports this verbatim.
             group1: Some("IFD1"),
         },
-        &mut ctx,
+        session,
+        ctx,
         &mut emitted,
     );
     let declined: Vec<u16> = match (
@@ -3727,7 +3827,13 @@ fn makernote_context<'a>(
 /// * `ctx` - Where the MakerNote sits, and how far its decoder may read
 /// * `byte_order` - Byte order for interpreting multi-byte values
 /// * `metadata` - MetadataMap to populate with manufacturer-specific tags
-fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: &mut MetadataMap) {
+fn parse_makernote_with_session(
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    session: &mut Session,
+    cond_ctx: &mut Ctx<'_>,
+    metadata: &mut MetadataMap,
+) {
     // Extract camera make from metadata to determine which parser to use
     let make = metadata.get_string("IFD0:Make").unwrap_or("").to_string();
     // A few MakerNote sub-structures are laid out per camera model rather than
@@ -3787,11 +3893,13 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
-    if let Err(e) = dispatch_makernote_with_context_and_values(
+    if let Err(e) = dispatch_makernote_with_context_and_values_and_session(
         &make,
         model.as_deref(),
         ctx,
         byte_order,
+        session,
+        cond_ctx,
         &mut makernote_tags,
         &mut value_forms,
     ) {
@@ -4201,6 +4309,91 @@ fn parse_minolta_preview_image_if_minolta(
     crate::parsers::tiff::makernotes::minolta::parse_minolta_preview_image_tag(
         ctx, byte_order, metadata,
     );
+}
+
+#[cfg(test)]
+fn parse_exif_directory(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    table: Option<&'static IfdTable>,
+    metadata: &mut MetadataMap,
+) {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    parse_exif_directory_with_session(
+        reader,
+        offset,
+        byte_order,
+        tiff_base,
+        tiff_len,
+        table,
+        &mut session,
+        &mut ctx,
+        metadata,
+    );
+}
+
+#[cfg(test)]
+fn parse_interop_subifd(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    metadata: &mut MetadataMap,
+) {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    parse_interop_subifd_with_session(
+        reader,
+        offset,
+        byte_order,
+        tiff_base,
+        tiff_len,
+        &mut session,
+        &mut ctx,
+        metadata,
+    );
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn parse_interop_directory(
+    reader: &dyn FileReader,
+    offset: u64,
+    byte_order: ByteOrder,
+    tiff_base: u64,
+    tiff_len: u64,
+    table: Option<&'static IfdTable>,
+    metadata: &mut MetadataMap,
+) {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    parse_interop_directory_with_session(
+        reader,
+        offset,
+        byte_order,
+        tiff_base,
+        tiff_len,
+        table,
+        &mut session,
+        &mut ctx,
+        metadata,
+    );
+}
+
+#[cfg(test)]
+fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: &mut MetadataMap) {
+    let mut session = Session::new();
+    let mut members = HashMap::new();
+    let mut cond_ctx = Ctx::new(&mut members);
+    parse_makernote_with_session(ctx, byte_order, &mut session, &mut cond_ctx, metadata);
 }
 
 #[cfg(test)]
