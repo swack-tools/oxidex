@@ -3,9 +3,9 @@
 This page describes how a change reaches `refactor/tag-machinery`, the
 branch where the refactor happens. It also covers the checks the change must
 pass and the measurement rules every claim must follow. The rules are
-committed in the repository root: `AGENTS.md` holds the substance and
-`CLAUDE.md` the workflow. This page summarises both. Where they differ, the
-committed files win.
+committed in the repository root: `AGENTS.md` is the shared policy and
+`CLAUDE.md` is only the Claude adapter. This page summarises both. Shared rules
+win; the adapter may not override them.
 
 ::: info Unreleased: `refactor/tag-machinery`
 The refactor branch is far ahead of `main` and of the v1.2.1 release. All
