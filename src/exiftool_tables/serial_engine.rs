@@ -366,19 +366,21 @@ fn emit_selected(
             None => (unconverted(), None),
         }
     };
-    sink.emit(Emitted {
-        module: table.module,
-        table: table.table,
-        group0: tag.groups.g0.unwrap_or(table.group0),
-        group1: tag.groups.g1.unwrap_or(table.group1),
-        group2: tag.groups.g2.unwrap_or(table.group2),
-        name: tag.name,
-        value,
-        value_conv,
-        low_priority: low_priority(tag.flags),
-        avoid: tag.flags.avoid,
-        rational: None,
-    });
+    if !super::attribution::silenced(super::attribution::Token::Serial) {
+        sink.emit(Emitted {
+            module: table.module,
+            table: table.table,
+            group0: tag.groups.g0.unwrap_or(table.group0),
+            group1: tag.groups.g1.unwrap_or(table.group1),
+            group2: tag.groups.g2.unwrap_or(table.group2),
+            name: tag.name,
+            value,
+            value_conv,
+            low_priority: low_priority(tag.flags),
+            avoid: tag.flags.avoid,
+            rational: None,
+        });
+    }
     result.emitted += 1;
     false
 }

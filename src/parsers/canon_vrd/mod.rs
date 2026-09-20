@@ -220,6 +220,11 @@ fn set_identity(metadata: &mut MetadataMap, ext: &str) {
     let Some(id) = crate::filetype::identify_by_extension(ext) else {
         return;
     };
+    if crate::exiftool_tables::attribution::silenced(
+        crate::exiftool_tables::attribution::Token::Producers,
+    ) {
+        return;
+    }
     metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
     metadata.insert(
         "File:FileTypeExtension",

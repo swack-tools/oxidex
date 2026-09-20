@@ -1,146 +1,130 @@
-# Generated share of correct output (probe census)
+# Authenticated generated-route census
 
-This directory is the instrument behind the "generated share of correct output"
-figure on the status page (`/status/`) and in `docs/AUTOGENERATION-PLAN.md`. The
-committed result is `docs/public/measurements/generated-share-13.59.json`, and
-`tools/docs/render_status.py` reads the figure from that file.
+This directory implements `genshare-receipt/v3`. Historical `genshare-probe/1`
+patches and `genshare-receipt/v2` summaries are discovery evidence only; they
+are not accepted by the validator.
 
-The question it answers is: **of the rows oxidex gets right against the pinned
-ExifTool, how many would be lost if the code generated from ExifTool's source
-were switched off?**
+The census measures one maintained OxiDex binary with six silence tokens in
+this exact order:
 
-## Method (`genshare-probe/1`)
-
-1. **Probe build.** `probe.patch` adds `src/probe_silence.rs` and one guard at
-   each point where generated data becomes an output row. The patch is never
-   landed. The environment variable `OXIDEX_PROBE_SILENCE=<tokens>` drops the row
-   at that point and keeps every side effect of the walk (member writes,
-   `DataMember`s, cipher state, descents). If the variable is unset or empty,
-   the output is byte-identical to the unpatched build. The census checks this
-   on every corpus file (the *inertness* step).
-
-   | token | boundary silenced |
-   | --- | --- |
-   | `engine` | the generic table engines: `engine.rs` and `ifd_engine.rs`'s `Emitted` pushes, including the v2 generated conversion arm (`generated_row`, #838) |
-   | `legacy-l1` | `runtime::DecodedField::emit`, the decode API that hand parsers call over generated tables (`RawAccess` rows are kept, see below) |
-   | `legacy-l2` | vendor walkers over tables from the generated manifest: binary_subdir, Canon CustomFunctions2, InfiRay, Sony main_extra, Sony plain and Minolta A100 walkers, Nikon settings |
-   | `producers` | generated producers: File identity (`FileType`, `FileTypeExtension`, `MIMEType`), the three `generated_compute` Composite arms, DICOM, GeoTIFF and FITS names |
-   | `legacy-l3` | walkers over hand-transcribed tables. These are **not** counted as generated. The token exists so that their size can be measured separately. |
-
-   The headline uses the union token `engine,legacy-l1,legacy-l2,producers`.
-   "Engine alone" uses `engine`.
-
-2. **Census.** `census.sh` runs `tools/exiftool-tables/conformance.py
-   --recursive --json-out` over the full corpus, which is
-   `/tmp/oxidex-exiftool-cache/combined-samples` (4,238 files, floors
-   `--min-files 3875 --min-tags 5000`). It grades against pinned ExifTool 13.59
-   and asserts both `-ver` = 13.59 and the `OOXML.docx` → `DOCX` capability probe
-   before the first number. It makes one census with the **unmodified** binary of
-   the same commit (the control), the inertness check, and then one census per
-   token with the probe binary. Every census runs under the exclusive
-   measurement lock.
-
-3. **Attribution.** `attribute.py` computes, per token:
-
-   - **matched lost** = control `matched` − probe `matched`, summed from
-     `per_format`. This is the authoritative number, and the share is
-     matched lost ÷ control matched.
-   - A per-row rebuild from `per_file`: for each (file, name), the lost count is
-     ΔMISSING + ΔVALUE. The rebuild must reconcile with matched lost, up to the
-     rename delta, with residual 0. `summarize.py` refuses any point where it
-     does not.
-   - Buckets, using the class index `class-names-eadb5884.json`:
-     - **direct**: DIRECT plus DIRECT_NAME. The lost row is one the silenced
-       class itself writes.
-     - **Composite cascade**: Composite values that ExifTool computes from the
-       dropped rows. oxidex computes them in hand code, from generated inputs.
-     - **other cascade**: everything else, for example a PreviewImage built
-       from a dropped Start/Length pair.
-
-4. **Result.** `summarize.py` turns one `attribute.py --json-out` per measured
-   commit into the committed JSON: the current commit, the earlier points, and
-   the delta from the first point.
-
-## Why it is a floor
-
-The probe measures what the output *would lose*. Anything generated that
-survives the probe is counted as hand:
-
-- **Shared keys.** A row that both generated and hand code write under the
-  same key survives the probe through the hand copy. Examples are the Olympus
-  residual tables, Sony `resolve_duplicates`, Canon ShotInfo vs CameraInfo,
-  and the InteropIFD hand arms that run whenever an engine row is absent
-  (worth about 0.9 points at `72eae8a5`).
-- **Conversions.** Generated PrintConv, enum and name maps looked up by hand
-  walkers are not silenced. Silencing a lookup makes the value wrong instead of
-  absent, so the conversion has no clean point to silence (the `conv` token is
-  refused).
-- **`RawAccess` rows** (L1b) and `sony/main_table.rs` rows are not silenced.
-- **Generated routes the probe does not know about.** The probe's boundary
-  list dates from `72eae8a5`. Generated routes added since then are not
-  silenced, so they count as hand until a token covers them: the serial engine
-  (`serial_engine.rs`, Canon AFInfo2, #760), the keyed engine and the generated
-  Garmin FIT reader (#782). #838's generated conversion arm is covered, because
-  it replaced a boundary the probe already silenced for the same fields.
-
-The class index affects only the direct / cascade split, never matched lost.
-It was built at `eadb5884` by `index/parse_tables.py` and `index/build_names.py`.
-Those scripts read the pre-#823 layout, which had one `binary_tables.rs` and
-one `ifd_tables.rs`. They are kept as a record of how the index was made.
-Because the union token does not silence `composite-declared`, every lost
-Composite row is a cascade whatever the index says, so the Composite cascade
-does not depend on the index either.
-
-## Reproducing a point
-
-```sh
-# per measured commit C: a clean control tree and a probe tree
-git worktree add --detach ../gs-ctl-C   C
-git worktree add --detach ../gs-probe-C C
-git -C ../gs-probe-C am "$PWD/tools/exiftool-tables/genshare/probe.patch"   # see below for older C
-(cd ../gs-ctl-C   && cargo build --release --bin oxidex)
-(cd ../gs-probe-C && cargo build --release --bin oxidex)
-
-unset PERL5LIB PERLLIB PERL5OPT
-export EXIFTOOL_PERL=<perl 5.38.2 with Archive::Zip>
-tools/exiftool-tables/genshare/census.sh <out-dir> ../gs-ctl-C ../gs-probe-C \
-    engine,legacy-l1,legacy-l2,producers engine
-
-tools/exiftool-tables/genshare/attribute.py \
-    --class-names tools/exiftool-tables/genshare/class-names-eadb5884.json \
-    --control <out-dir>/control.json \
-    --probe engine,legacy-l1,legacy-l2,producers=<out-dir>/probe-engine+legacy-l1+legacy-l2+producers.json \
-    --probe engine=<out-dir>/probe-engine.json --json-out <out-dir>/attr.json
-
-tools/exiftool-tables/genshare/summarize.py --exiftool 13.59 \
-    --corpus /tmp/oxidex-exiftool-cache/combined-samples --files 4238 --date <YYYY-MM-DD> \
-    --point <sha1>=<attr1.json> ... --point <current sha>=<attr.json> \
-    --out docs/public/measurements/generated-share-13.59.json
-uv run tools/docs/render_status.py      # then update the plan's row to the new figure
+```text
+engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
-`probe.patch` applies to `2d8ff775`. Its first three commits apply to
-`8cceb4a7`, with two mechanical conflicts: `infiray.rs` gained
-`insert_with_group1`, and `fits.rs` lost `naxis_values`. Keep the upstream
-code and add the probe guard. The fourth commit silences #838's generated arm
-and exists only from `2d8ff775` on. `probe-72eae8a5.patch` holds the probe
-exactly as it was measured at `72eae8a5` (branch `staging/gen-share-probe-72ea`
-@ `887bf764`).
+It executes maintained-binary controls with the environment absent and
+explicitly empty, plus a true pre-seam ordinary-binary control built from the
+parent of the commit that introduced `src/exiftool_tables/attribution.rs`.
+Each token and the six-token union run separately. The union is never computed
+by summing individual losses. A zero-loss token is reported as
+`unexercised`, not authenticated coverage. In particular, `keyed` remains
+unexercised until a production caller reaches the keyed engine.
 
-**When porting the probe forward,** list every place the engines push a row
-(`rg -n 'out\.push|sink\.emit|Emitted \{' src/exiftool_tables`). A new push
-that carries rows a silenced class used to emit must get the same guard, or
-the share falls for no real reason. A push for a new generated route goes on
-the floor list above until it has its own token.
+## Bounded first probe
 
-Checks that must hold before a point is trusted:
+The committed manifest contains exactly:
 
-- the census header shows ExifTool 13.59 and the DOCX probe;
-- the file count is 4,238;
-- the probe's token sanity run exits 0 (conformance.py ignores oxidex's exit
-  status, and a refused token scores as all-MISSING; `attribute.py` refuses a
-  probe below 25% of control);
-- inertness is 4,238/4,238, or any difference is shown to be nondeterminism
-  in the control binary too (PentaxOptioL20.jpg's `PentaxModelID` duplicate
-  order is a known case);
-- `reconciliation_residual` is 0 for every token.
+```text
+ICC_Profile.icc
+AAC.aac
+OOXML.docx
+```
+
+`testdata/bounded-corpus-expectations.json` binds their reviewed content hashes,
+roles, per-mode matched losses, per-file missing counts, and the exact AAC and
+ICC fixture deltas. Those expectations were frozen only after the first valid
+`observed_unreviewed` probe received controller and independent review. A run
+matches them byte-for-byte before it may emit `status=success` or satisfy
+`--require-success`; any drift fails closed.
+
+Run only through the exclusive measurement lock and use a new durable output
+directory every time:
+
+```bash
+tools/exiftool-tables/genshare/census.sh \
+  --repository /absolute/clean/oxidex-worktree \
+  --target-dir /absolute/durable/cargo-target \
+  --output /absolute/durable/evidence/run-id \
+  --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
+  --manifest tools/exiftool-tables/genshare/testdata/bounded-corpus.txt \
+  --min-files 3 \
+  --min-tags 30 \
+  --perl /absolute/perl-with-Archive-Zip \
+  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
+  --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
+```
+
+The output path must not exist, even if empty. The tool never reuses or deletes
+a run and never stages evidence in a system temporary directory. It validates an absolute corpus
+root, copies the exact ordered selection into `RUN/selection`, byte-compares and
+hashes each copy, and passes only that directory's files to its raw child
+driver. Individual manifest paths are never misrepresented as conformance
+corpus roots.
+
+## Evidence retained
+
+For every file and every mode, the run retains oracle and candidate argv, cwd,
+allow-listed environment state, scrubbed variables, timestamps, timeout/signal/
+return code, raw stdout, raw stderr, parsed JSON, and hashes. Duplicate JSON
+keys, invalid UTF-8, malformed shape, timeout, signal, or nonzero return fail the
+entire run. Selected, oracle-success, candidate-success, and scored path sets
+must be identical.
+
+Each corpus child is launched with `Popen` and bound, while unreaped, to its PID
+and kernel start identity. Linux records boot ID plus `/proc` start ticks;
+macOS records the libproc start timeval. An unsupported query, failed query, or
+identity change before output collection fails closed.
+
+The projection imports only the pure comparison rules from the pinned
+`conformance.py`; it does not use that wrapper's child runners. Counts are
+occurrences: one `missing` `[group, value]` pair is one missing occurrence.
+Every file and aggregate must satisfy both Task 6 equations, and each probe must
+satisfy both control/probe delta equations. Gains and the independently run
+union remain explicit.
+
+Unset/empty inertness compares distinct child runs from the same binary. It
+preserves order, typed values, duplicate identity, raw keys, and stderr. The
+only normalization replaces the value of the exact key
+`System:FileAccessDate`; no other key or value is dropped or rewritten.
+The pre-seam control uses the identical staged selection with the environment
+absent and must match the maintained unset control in normalized ordered output
+and raw stderr. Its introducing commit, one-parent relationship, parent tree,
+run-owned detached checkout, isolated target, build logs, and binary are
+retained as distinct proof; it is not a maintained-binary self-comparison.
+
+Source commit/tree/clean state, binary content/size/mode/mtime, comparator,
+Perl, complete ExifTool `exiftool`+`lib/` manifest, corpus originals, staged
+copies, route ledger, contracts, and all raw artifacts are content-bound. A
+post-run recheck detects drift.
+
+## Validation and failures
+
+Replay a completed observation:
+
+```bash
+python3 tools/exiftool-tables/genshare/attribute.py validate \
+  --receipt /absolute/run/receipt.json \
+  --recheck-live-inputs
+```
+
+The validator recomputes the exact artifact set, hashes, parsed outputs,
+projections, path sets, token/mode set, and reconciliation counters. It also
+authenticates every PID/start binding and replays the pre-seam build proof and
+ordinary-binary equality claim. Use
+`--require-success` only for a later controller-reviewed receipt; it correctly
+rejects `observed_unreviewed`.
+
+After a run directory is created, every refusal produces
+`receipt.failed.json`. It records the terminal stage, error, child-start count,
+and identities of artifacts actually retained; success-only fields are null.
+Validate its integrity with:
+
+```bash
+python3 tools/exiftool-tables/genshare/attribute.py validate-failure \
+  --receipt /absolute/run/receipt.failed.json
+```
+
+An already-existing output directory is refused without mutation and therefore
+cannot receive a failure receipt. Retry with a new run ID.
+
+`probe.patch` is a non-applicable retirement notice. Do not apply it or create a
+second attribution implementation.

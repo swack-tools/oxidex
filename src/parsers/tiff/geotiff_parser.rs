@@ -105,6 +105,12 @@ pub fn parse_geotiff_keys(
             continue;
         };
 
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Producers,
+        ) {
+            continue;
+        }
+
         result.insert(
             format!("GeoTiff:{}", tag_name),
             apply_print_conv(key_id, raw),

@@ -698,24 +698,26 @@ fn walk_with_policy(
             ),
             None => (super::runtime::to_exiftool_value(&converted), None),
         };
-        out.push(Emitted {
-            module: table.module,
-            table: table.table,
-            group0: table.group0,
-            // The field's own `Groups{1}` else the table's (ExifTool.pm:
-            // 9236-9244 via `effective_groups`).
-            group1: table.effective_groups(field).1,
-            group2: table.group2,
-            name: field.name,
-            value,
-            value_conv,
-            low_priority: table.priority == Some(0),
-            // `Avoid` is not part of the binary-table schema (`Field` has no
-            // flags); no ProcessBinaryData field in the pinned tree declares
-            // it.
-            avoid: false,
-            rational: None,
-        });
+        if !super::attribution::silenced(super::attribution::Token::Engine) {
+            out.push(Emitted {
+                module: table.module,
+                table: table.table,
+                group0: table.group0,
+                // The field's own `Groups{1}` else the table's (ExifTool.pm:
+                // 9236-9244 via `effective_groups`).
+                group1: table.effective_groups(field).1,
+                group2: table.group2,
+                name: field.name,
+                value,
+                value_conv,
+                low_priority: table.priority == Some(0),
+                // `Avoid` is not part of the binary-table schema (`Field` has no
+                // flags); no ProcessBinaryData field in the pinned tree declares
+                // it.
+                avoid: false,
+                rational: None,
+            });
+        }
     }
     BinaryWalkOutcome::Complete
 }

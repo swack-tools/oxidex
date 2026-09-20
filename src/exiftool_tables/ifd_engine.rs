@@ -1099,9 +1099,11 @@ fn walk_scoped(
                     let Some(group1) = group1_of(table, tag, &dir) else {
                         continue;
                     };
-                    out.push(generated_row(table, tag, group1, &raw, fraction, report));
-                    if let Some(reads) = decoded.as_deref_mut() {
-                        reads.rows.push((out.len() - 1, index));
+                    if !super::attribution::silenced(super::attribution::Token::Engine) {
+                        out.push(generated_row(table, tag, group1, &raw, fraction, report));
+                        if let Some(reads) = decoded.as_deref_mut() {
+                            reads.rows.push((out.len() - 1, index));
+                        }
                     }
                     continue;
                 }
@@ -1178,24 +1180,29 @@ fn walk_scoped(
         let Some(group1) = group1_of(table, tag, &dir) else {
             continue;
         };
-        out.push(Emitted {
-            module: table.module,
-            table: table.table,
-            // ExifTool.pm:9236-9244 (`AddTagToTable`) / 3832-3835: the tag's
-            // own family else the table's.
-            group0: tag.groups.g0.unwrap_or(table.group0),
-            group1,
-            group2: tag.groups.g2.unwrap_or(table.group2),
-            name: tag.name,
-            value,
-            low_priority: effective_priority(table, tag) == Some(0),
-            avoid: tag.flags.avoid,
-            // Only where `value` is the rational's number unconverted.
-            rational: fraction
-                .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
-            value_conv,
-        });
-        if let Some(reads) = decoded.as_deref_mut() {
+        let emitted_at = out.len();
+        if !super::attribution::silenced(super::attribution::Token::Engine) {
+            out.push(Emitted {
+                module: table.module,
+                table: table.table,
+                // ExifTool.pm:9236-9244 (`AddTagToTable`) / 3832-3835: the tag's
+                // own family else the table's.
+                group0: tag.groups.g0.unwrap_or(table.group0),
+                group1,
+                group2: tag.groups.g2.unwrap_or(table.group2),
+                name: tag.name,
+                value,
+                low_priority: effective_priority(table, tag) == Some(0),
+                avoid: tag.flags.avoid,
+                // Only where `value` is the rational's number unconverted.
+                rational: fraction
+                    .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
+                value_conv,
+            });
+        }
+        if out.len() > emitted_at
+            && let Some(reads) = decoded.as_deref_mut()
+        {
             reads.rows.push((out.len() - 1, index));
         }
     }

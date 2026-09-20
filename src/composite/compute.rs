@@ -1213,6 +1213,16 @@ fn panasonic_advanced_scene_mode(model: &str, scene: &str, advanced: &str) -> Op
 /// The returned string is the print-formatted value, matching what ExifTool
 /// prints by default, because that is what the comparison harness diffs.
 #[must_use]
+pub(super) fn is_generated_compute(module: &str, name: &str) -> bool {
+    matches!(
+        (module, name),
+        ("FLIR", "PeakSpectralSensitivity")
+            | ("PanasonicRaw", "ImageHeight")
+            | ("PanasonicRaw", "ImageWidth")
+    )
+}
+
+#[must_use]
 pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Option<Computed> {
     match (module, name) {
         ("Panasonic", "AdvancedSceneMode") => {
