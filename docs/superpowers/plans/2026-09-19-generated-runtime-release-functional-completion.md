@@ -286,16 +286,16 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | 6 | `conformance-receipts` | CLI / Luna | 0 | any non-conformance task |
 | 7 | `file-session` | Desktop / Sol | 2, 4 | 3, 5, 6 |
 | 8 | `generated-attribution` | CLI / Terra | 1, 3, 4, 7 | 5, 6 |
-| 9 | `exif-shared-pipeline` | Desktop / Sol | 2, 4, 7, 8 | 5, 6 |
-| 10 | `refusal-closure` | Desktop / Sol | 1, 4, 9 | 5, 6 |
-| 11 | `olympus-pilot` | Desktop / Sol | 3, 8, 10 | 5, 6 |
+| 9 | `exif-shared-pipeline` | CLI / Sol | 2, 4, 7, 8 | 5, 6 |
+| 10 | `refusal-closure` | CLI / Sol | 1, 4, 9 | 5, 6 |
+| 11 | `olympus-pilot` | CLI / Sol | 3, 8, 10 | 5, 6 |
 | 12 | `nikon-port` | CLI / Terra | 11 | 13-16 |
 | 13 | `pentax-panasonic-port` | CLI / Terra | 11 | 12, 14-16 |
 | 14 | `dji-composite-xmp-port` | CLI / Terra | 11, 13 | 12, 15, 16 |
 | 15 | `legacy-camera-tail` | CLI / Terra | 11 | 12-14, 16 |
 | 16 | `trailer-tail` | CLI / Terra | 11 | 12-15 |
-| 17 | `walker-engine-consolidation` | Desktop / Sol | 9, 11, 12-16 | none; vendors are remotely merged first |
-| 18 | `proven-deletion` | Desktop / Sol | 8, 10-17 | documentation-only work |
+| 17 | `walker-engine-consolidation` | CLI / Sol | 9, 11, 12-16 | none; vendors are remotely merged first |
+| 18 | `proven-deletion` | CLI / Sol | 8, 10-17 | documentation-only work |
 | 19 | `version-transition-qualification` | CLI / Sol | 5, 6, 18 | documentation-only work |
 | 20 | `frozen-candidate-evidence` | controller + Astra review | all prior tasks | none; writers frozen |
 
@@ -1667,7 +1667,7 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/09-exif-shared-pipeline.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/exif-shared-pipeline`
 **Worktree:** `/Users/allen/git/oxidex-beta1-exif-shared-pipeline`
@@ -1769,7 +1769,7 @@ path and its owner, test and receipt hashes, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/10-refusal-closure.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/refusal-closure`
 **Worktree:** `/Users/allen/git/oxidex-beta1-refusal-closure`
@@ -1879,7 +1879,7 @@ verification, commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/11-olympus-pilot.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/olympus-pilot`
 **Worktree:** `/Users/allen/git/oxidex-beta1-olympus-pilot`
@@ -2332,7 +2332,7 @@ values. Require zero lost reads and zero new VALUE rows.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/17-walker-engine-consolidation.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/walker-engine-consolidation`
 **Worktree:** `/Users/allen/git/oxidex-beta1-walker-engine-consolidation`
@@ -2424,7 +2424,7 @@ the shared stage.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/18-proven-deletion.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/proven-deletion`
 **Worktree:** `/Users/allen/git/oxidex-beta1-proven-deletion`
