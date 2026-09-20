@@ -1787,7 +1787,11 @@ scope/processed-state preservation. Assertions must observe production
 residual output/state rather than counters detached from the residual path.
 Exercise typed Make/Model clearing as well as assignment, and directly assert
 the reported-scalar UTF-8 decline reason plus absence of every staged mutation
-before the real residual runs.
+before the real residual runs. The same invalid-byte attempt must traverse a
+production residual path or production seam: a test-local `match` that
+constructs `TagValue::Binary` is not a residual proof. Assert unchanged live
+state at that boundary, zero generated emissions, exactly one residual
+occurrence, and the residual's observable output.
 
 - [ ] **Step 2: Run focused engine tests red**
 
@@ -1819,7 +1823,10 @@ four-directory owner/group/order fixture. In standalone TIFF, the
 `process_tiff_ifd_tags_indexed` or any MakerNote/pointer/IPTC/GeoTIFF/PrintIM
 handler runs; checking inside `route_entry` is too late. The four-directory
 fixture must assert each named `Owner` outcome and that silent parent edges are
-absent, not only tag keys/count/order.
+absent, not only tag keys/count/order. The named-owner control must observe
+actual `route_entry` results from walked rows and physical occurrences for all
+four directories. Repeating `owner()` against an empty static table with the
+directory name used only in assertion text does not satisfy this requirement.
 
 - [ ] **Step 5: Make request-aware edge behavior explicit**
 
