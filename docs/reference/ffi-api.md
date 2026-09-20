@@ -154,16 +154,13 @@ These values are defined in `src/ffi/error.rs`.
 **Critical Rules:**
 
 1. **Handles Must Be Destroyed** - Failing to call `exiftool_destroy()` leaks memory
-2. **String Lifetimes Are Short** - Returned strings are valid until:
-   - Next API call on the same handle
-   - Handle destruction
-   - **Copy strings immediately if needed beyond the call**
+2. **Handle-owned strings** - The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 3. **Input Strings** - Must be null-terminated and UTF-8 encoded
 
 | Resource | Owner | Lifetime | Responsibility |
 |----------|-------|----------|----------------|
 | `ExifToolHandle*` | Library | Until `exiftool_destroy()` | Call `exiftool_destroy()` once |
-| Returned strings | Library | Until next call | Copy immediately if needed |
+| Returned strings | Handle | Through read-only getters; invalidated by successful `exiftool_read_file` or destruction | Copy before either invalidating event |
 | Input strings | Caller | N/A | Must be null-terminated UTF-8 |
 
 ### Thread Safety
@@ -273,6 +270,8 @@ const char* exiftool_get_tag_string(const ExifToolHandle* handle, const char* ta
 - Non-NULL: Tag value as string
 - NULL: Tag not found or type mismatch
 
+**Lifetime:** The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
+
 **Example:**
 
 ```c
@@ -282,7 +281,7 @@ if (make) {
 }
 ```
 
-**Important:** Copy the string immediately if you need it beyond the next call:
+Copy before a successful reload or destruction if the value is needed afterward:
 
 ```c
 const char* make = exiftool_get_tag_string(handle, "IFD0:Make");
@@ -292,6 +291,17 @@ if (make) {
     free(make_copy);
 }
 ```
+
+#### `exiftool_get_tag_string_in_channel()`
+
+Gets a tag string from the requested stored, ValueConv, or PrintConv channel.
+
+```c
+const char* exiftool_get_tag_string_in_channel(
+    const ExifToolHandle* handle, const char* tag_name, ExifToolValueChannel channel);
+```
+
+**Lifetime:** The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 
 #### `exiftool_get_tag_integer()`
 
@@ -496,6 +506,8 @@ const char* exiftool_get_tag_name_at(const ExifToolHandle* handle, size_t index)
 **Returns:**
 - Tag name, or `NULL` when the index is out of range
 
+**Lifetime:** The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
+
 **Example:**
 
 ```c
@@ -649,15 +661,15 @@ public:
 
 ### String Copying
 
-Always copy strings immediately:
+Read-only getters do not invalidate one another. Copy before the next successful file read or handle destruction:
 
 ```c
-// WRONG - dangling pointer after next call
+// VALID - read-only getter calls preserve handle-owned strings
 const char* make = exiftool_get_tag_string(handle, "IFD0:Make");
-exiftool_get_tag_string(handle, "IFD0:Model");  // make is now invalid!
-printf("%s\n", make);  // UNDEFINED BEHAVIOR
+exiftool_get_tag_string(handle, "IFD0:Model");
+printf("%s\n", make);  // valid until a successful reload or destruction
 
-// CORRECT - copy immediately
+// COPY before a successful reload or destruction
 const char* make_ptr = exiftool_get_tag_string(handle, "IFD0:Make");
 char make[256];
 if (make_ptr) {
@@ -690,7 +702,7 @@ void* worker_thread(void* arg) {
 ## Common Pitfalls
 
 1. **Forgetting to destroy handle** - Always pair `create` with `destroy`
-2. **Using returned strings after next call** - Copy immediately
+2. **Using returned strings after reload or destruction** - Copy before either event
 3. **Ignoring return codes** - Always check for errors
 4. **NULL input strings** - All strings must be null-terminated
 5. **Sharing handle across threads** - Shared read-only getters are safe, but

@@ -20,9 +20,7 @@ pub struct ExifToolContext {
     pub metadata: MetadataMap,
     /// Cache of CString instances for string returns.
     ///
-    /// Its allocations remain stable across read-only getter calls, including
-    /// concurrent getters. A successful file read or handle destruction invalidates
-    /// the returned pointers; callers must synchronize those operations.
+    /// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
     pub string_cache: Mutex<Vec<CString>>,
     /// Iterator cache: stores tag names for iteration
     pub tag_names_cache: Vec<String>,

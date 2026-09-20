@@ -239,9 +239,7 @@ uintptr_t exiftool_get_tag_count(const struct ExifToolHandle *handle);
  - NULL if index is out of bounds or handle is NULL
 
  # String Lifetime
- Returned string is valid until:
- - Next API call on same handle
- - Handle destruction
+ The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 
  # Thread Safety
  Thread-safe for read-only access.
@@ -276,9 +274,7 @@ int exiftool_has_tag(const struct ExifToolHandle *handle, const char *tag_name);
  - NULL if tag doesn't exist or is not a String type
 
  # String Lifetime
- Returned string is valid until:
- - Next API call on same handle
- - Handle destruction
+ The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 
  # Thread Safety
  Thread-safe for read-only access.

@@ -133,9 +133,7 @@ pub extern "C" fn exiftool_get_tag_count(handle: *const ExifToolHandle) -> usize
 /// - NULL if index is out of bounds or handle is NULL
 ///
 /// # String Lifetime
-/// Returned string is valid until:
-/// - Next API call on same handle
-/// - Handle destruction
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access.
@@ -228,9 +226,7 @@ pub extern "C" fn exiftool_has_tag(
 /// - NULL if tag doesn't exist or is not a String type
 ///
 /// # String Lifetime
-/// Returned string is valid until:
-/// - Next API call on same handle
-/// - Handle destruction
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access.
@@ -276,6 +272,9 @@ pub extern "C" fn exiftool_get_tag_string(
 /// callers of the old ABI still observe its PrintConv-default map view.
 /// `channel` is an `ExifToolValueChannel` value; an unknown integer returns
 /// NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+///
+/// # String Lifetime
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access. Mutating operations and handle

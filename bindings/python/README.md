@@ -173,7 +173,8 @@ Create a new Oxidex handle.
 **Raises**: `OxidexError` if handle creation fails (out of memory).
 
 #### `read_file(filepath: str) -> None`
-Read metadata from a file.
+Read metadata from a file, replacing the handle's current metadata. This is not a
+read-only getter and must not overlap other operations on the same handle.
 
 **Args**:
 - `filepath`: Path to the image file
@@ -300,7 +301,7 @@ The C FFI follows these thread safety rules:
 
 - **Handle creation** (`exiftool_create`): Thread-safe, each call returns an independent handle
 - **Handle operations**: The wrapper exposes read-only operations; shared-handle
-  C getters are safe concurrently, but reads, writes, mutations, and destruction
+  C getters are safe concurrently, but `read_file`, writes, mutations, and destruction
   must not overlap on one handle
 - **Error messages**: Thread-safe - each thread has its own error message storage
 
