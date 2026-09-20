@@ -1206,23 +1206,18 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
             None => unknown_text(&value.perl_string()?),
         }),
         PrintConv::StrEnum(map) => {
-            if let DecodedValue::StringBytes(bytes) = value {
-                let display = fix_utf8(bytes)?;
-                return Some(
-                    map.iter()
-                        .find(|(candidate, _)| candidate.as_bytes() == bytes)
-                        .map_or_else(
-                            || unknown_text(&display),
-                            |(_, rendered)| (*rendered).to_string(),
-                        ),
-                );
-            }
-            let key = value.enum_key()?;
             if map
                 .first()
                 .is_some_and(|(marker, _)| *marker == FIXED_ARRAY_PATTERN_MARKER)
             {
+                // The marker describes the conversion; it is never an
+                // ExifTool lookup key. Strip it before every value-kind path,
+                // including StringBytes' byte-preserving fast path.
                 let map = &map[1..];
+                let key = match value {
+                    DecodedValue::StringBytes(bytes) => fix_utf8(bytes)?,
+                    _ => value.enum_key()?,
+                };
                 if let Some((_, rendered)) = map.iter().find(|(candidate, _)| *candidate == key) {
                     return Some((*rendered).to_string());
                 }
@@ -1248,6 +1243,18 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
                         ),
                 );
             }
+            if let DecodedValue::StringBytes(bytes) = value {
+                let display = fix_utf8(bytes)?;
+                return Some(
+                    map.iter()
+                        .find(|(candidate, _)| candidate.as_bytes() == bytes)
+                        .map_or_else(
+                            || unknown_text(&display),
+                            |(_, rendered)| (*rendered).to_string(),
+                        ),
+                );
+            }
+            let key = value.enum_key()?;
             Some(
                 map.iter()
                     .find(|(candidate, _)| *candidate == key)
@@ -1479,6 +1486,17 @@ mod tests {
                 &DecodedValue::Array(vec![DecodedValue::Integer(7), DecodedValue::Integer(3)])
             ),
             Some("Unknown (7 3)".to_string()),
+        );
+        assert_eq!(
+            render(conv, &DecodedValue::StringBytes(b"1 7".to_vec())),
+            Some("Live Composite (7 images)".to_string()),
+        );
+        assert_eq!(
+            render(
+                conv,
+                &DecodedValue::StringBytes(FIXED_ARRAY_PATTERN_MARKER.as_bytes().to_vec())
+            ),
+            Some(format!("Unknown ({FIXED_ARRAY_PATTERN_MARKER})")),
         );
     }
 

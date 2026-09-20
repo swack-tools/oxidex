@@ -72,39 +72,102 @@ fn test_olympus_parser_trait_implementation() {
     assert_eq!(parser.tag_prefix(), "Olympus:");
 }
 
+fn little_endian_entry(tag: u16, data_type: u16, count: u32, value: u32) -> Vec<u8> {
+    let mut entry = Vec::with_capacity(12);
+    entry.extend_from_slice(&tag.to_le_bytes());
+    entry.extend_from_slice(&data_type.to_le_bytes());
+    entry.extend_from_slice(&count.to_le_bytes());
+    entry.extend_from_slice(&value.to_le_bytes());
+    entry
+}
+
+fn olympus_stacked_image_fixture(first: u32, second: u32) -> Vec<u8> {
+    const CAMERA_SETTINGS_OFFSET: u32 = 40;
+    const STACKED_IMAGE_VALUES_OFFSET: u32 = 64;
+
+    let mut note = b"OLYMPUS\0II\x03\0".to_vec();
+    note.extend_from_slice(&1u16.to_le_bytes());
+    note.extend_from_slice(&little_endian_entry(0x2020, 4, 1, CAMERA_SETTINGS_OFFSET));
+    note.extend_from_slice(&0u32.to_le_bytes());
+    note.resize(CAMERA_SETTINGS_OFFSET as usize, 0);
+    note.extend_from_slice(&1u16.to_le_bytes());
+    note.extend_from_slice(&little_endian_entry(
+        0x0804,
+        4,
+        2,
+        STACKED_IMAGE_VALUES_OFFSET,
+    ));
+    note.extend_from_slice(&0u32.to_le_bytes());
+    note.resize(STACKED_IMAGE_VALUES_OFFSET as usize, 0);
+    note.extend_from_slice(&first.to_le_bytes());
+    note.extend_from_slice(&second.to_le_bytes());
+    note
+}
+
+fn camer_fixture(payload_len: usize, payload_tiff_offset: u32) -> Vec<u8> {
+    const PAYLOAD_OFFSET: u32 = 32;
+
+    let mut note = b"CAMER\0\0\0".to_vec();
+    note.extend_from_slice(&1u16.to_le_bytes());
+    note.extend_from_slice(&little_endian_entry(
+        0x2050,
+        7,
+        payload_len as u32,
+        payload_tiff_offset + PAYLOAD_OFFSET,
+    ));
+    note.extend_from_slice(&0u32.to_le_bytes());
+    note.resize(PAYLOAD_OFFSET as usize, 0);
+    note.resize(PAYLOAD_OFFSET as usize + payload_len, 0x5a);
+    note
+}
+
 /// Pinned ExifTool 13.59 renders Olympus::CameraSettings 0x0804's two
-/// `int32u` values `0 0` as `No`. This fails if the generated IFD row is
-/// withheld or if its source-derived fixed-array PrintConv is not applied.
+/// `int32u` values `0 0` as `No`. The generated fixture exercises the same
+/// dispatcher, nested IFD and generated-row path without a private corpus.
 #[test]
-fn tg_870_reports_generated_stacked_image() {
-    use oxidex::core::operations::read_metadata;
-    use std::path::Path;
+fn generated_fixture_reports_stacked_image() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernote_dispatcher::dispatch_makernote;
+    use std::collections::HashMap;
 
-    let path = Path::new(
-        "/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples/Olympus/OlympusTG-870.jpg",
-    );
-    assert!(path.is_file(), "pinned Olympus fixture must be available");
-
-    let metadata = read_metadata(path).expect("Olympus TG-870 parses");
-    assert_eq!(metadata.get_string("Olympus:StackedImage"), Some("No"));
+    let mut tags = HashMap::new();
+    dispatch_makernote(
+        "OLYMPUS CORPORATION",
+        &olympus_stacked_image_fixture(0, 0),
+        ByteOrder::LittleEndian,
+        &mut tags,
+    )
+    .expect("synthetic Olympus MakerNote parses");
+    assert_eq!(tags.get("Olympus:StackedImage"), Some(&"No".to_string()));
 }
 
 /// MakerNotes.pm routes a `CAMER\\0` Olympus-layout note through
 /// Olympus::Main at byte 8 and selects the binary CameraParameters variant.
-/// This catches both a missing dispatcher route and a rejected Olympus header.
+/// The generated fixture keeps this default regression independent of a
+/// machine-specific Pentax sample path.
 #[test]
-fn camer_makernote_reports_generated_camera_parameters() {
-    use oxidex::core::operations::read_metadata;
-    use std::path::Path;
+fn generated_camer_fixture_reports_camera_parameters() {
+    use oxidex::parsers::tiff::ifd_parser::ByteOrder;
+    use oxidex::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context;
+    use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+    use std::collections::HashMap;
 
-    let path = Path::new(
-        "/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples/Pentax/PentaxIQ_Digital59e.jpg",
-    );
-    assert!(path.is_file(), "pinned CAMER fixture must be available");
-
-    let metadata = read_metadata(path).expect("Pentax IQ Digital 59e parses");
+    const MAKERNOTE_OFFSET: usize = 96;
+    let note = camer_fixture(24, MAKERNOTE_OFFSET as u32);
+    let mut tiff = vec![0u8; MAKERNOTE_OFFSET];
+    tiff.extend_from_slice(&note);
+    let context = MakerNoteContext::in_tiff(&tiff, MAKERNOTE_OFFSET, note.len(), 0);
+    let mut tags = HashMap::new();
+    dispatch_makernote_with_context(
+        "PENTAX Corporation",
+        None,
+        &context,
+        ByteOrder::LittleEndian,
+        &mut tags,
+    )
+    .expect("synthetic CAMER MakerNote parses");
     assert_eq!(
-        metadata.get_string("Olympus:CameraParameters"),
-        Some("(Binary data 6058 bytes, use -b option to extract)")
+        tags.get("Olympus:CameraParameters"),
+        Some(&"(Binary data 24 bytes, use -b option to extract)".to_string())
     );
 }
