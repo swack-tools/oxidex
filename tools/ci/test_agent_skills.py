@@ -16,6 +16,26 @@ from tools.ci import sync_agent_skills as sync
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
+CLAUDE_ADAPTER = """# Claude adapter
+
+## Shared policy
+
+Read `AGENTS.md` for shared repository policy. It is authoritative; this
+adapter does not import or duplicate those rules and may not override them.
+
+## Skills
+
+Use project-specific Claude skills from `.claude/skills`.
+
+## Model routing
+
+Use Opus for architecture, release-promotion judgment, security-sensitive work,
+and final broad reviews. Use Sonnet for bounded implementation and routine
+review. Use Haiku only for low-risk, read-only inventory or summarization.
+
+Prefer fast mode for delegated Claude work when it is available.
+"""
+
 
 def canonical(skill: str, relative: str) -> str:
     """Read a file from the canonical shared-skill tree."""
@@ -44,6 +64,14 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
     (root / ".claude/skills/alpha/SKILL.md").write_text(canonical, encoding="utf-8")
     (root / ".agents/skills/alpha/SKILL.md").write_text(mirror, encoding="utf-8")
     return root
+
+
+def validate_claude_adapter(path: pathlib.Path) -> list[str]:
+    """Validate a Claude adapter file at a repository boundary."""
+
+    if path.read_text(encoding="utf-8") != CLAUDE_ADAPTER:
+        return ["CLAUDE.md must exactly match the Claude adapter contract"]
+    return []
 
 
 class SkillMirrorTests(unittest.TestCase):
@@ -95,34 +123,31 @@ class SkillMirrorTests(unittest.TestCase):
                 self.assertNotIn(forbidden, text)
 
     def test_claude_adapter_is_exact_and_rejects_adversarial_policy_variants(self):
-        expected = """# Claude adapter
-
-## Shared policy
-
-Read `AGENTS.md` for shared repository policy. It is authoritative; this
-adapter does not import or duplicate those rules and may not override them.
-
-## Skills
-
-Use project-specific Claude skills from `.claude/skills`.
-
-## Model routing
-
-Use Opus for architecture, release-promotion judgment, security-sensitive work,
-and final broad reviews. Use Sonnet for bounded implementation and routine
-review. Use Haiku only for low-risk, read-only inventory or summarization.
-
-Prefer fast mode for delegated Claude work when it is available.
-"""
+        expected = CLAUDE_ADAPTER
         actual = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertEqual(actual, expected)
-        for adversarial in (
-            expected.replace("Use Opus", "Do not use Opus"),
-            expected.replace("Use Sonnet", "Use Opus"),
-            expected + "\nRun `git status` before every release build.\n",
-        ):
-            with self.subTest(adversarial=adversarial):
-                self.assertNotEqual(adversarial, expected)
+        self.assertEqual(validate_claude_adapter(REPO / "CLAUDE.md"), [])
+
+    def test_claude_adapter_validator_rejects_mutated_repository_fixtures(self):
+        source = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        mutations = {
+            "import-only": "@AGENTS.md\n",
+            "generic-appendix": source + "\nRun `cargo test` before every release build.\n",
+            "repository-git": source + "\nNever edit repository history without review.\n",
+            "release": source + "\nA release tag requires explicit maintainer authorization.\n",
+            "build-test": source + "\nRun the full build before committing.\n",
+            "worktree": source + "\nUse a separate worktree for every change.\n",
+            "parity": source + "\nAlways measure metadata parity against the pinned oracle.\n",
+            "generated": source + "\nNever edit generated files directly; run the generator instead.\n",
+            "security": source + "\nNever expose credentials or bypass a security control.\n",
+            "fleet": source + "\nFleet workers must report their lease before running.\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = pathlib.Path(tmp) / "CLAUDE.md"
+            for name, mutated in mutations.items():
+                with self.subTest(mutation=name):
+                    fixture.write_text(mutated, encoding="utf-8")
+                    self.assertNotEqual(validate_claude_adapter(fixture), [])
 
     def test_release_checklist_requires_receipts_signed_tag_and_artifact_proof(self):
         text = (REPO / "docs/contributing/release-checklist.md").read_text(
