@@ -24,6 +24,7 @@ pub use tables::{COMPOSITES, Composite};
 
 use std::collections::HashSet;
 
+use crate::core::tag_occurrence::ValueChannel;
 use crate::core::{Instance, MetadataMap, TagOccurrence, TagValue};
 
 /// Maximum resolution passes.
@@ -92,7 +93,7 @@ fn value_string(v: &TagValue) -> Option<String> {
 /// form for every tag that has no separate PrintConv step -- which is every
 /// case not covered by `value`/`apex_value_conv` here.
 fn occurrence_value_string(occurrence: &TagOccurrence) -> Option<String> {
-    value_string(&occurrence.value_conv())
+    value_string(occurrence.project(ValueChannel::ValueConv).as_ref())
 }
 
 /// Resolves one Composite dependency key (already normalized to `Group:Tag`

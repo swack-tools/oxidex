@@ -86,7 +86,7 @@ fn perl_join(values: &[f64]) -> (String, Vec<f64>) {
     let reparsed = rendered
         .iter()
         .zip(values)
-        .map(|(text, original)| text.parse().unwrap_or(*original))
+        .map(|(text, original)| text.parse().unwrap_or(*original)) // typed-value-projection: reparse perl_join
         .collect();
     (rendered.join(" "), reparsed)
 }
@@ -221,11 +221,12 @@ fn perl_truthy(value: Option<&str>) -> bool {
 
 fn printed_integer(value: &str) -> Option<i64> {
     value.trim().parse().ok().or_else(|| {
+        // typed-value-projection: reparse printed_integer
         value
             .trim()
             .strip_prefix("Unknown (")?
             .strip_suffix(')')?
-            .parse()
+            .parse() // typed-value-projection: reparse printed_integer
             .ok()
     })
 }
@@ -573,7 +574,7 @@ fn perl_is_float(value: &str) -> Option<f64> {
     {
         return None;
     }
-    let parsed: f64 = value.parse().ok()?;
+    let parsed: f64 = value.parse().ok()?; // typed-value-projection: reparse perl_is_float
     parsed.is_finite().then_some(parsed)
 }
 
@@ -1054,7 +1055,7 @@ fn print_fnumber(v: f64) -> String {
 fn canon_sensor_diag(xres: Option<&str>, yres: Option<&str>) -> Option<f64> {
     fn parts(s: &str) -> Option<(i64, i64)> {
         let (n, d) = s.split_once('/')?;
-        Some((n.trim().parse().ok()?, d.trim().parse().ok()?))
+        Some((n.trim().parse().ok()?, d.trim().parse().ok()?)) // typed-value-projection: reparse resolution_parts
     }
     let (xn, xd) = parts(xres?)?;
     let (yn, yd) = parts(yres?)?;

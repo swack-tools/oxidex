@@ -25,6 +25,7 @@ use crate::core::read_report::{
 };
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
+use crate::core::tag_occurrence::ValueChannel;
 use crate::core::tiff_helpers::parse_ifd_chain;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
@@ -1317,10 +1318,7 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
             // SHORT behind `ColorSpace` `sRGB`, the bytes behind `Padding`'s
             // placeholder, `TagOccurrence::stored`); the writer serializes
             // stored forms, never printed ones.
-            let value = occurrence
-                .stored
-                .clone()
-                .unwrap_or_else(|| occurrence.raw.clone());
+            let value = occurrence.project(ValueChannel::Stored).into_owned();
             // Insert tag into destination (merges with existing, preserving others)
             dest_metadata.insert(tag_name.clone(), value);
         }

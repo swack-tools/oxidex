@@ -230,6 +230,13 @@ impl TagSink {
     pub fn set_winner_value(&mut self, key: &str, value: TagValue) -> bool {
         match self.winners.get(key) {
             Some(&idx) => {
+                // A legacy producer can format the display form before it
+                // later supplies ValueConv through `set_value_form`. Preserve
+                // that known display as PrintConv before attaching the typed
+                // value; an explicit producer print form always wins.
+                if self.occurrences[idx].print.is_none() {
+                    self.occurrences[idx].print = Some(self.occurrences[idx].raw.clone());
+                }
                 self.occurrences[idx].value = Some(value);
                 true
             }

@@ -21,6 +21,34 @@
 // Rust side because they're called from C.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+use std::os::raw::c_int;
+
+use crate::core::tag_occurrence::ValueChannel;
+
+/// Selects one ExifTool value stage for the additive channel-aware C accessors.
+///
+/// Existing accessors retain their legacy PrintConv-default behavior. New
+/// accessors accept the discriminant as `c_int` so invalid values can return a
+/// normal FFI error instead of crossing the boundary as an invalid Rust enum.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExifToolValueChannel {
+    Stored = 0,
+    ValueConv = 1,
+    PrintConv = 2,
+}
+
+impl ExifToolValueChannel {
+    pub(crate) fn parse(value: c_int) -> Option<ValueChannel> {
+        match value {
+            0 => Some(ValueChannel::Stored),
+            1 => Some(ValueChannel::ValueConv),
+            2 => Some(ValueChannel::PrintConv),
+            _ => None,
+        }
+    }
+}
+
 // Module declarations
 pub mod context;
 pub mod error;
@@ -43,7 +71,8 @@ pub use error::exiftool_get_last_error;
 pub use lifecycle::{exiftool_create, exiftool_destroy};
 pub use read_tags::{
     exiftool_get_tag_count, exiftool_get_tag_float, exiftool_get_tag_integer,
-    exiftool_get_tag_name_at, exiftool_get_tag_string, exiftool_has_tag, exiftool_read_file,
+    exiftool_get_tag_name_at, exiftool_get_tag_string, exiftool_get_tag_string_in_channel,
+    exiftool_has_tag, exiftool_read_file,
 };
 pub use write_tags::{
     exiftool_remove_tag, exiftool_set_tag_float, exiftool_set_tag_integer, exiftool_set_tag_string,

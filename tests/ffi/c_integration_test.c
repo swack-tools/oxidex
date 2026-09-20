@@ -103,6 +103,12 @@ void test_tag_operations() {
     TEST_ASSERT(make != NULL, "Get string tag returns non-NULL");
     TEST_ASSERT(strcmp(make, "Test Camera") == 0, "String value is correct");
 
+    /* Explicit channel selection is additive; the legacy accessor remains valid. */
+    const char* value_conv = exiftool_get_tag_string_in_channel(
+        handle, "EXIF:Make", EXIFTOOL_VALUE_CHANNEL_VALUE_CONV);
+    TEST_ASSERT(value_conv != NULL, "ValueConv string accessor returns non-NULL");
+    TEST_ASSERT(strcmp(value_conv, "Test Camera") == 0, "ValueConv string is correct");
+
     /* Set integer tag */
     result = exiftool_set_tag_integer(handle, "EXIF:ISO", 800);
     TEST_ASSERT(result == EXIFTOOL_OK, "Set integer tag succeeds");

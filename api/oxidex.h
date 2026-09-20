@@ -4327,6 +4327,18 @@ int exiftool_has_tag(const struct ExifToolHandle *handle, const char *tag_name);
 const char *exiftool_get_tag_string(const struct ExifToolHandle *handle, const char *tag_name);
 
 /*
+ Retrieves a tag's UTF-8 string from an explicitly selected value channel.
+
+ This additive entry point leaves [`exiftool_get_tag_string`] unchanged:
+ callers of the old ABI still observe its PrintConv-default map view.
+ `channel` is an [`ExifToolValueChannel`] discriminant; an unknown value
+ returns NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+ */
+const char *exiftool_get_tag_string_in_channel(const struct ExifToolHandle *handle,
+                                               const char *tag_name,
+                                               int channel);
+
+/*
  Retrieves tag value as a 64-bit integer.
 
  # Arguments

@@ -25,9 +25,8 @@
 //! arbitration and keeps every match, in file order.
 
 use crate::cli::args::CliArgs;
-use crate::core::exiftool_compat::format_tag_value_rules;
 use crate::core::read_options::ReadOptions;
-use crate::core::tag_occurrence::{Instance, TagOccurrence};
+use crate::core::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use crate::core::{MetadataMap, TagValue};
 use std::collections::HashSet;
 
@@ -323,11 +322,13 @@ pub fn resolve_requested_tags<'a>(
 /// storage, else `occurrence.raw`. This matches whole-map raw projection
 /// and composite dependency resolution without inverting printed labels.
 pub fn resolved_display_value(occurrence: &TagOccurrence, no_print_conv: bool) -> TagValue {
-    if no_print_conv {
-        occurrence.value_conv()
-    } else {
-        format_tag_value_rules(&occurrence.lookup_key(), &occurrence.raw)
-    }
+    occurrence
+        .project(if no_print_conv {
+            ValueChannel::ValueConv
+        } else {
+            ValueChannel::PrintConv
+        })
+        .into_owned()
 }
 
 /// Builds a synthesized [`MetadataMap`] ready to hand to the existing
@@ -592,25 +593,19 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         return ResolvedFileOutput::Metadata(metadata);
     }
 
-    let metadata = if no_print_conv {
-        // strip_extended_only rebuilt the display map and discarded value
-        // forms. Use its key selection with the original winning occurrences.
-        let values = raw_metadata.without_print_conv();
-        values
-            .iter()
-            .filter(|(key, _)| surviving.contains_key(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
+    // `strip_extended_only` supplies only the surviving key set. Values must
+    // remain attached to their original winning occurrence so selection never
+    // reconstructs a channel from the flattened raw map.
+    let channel = if no_print_conv {
+        ValueChannel::ValueConv
     } else {
-        // Keep the complete PrintConv scalar until the chosen renderer:
-        // JSON checks numeric/boolean typing before deleting NULs, while
-        // plain output applies Printable's own control/whitespace rules.
-        let mut formatted = MetadataMap::with_capacity(surviving.len());
-        for (key, value) in surviving.iter() {
-            formatted.insert(key.clone(), format_tag_value_rules(key, value));
-        }
-        formatted
+        ValueChannel::PrintConv
     };
+    let metadata = raw_metadata
+        .winner_occurrences()
+        .filter(|(key, _)| surviving.contains_key(*key))
+        .map(|(key, occurrence)| (key.clone(), occurrence.project(channel).into_owned()))
+        .collect();
     ResolvedFileOutput::Metadata(metadata)
 }
 
@@ -649,8 +644,22 @@ mod tests {
             "IFD0",
             Instance::default(),
         );
-        source.insert("IFD0:Orientation", TagValue::new_integer(6));
-        source.insert("ExifIFD:FNumber", TagValue::new_rational(28, 10));
+        source.insert_occurrence_with_raw(
+            "IFD0:Orientation",
+            TagValue::new_string("Rotate 90 CW"),
+            TagValue::new_integer(6),
+            1,
+            "IFD0",
+            Instance::default(),
+        );
+        source.insert_occurrence_with_raw(
+            "ExifIFD:FNumber",
+            TagValue::new_string("2.8"),
+            TagValue::new_rational(28, 10),
+            1,
+            "ExifIFD",
+            Instance::default(),
+        );
         // Exercise unfiltered, selected, grouped and duplicate projection;
         // --no-print-conv must preserve the same complete string as well.
         for (selected, grouped, all_tags) in [
@@ -917,7 +926,14 @@ mod tests {
                 Instance::default(),
             );
         }
-        source.insert("IFD0:Orientation", TagValue::new_integer(6));
+        source.insert_occurrence_with_raw(
+            "IFD0:Orientation",
+            TagValue::new_string("Rotate 90 CW"),
+            TagValue::new_integer(6),
+            1,
+            "IFD0",
+            Instance::default(),
+        );
         source.insert("IFD0:0xDEAD", TagValue::new_string("hidden"));
         for (selected, grouped, all_tags) in [
             (false, false, false),

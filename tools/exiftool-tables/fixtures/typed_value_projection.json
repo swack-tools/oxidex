@@ -1,0 +1,21 @@
+{
+  "cases": [
+    {"kind":"integer","key":"Fixture:Integer","raw":{"type":"Integer","value":7},"value":{"type":"Integer","value":7},"print":{"type":"String","value":"seven"}},
+    {"kind":"float","key":"Fixture:Float","raw":{"type":"Float","value":1.5},"value":{"type":"Float","value":1.5},"print":{"type":"String","value":"1.50"}},
+    {"kind":"rational","key":"Fixture:Rational","raw":{"type":"Rational","value":{"numerator":1,"denominator":80}},"value":{"type":"Float","value":0.0125},"print":{"type":"String","value":"1/80 s"}},
+    {"kind":"enum","key":"Fixture:Enum","raw":{"type":"Integer","value":6},"value":{"type":"Integer","value":6},"print":{"type":"String","value":"Rotate 90 CW"}},
+    {"kind":"date_time","key":"Fixture:DateTime","raw":{"type":"DateTime","value":"2024-01-02T03:04:05Z"},"value":{"type":"DateTime","value":"2024-01-02T03:04:05Z"},"print":{"type":"String","value":"2024:01:02 03:04:05 UTC"}},
+    {"kind":"bytes","key":"Fixture:Bytes","raw":{"type":"Binary","value":[82,57,56]},"value":{"type":"Binary","value":[82,57,56]},"print":{"type":"String","value":"R98 bytes"}},
+    {"kind":"binary_placeholder","key":"Fixture:BinaryPlaceholder","raw":{"type":"Binary","value":[1,2,3,4]},"value":{"type":"Binary","value":[1,2,3,4]},"print":{"type":"String","value":"(Binary data 4 bytes, use -b option to extract)"}},
+    {"kind":"list","key":"Fixture:List","raw":{"type":"Array","value":[{"type":"String","value":"raw"}]},"value":{"type":"Array","value":[{"type":"String","value":"value"}]},"print":{"type":"String","value":"one, two"}},
+    {"kind":"undefined_suppressed","key":"Fixture:Suppressed","raw":{"type":"String","value":"undef"},"value":{"type":"String","value":"undef"},"print":{"type":"String","value":""}},
+    {"kind":"units","key":"Fixture:Units","raw":{"type":"Float","value":50.0},"value":{"type":"Float","value":50.0},"print":{"type":"String","value":"50 mm"}},
+    {"kind":"negative_zero","key":"Fixture:NegativeZero","raw":{"type":"Float","value":-0.0},"value":{"type":"Float","value":-0.0},"print":{"type":"String","value":"-0.0 EV"}}
+  ],
+  "intentional_display_reparse": [
+    {"id":"perl_join","source":"Image/ExifTool.pm:3697 (converted list scalar rejoin)"},
+    {"id":"printed_integer","source":"Image/ExifTool.pm:3627-3634 (PrintConv Unknown (N) fallback)"},
+    {"id":"perl_is_float","source":"Image/ExifTool.pm:5969-5978 (ToFloat)"},
+    {"id":"resolution_parts","source":"Image/ExifTool/Exif.pm:2762-2770 (FocalPlane rational fields)"}
+  ]
+}

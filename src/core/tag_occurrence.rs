@@ -512,7 +512,12 @@ mod value_conv_projection_tests {
         );
         assert_eq!(
             resolved_display_value(requested[0].occurrence, false),
-            TagValue::new_string("14.0")
+            // This synthetic occurrence has no explicit PrintConv. Canonical
+            // PrintConv projection therefore falls back to its ValueConv;
+            // reconstructing a display string from raw belongs to neither
+            // channel and would discard an explicit producer form when one
+            // exists.
+            TagValue::Float(default)
         );
         let all = resolve_requested_tags(&map, &["ApertureValue".to_string()], true);
         let values: Vec<String> = all

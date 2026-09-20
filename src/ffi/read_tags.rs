@@ -10,6 +10,7 @@ use std::ptr;
 
 use crate::core::operations::read_metadata;
 
+use super::ExifToolValueChannel;
 use super::context::{ExifToolContext, ExifToolHandle, handle_to_context, handle_to_context_mut};
 use super::error::{
     EXIFTOOL_ERR_INTERNAL, EXIFTOOL_ERR_INVALID_TAG_VALUE, EXIFTOOL_ERR_NULL_POINTER,
@@ -274,6 +275,58 @@ pub extern "C" fn exiftool_get_tag_string(
             }
             Err(_) => ptr::null(),
         }
+    }));
+
+    result.unwrap_or(ptr::null())
+}
+
+/// Retrieves a tag's UTF-8 string from an explicitly selected value channel.
+///
+/// This additive entry point leaves [`exiftool_get_tag_string`] unchanged:
+/// callers of the old ABI still observe its PrintConv-default map view.
+/// `channel` is an [`ExifToolValueChannel`] discriminant; an unknown value
+/// returns NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+#[unsafe(no_mangle)]
+pub extern "C" fn exiftool_get_tag_string_in_channel(
+    handle: *const ExifToolHandle,
+    tag_name: *const c_char,
+    channel: c_int,
+) -> *const c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| unsafe {
+        if handle.is_null() || tag_name.is_null() {
+            set_last_error("NULL pointer provided".to_string());
+            return ptr::null();
+        }
+        let Some(channel) = ExifToolValueChannel::parse(channel) else {
+            set_last_error(format!("Unknown value channel: {channel}"));
+            return ptr::null();
+        };
+        let context = match handle_to_context(handle) {
+            Some(ctx) => ctx,
+            None => return ptr::null(),
+        };
+        let name = match CStr::from_ptr(tag_name).to_str() {
+            Ok(name) => name,
+            Err(_) => return ptr::null(),
+        };
+        let value = match context
+            .metadata
+            .winner_occurrences()
+            .find(|(key, _)| key.as_str() == name)
+            .map(|(_, occurrence)| occurrence.project(channel))
+        {
+            Some(value) => value,
+            None => {
+                set_last_error(format!("Tag not found: {name}"));
+                return ptr::null();
+            }
+        };
+        let Some(value) = value.as_string() else {
+            set_last_error(format!("Tag '{name}' is not a String type"));
+            return ptr::null();
+        };
+        let ctx_mut = &mut *(handle as *mut ExifToolContext);
+        CString::new(value).map_or_else(|_| ptr::null(), |value| ctx_mut.cache_string(value))
     }));
 
     result.unwrap_or(ptr::null())
