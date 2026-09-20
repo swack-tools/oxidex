@@ -1,0 +1,14 @@
+{
+  "routes": [
+    "/",
+    "/changelog",
+    "/guide",
+    "/guide/exiftool-parity",
+    "/guide/getting-started",
+    "/guide/migrating-from-1x",
+    "/performance",
+    "/reference",
+    "/reference/formats",
+    "/status"
+  ]
+}

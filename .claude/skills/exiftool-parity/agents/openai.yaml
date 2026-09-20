@@ -1,0 +1,7 @@
+interface:
+  display_name: "ExifTool Parity"
+  short_description: "Measure OxiDex against pinned ExifTool evidence"
+  default_prompt: "Use $exiftool-parity to measure this OxiDex candidate against pinned ExifTool and produce commit-bound parity evidence."
+
+policy:
+  allow_implicit_invocation: true

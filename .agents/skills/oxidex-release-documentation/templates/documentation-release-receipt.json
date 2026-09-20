@@ -17,7 +17,12 @@
   },
   "claims": [],
   "pages": [],
-  "benchmarks": [],
+  "benchmarks": [
+    {
+      "disposition": "unverified",
+      "reason": null
+    }
+  ],
   "local_build": {
     "status": "unverified",
     "command": null,
@@ -30,11 +35,18 @@
     "rendered_inventory": null,
     "reconciliation": null,
     "crawl_evidence": null,
+    "snapshot_manifest_sha256": null,
+    "crawl_sha256": null,
+    "server_log": null,
     "evidence_path": null
   },
   "visual_review": {
     "status": "unverified",
     "automation_manifest": null,
+    "automation_manifest_sha256": null,
+    "visual_matrix": null,
+    "visual_matrix_sha256": null,
+    "screenshots_path": null,
     "samples": [],
     "findings": [],
     "human_review": {

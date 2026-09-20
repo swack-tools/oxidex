@@ -1,3 +1,7 @@
 interface:
-  display_name: "Oxidex Release Documentation"
-  short_description: "Help with Oxidex Release Documentation tasks"
+  display_name: "OxiDex Release Documentation"
+  short_description: "Audit factual release docs and GitHub Pages"
+  default_prompt: "Use $oxidex-release-documentation to audit this OxiDex candidate's documentation and GitHub Pages evidence."
+
+policy:
+  allow_implicit_invocation: true

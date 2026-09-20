@@ -1,0 +1,5 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 2rem; }
+.wide-table { max-width: 20rem; overflow-x: auto; }
+table { min-width: 40rem; }
+dialog { border: 1px solid currentColor; }

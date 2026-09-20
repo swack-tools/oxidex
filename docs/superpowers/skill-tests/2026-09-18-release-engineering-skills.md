@@ -257,3 +257,168 @@ behavior, binary/commit provenance, recursive scope/floors, durable structured
 evidence, fresh baselines, four metric families, no blended percentage,
 recovery prerequisites and honest failure evidence. No oracle invocation or
 corpus sweep occurred; this verifies skill behavior, not release parity.
+
+## 2026-09-19 Phase 1 trigger regression probes
+
+These fresh probes validate routing and instruction behavior after adding the
+executable oracle and receipt gates. They are behavioral skill tests, not a
+release certification or a corpus measurement.
+
+### `exiftool-parity`
+
+Positive prompt:
+
+> Compare this OxiDex release candidate against ExifTool and give me
+> publishable tag-parity metrics for the release notes.
+
+Result: **PASS / trigger**. A fresh evaluator matched the request to the skill
+description and required the pinned explicit Perl/tree, `release_oracle.py`,
+receipt verification, candidate identity, structured evidence, conformance
+file/tag floors, the authenticated-read occurrence floor, and four separate
+measurement families. It refused PATH/Homebrew fallback and a blended parity
+percentage.
+
+Negative prompt:
+
+> Explain what EXIF metadata is in one paragraph; do not inspect this
+> repository or run comparisons.
+
+Result: **PASS / do not trigger**. The request is conceptual and asks for no
+OxiDex comparison, regression verification, file diagnosis, or release metric.
+The evaluator reported no Critical or Important routing issue.
+
+### `oxidex-release-finalization`
+
+Positive prompt:
+
+> Finalize v2.0.0-beta.1: promote it through main, wait for CI and review
+> comments, tag it, and verify the GitHub/macOS release.
+
+Result: **PASS / trigger**. A fresh evaluator required validated parity and
+documentation receipts, reviewed promotion to `main`, required CI, a complete
+review-thread query with zero unresolved actionable threads, exact merged-SHA
+revalidation, and a separate authorization naming the exact version/tag/SHA
+before tag push. It selected tag workflows by exact SHA and distinguished the
+Developer ID signed executable from its notarized and stapled containing DMG.
+
+Negative prompt:
+
+> Run cargo test for my feature branch; this is ordinary development and not a
+> release.
+
+Result: **PASS / do not trigger**. No release preparation, promotion, tagging,
+publication, or release validation was requested. The evaluator reported no
+Critical or Important routing issue.
+
+## 2026-09-20 Phase 2 documentation trigger probes
+
+Fresh `codex-cli 0.155.1` read-only, ephemeral sessions tested implicit routing
+after the executable local Pages audit landed. These are routing tests, not a
+documentation approval.
+
+Positive prompt:
+
+> The VitePress build is green and the sidebar looks fine. Approve the OxiDex
+> release documentation and GitHub Pages pipeline for the release candidate,
+> including benchmark claims and mobile/dark rendering.
+
+Result: **PASS / trigger** (session
+`01a0be0a-3e8d-7402-b856-6a2034b2bd6e`). The evaluator named
+`oxidex-release-documentation`, refused approval from a green build/sidebar
+alone, and required the release-documentation audit plus responsive evidence.
+
+Negative prompt:
+
+> A Rust unit test has a misspelled local variable name. Identify the
+> repository skill you would invoke, or say none.
+
+Result: **PASS / do not trigger** (session
+`01a0be0a-3e0e-7e51-80a1-9a4857c17cc7`). The evaluator selected no release or
+parity skill because this is ordinary code maintenance.
+
+## 2026-09-20 Phase 3 reuse and discovery pressure tests
+
+These fresh read-only contexts tested the three-skill sequence before and after
+the Phase 3 routing/metadata revision. They did not certify a release, run a
+corpus, deploy documentation, merge to `main`, or push a tag.
+
+### RED baseline
+
+Parity prompt:
+
+> For the release candidate, measure OxiDex against the pinned ExifTool across
+> the corpus, report extraction/readable tag parity by format, and produce
+> evidence the docs team can cite. Separately, decide whether an ordinary Nikon
+> parser-field implementation should trigger the same skill.
+
+Documentation prompt:
+
+> Before tagging, prove every GitHub Pages route is current and factual, locally
+> build it, crawl links/assets/fragments, and visually test representative
+> mobile/desktop light/dark pages. Separately, decide whether one README typo
+> should trigger the same skill.
+
+Full-release prompt:
+
+> Prove parity and docs, promote by reviewed PR to main, verify signed/notarized/
+> stapled macOS artifacts and GitHub Release automation, and tag only after the
+> exact authorization boundary. Separately, route an ordinary parser PR merge.
+
+All evaluators found the intended high-level boundaries and the required
+parity → documentation → finalization order. The baseline nevertheless found
+the Phase 3 defects: `exiftool-parity` had no `agents/openai.yaml`, documentation
+had no default prompt, implicit policy was not explicit, trigger descriptions
+overlapped broadly, parity/documentation entrypoints were 707/628 words, and
+generic recipes contained the fixed beta version and dated lock-controller
+path. The executable RED run recorded failures for each of those conditions,
+plus an empty `not_applicable` benchmark reason.
+
+### GREEN routing and behavior
+
+- **Parity:** PASS. The release measurement implicitly selects
+  `exiftool-parity`; an ordinary parser edit without comparison evidence selects
+  no release skill. The evaluator found complete UI/default-prompt metadata,
+  explicit implicit invocation, caller-supplied version and lock inputs, exact
+  candidate/oracle/corpus evidence, separated measurement families, and a
+  verified receipt handoff to documentation.
+- **Documentation:** PASS. The Pages request implicitly selects
+  `oxidex-release-documentation`; a typo selects no release skill. The evaluator
+  required every rendered route/asset/fragment, while screenshots cover every
+  tracked representative route/viewport/theme cell (10 routes × 2 viewports ×
+  2 themes = 40 cells), followed by human review. With no performance claim it
+  required `disposition: not_applicable` and a non-empty reason rather than a
+  synthetic benchmark pass.
+- **Full release:** the behavioral route and authority boundary passed:
+  `exiftool-parity` → `oxidex-release-documentation` →
+  `oxidex-release-finalization`, reviewed promotion to `main`, exact merged-SHA
+  CI, signed-tag dry run, then a hard stop for authorization naming the exact
+  version/tag/`MAIN_SHA`. The ordinary integration-branch feature PR selects no
+  release skill. Its first test run correctly refused an overall GREEN verdict
+  because the self-hashing finalization fixture had not yet been refreshed for
+  the Phase 3 tracked-file changes; fixture reconciliation and a fresh rerun are
+  required below.
+
+An actual non-fast `codex-cli 0.155.1` discovery smoke loaded the project mirror
+and reported all three skills, each with implicit invocation enabled and the
+expected positive/negative boundary. Its durable result is outside the tracked
+tree under
+`/Users/allen/oxidex-ops/evidence/20260920-release-skills-phase3/cli-discovery.9UdqZW`;
+the command exited zero with fast mode explicitly disabled. This proves local
+CLI discovery, not release behavior. Desktop subagent probes loaded the same
+`.agents` mirror and metadata successfully.
+
+A fresh post-reconciliation full-release evaluator then returned **PASS**. It
+independently selected parity → documentation → finalization, rejected release
+skill activation for the ordinary parser PR, and stopped real tagging until
+authorization names the exact version, tag, and full `main` SHA. It also
+confirmed caller-supplied lock, version, Developer ID, and TeamIdentifier
+inputs, canonical/mirror agreement, and all three implicit-invocation metadata
+records. The focused skill/receipt suite passed 55/55 and the release-workflow
+suite passed 18/18 in that context.
+
+Whole-branch review found one Important regression-test weakness: lexical token
+collection could count a validator command printed by `echo`/`printf` or stored
+inside a no-op heredoc as an invocation. Three mutation cases first reproduced
+the false positive. The test helper now parses syntactic command positions,
+removes heredoc bodies, and requires validator argv at an executable command
+prefix; the inert mutations and real skill commands then passed together.

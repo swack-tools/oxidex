@@ -111,6 +111,7 @@ for a in artifacts.select():
         path.write_text(version+'|'+a.key+'\\n'+''.join('mod %s;\\n'%s for s in (artifacts.module_stems(a.key) if a.key in artifacts.MODULE_FAMILIES else ())))
     if fail=='generate-'+label and a.tier==1: sys.exit(7)
 if fail=='undeclared': (root/'surprise.rs').write_text('oops')
+if fail=='changed-helper': (root/'tools/exiftool-tables/stub_regen.py').write_text('changed helper')
 if fail in ('added-module','removed-module'):
     hub=root/'src/exiftool_tables/binary/mod.rs'
     lines=hub.read_text().splitlines()
@@ -224,13 +225,42 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
             [a.path for a in artifacts.select()],
         )
 
-    def test_ordinary_before_is_committed_after_regenerates_every_manifest_output(self):
+    def test_same_pin_before_regenerates_and_records_fresh_provenance(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)
         self.unchanged()
-        self.assertEqual((self.base/'binary-seen-before').read_text(),'committed-13.59')
+        self.assertEqual((self.base/'binary-seen-before').read_text(),'13.59')
         self.assertEqual((self.base/'binary-seen-after').read_text(),'13.60')
+        before=self.report()['variants']['before']
+        self.assertTrue(before['regenerated'])
+        self.assertEqual(before['source_sha256'],tx.digest(self.base/'exiftool-13.59/exiftool'))
+        self.assertEqual(before['generator_sha256'],tx.digest(self.root/'tools/exiftool-tables/regen-all.sh'))
+        self.assertTrue(before['clean_tree']['clean'])
+        self.assertIn(tx.PIN,before['output_sha256'])
+        self.assertTrue(before['output_sha256'])
         self.assertEqual(self.report()['phase'],'dry-run-passed')
         self.assertEqual(len(self.git('worktree','list','--porcelain').split(b'worktree '))-1,1)
+
+    def test_before_generation_controls_preserve_caller_and_accept_split_module_changes(self):
+        for fail in ('generate-before','changed-helper','undeclared'):
+            with self.subTest(fail=fail):
+                result=self.run_bump(['--dry-run'],fail=fail)
+                self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertEqual(self.report()['failed_stage'],'generate-before',result.stderr)
+                self.unchanged()
+        for fail in ('added-module','removed-module'):
+            with self.subTest(fail=fail):
+                result=self.run_bump(['--dry-run'],fail=fail)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertTrue(self.report()['variants']['before']['output_sha256'])
+                self.unchanged()
+
+    def test_live_promotion_refuses_split_module_set_changes_without_partial_write(self):
+        for fail in ('added-module','removed-module'):
+            with self.subTest(fail=fail):
+                result=self.run_bump(fail=fail)
+                self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertIn('generated artifact path set changed',result.stderr)
+                self.unchanged()
 
     def test_retrospective_before_and_after_have_no_mixed_tiers(self):
         result=self.run_bump(['--dry-run','--from','13.55'],version='13.59',old='13.55')
@@ -308,14 +338,6 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
         self.assertEqual((self.root/tx.PIN).read_text(),'13.60\n')
         self.assertEqual(self.report()['phase'],'promoted')
         for a in artifacts.select():self.assertEqual((self.root/a.path).read_text(),output_text('13.60',a))
-
-    def test_live_promotion_refuses_split_module_set_changes_without_partial_write(self):
-        for fail in ('added-module','removed-module'):
-            with self.subTest(fail=fail):
-                result=self.run_bump(fail=fail)
-                self.assertNotEqual(result.returncode,0,result.stdout)
-                self.assertIn('generated artifact path set changed',result.stderr)
-                self.unchanged()
 
     def prepared(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)

@@ -194,7 +194,7 @@ pub static ENABLED: &[(&str, &str)] = &[
     // EXTRA 1,562 and renames 22 unchanged. The only per-file changes are
     // ten ImageNumber fixes from the accompanying raw-ID repair; no new
     // MISSING, VALUE or EXTRA. The earlier pilot-only pair was unchanged.
-    // Full identities and per-file evidence: docs/reference/sony-shared-pilot-gate.json.
+    // Full identities and per-file evidence: docs/public/reference/sony-shared-pilot-gate.json.
     ("Sony", "Tag202a"),
     //
     // NOT listed, and why -- these are the decisions, not the leftovers:

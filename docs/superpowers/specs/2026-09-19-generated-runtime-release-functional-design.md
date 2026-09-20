@@ -116,7 +116,7 @@ The functional program is complete when all of the following are true:
 - The controller does not occupy a subagent slot and remains available to
   integrate completed work, maintain ledgers, prepare briefs, and dispatch the
   next independent task.
-- All agents use fast mode.
+- Fast mode is disabled for every Desktop and CLI agent.
 - When two models are both adequate, the cheaper and faster model is selected.
 - At most three Desktop implementation or review subagents are live
   concurrently.
@@ -140,7 +140,7 @@ self-contained task PRD. Its durable `launch` command starts this argv with
 in the prompt argv, and append-only JSONL/final-message files:
 
 ```bash
-codex --yolo exec --enable fast_mode --model gpt-5.6-terra --json \
+codex --yolo exec --disable fast_mode --model gpt-5.6-terra --json \
   -o /absolute/durable/process/final.md -C /absolute/task/worktree \
   "Process token TOKEN. Execute the canonical PRD at /absolute/path/to/task-prd.md"
 ```
@@ -483,7 +483,7 @@ progress, and a local-only task is not considered safely checkpointed.
 
 ## 10. Model-selection policy
 
-Every dispatch names the model explicitly and requests fast mode.
+Every dispatch names the model explicitly and leaves fast mode disabled.
 
 | Work | Default model | Escalation |
 |---|---|---|
@@ -493,8 +493,9 @@ Every dispatch names the model explicitly and requests fast mode.
 | High-risk deletion review, architectural adjudication, final whole-branch review | `gpt-6-astra` | no higher model; stop only when every safe path is a guess |
 
 When the controller is uncertain between two adjacent models, it chooses the
-cheaper model. Escalation changes the model, not fast mode. Reviewer floor is
-Terra. Luna does not approve shared runtime, deletion, or upgrade changes.
+cheaper model. Escalation changes the model while fast mode remains disabled.
+Reviewer floor is Terra. Luna does not approve shared runtime, deletion, or
+upgrade changes.
 
 The controller prefers Desktop slots for central runtime work and interactive
 fix loops. CLI workers take well-specified parallel implementation, fixture,
