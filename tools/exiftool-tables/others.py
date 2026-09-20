@@ -121,6 +121,34 @@ _EXIF_PRINT_PARAMETER = (
     "}"
 )
 
+# Olympus.pm:2639-2681's CameraSettings::StackedImage OTHER sub. This is a
+# fixed two-number array conversion, not a scalar OTHER: after the direct hash
+# lookup misses, it replaces the second decimal component of the space-joined
+# value with `*`, looks that key up, and replaces the one `*` in the rendered
+# value with the captured decimal component. The source map itself remains
+# generated from the pinned table dump; this registry entry establishes only
+# the exact executable semantics that authorize its generated representation.
+OLYMPUS_STACKED_IMAGE_OTHER = (
+    "{\n    package Image::ExifTool::Olympus;\n    use strict;\n"
+    "    (my($val, $inv, $conv) = @_);\n"
+    "    if ($inv) {\n"
+    "        ($val = lc($val));\n"
+    "        (($val =~ s/(\\d+) images/* images/) or (return (undef)));\n"
+    "        (my($num) = $1);\n"
+    "        foreach $_ (keys(%$conv)) {\n"
+    "            (($val eq lc($conv->{$_})) or (next));\n"
+    "            ((($val = $_) =~ s/\\*/$num/) or (return (undef)));\n"
+    "            (return $val);\n"
+    "        }\n"
+    "    } else {\n"
+    "        ((($val =~ s/ (\\d+)/ */) and $conv->{$val}) or (return (\"Unknown ($_[0])\")));\n"
+    "        (my($num) = $1);\n"
+    "        (($val = $conv->{$val}) =~ s/\\*/$num/);\n"
+    "        (return $val);\n"
+    "    }\n"
+    "}"
+)
+
 # deparse text (exact, verbatim) -> Rust `OtherId` variant name.
 OTHER_REGISTRY = {
     _MINOLTA_AF_STATUS_FOCUS: "MinoltaAfStatusFocus",
@@ -129,6 +157,16 @@ OTHER_REGISTRY = {
     _FUJIFILM_RETURN_ARG0_IDENTITY: "Identity",
     _EXIF_PRINT_PARAMETER: "ExifPrintParameter",
 }
+
+
+def is_fixed_array_pattern_other(deparse_text):
+    """Whether `deparse_text` is the one source-verified array OTHER body.
+
+    This intentionally does not match by package, tag name, or a loose regex:
+    an ExifTool edit to even one branch of the closure turns this off and lets
+    `codegen.py` refuse the conversion rather than retain stale behavior.
+    """
+    return deparse_text == OLYMPUS_STACKED_IMAGE_OTHER
 
 
 def translate_other(deparse_text):

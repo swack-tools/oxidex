@@ -219480,11 +219480,9 @@
       "full_name": "Image::ExifTool::Olympus::CameraSettings",
       "module": "Olympus",
       "name": "StackedImage",
-      "omissions": [
-        "print_conv"
-      ],
+      "omissions": [],
       "raw_key": "2052",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "1e4a959b821ec0c95015d6ef1e553169e901a2d1d9535a89ce0f70a32ec5daec",
       "state": "emitted",

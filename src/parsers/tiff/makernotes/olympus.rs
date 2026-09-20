@@ -94,6 +94,11 @@ const OLYMPUS_HEADER_BE: &[u8] = b"OLYMPUS\0MM";
 // `data[0..8] == LITERAL` comparison could never be true and every type-1
 // Olympus JPEG (163 of the 315 in the corpus) was rejected outright.
 const OLYMPUS_HEADER_TYPE1: &[u8] = b"OLYMP\x00";
+// Pentax-branded cameras can carry ExifTool's OlympusCAMER variant:
+// MakerNotes.pm:505-515 matches `CAMER\0`, sets `OlympusCAMER`, then starts
+// the Olympus Main IFD at byte 8. The state selects Main 0x2050's generated
+// CameraParameters alternative instead of either FocusInfo interpretation.
+const OLYMPUS_HEADER_CAMER: &[u8] = b"CAMER\x00";
 // Type 3 (OM System bodies -- OM-1, OM-3, OM-5, OM-1 Mark II, TG-7). The
 // header is "OM SYSTEM\0" padded to 12 bytes, then "II"/"MM" and a version
 // word, so the directory starts 16 bytes in:
@@ -398,6 +403,10 @@ impl MakerNoteParser for OlympusParser {
 
         // Check for Type 1 headers: "OLYMP\0" plus a two-byte version.
         if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
+            return true;
+        }
+
+        if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_CAMER {
             return true;
         }
 
@@ -1967,8 +1976,10 @@ fn detect_header_type_and_offsets(
         return Ok((16, order));
     }
 
-    // Check Type 1 headers: ExifTool's `Start => '$valuePtr + 8'`.
-    if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
+    // Type 1 and OlympusCAMER headers: ExifTool's `Start => '$valuePtr + 8'`.
+    if data.len() >= 8
+        && (&data[0..6] == OLYMPUS_HEADER_TYPE1 || &data[0..6] == OLYMPUS_HEADER_CAMER)
+    {
         return Ok((8, default_byte_order));
     }
 

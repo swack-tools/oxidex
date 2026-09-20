@@ -17,6 +17,12 @@ use crate::io::ByteOrder;
 use super::cond;
 use super::{ALL_BINARY_TABLES, BinaryTable, ExprValue, Field, Fmt, Omitted, PrintConv};
 
+/// Source-emitted discriminator for Olympus.pm:2639-2681's exact
+/// `StackedImage` array OTHER closure. It can only enter a generated
+/// `StrEnum` after `others.py` matched the full B::Deparse text, so ordinary
+/// string hash maps keep ExifTool's direct-lookup behavior.
+const FIXED_ARRAY_PATTERN_MARKER: &str = "\u{1f}oxidex-fixed-array-pattern-v1";
+
 /// A value read directly from a generated binary-table field.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DecodedValue {
@@ -1212,6 +1218,36 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
                 );
             }
             let key = value.enum_key()?;
+            if map
+                .first()
+                .is_some_and(|(marker, _)| *marker == FIXED_ARRAY_PATTERN_MARKER)
+            {
+                let map = &map[1..];
+                if let Some((_, rendered)) = map.iter().find(|(candidate, _)| *candidate == key) {
+                    return Some((*rendered).to_string());
+                }
+                let mut parts = key.split(' ');
+                let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next())
+                else {
+                    return Some(unknown_text(&key));
+                };
+                if first.is_empty()
+                    || second.is_empty()
+                    || !first.bytes().all(|byte| byte.is_ascii_digit())
+                    || !second.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return Some(unknown_text(&key));
+                }
+                let wildcard = format!("{first} *");
+                return Some(
+                    map.iter()
+                        .find(|(candidate, _)| *candidate == wildcard)
+                        .map_or_else(
+                            || unknown_text(&key),
+                            |(_, rendered)| rendered.replacen('*', second, 1),
+                        ),
+                );
+            }
             Some(
                 map.iter()
                     .find(|(candidate, _)| *candidate == key)
@@ -1403,6 +1439,48 @@ mod tests {
     use super::*;
     use crate::exiftool_tables::TagGroups;
     use crate::exiftool_tables::{ALL_BINARY_TABLES, ExprId, Mask, Omitted, OtherId, find_table};
+
+    #[test]
+    fn fixed_array_pattern_reproduces_pinned_olympus_stacked_image_other() {
+        // Olympus.pm:2639-2681, captured with the pinned 13.59 Perl's
+        // B::Deparse: direct keys win, then the second numeric component
+        // selects a `first *` source-map key and fills its rendered `*`.
+        let conv = PrintConv::StrEnum(&[
+            (FIXED_ARRAY_PATTERN_MARKER, ""),
+            ("0 0", "No"),
+            ("1 *", "Live Composite (* images)"),
+            ("3 2", "ND2 (1EV)"),
+            ("9 *", "Focus-stacked (* images)"),
+        ]);
+        assert_eq!(
+            render(
+                conv,
+                &DecodedValue::Array(vec![DecodedValue::Integer(0), DecodedValue::Integer(0)])
+            ),
+            Some("No".to_string()),
+        );
+        assert_eq!(
+            render(
+                conv,
+                &DecodedValue::Array(vec![DecodedValue::Integer(1), DecodedValue::Integer(7)])
+            ),
+            Some("Live Composite (7 images)".to_string()),
+        );
+        assert_eq!(
+            render(
+                conv,
+                &DecodedValue::Array(vec![DecodedValue::Integer(9), DecodedValue::Integer(12)])
+            ),
+            Some("Focus-stacked (12 images)".to_string()),
+        );
+        assert_eq!(
+            render(
+                conv,
+                &DecodedValue::Array(vec![DecodedValue::Integer(7), DecodedValue::Integer(3)])
+            ),
+            Some("Unknown (7 3)".to_string()),
+        );
+    }
 
     // --- run-time typed conversions (Garmin FIT) --------------------------
 

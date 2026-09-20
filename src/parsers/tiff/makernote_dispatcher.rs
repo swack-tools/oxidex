@@ -232,6 +232,35 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
         return Ok(());
     }
 
+    // MakerNotes.pm:505-515's `MakerNoteMinolta2` routes a literal `CAMER\0`
+    // signature to Olympus::Main, independently of the file's Pentax make.
+    // Its condition also records `$$self{OlympusCAMER}=1`; Main 0x2050's
+    // generated variant group reads that member to select CameraParameters
+    // rather than FocusInfo. Seed both runtime views because generated IFD
+    // conditions use `cond_ctx` while converted expressions retain `session`.
+    if data.starts_with(b"CAMER\0") {
+        cond_ctx
+            .members
+            .insert("OlympusCAMER", crate::exiftool_tables::MemberValue::Num(1));
+        session
+            .set_member(
+                "OlympusCAMER",
+                crate::exiftool_tables::session::MemberVal::Int(1),
+            )
+            .expect("OlympusCAMER is an untyped ExifTool member");
+        let parser = olympus::OlympusParser;
+        parser.parse_with_context_and_values_and_session(
+            ctx,
+            byte_order,
+            model,
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+        )?;
+        return Ok(());
+    }
+
     // Vendors that spell their own name several ways across model generations
     // are matched by prefix rather than by an exhaustive literal list. Olympus
     // alone writes six different strings across the sample corpus -- "OLYMPUS

@@ -438,6 +438,42 @@ def _rust_pairs(pairs):
     return ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
 
 
+def _fixed_array_pattern_pairs(mapping):
+    """Source-map pairs for Olympus.pm's exact fixed-array OTHER closure.
+
+    The associated closure is registered by full deparse identity in
+    `others.py`. It receives ExifTool's space-joined `Count == 2` integer
+    value, exact-matches first, then replaces its second component with `*`
+    and substitutes that number into exactly one `*` in the rendered value.
+    The generated representation carries only the source map; this shape gate
+    prevents the generic renderer from being applied to a different closure or
+    an unverified array grammar.
+    """
+    pairs = []
+    for key, rendered in mapping.items():
+        if not isinstance(key, str) or not isinstance(rendered, str):
+            return None
+        components = key.split(" ")
+        if len(components) != 2 or any(not component for component in components):
+            return None
+        first, second = components
+        if not first.isdecimal() or not (second.isdecimal() or second == "*"):
+            return None
+        if second == "*":
+            if rendered.count("*") != 1:
+                return None
+        elif "*" in rendered:
+            return None
+        pairs.append((key, rendered))
+    return sorted(pairs)
+
+
+# A non-source discriminator for the one exact registered array OTHER
+# closure. Every actual key/value pair emitted after it remains pinned-source
+# data; a normal ExifTool string hash cannot opt into wildcard handling.
+FIXED_ARRAY_PATTERN_MARKER = "\x1foxidex-fixed-array-pattern-v1"
+
+
 def conv_for(tag, stats, input_domain, verified_exprs):
     """`(rust_printconv_src, refused)` for one tag.
 
@@ -533,6 +569,25 @@ def conv_for(tag, stats, input_domain, verified_exprs):
             deparse = None
             if isinstance(other, dict) and other.get("__perl") == "CODE":
                 deparse = other.get("__deparse")
+                if others.is_fixed_array_pattern_other(deparse):
+                    fixed_array_pairs = _fixed_array_pattern_pairs(m)
+                    if input_domain == "list" and fixed_array_pairs:
+                        stats["other_fixed_array_pattern"] += 1
+                        body = ", ".join([
+                            f'(\"{rust_str(FIXED_ARRAY_PATTERN_MARKER)}\", \"\")',
+                            *[
+                            f'(\"{rust_str(key)}\", \"{rust_str(rendered)}\")'
+                            for key, rendered in fixed_array_pairs
+                            ],
+                        ])
+                        return f"PrintConv::StrEnum(&[{body}])", False
+                    # The closure identity was known, but its accompanying
+                    # source map no longer has the grammar that identity
+                    # proves. Treat it as an ordinary unregistered OTHER so
+                    # binary Gate A and IFD withholding remain fail-closed.
+                    stats["pc_directives_dropped"]["OTHER"] += 1
+                    stats["other_unregistered"] += 1
+                    return "PrintConv::None", False
                 if deparse:
                     other_id = others.translate_other(deparse)
             if other_id is not None:
@@ -3140,6 +3195,7 @@ IFD_REPORT = (
         ("ValueConv ExprIds (oracle-approved)", "value_conv_compiled"),
         ("BITMASK fields (DecodeBits)", "bitmask_emitted"),
         ("OTHER conversions registered", "other_translated"),
+        ("fixed-array OTHER patterns (exact closure identity)", "other_fixed_array_pattern"),
         ("per-tag group overrides", "tag_group_override"),
         ("SubDirectory edges modeled", "ifd_subdir_edge_modeled"),
         ("  target is an IFD-style table", "ifd_subdir_edge_target_ifd"),

@@ -10,6 +10,7 @@ import collections
 import unittest
 
 import codegen
+import others
 
 
 def _stats():
@@ -65,6 +66,62 @@ class PlainHashPrintConv(unittest.TestCase):
         self.assertTrue(refused)
         self.assertEqual(stats["enum_str_printhex_refused"], 1)
         self.assertEqual(stats["enum_str"], 0)
+
+
+class FixedArrayPatternPrintConv(unittest.TestCase):
+    def test_pinned_olympus_other_closure_emits_a_source_map_backed_pattern(self):
+        # Olympus.pm:2639-2681 (ExifTool 13.59): StackedImage is a Count=2
+        # `undef` field. Its OTHER closure first replaces its second decimal
+        # component with `*`, then substitutes that component into the
+        # matching rendered value. The source-identity registry is deliberately
+        # exact: a closure edit must refuse, not reuse this behavior.
+        stats = _stats()
+        tag = {
+            "Name": "StackedImage",
+            "Format": "undef",
+            "Count": 2,
+            "PrintConv": {
+                "kind": "enum_partial",
+                "map": {
+                    "0 0": "No",
+                    "1 *": "Live Composite (* images)",
+                    "3 2": "ND2 (1EV)",
+                    "9 *": "Focus-stacked (* images)",
+                },
+                "directives": {
+                    "OTHER": {
+                        "__perl": "CODE",
+                        "__deparse": others.OLYMPUS_STACKED_IMAGE_OTHER,
+                    },
+                },
+            },
+        }
+        src, refused = codegen.conv_for(tag, stats, "list", set())
+        self.assertEqual(
+            src,
+            'PrintConv::StrEnum(&[("\\u{1f}oxidex-fixed-array-pattern-v1", ""), '
+            '("0 0", "No"), '
+            '("1 *", "Live Composite (* images)"), '
+            '("3 2", "ND2 (1EV)"), '
+            '("9 *", "Focus-stacked (* images)")])',
+        )
+        self.assertFalse(refused)
+        self.assertEqual(stats["other_fixed_array_pattern"], 1)
+
+    def test_unrecognized_array_other_remains_refused(self):
+        stats = _stats()
+        tag = {
+            "Name": "NotStackedImage",
+            "PrintConv": {
+                "kind": "enum_partial",
+                "map": {"1 *": "One (* images)"},
+                "directives": {"OTHER": {"__perl": "CODE", "__deparse": "different"}},
+            },
+        }
+        src, refused = codegen.conv_for(tag, stats, "str", set())
+        self.assertEqual(src, "PrintConv::None")
+        self.assertFalse(refused)
+        self.assertEqual(stats["other_unregistered"], 1)
 
 
 if __name__ == "__main__":
