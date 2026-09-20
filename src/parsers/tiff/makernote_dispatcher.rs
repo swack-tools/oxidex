@@ -214,7 +214,7 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
     // accepts an already-routed Type2 record, so enforce the Make half here at
     // the dispatch boundary before Leica's Panasonic::Main routes can see it.
     if panasonic::is_panasonic_type2_makernote(data) {
-        if make_normalized.starts_with("panasonic") {
+        if make.starts_with("Panasonic") {
             let parser = panasonic::PanasonicParser;
             parser.parse_with_context_and_values_and_session(
                 ctx,

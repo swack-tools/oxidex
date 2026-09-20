@@ -12,7 +12,7 @@ const HEADER: &[u8] = b"DJI-DBG\0";
 pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
     data.strip_prefix(HEADER)
         .map_or_else(MetadataMap::new, |records| {
-            parse_dji_info_records_in_group(records, "APP7")
+            parse_dji_info_records_in_group(records, "DJI")
         })
 }
 
@@ -20,10 +20,10 @@ pub fn parse_dji_dbg_app7(data: &[u8]) -> MetadataMap {
 ///
 /// ExifTool uses the same table for an APP7 `DJI-DBG\0` payload and for the
 /// `MakerNoteDJIInfo` EXIF value. The latter starts directly with `[`. This
-/// convenience entry point retains the APP7 group used by the original
-/// parser; MakerNote dispatch calls the group-aware variant below.
+/// convenience entry point uses the table's `DJI` family-1 group; MakerNote
+/// dispatch calls the group-aware variant below.
 pub fn parse_dji_info_records(records: &[u8]) -> MetadataMap {
-    parse_dji_info_records_in_group(records, "APP7")
+    parse_dji_info_records_in_group(records, "DJI")
 }
 
 /// Extracts the bracketed `DJI::Info` stream under its carrier's ExifTool

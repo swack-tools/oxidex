@@ -362,23 +362,23 @@ pub fn parse_maker_notes_0x56(data: &[u8], order: ByteOrder, tags: &mut HashMap<
             "Nikon:BurstStartImageNumber".to_string(),
             ((burst & 0x0007_ffe0) >> 5).to_string(),
         );
-        if let Some(kind) = match burst & 0x1f {
-            0 => Some("JPG"),
-            2 => Some("NEF"),
-            3 => Some("TIF"),
-            4 => Some("NDF"),
-            5 => Some("MOV"),
-            6 => Some("NEV"),
-            7 => Some("MP4"),
-            _ => None,
-        } {
-            tags.insert("Nikon:BurstStartImageType".to_string(), kind.to_string());
-        }
+        let image_type = burst & 0x1f;
+        let kind = match image_type {
+            0 => "JPG".to_string(),
+            2 => "NEF".to_string(),
+            3 => "TIF".to_string(),
+            4 => "NDF".to_string(),
+            5 => "MOV".to_string(),
+            6 => "NEV".to_string(),
+            7 => "MP4".to_string(),
+            _ => format!("Unknown ({image_type})"),
+        };
+        tags.insert("Nikon:BurstStartImageType".to_string(), kind);
         if let Some(number) = read_u32(data, 8, order) {
             tags.insert("Nikon:BurstShotNumber".to_string(), number.to_string());
         }
     }
-    if let Some(active) = read_u32(data, 12, order) {
+    if let Some(&active) = data.get(12) {
         let printed = match active {
             0 => "No".to_string(),
             1 => "Yes".to_string(),

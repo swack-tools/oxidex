@@ -3846,6 +3846,13 @@ fn parse_makernote_with_session(
     // self-describing (Nikon AFInfo's byte order, for one).
     let model = metadata.get_string("IFD0:Model").map(str::to_string);
 
+    // `MakerNoteDJIInfo` is selected solely by its exact payload signature,
+    // before any Make-gated route. It uses the same bracketed `DJI::Info`
+    // record stream as APP7 `DJI-DBG`, but without the APP7 header.
+    if parse_dji_info_makernote(ctx, metadata) {
+        return;
+    }
+
     if make.is_empty() {
         return;
     }
@@ -3870,15 +3877,6 @@ fn parse_makernote_with_session(
     // `PreviewImage` is binary and its `PreviewImageStart` an integer, neither
     // of which survives a string map. See `makernotes::sigma`.
     if parse_sigma_makernote_if_sigma(&make, ctx, metadata) {
-        return;
-    }
-
-    // `MakerNoteDJIInfo` is the same bracketed `DJI::Info` record stream as
-    // the APP7 `DJI-DBG` carrier, but has no APP7 header and belongs to the
-    // DJI family-1 group. It may contain binary values, so keep it in the
-    // MetadataMap path instead of forcing it through the dispatcher's string
-    // map. Ordinary numeric DJI MakerNotes continue to the dispatcher below.
-    if parse_dji_info_makernote_if_dji(&make, ctx, metadata) {
         return;
     }
 
@@ -4003,12 +4001,8 @@ fn parse_makernote_with_session(
 /// Parses the bracketed `MakerNoteDJIInfo` payload selected by ExifTool's
 /// `DJI::Info` table. DJI's ordinary numeric MakerNotes continue through the
 /// standard dispatcher.
-fn parse_dji_info_makernote_if_dji(
-    make: &str,
-    ctx: &MakerNoteContext<'_>,
-    metadata: &mut MetadataMap,
-) -> bool {
-    if !make.trim().eq_ignore_ascii_case("DJI") || !ctx.payload().starts_with(b"[") {
+fn parse_dji_info_makernote(ctx: &MakerNoteContext<'_>, metadata: &mut MetadataMap) -> bool {
+    if !ctx.payload().starts_with(b"[ae_dbg_info:") {
         return false;
     }
 

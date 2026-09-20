@@ -5,6 +5,47 @@ use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use std::collections::HashMap;
 use std::process::Command;
 
+fn tiff_with_makernote(make: &str, payload: &[u8]) -> Vec<u8> {
+    const EXIF_IFD: usize = 38;
+    const DATA_START: usize = 56;
+    let make = [make.as_bytes(), b"\0"].concat();
+    let make_offset = DATA_START;
+    let makernote_offset = make_offset + make.len();
+    let mut tiff = vec![0_u8; DATA_START];
+    tiff[..8].copy_from_slice(b"II\x2a\0\x08\0\0\0");
+
+    tiff[8..10].copy_from_slice(&2_u16.to_le_bytes());
+    tiff[10..12].copy_from_slice(&0x010f_u16.to_le_bytes());
+    tiff[12..14].copy_from_slice(&2_u16.to_le_bytes());
+    tiff[14..18].copy_from_slice(&u32::try_from(make.len()).unwrap().to_le_bytes());
+    tiff[18..22].copy_from_slice(&u32::try_from(make_offset).unwrap().to_le_bytes());
+    tiff[22..24].copy_from_slice(&0x8769_u16.to_le_bytes());
+    tiff[24..26].copy_from_slice(&4_u16.to_le_bytes());
+    tiff[26..30].copy_from_slice(&1_u32.to_le_bytes());
+    tiff[30..34].copy_from_slice(&(EXIF_IFD as u32).to_le_bytes());
+
+    tiff[EXIF_IFD..EXIF_IFD + 2].copy_from_slice(&1_u16.to_le_bytes());
+    tiff[EXIF_IFD + 2..EXIF_IFD + 4].copy_from_slice(&0x927c_u16.to_le_bytes());
+    tiff[EXIF_IFD + 4..EXIF_IFD + 6].copy_from_slice(&7_u16.to_le_bytes());
+    tiff[EXIF_IFD + 6..EXIF_IFD + 10]
+        .copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+    tiff[EXIF_IFD + 10..EXIF_IFD + 14]
+        .copy_from_slice(&u32::try_from(makernote_offset).unwrap().to_le_bytes());
+    tiff.extend_from_slice(&make);
+    tiff.extend_from_slice(payload);
+    tiff
+}
+
+fn read_tiff_makernote(make: &str, payload: &[u8]) -> oxidex::core::MetadataMap {
+    let file = tempfile::Builder::new()
+        .suffix(".tif")
+        .tempfile()
+        .expect("create synthetic Panasonic TIFF");
+    std::fs::write(file.path(), tiff_with_makernote(make, payload))
+        .expect("write synthetic Panasonic TIFF");
+    oxidex::core::operations::read_metadata(file.path()).expect("synthetic Panasonic TIFF parses")
+}
+
 fn pentax_caf_tags(grid: u8, point_bytes: &[u8]) -> HashMap<String, String> {
     let mut raw = vec![0, grid];
     raw.extend_from_slice(point_bytes);
@@ -156,5 +197,22 @@ fn panasonic_type2_dispatch_requires_a_panasonic_make() {
             !tags.keys().any(|key| key.starts_with("Panasonic:")),
             "{make} must not enter Panasonic::Type2: {tags:?}"
         );
+    }
+}
+
+#[test]
+fn panasonic_type2_public_reader_uses_a_case_sensitive_make_gate() {
+    let payload = b"MKE\0\0\0\x34\x12";
+    let normal = read_tiff_makernote("Panasonic Corporation", payload);
+    assert_eq!(normal.get_string("Panasonic:MakerNoteType"), Some("MKE"));
+    assert_eq!(normal.get_string("Panasonic:Gain"), Some("4660"));
+
+    for make in ["panasonic corporation", "PANASONIC CORPORATION"] {
+        let metadata = read_tiff_makernote(make, payload);
+        assert!(
+            metadata.get("Panasonic:MakerNoteType").is_none(),
+            "{make} must not enter Panasonic::Type2"
+        );
+        assert!(metadata.get("Panasonic:Gain").is_none());
     }
 }
