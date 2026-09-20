@@ -2,6 +2,7 @@
 """Focused regression tests for conformance.py's matching rules."""
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -18,6 +19,63 @@ SPEC = importlib.util.spec_from_file_location("conformance", MODULE_PATH)
 conformance = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(conformance)
+
+
+class OracleResolutionTests(unittest.TestCase):
+    @staticmethod
+    def _source(tmp, version="13.59"):
+        root = tmp / "exiftool-source"
+        (root / "lib" / "Image").mkdir(parents=True)
+        (root / "t" / "images").mkdir(parents=True)
+        (root / "exiftool").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (root / "lib" / "Image" / "ExifTool.pm").write_text(
+            f"$VERSION = '{version}';\n", encoding="utf-8")
+        (root / "t" / "images" / "OOXML.docx").write_bytes(b"docx")
+        perl = tmp / "perl"
+        perl.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            f"  *' -ver'*) printf '%s\\n' '{version}' ;;\n"
+            "  *) printf 'DOCX\\n' ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        perl.chmod(0o755)
+        return root, perl
+
+    def test_normal_resolution_accepts_ci_source_and_perl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, perl = self._source(Path(directory))
+            with mock.patch.dict(os.environ, {"EXIFTOOL_PERL": str(perl)}, clear=False):
+                oracle = conformance.resolve_oracle(root)
+            self.assertEqual(oracle.version, conformance.expected_exiftool_version())
+            self.assertEqual(Path(oracle.interpreter), perl.resolve())
+            self.assertEqual(oracle.argv[-2:], ["-config", ""])
+
+    def test_strict_release_rejects_ambient_selector_even_with_explicit_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, perl = self._source(Path(directory))
+            with mock.patch.dict(os.environ, {"EXIFTOOL_PERL": str(perl)}, clear=False):
+                with self.assertRaisesRegex(conformance.exiftool_oracle.OracleError,
+                                            "ambient selectors"):
+                    conformance.resolve_oracle(root, perl=str(perl), strict=True)
+
+    def test_strict_release_requires_explicit_source_and_interpreter(self):
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(conformance.subprocess, "run",
+                                  side_effect=AssertionError("implicit oracle probe")):
+            with self.assertRaisesRegex(conformance.exiftool_oracle.OracleError,
+                                        "requires explicit"):
+                conformance.resolve_oracle(strict=True)
+
+    def test_resolution_uses_the_checkout_pin_for_an_upgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, perl = self._source(Path(directory), version="13.60")
+            with mock.patch.object(conformance, "expected_exiftool_version",
+                                   return_value="13.60"):
+                oracle = conformance.resolve_oracle(root, perl=str(perl))
+            self.assertEqual(oracle.version, "13.60")
+            self.assertEqual(oracle.pinned_version, "13.60")
 
 
 class CompareTests(unittest.TestCase):
@@ -177,7 +235,7 @@ class CompareTests(unittest.TestCase):
             "ID3v1:Artist": "Who Knows",
             "ID3v1:Comment": "a nice comment",
             "ID3v1:Genre": "Funk",
-            "ID3v1:Title": "A 4s sample for testing embedd",
+            "ID3v1:Title": "A 4s sample for testing embedded",
             "ID3v1:Year": 2006,
             "MP3:ID3Version": "ID3 v1",
             "Composite:DateTimeOriginal": 2005,
@@ -284,8 +342,31 @@ class OracleKeyShapeTests(unittest.TestCase):
         with mock.patch.object(conformance.subprocess, "run", fake_run):
             et = conformance.run_exiftool(Oracle(), "x.jpg")
 
-        self.assertEqual(seen["argv"], ["exiftool", "-G0:1:4", "-s", "-j", "-a", "x.jpg"])
+        self.assertEqual(seen["argv"], [
+            "exiftool", "-config", "", "-G0:1:4", "-s", "-j", "-a", "x.jpg",
+        ])
         self.assertEqual(et["MPF:MPImage1:MPImageLength"], 1001)
+
+    def test_run_exiftool_forces_deterministic_locale(self):
+        seen = {}
+
+        class Oracle:
+            def command(self, extra):
+                return ["exiftool", *extra]
+
+        class Done:
+            stdout = '[{"File:FileType": "JPEG"}]'
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            seen["env"] = kwargs["env"]
+            return Done()
+
+        with mock.patch.object(conformance.subprocess, "run", fake_run):
+            conformance.run_exiftool(Oracle(), "x.jpg")
+
+        self.assertEqual(seen["env"]["LC_ALL"], "C")
+        self.assertEqual(seen["env"]["LANG"], "C")
 
     def test_file_type_is_read_through_split_oracle_key(self):
         self.assertEqual(conformance.file_type({"File:FileType": "JPEG"}), "JPEG")
@@ -464,17 +545,49 @@ conformance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(conformance)
 fixtures = json.loads(Path(fixtures_path).read_text(encoding="utf-8"))
 
+binary_path = Path(corpus).parent / "oxidex"
+binary_path.write_bytes(b"determinism test binary")
+oracle_root = Path(corpus).parent / "oracle"
+(oracle_root / "lib" / "Image").mkdir(parents=True, exist_ok=True)
+(oracle_root / "t" / "images").mkdir(parents=True, exist_ok=True)
+(oracle_root / "exiftool").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+(oracle_root / "lib" / "Image" / "ExifTool.pm").write_text(
+    "$VERSION = '13.59';\n", encoding="utf-8")
+(oracle_root / "t" / "images" / "OOXML.docx").write_bytes(b"docx")
+perl_path = Path(corpus).parent / "perl"
+perl_path.write_text(
+    "#!/bin/sh\ncase \" $* \" in *' -ver'*) printf '13.59\\n' ;; *) printf 'DOCX\\n' ;; esac\n",
+    encoding="utf-8")
+perl_path.chmod(0o755)
+oracle = SimpleNamespace(
+    version="13.59", pinned_version="13.59", source="pinned source tree",
+    interpreter=str(perl_path),
+    missing_modules=[], verified=True,
+    argv=[str(perl_path), f"-I{oracle_root / 'lib'}",
+          str(oracle_root / "exiftool"),
+          "-config", ""],
+    check_container_support=lambda _docx: None,
+    provenance=lambda: "ExifTool 13.59 (pinned, via pinned source tree)",
+    display=lambda: " ".join(oracle.argv),
+)
+git = SimpleNamespace(
+    repo_root=Path(module_path).resolve().parents[2],
+    commit="0123456789abcdef0123456789abcdef01234567", describe="0123456",
+    dirty=False, dirty_files=[], short=lambda: "0123456 (clean)",
+)
+binary = SimpleNamespace(kind="oxidex", requested="oxidex", path=binary_path,
+                          mtime=0.0, size=binary_path.stat().st_size)
+
 first = fixtures[min(fixtures)]
 names = (conformance.tags_by_name(first["exiftool"], conformance.split_oracle_key).keys()
          | conformance.tags_by_name(first["oxidex"], conformance.split_oxidex_key).keys())
 Path(set_order_out).write_text(json.dumps(list(names)), encoding="utf-8")
 
 inst = conformance.instrument
-with mock.patch.object(conformance.exiftool_oracle, "shared", lambda: None), \
-        mock.patch.object(inst, "git_state", lambda: None), \
+with mock.patch.object(conformance, "resolve_oracle", lambda *args, **kwargs: oracle), \
+        mock.patch.object(inst, "git_state", lambda: git), \
         mock.patch.object(inst, "refuse_if_dirty", lambda _git, _tool: False), \
-        mock.patch.object(inst, "resolve_binary",
-                          lambda _req, kind: SimpleNamespace(path="oxidex")), \
+        mock.patch.object(inst, "resolve_binary", lambda _req, kind: binary), \
         mock.patch.object(inst, "print_header", lambda **_kw: None), \
         mock.patch.object(conformance, "run_exiftool",
                           lambda _oracle, p: fixtures[Path(p).name]["exiftool"]), \
@@ -483,6 +596,363 @@ with mock.patch.object(conformance.exiftool_oracle, "shared", lambda: None), \
         mock.patch.object(sys, "argv",
                           ["conformance.py", corpus, "--json-out", json_out]):
     conformance.main()
+"""
+
+
+_AUTHENTICATED_RECEIPT_DRIVER = r"""
+import importlib.util, json, os, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+module_path, corpus, json_out, fixtures_path = sys.argv[1:5]
+mutation = sys.argv[5] if len(sys.argv) > 5 else ""
+spec = importlib.util.spec_from_file_location("conformance", module_path)
+conformance = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(conformance)
+fixtures = json.loads(Path(fixtures_path).read_text(encoding="utf-8"))
+
+binary_path = Path(corpus).parent / "oxidex"
+binary_path.write_bytes(b"authenticated test binary")
+oracle_root = Path(corpus).parent / "oracle"
+(oracle_root / "lib" / "Image").mkdir(parents=True, exist_ok=True)
+(oracle_root / "t" / "images").mkdir(parents=True, exist_ok=True)
+(oracle_root / "exiftool").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+(oracle_root / "lib" / "Image" / "ExifTool.pm").write_text(
+    "$VERSION = '13.59';\n", encoding="utf-8")
+(oracle_root / "t" / "images" / "OOXML.docx").write_bytes(b"docx")
+perl_path = Path(corpus).parent / "perl"
+perl_path.write_text(
+    "#!/bin/sh\ncase \" $* \" in *' -ver'*) printf '13.59\\n' ;; *) printf 'DOCX\\n' ;; esac\n",
+    encoding="utf-8")
+perl_path.chmod(0o755)
+oracle = SimpleNamespace(
+    version="13.59",
+    pinned_version="13.59",
+    source="pinned source tree",
+    interpreter=str(perl_path),
+    missing_modules=[],
+    verified=True,
+    argv=[str(perl_path), f"-I{oracle_root / 'lib'}",
+          str(oracle_root / "exiftool"),
+          "-config", ""],
+    provenance=lambda: f"ExifTool 13.59 (pinned, perl {perl_path}, via pinned source tree)",
+    display=lambda: " ".join(oracle.argv),
+    check_container_support=lambda _docx: None,
+)
+git = SimpleNamespace(
+    repo_root=Path(module_path).resolve().parents[2],
+    commit="0123456789abcdef0123456789abcdef01234567",
+    describe="0123456",
+    dirty=False,
+    dirty_files=[],
+    short=lambda: "0123456 (0123456789ab, clean)",
+)
+binary = SimpleNamespace(
+    kind="oxidex",
+    requested="./target/debug/oxidex",
+    path=binary_path,
+    mtime=0.0,
+    size=binary_path.stat().st_size,
+)
+git_after = SimpleNamespace(
+    repo_root=git.repo_root,
+    commit="f" * 40 if mutation == "source" else git.commit,
+    describe=git.describe,
+    dirty=False,
+    dirty_files=[],
+    short=git.short,
+)
+mutated = False
+oxidex_calls = 0
+
+def fake_oxidex(_binary, path):
+    global mutated, oxidex_calls
+    oxidex_calls += 1
+    if mutation == "corpus" and not mutated:
+        Path(path).write_bytes(b"mutated corpus input")
+        mutated = True
+    if mutation == "replay_corpus" and oxidex_calls > 2 and not mutated:
+        Path(path).write_bytes(b"mutated during validator replay")
+        mutated = True
+    return fixtures[Path(path).name]["oxidex"]
+
+with mock.patch.object(conformance, "resolve_oracle", lambda *args, **kwargs: oracle), \
+        mock.patch.object(conformance.instrument, "git_state", side_effect=[git, git_after, git_after]), \
+        mock.patch.object(conformance.instrument, "refuse_if_dirty", lambda _git, _tool: False), \
+        mock.patch.object(conformance.instrument, "resolve_binary", lambda _req, kind: binary), \
+        mock.patch.object(conformance.instrument, "print_header", lambda **_kw: None), \
+        mock.patch.object(conformance, "run_exiftool", lambda _oracle, p: fixtures[Path(p).name]["exiftool"]), \
+        mock.patch.object(conformance, "run_oxidex", fake_oxidex), \
+        mock.patch.object(sys, "argv", ["conformance.py", corpus, "--min-files", "2",
+                                          "--min-tags", "1", "--json-out", json_out]):
+    conformance.main()
+
+if mutation in {"forge", "subset", "oracle_manifest", "per_format", "per_file",
+                "renames", "missing", "extra", "severity", "replay_corpus"}:
+    data = json.loads(Path(json_out).read_text(encoding="utf-8"))
+    expected_contract = {
+        "selection": {
+            "roots": [str(Path(corpus).resolve())],
+            "recursive": False,
+            "only": None,
+            "extensions": None,
+            "excluded_extensions": [],
+        },
+        "floors": {"min_files": 2, "min_tags": 1},
+    }
+    if mutation == "forge":
+        data.update({
+            "oracle_occurrences": 1,
+            "candidate_occurrences": 1,
+            "matched_occurrences": 1,
+            "missing_occurrences": 0,
+            "extra_occurrences": 0,
+            "value_occurrences": 0,
+            "rename_source_occurrences": 0,
+            "rename_target_occurrences": 0,
+            "oracle_tag_count": 1,
+        })
+    elif mutation == "subset":
+        manifest = data["instrument"]["corpus_manifest"]
+        first = sorted(manifest["files"])[0]
+        data["instrument"]["selection"]["only"] = Path(first).name
+        data["instrument"]["corpus_manifest"] = conformance.corpus_manifest([first])
+        data["instrument"]["file_count"] = 1
+        data["instrument"]["selected_file_count"] = 1
+        data["instrument"]["scored_file_count"] = 1
+        rows = [
+            row for row in data["instrument"]["measurement_transcript"]["rows"]
+            if row["path"] == first
+        ]
+        data["instrument"]["measurement_transcript"] = conformance.measurement_transcript(rows)
+        row = rows[0]
+        for key in (
+                "oracle_occurrences", "candidate_occurrences", "matched_occurrences",
+                "missing_occurrences", "extra_occurrences", "value_occurrences",
+                "rename_source_occurrences", "rename_target_occurrences"):
+            data[key] = row[key]
+        data["oracle_tag_count"] = row["oracle_occurrences"]
+        data["instrument"]["floors"] = {"min_files": 1, "min_tags": 1}
+    elif mutation == "oracle_manifest":
+        include_root = Path(corpus).parent / f"r3-unmanifested-{os.getpid()}"
+        (include_root / "Image").mkdir(parents=True, exist_ok=True)
+        (include_root / "Image" / "ExifTool.pm").write_text(
+            "# adversarial unmanifested oracle include\n", encoding="utf-8")
+        argv = data["instrument"]["oracle"]["argv"]
+        data["instrument"]["oracle"]["argv"] = [argv[0], f"-I{include_root}", *argv[1:]]
+        data["instrument"]["oracle"]["command"] = " ".join(
+            data["instrument"]["oracle"]["argv"])
+    elif mutation == "per_format":
+        data["per_format"] = {"FORGED": {"files": 999, "matched": 999}}
+    elif mutation == "per_file":
+        data["per_file"] = {}
+    elif mutation == "renames":
+        data["renames"] = {"JPEG": {"forged->claim": 999}}
+    elif mutation == "missing":
+        data["missing"] = {"JPEG:forged": 999}
+    elif mutation == "extra":
+        data["extra"] = {"JPEG:forged": 999}
+    elif mutation == "severity":
+        data["severity"] = {"forged": 999}
+    with mock.patch.object(
+            conformance, "run_exiftool",
+            lambda _oracle, p: fixtures[Path(p).name]["exiftool"]), \
+            mock.patch.object(conformance, "run_oxidex", fake_oxidex), \
+            mock.patch.object(conformance.exiftool_oracle, "shared", lambda: oracle):
+        try:
+            conformance.validate_receipt(
+                data, current_git=git_after, expected_contract=expected_contract,
+                expected_oracle=oracle)
+        except conformance.ReceiptError as exc:
+            print(f"rejected: {exc}")
+            raise SystemExit(0)
+    raise SystemExit("accepted forged receipt mutation")
+"""
+
+
+class NativeAuthorityError(RuntimeError):
+    """CI supplied native authority is present but cannot be authenticated."""
+
+
+def _native_oracle_inputs(environ=None):
+    """Return verified native inputs, skipping only when none were supplied."""
+    environ = os.environ if environ is None else environ
+    source_names = ("OXIDEX_PINNED_EXIFTOOL", "EXIFTOOL_SOURCE")
+    source_values = [(name, environ[name]) for name in source_names if name in environ]
+    perl_supplied = "EXIFTOOL_PERL" in environ
+    if not source_values and not perl_supplied:
+        return None
+    if not source_values or not perl_supplied:
+        raise NativeAuthorityError(
+            "supplied native authority requires both EXIFTOOL_PERL and "
+            "one ExifTool source input when either is supplied"
+        )
+    perl_value = environ["EXIFTOOL_PERL"]
+    try:
+        if len(source_values) == 2:
+            declared_paths = [Path(value).expanduser().absolute()
+                              for _name, value in source_values]
+            if declared_paths[0] != declared_paths[1]:
+                raise NativeAuthorityError(
+                    "OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_SOURCE select "
+                    "different source trees"
+                )
+        source_paths = []
+        for name, value in source_values:
+            if not value:
+                raise OSError(f"{name} is empty")
+            source_paths.append((name, Path(value).resolve(strict=True)))
+        if len(source_paths) == 2 and source_paths[0][1] != source_paths[1][1]:
+            raise NativeAuthorityError(
+                "OXIDEX_PINNED_EXIFTOOL and EXIFTOOL_SOURCE select different "
+                "source trees"
+            )
+        source = source_paths[0][1]
+        if not perl_value:
+            raise OSError("EXIFTOOL_PERL is empty")
+        perl = conformance._resolve_executable(perl_value, "native test Perl")
+        oracle = conformance.resolve_oracle(source, perl=str(perl))
+        conformance.check_oracle_capability(
+            oracle, source / "t" / "images" / "OOXML.docx")
+    except (OSError, conformance.exiftool_oracle.OracleError,
+            conformance.ReceiptError) as exc:
+        raise NativeAuthorityError(
+            "invalid supplied native authority: "
+            f"{source_values!r}, EXIFTOOL_PERL={perl_value!r}: {exc}") from None
+    return source, perl
+
+
+_NATIVE_ORACLE_INPUTS = _native_oracle_inputs()
+
+
+class NativeAuthorityConfigurationTests(unittest.TestCase):
+    def test_absent_native_authority_is_an_optional_skip(self):
+        self.assertIsNone(_native_oracle_inputs({}))
+
+    def test_partial_native_authority_is_a_hard_setup_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "requires both"):
+            _native_oracle_inputs({"EXIFTOOL_PERL": "/missing/perl"})
+
+    def test_invalid_supplied_perl_is_a_hard_setup_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, _perl = OracleResolutionTests._source(Path(directory))
+            with self.assertRaisesRegex(RuntimeError, "invalid supplied native authority"):
+                _native_oracle_inputs({
+                    "EXIFTOOL_PERL": "/missing/perl",
+                    "OXIDEX_PINNED_EXIFTOOL": str(source),
+                })
+
+    def test_invalid_supplied_source_alias_is_a_hard_setup_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "invalid supplied native authority"):
+            _native_oracle_inputs({
+                "EXIFTOOL_PERL": sys.executable,
+                "EXIFTOOL_SOURCE": "/missing/exiftool-source",
+            })
+
+    def test_mismatched_source_aliases_are_a_hard_setup_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "different source trees"):
+            _native_oracle_inputs({
+                "EXIFTOOL_PERL": "/missing/perl",
+                "OXIDEX_PINNED_EXIFTOOL": "/one/exiftool",
+                "EXIFTOOL_SOURCE": "/two/exiftool",
+            })
+
+    def test_version_skew_in_supplied_source_is_a_hard_setup_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, perl = OracleResolutionTests._source(
+                Path(directory), version="13.60")
+            with self.assertRaisesRegex(RuntimeError, "invalid supplied native authority"):
+                _native_oracle_inputs({
+                    "EXIFTOOL_PERL": str(perl),
+                    "OXIDEX_PINNED_EXIFTOOL": str(source),
+                })
+
+
+_NATIVE_ORACLE_DRIVER = r"""
+import importlib.util, os, subprocess, sys, tempfile
+from unittest import mock
+from pathlib import Path
+
+module_path, source_value, perl_value = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("conformance", module_path)
+conformance = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(conformance)
+source = Path(source_value).resolve()
+perl = Path(perl_value).resolve()
+docx = source / "t" / "images" / "OOXML.docx"
+
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    perl_home = root / "hostile-perl"
+    perl_home.mkdir()
+    config_home = root / "hostile-home"
+    config_home.mkdir()
+    perl_marker = root / "perl.marker"
+    config_marker = root / "config.marker"
+    (perl_home / "OracleHijack.pm").write_text(
+        "package OracleHijack; BEGIN { open my $fh, '>', $ENV{R7_PERL_MARKER}; "
+        "print {$fh} 'executed'; close $fh; } 1;\n", encoding="utf-8")
+    (config_home / ".ExifTool_config").write_text(
+        "BEGIN { open my $fh, '>', $ENV{R7_CONFIG_MARKER} or die $!; "
+        "print {$fh} 'executed'; close $fh; } 1;\n", encoding="utf-8")
+
+    base = os.environ.copy()
+    for name in (*conformance.ORACLE_SELECTOR_ENV,
+                 *conformance.PERL_STARTUP_ENV, "HOME", "EXIFTOOL_HOME"):
+        base.pop(name, None)
+    base.update(conformance.ORACLE_LOCALE_ENV)
+
+    # Prove both attack controls are live before proving the sanitized paths.
+    unsanitized_perl = dict(base, PERL5OPT="-MOracleHijack",
+                            PERL5LIB=str(perl_home), PERLLIB=str(perl_home),
+                            R7_PERL_MARKER=str(perl_marker))
+    probe = subprocess.run([str(perl), "-e", "1"], env=unsanitized_perl,
+                           capture_output=True, text=True)
+    if probe.returncode != 0 or not perl_marker.exists():
+        raise SystemExit("native PERL5OPT control did not execute")
+
+    unsanitized_config = dict(base, HOME=str(config_home),
+                              EXIFTOOL_HOME=str(config_home),
+                              R7_CONFIG_MARKER=str(config_marker))
+    probe = subprocess.run(
+        [str(perl), f"-I{source / 'lib'}", str(source / 'exiftool'),
+         "-s3", "-FileType", str(docx)],
+        env=unsanitized_config, capture_output=True, text=True)
+    if probe.returncode != 0 or not config_marker.exists():
+        raise SystemExit("native ExifTool config control did not execute")
+    perl_marker.unlink()
+    config_marker.unlink()
+
+    hostile = dict(base, HOME=str(config_home), EXIFTOOL_HOME=str(config_home),
+                   PERL5OPT="-MOracleHijack", PERL5LIB=str(perl_home),
+                   PERLLIB=str(perl_home), R7_PERL_MARKER=str(perl_marker),
+                   R7_CONFIG_MARKER=str(config_marker))
+    with mock.patch.dict(os.environ, hostile, clear=True):
+        oracle = conformance.resolve_oracle(source, perl=str(perl), strict=True)
+        if oracle.argv[-2:] != ["-config", ""]:
+            raise SystemExit(f"resolver omitted canonical empty config: {oracle.argv!r}")
+        identity = conformance.oracle_identity(oracle)
+        conformance.check_oracle_capability(oracle, docx)
+        conformance.run_exiftool(oracle, docx)
+        conformance._validate_oracle_identity(identity, oracle)
+        try:
+            conformance.resolve_oracle(strict=True)
+        except conformance.exiftool_oracle.OracleError as exc:
+            if "requires explicit" not in str(exc):
+                raise SystemExit(f"strict fallback failed for wrong reason: {exc}")
+        else:
+            raise SystemExit("strict resolver accepted implicit inputs")
+        try:
+            conformance._validate_oracle_identity(identity)
+        except conformance.ReceiptError as exc:
+            if "requires explicit" not in str(exc):
+                raise SystemExit(f"validator fallback failed for wrong reason: {exc}")
+        else:
+            raise SystemExit("validator accepted implicit oracle inputs")
+    if perl_marker.exists() or config_marker.exists():
+        raise SystemExit("sanitized oracle path executed hostile control")
+print("native hostile controls executed unsanitized and were blocked after isolation")
 """
 
 
@@ -560,6 +1030,156 @@ class JsonOutDeterminismTests(unittest.TestCase):
 
         self.assertEqual(json_a.decode(), json_b.decode())
 
+    def test_json_receipt_authenticates_occurrences_and_instrument(self):
+        fixtures = self._fixtures()
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            corpus = tmp / "corpus"
+            corpus.mkdir()
+            for name in fixtures:
+                (corpus / name).write_bytes(b"")
+            fixture_path = tmp / "fixtures.json"
+            fixture_path.write_text(json.dumps(fixtures), encoding="utf-8")
+            receipt = tmp / "receipt.json"
+            expected_corpus_root = str(corpus.resolve())
+            proc = subprocess.run(
+                [sys.executable, "-c", _AUTHENTICATED_RECEIPT_DRIVER,
+                 str(MODULE_PATH), str(corpus), str(receipt), str(fixture_path)],
+                capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(proc.returncode, 0,
+                             f"receipt driver failed\n{proc.stdout}\n{proc.stderr}")
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["schema"], 1)
+        self.assertEqual(data["oracle_occurrences"], 39)
+        self.assertEqual(data["candidate_occurrences"], 39)
+        self.assertEqual(data["matched_occurrences"], 2)
+        self.assertEqual(data["value_occurrences"], 28)
+        self.assertEqual(data["missing_occurrences"], 8)
+        self.assertEqual(data["extra_occurrences"], 8)
+        self.assertEqual(data["rename_source_occurrences"], 1)
+        self.assertEqual(data["rename_target_occurrences"], 1)
+        self.assertEqual(
+            data["oracle_occurrences"],
+            data["matched_occurrences"] + data["missing_occurrences"]
+            + data["value_occurrences"] + data["rename_source_occurrences"],
+        )
+        self.assertEqual(
+            data["candidate_occurrences"],
+            data["matched_occurrences"] + data["extra_occurrences"]
+            + data["value_occurrences"] + data["rename_target_occurrences"],
+        )
+
+        instrument = data["instrument"]
+        self.assertEqual(instrument["corpus_roots"], [expected_corpus_root])
+        self.assertEqual(instrument["file_count"], 2)
+        self.assertEqual(instrument["selected_file_count"], 2)
+        self.assertEqual(instrument["scored_file_count"], 2)
+        self.assertEqual(instrument["corpus_manifest"]["file_count"], 2)
+        self.assertEqual(instrument["selection"]["roots"], [expected_corpus_root])
+        self.assertFalse(instrument["selection"]["recursive"])
+        self.assertEqual(instrument["measurement_transcript"]["row_count"], 2)
+        self.assertRegex(instrument["measurement_transcript"]["sha256"], r"^[a-f0-9]{64}$")
+        self.assertEqual(instrument["floors"], {"min_files": 2, "min_tags": 1})
+        self.assertFalse(instrument["repo"]["dirty"])
+        self.assertRegex(instrument["repo"]["commit"], r"^[a-f0-9]{40}$")
+        self.assertRegex(instrument["repo"]["tree"], r"^[a-f0-9]{40}$")
+        self.assertEqual(instrument["oracle"]["version"], "13.59")
+        self.assertEqual(instrument["oracle"]["source"], "pinned source tree")
+        self.assertTrue(Path(instrument["oracle"]["runtime"]).is_absolute())
+        self.assertNotEqual(Path(instrument["oracle"]["runtime"]), Path("perl5.38.2"))
+        self.assertTrue(instrument["oracle"]["verified"])
+        self.assertEqual(instrument["oracle"]["capability"]["file_type"], "DOCX")
+        self.assertGreater(instrument["oracle"]["source_manifest"]["file_count"], 0)
+        self.assertRegex(instrument["binary"]["sha256"], r"^[a-f0-9]{64}$")
+
+    def _run_mutation_driver(self, tmp, mutation):
+        fixtures = self._fixtures()
+        corpus = tmp / "corpus"
+        corpus.mkdir()
+        for name in fixtures:
+            (corpus / name).write_bytes(b"")
+        fixture_path = tmp / "fixtures.json"
+        fixture_path.write_text(json.dumps(fixtures), encoding="utf-8")
+        receipt = tmp / "receipt.json"
+        return subprocess.run(
+            [sys.executable, "-c", _AUTHENTICATED_RECEIPT_DRIVER,
+             str(MODULE_PATH), str(corpus), str(receipt), str(fixture_path), mutation],
+            capture_output=True, text=True, timeout=120,
+        )
+
+    def test_main_rejects_source_state_changed_during_measurement(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = self._run_mutation_driver(Path(d), "source")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("source repository changed", proc.stderr + proc.stdout)
+
+    def test_main_rejects_corpus_input_changed_during_measurement(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = self._run_mutation_driver(Path(d), "corpus")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("corpus input changed", proc.stderr + proc.stdout)
+
+    def test_validator_rejects_self_authored_unmeasured_counters(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = self._run_mutation_driver(Path(d), "forge")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("rejected", proc.stdout)
+
+    def test_validator_rejects_an_arbitrary_corpus_subset(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = self._run_mutation_driver(Path(d), "subset")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("rejected", proc.stdout)
+
+    def test_validator_rejects_an_oracle_manifest_omitting_lib(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = self._run_mutation_driver(Path(d), "oracle_manifest")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("rejected", proc.stdout)
+
+    def test_validator_rejects_each_published_claim_when_forged(self):
+        for mutation in ("per_format", "per_file", "renames", "missing", "extra", "severity"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as d:
+                proc = self._run_mutation_driver(Path(d), mutation)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("rejected", proc.stdout)
+
+    def test_validator_rechecks_corpus_after_replay(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = self._run_mutation_driver(Path(d), "replay_corpus")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("corpus input changed", proc.stderr + proc.stdout)
+
+    @unittest.skipUnless(
+        _NATIVE_ORACLE_INPUTS,
+        "native hostile-oracle coverage requires CI-supplied source and Perl inputs",
+    )
+    def test_native_oracle_scrubs_hostile_perl_environment(self):
+        source, perl = _NATIVE_ORACLE_INPUTS
+        proc = subprocess.run(
+            [sys.executable, "-c", _NATIVE_ORACLE_DRIVER, str(MODULE_PATH),
+             str(source), str(perl)],
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("native hostile controls executed unsanitized", proc.stdout)
+
+    @unittest.skipUnless(
+        _NATIVE_ORACLE_INPUTS,
+        "native hostile-oracle coverage requires CI-supplied source and Perl inputs",
+    )
+    def test_native_oracle_blocks_config_and_ambient_oracle_controls(self):
+        source, perl = _NATIVE_ORACLE_INPUTS
+        proc = subprocess.run(
+            [sys.executable, "-c", _NATIVE_ORACLE_DRIVER, str(MODULE_PATH),
+             str(source), str(perl)],
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("native hostile controls executed unsanitized", proc.stdout)
+
 
 class SeverityTests(unittest.TestCase):
     def test_date_time(self):
@@ -587,6 +1207,96 @@ class SeverityTests(unittest.TestCase):
 
     def test_structural_is_the_fallback(self):
         self.assertEqual(conformance.classify_severity("Canon", "Nikon"), "structural")
+
+
+class ReceiptValidationTests(unittest.TestCase):
+    @staticmethod
+    def _receipt(tmp):
+        binary = tmp / "oxidex"
+        binary.write_bytes(b"receipt binary")
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        return {
+            "schema": 1,
+            "oracle_occurrences": 4,
+            "candidate_occurrences": 4,
+            "matched_occurrences": 2,
+            "missing_occurrences": 1,
+            "extra_occurrences": 1,
+            "value_occurrences": 0,
+            "rename_source_occurrences": 1,
+            "rename_target_occurrences": 1,
+            "oracle_tag_count": 4,
+            "instrument": {
+                "file_count": 1,
+                "floors": {"min_files": 1, "min_tags": 1},
+                "binary": {"path": str(binary), "sha256": digest},
+            },
+        }
+
+    def test_rejects_a_receipt_without_measurement_floors(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            del receipt["instrument"]["floors"]
+            with self.assertRaisesRegex(conformance.ReceiptError, "floors"):
+                conformance.validate_receipt(receipt)
+
+    def test_rejects_zero_or_negative_measurement_floors(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            receipt["instrument"]["floors"]["min_files"] = 0
+            with self.assertRaisesRegex(conformance.ReceiptError, "floors"):
+                conformance.validate_receipt(receipt)
+
+    def test_rejects_a_zero_occurrence_denominator(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            for key in (
+                "oracle_occurrences", "candidate_occurrences", "matched_occurrences",
+                "missing_occurrences", "extra_occurrences", "value_occurrences",
+                "rename_source_occurrences", "rename_target_occurrences",
+                "oracle_tag_count",
+            ):
+                receipt[key] = 0
+            receipt["instrument"]["floors"] = {"min_files": 1, "min_tags": 1}
+            with self.assertRaisesRegex(conformance.ReceiptError, "vacuous"):
+                conformance.validate_receipt(receipt)
+
+    def test_rejects_omitted_provenance_identity(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            with self.assertRaisesRegex(conformance.ReceiptError, "provenance"):
+                conformance.validate_receipt(receipt)
+
+    def test_rejects_forged_provenance_identity(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            receipt["instrument"].update({
+                "repo": {"root": str(Path.cwd()), "commit": "f" * 40,
+                         "tree": "f" * 40, "dirty": False, "dirty_files": []},
+                "corpus_roots": [str(Path(d))],
+                "file_count": 1,
+                "scored_file_count": 1,
+                "oracle": {"version": "12.0", "pinned_version": "12.0",
+                            "source": "forged", "runtime": "forged",
+                            "verified": True, "missing_modules": []},
+            })
+            with self.assertRaisesRegex(conformance.ReceiptError, "provenance"):
+                conformance.validate_receipt(receipt)
+
+    def test_rejects_totals_that_do_not_reconcile(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            receipt["oracle_occurrences"] = 99
+            receipt["oracle_tag_count"] = 99
+            with self.assertRaises(conformance.ReceiptError):
+                conformance.validate_receipt(receipt)
+
+    def test_rejects_a_candidate_binary_changed_after_measurement(self):
+        with tempfile.TemporaryDirectory() as d:
+            receipt = self._receipt(Path(d))
+            Path(receipt["instrument"]["binary"]["path"]).write_bytes(b"tampered")
+            with self.assertRaises(conformance.ReceiptError):
+                conformance.validate_receipt(receipt)
 
 
 if __name__ == "__main__":
