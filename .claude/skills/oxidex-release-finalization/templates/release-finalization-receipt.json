@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "version": "2.0.0-beta.1",
-  "tag": "v2.0.0-beta.1",
+  "version": null,
+  "tag": null,
   "candidate_sha": null,
   "candidate_tree": null,
   "candidate_cargo_target_dir": null,
@@ -12,8 +12,8 @@
     "documentation": {"path": null, "sha256": null, "measured_sha": null, "measured_tree": null, "status": "unverified"}
   },
   "packaging": {
-    "prerelease": true,
-    "latest": false,
+    "prerelease": null,
+    "latest": null,
     "targets": [],
     "expected_assets": []
   },

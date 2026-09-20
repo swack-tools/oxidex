@@ -89,7 +89,8 @@ The Git tag peel, not `target_commitish` text alone, proves the released commit.
 ## Expected asset matrix
 
 Derive the current expectation from the reviewed `release.yml`; update the
-matrix if that workflow intentionally changes. For v2.0.0-beta.1 it is:
+matrix if that workflow intentionally changes. With the release version in
+`VERSION`, the current workflow expects:
 
 | Asset | Platform / proof |
 | --- | --- |
@@ -97,7 +98,7 @@ matrix if that workflow intentionally changes. For v2.0.0-beta.1 it is:
 | `oxidex-aarch64-unknown-linux-musl` | Linux arm64 static binary |
 | `oxidex-x86_64-pc-windows-gnu.exe` | Windows x86_64 binary |
 | `oxidex-aarch64-apple-darwin` | Signed macOS arm64 binary |
-| `oxidex-v2.0.0-beta.1.dmg` | Notarized and stapled macOS DMG containing the signed executable |
+| `oxidex-v${VERSION}.dmg` | Notarized and stapled macOS DMG containing the signed executable |
 
 Require no missing, zero-byte, or unexpected assets. If checksums are
 advertised or emitted, verify them; current absence of a checksum asset must be

@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,11 @@ from tools.ci import sync_agent_skills as sync
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+RELEASE_SKILLS = (
+    "exiftool-parity",
+    "oxidex-release-documentation",
+    "oxidex-release-finalization",
+)
 
 
 def canonical(skill: str, relative: str) -> str:
@@ -27,6 +33,104 @@ def bash_snippets(skill: str, relative: str) -> list[str]:
     """Return fenced Bash snippets from one canonical skill file."""
 
     return re.findall(r"```bash\n(.*?)```", canonical(skill, relative), re.DOTALL)
+
+
+def _without_heredoc_bodies(snippet: str) -> str:
+    """Remove heredoc data while retaining the command that opens each one."""
+
+    output: list[str] = []
+    delimiters: list[tuple[str, bool]] = []
+    heredoc = re.compile(
+        r"(?<!<)<<(?P<tabs>-?)(?!<)\s*"
+        r"(?:'(?P<single>[^']+)'|\"(?P<double>[^\"]+)\"|(?P<bare>[A-Za-z_]\w*))"
+    )
+    for line in snippet.splitlines(keepends=True):
+        if delimiters:
+            delimiter, strip_tabs = delimiters[0]
+            candidate = line.rstrip("\r\n")
+            if strip_tabs:
+                candidate = candidate.lstrip("\t")
+            if candidate == delimiter:
+                delimiters.pop(0)
+            continue
+        output.append(line)
+        for match in heredoc.finditer(line):
+            delimiter = match.group("single", "double", "bare")
+            assert delimiter is not None
+            delimiters.append((delimiter, match.group("tabs") == "-"))
+    return "".join(output)
+
+
+def active_shell_commands(snippets: list[str]) -> list[tuple[str, ...]]:
+    """Return normalized argv for syntactic shell command invocations."""
+
+    commands: list[tuple[str, ...]] = []
+    separators = {"then", "do", "else", "elif", "fi", "done"}
+    prefixes = {"if", "while", "until", "!"}
+    assignment = re.compile(r"^[A-Za-z_]\w*=.*$", re.DOTALL)
+
+    def append_command(words: list[str]) -> None:
+        while words and (words[0] in prefixes or assignment.match(words[0])):
+            words.pop(0)
+        if words and words[0] in {"command", "env"}:
+            words.pop(0)
+            while words and (words[0].startswith("-") or assignment.match(words[0])):
+                words.pop(0)
+        if words:
+            commands.append(tuple(words))
+
+    for snippet in snippets:
+        normalized = _without_heredoc_bodies(snippet).replace("\\\n", " ")
+        lexer = shlex.shlex(
+            normalized.replace("\n", " ; "),
+            posix=True,
+            punctuation_chars=";&|()<>",
+        )
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        current: list[str] = []
+        for token in lexer:
+            if token in separators or (token and set(token) <= set(";&|()")):
+                append_command(current)
+                current = []
+            else:
+                current.append(token)
+        append_command(current)
+    return commands
+
+
+def has_shell_command(
+    commands: list[tuple[str, ...]],
+    prefix: str,
+    *required_fragments: str,
+) -> bool:
+    """Return whether an invocation has the prefix and contiguous fragments."""
+
+    expected_prefix = tuple(shlex.split(prefix))
+    fragments = [tuple(shlex.split(fragment)) for fragment in required_fragments]
+    for command in commands:
+        if command[: len(expected_prefix)] != expected_prefix:
+            continue
+        if all(
+            any(
+                command[index : index + len(fragment)] == fragment
+                for index in range(len(command) - len(fragment) + 1)
+            )
+            for fragment in fragments
+        ):
+            return True
+    return False
+
+
+def frontmatter_description(skill: str) -> str:
+    """Return the description from a skill's YAML frontmatter."""
+
+    match = re.search(
+        r"(?m)^description:\s*(.+)$", canonical(skill, "SKILL.md")
+    )
+    if match is None:
+        raise AssertionError(f"{skill} has no frontmatter description")
+    return match.group(1).strip().strip('"')
 
 
 def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.Path:
@@ -47,6 +151,83 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
 
 
 class SkillMirrorTests(unittest.TestCase):
+    def test_active_shell_text_ignores_inert_validator_mentions(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        inert = (
+            f"printf '%s\\n' '{command}'\n",
+            f"echo {command}\n",
+            f": <<'NOT_RUN'\n{command}\nNOT_RUN\n",
+        )
+        for snippet in inert:
+            with self.subTest(snippet=snippet):
+                self.assertFalse(
+                    has_shell_command(active_shell_commands([snippet]), command)
+                )
+        self.assertTrue(
+            has_shell_command(active_shell_commands([f"{command}\n"]), command)
+        )
+
+    def test_all_release_skills_are_allowlisted(self):
+        self.assertTrue(
+            set(RELEASE_SKILLS).issubset(sync.shared_skill_names(REPO)),
+            sync.shared_skill_names(REPO),
+        )
+
+    def test_release_skills_have_codex_ui_metadata_and_implicit_routing(self):
+        for skill in RELEASE_SKILLS:
+            path = REPO / ".claude/skills" / skill / "agents/openai.yaml"
+            with self.subTest(skill=skill):
+                self.assertTrue(path.is_file(), f"missing {path.relative_to(REPO)}")
+                text = path.read_text(encoding="utf-8")
+                display = re.search(r'(?m)^\s{2}display_name:\s*"([^"]+)"$', text)
+                short = re.search(r'(?m)^\s{2}short_description:\s*"([^"]+)"$', text)
+                prompt = re.search(r'(?m)^\s{2}default_prompt:\s*"([^"]+)"$', text)
+                self.assertIsNotNone(display)
+                self.assertIsNotNone(short)
+                self.assertIsNotNone(prompt)
+                assert short is not None and prompt is not None
+                self.assertGreaterEqual(len(short.group(1)), 25)
+                self.assertLessEqual(len(short.group(1)), 64)
+                self.assertIn(f"${skill}", prompt.group(1))
+                self.assertRegex(
+                    text,
+                    r"(?ms)^policy:\s*$.*^\s{2}allow_implicit_invocation:\s*true\s*$",
+                )
+
+    def test_release_skill_entrypoints_stay_under_500_words(self):
+        for skill in RELEASE_SKILLS:
+            words = canonical(skill, "SKILL.md").split()
+            with self.subTest(skill=skill, words=len(words)):
+                self.assertLessEqual(len(words), 500)
+
+    def test_release_skill_descriptions_include_positive_and_negative_triggers(self):
+        expected = {
+            "exiftool-parity": ("pinned ExifTool", "ordinary parser"),
+            "oxidex-release-documentation": ("GitHub Pages", "typo"),
+            "oxidex-release-finalization": ("tagging", "ordinary feature"),
+        }
+        for skill, phrases in expected.items():
+            description = frontmatter_description(skill)
+            with self.subTest(skill=skill):
+                self.assertTrue(description.startswith("Use when"), description)
+                for phrase in phrases:
+                    self.assertIn(phrase, description)
+
+    def test_generic_release_skills_have_no_beta_or_dated_lock_constants(self):
+        forbidden = {
+            "fixed beta version": re.compile(r"v?2\.0\.0-beta\.1"),
+            "dated lock controller": re.compile(r"20260917-group1-batch2"),
+        }
+        for skill in RELEASE_SKILLS:
+            root = REPO / ".claude/skills" / skill
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix not in {".md", ".json", ".yaml"}:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for label, pattern in forbidden.items():
+                    with self.subTest(skill=skill, path=path.relative_to(root), label=label):
+                        self.assertNotRegex(text, pattern)
+
     def test_release_routing_names_all_three_skills(self):
         for relative in (
             "AGENTS.md",
@@ -148,38 +329,53 @@ class SkillMirrorTests(unittest.TestCase):
                 self.assertNotRegex(path.read_text(encoding="utf-8"), bare)
 
     def test_parity_release_instrument_contract(self):
-        text = canonical("exiftool-parity", "SKILL.md")
+        entrypoint = canonical("exiftool-parity", "SKILL.md")
+        text = canonical("exiftool-parity", "references/harnesses.md")
+        self.assertIn("(references/harnesses.md)", entrypoint)
         self.assertNotIn("/tmp/oxidex-perl538-build-", text)
         for phrase in (
             "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
-            "/Users/allen/oxidex-ops/cache/exiftool/<pin>",
+            "/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
         ):
             self.assertIn(phrase, text)
 
     def test_release_skills_call_receipt_and_oracle_validators(self):
-        parity = canonical("exiftool-parity", "references/harnesses.md")
-        finalization = canonical("oxidex-release-finalization", "references/gates.md")
-        for required in (
-            "python3 tools/ci/release_oracle.py",
-            "python3 tools/ci/validate_release_receipt.py --kind parity",
-            "--candidate-sha \"$PARITY_SHA\"",
-        ):
-            self.assertIn(required, parity)
-        for kind in ("parity", "documentation"):
-            self.assertIn(
-                f"python3 tools/ci/validate_release_receipt.py --kind {kind}",
-                finalization,
+        parity = active_shell_commands(
+            bash_snippets("exiftool-parity", "references/harnesses.md")
+        )
+        finalization = active_shell_commands(
+            bash_snippets("oxidex-release-finalization", "references/gates.md")
+        )
+        self.assertTrue(has_shell_command(parity, "python3 tools/ci/release_oracle.py"))
+        self.assertTrue(
+            has_shell_command(
+                parity,
+                "python3 tools/ci/validate_release_receipt.py --kind parity",
+                "--candidate-sha $PARITY_SHA",
             )
-        published = canonical(
-            "oxidex-release-finalization", "references/github-release-and-macos.md"
         )
-        self.assertIn(
-            "python3 tools/ci/validate_release_receipt.py --kind finalization",
-            published,
+        for kind in ("parity", "documentation"):
+            self.assertTrue(
+                has_shell_command(
+                    finalization,
+                    f"python3 tools/ci/validate_release_receipt.py --kind {kind}",
+                )
+            )
+        published = active_shell_commands(
+            bash_snippets(
+                "oxidex-release-finalization",
+                "references/github-release-and-macos.md",
+            )
         )
-        self.assertIn('--candidate-sha "$CANDIDATE_SHA"', published)
+        self.assertTrue(
+            has_shell_command(
+                published,
+                "python3 tools/ci/validate_release_receipt.py --kind finalization",
+                "--candidate-sha $CANDIDATE_SHA",
+            )
+        )
 
     def test_release_promotion_requires_zero_unresolved_review_threads(self):
         text = canonical("oxidex-release-finalization", "references/gates.md")
@@ -481,6 +677,7 @@ class SkillMirrorTests(unittest.TestCase):
         audit = canonical("oxidex-release-documentation", "references/github-pages-audit.md")
         for phrase in ("Playwright", "requestfailed", "pageerror", "1440", "390", "actionlint"):
             self.assertIn(phrase, audit)
+        self.assertIn("every representative route/viewport/theme cell", audit)
 
     def test_release_finalization_pipeline_snippets_enable_pipefail(self):
         for relative in ("references/gates.md", "references/github-release-and-macos.md"):

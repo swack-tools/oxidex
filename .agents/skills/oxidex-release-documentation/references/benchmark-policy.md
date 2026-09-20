@@ -49,9 +49,10 @@ If there is no candidate measurement, choose an explicit disposition:
 2. Retain older results only if the rendered page says which commit produced
    them, visibly labels them **historical**, and the release summary does not
    attribute them to the candidate. Record candidate performance as unmeasured.
-3. Remove the unsupported speed claim and record the absence. Missing required
-   evidence remains a blocker; do not report an empty performance page as a
-   passed benchmark gate.
+3. If the candidate publishes no performance claim, remove unsupported speed
+   language and add a `benchmarks` row with `disposition: not_applicable` plus
+   a non-empty reason. This is a scoped absence, not a passed measurement.
+   Missing evidence for a retained claim remains a blocker.
 
 Build with the exact disposition that will be published. If a historical run
 is selected, record its explicit ID instead of pretending it is a candidate

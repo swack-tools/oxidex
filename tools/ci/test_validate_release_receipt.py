@@ -125,6 +125,27 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
             with self.subTest(path=dotted):
                 self.assert_invalid("documentation", payload, dotted)
 
+    def test_documentation_not_applicable_benchmark_requires_reason(self):
+        payload = fixture("documentation")
+        payload["benchmarks"] = [
+            {
+                "disposition": "not_applicable",
+                "reason": "No performance claim is published for this candidate.",
+            }
+        ]
+        self.assertEqual(
+            validator.validate_receipt(
+                "documentation",
+                payload,
+                expected_version=VERSION,
+                expected_sha=SHA,
+            ),
+            [],
+        )
+
+        payload["benchmarks"][0]["reason"] = ""
+        self.assert_invalid("documentation", payload, "benchmarks[0].reason")
+
         for dotted, value in (
             ("claims", [None]),
             ("pages", [None]),
