@@ -1254,6 +1254,18 @@ typedef struct ExifToolHandle {
 } ExifToolHandle;
 
 /*
+ Selects the value stage returned by exiftool_get_tag_string_in_channel.
+
+ Existing tag accessors retain their legacy default. Use this named integer
+ type and its constants only with the additive channel-selecting accessor.
+ */
+typedef int ExifToolValueChannel;
+
+#define EXIFTOOL_VALUE_CHANNEL_STORED 0
+#define EXIFTOOL_VALUE_CHANNEL_VALUE_CONV 1
+#define EXIFTOOL_VALUE_CHANNEL_PRINT_CONV 2
+
+/*
  Retrieves the last error message.
 
  # Returns
@@ -1393,6 +1405,31 @@ int exiftool_has_tag(const struct ExifToolHandle *handle, const char *tag_name);
  Thread-safe for read-only access.
  */
 const char *exiftool_get_tag_string(const struct ExifToolHandle *handle, const char *tag_name);
+
+/*
+ Retrieves a tag string from an explicitly selected value channel.
+
+ # Arguments
+ - `handle`: Handle to query (must not be NULL)
+ - `tag_name`: Tag name (must not be NULL)
+ - `channel`: One of `ExifToolValueChannel`
+
+ # Returns
+ - Pointer to null-terminated UTF-8 string
+ - NULL if the tag is missing, cannot be represented as a string, or channel
+   is invalid
+
+ # String Lifetime
+ Returned string is valid until the next API call on the same handle or handle
+ destruction.
+
+ # Thread Safety
+ Thread-safe for read-only access. Mutating operations and handle destruction
+ remain non-concurrent on the same handle.
+ */
+const char *exiftool_get_tag_string_in_channel(const struct ExifToolHandle *handle,
+                                               const char *tag_name,
+                                               ExifToolValueChannel channel);
 
 /*
  Retrieves tag value as a 64-bit integer.

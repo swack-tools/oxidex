@@ -62,7 +62,7 @@ pub struct MetadataMap {
     /// until Step 22, which consumes the occurrence winner view anyway").
     /// This is Step 22: [`MetadataMap::set_value_form`]/[`MetadataMap::
     /// value_form`] below now read and write `TagOccurrence.value` via
-    /// [`TagSink::set_winner_value`] instead of a second map, so serde
+    /// [`TagSink::set_winner_display_value`] instead of a second map, so serde
     /// skipping it is automatic (occurrences were never serialized to begin
     /// with -- only the winner projection's `raw` form is, via
     /// `Serialize for MetadataMap` below) rather than a field the old
@@ -219,6 +219,12 @@ impl MetadataMap {
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display_value, order);
         occurrence.group1 = super::tag_occurrence::intern(group1);
+        // This route receives a display string and its late ValueConv form
+        // together. Keep the display explicitly so PrintConv cannot fall
+        // back to the newly attached ValueConv.
+        if occurrence.print.is_none() {
+            occurrence.print = Some(occurrence.raw.clone());
+        }
         occurrence.value = Some(no_print_conv_value);
         self.sink.record(key, occurrence);
         previous
@@ -530,7 +536,7 @@ impl MetadataMap {
     pub(crate) fn set_value_form<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         let key = key.into();
         self.sink
-            .set_winner_value(&key, TagValue::new_string(value.into()));
+            .set_winner_display_value(&key, TagValue::new_string(value.into()));
     }
 
     /// Returns the full-precision value form attached to `key`, if any.
@@ -798,6 +804,75 @@ mod tests {
         assert_eq!(
             occurrence.project(ValueChannel::Stored).as_ref(),
             &TagValue::new_string("26 kB")
+        );
+    }
+
+    #[test]
+    fn late_value_form_snapshots_the_existing_display_as_print() {
+        let mut map = MetadataMap::new();
+        map.insert("QuickTime:Duration", TagValue::new_string("1.00 s"));
+
+        map.set_value_form("QuickTime:Duration", "1");
+
+        let occurrence = map.occurrences_for("QuickTime:Duration")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("1.00 s"))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("1.00 s")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::new_string("1")
+        );
+    }
+
+    #[test]
+    fn late_value_form_preserves_an_explicit_print() {
+        let mut map = MetadataMap::new();
+        let mut occurrence = TagOccurrence::from_insert_shim(
+            "QuickTime:Duration",
+            TagValue::new_string("raw duration"),
+            map.sink.next_order(),
+        );
+        occurrence.print = Some(TagValue::new_string("1.00 s"));
+        map.sink
+            .record("QuickTime:Duration".to_string(), occurrence);
+
+        map.set_value_form("QuickTime:Duration", "1");
+
+        assert_eq!(
+            map.occurrences_for("QuickTime:Duration")[0]
+                .project(ValueChannel::PrintConv)
+                .as_ref(),
+            &TagValue::new_string("1.00 s")
+        );
+    }
+
+    #[test]
+    fn group1_value_insert_snapshots_the_display_as_print() {
+        let mut map = MetadataMap::new();
+        map.insert_with_group1_and_value(
+            "GPS:GPSLatitude",
+            TagValue::new_string("37 deg 46' 33.24\""),
+            TagValue::Float(37.7759),
+            "GPS",
+        );
+
+        let occurrence = map.occurrences_for("GPS:GPSLatitude")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("37 deg 46' 33.24\""))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("37 deg 46' 33.24\"")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(37.7759)
         );
     }
 
