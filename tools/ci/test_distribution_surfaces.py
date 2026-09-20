@@ -14,6 +14,7 @@ README = (REPO / "README.md").read_text(encoding="utf-8")
 PACKAGING_GUIDE = (REPO / "docs/reference/packaging/packaging-guide.md").read_text(
     encoding="utf-8"
 )
+RELEASE_PAGE = (REPO / "docs/RELEASE-2.0.0-beta.1.md").read_text(encoding="utf-8")
 HOMEBREW_README_PATH = REPO / "packaging/homebrew/README.md"
 HOMEBREW_README = (
     HOMEBREW_README_PATH.read_text(encoding="utf-8")
@@ -54,6 +55,16 @@ class DistributionSurfaceTests(unittest.TestCase):
         self.assertNotIn("Example: ./scripts/build-all-packages.sh 0.1.0", PACKAGE_BUILD)
         self.assertNotIn("/tmp/", PACKAGE_TEST)
         self.assertNotIn("github.com/oxidex/oxidex", PACKAGE_BUILD)
+
+    def test_release_page_matches_removed_readme_registry_surfaces(self):
+        self.assertIn("Option (c) is selected for this beta", RELEASE_PAGE)
+        self.assertNotIn("One leftover: the `README.md` crates.io badge", RELEASE_PAGE)
+        self.assertNotIn("points at `crates.io/crates/oxidex`", RELEASE_PAGE)
+
+    def test_release_page_names_the_disabled_homebrew_placeholder(self):
+        self.assertIn("packaging/homebrew/oxidex.rb.disabled", RELEASE_PAGE)
+        self.assertIn("Homebrew is disabled for this beta", RELEASE_PAGE)
+        self.assertNotIn("`packaging/homebrew/oxidex.rb`", RELEASE_PAGE)
 
 
 if __name__ == "__main__":
