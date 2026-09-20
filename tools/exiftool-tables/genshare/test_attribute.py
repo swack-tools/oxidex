@@ -371,6 +371,47 @@ class ArtifactValidationTests(unittest.TestCase):
             receipt["fixture_contract"] = attribute._fixture_observations(
                 runs, projections, reconciliations, {"sha256": "f" * 64}
             )
+            observed_payload = receipt["fixture_contract"]["observed_loss_payload"]
+            reviewed = attribute._fixture_observations(
+                runs,
+                projections,
+                reconciliations,
+                {
+                    "sha256": "e" * 64,
+                    "document": {
+                        "review_status": "reviewed_exact",
+                        "exact_loss_expectations": observed_payload,
+                    },
+                },
+            )
+            self.assertEqual(reviewed["review_status"], "reviewed_exact")
+            self.assertEqual(reviewed["exact_loss_expectations"], observed_payload)
+            wrong_payloads = []
+            wrong = copy.deepcopy(observed_payload)
+            wrong["modes"]["engine"]["matched_lost"] += 1
+            wrong_payloads.append(wrong)
+            wrong = copy.deepcopy(observed_payload)
+            wrong["corpus"] = list(reversed(wrong["corpus"]))
+            wrong_payloads.append(wrong)
+            wrong = copy.deepcopy(observed_payload)
+            wrong["schema"] = "genshare-exact-loss/v0"
+            wrong_payloads.append(wrong)
+            for wrong_payload in wrong_payloads:
+                with self.subTest(wrong_payload=wrong_payload), self.assertRaisesRegex(
+                    attribute.ReceiptError, "reviewed exact"
+                ):
+                    attribute._fixture_observations(
+                        runs,
+                        projections,
+                        reconciliations,
+                        {
+                            "sha256": "d" * 64,
+                            "document": {
+                                "review_status": "reviewed_exact",
+                                "exact_loss_expectations": wrong_payload,
+                            },
+                        },
+                    )
             proof_root = root / "pre-seam"
             proof_root.mkdir()
             retained_binary = proof_root / "oxidex"

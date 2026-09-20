@@ -29,10 +29,12 @@ AAC.aac
 OOXML.docx
 ```
 
-`testdata/bounded-corpus-expectations.json` binds their reviewed content hashes
-and roles. It deliberately contains no exact loss arrays: the first valid probe
-is `observed_unreviewed` until the controller and independent reviewer inspect
-the raw deltas and source routes. It cannot satisfy `--require-success`.
+`testdata/bounded-corpus-expectations.json` binds their reviewed content hashes,
+roles, per-mode matched losses, per-file missing counts, and the exact AAC and
+ICC fixture deltas. Those expectations were frozen only after the first valid
+`observed_unreviewed` probe received controller and independent review. A run
+matches them byte-for-byte before it may emit `status=success` or satisfy
+`--require-success`; any drift fails closed.
 
 Run only through the exclusive measurement lock and use a new durable output
 directory every time:

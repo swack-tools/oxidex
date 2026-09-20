@@ -776,7 +776,13 @@ def _replay_receipt(receipt: dict, root: Path) -> None:
         recomputed,
         {mode: reconcile(recomputed["control-empty"]["aggregate"], recomputed[mode]["aggregate"])
          for mode in expected_modes},
-        {"sha256": fixture.get("expectations_sha256")},
+        {
+            "sha256": fixture.get("expectations_sha256"),
+            "document": {
+                "review_status": fixture.get("review_status"),
+                "exact_loss_expectations": fixture.get("exact_loss_expectations"),
+            },
+        },
     )
     if expected_fixture != fixture:
         raise ReceiptError("fixture observations do not replay")
@@ -1280,6 +1286,17 @@ def _load_expectations(manifest: Path, selection: dict, root: Path) -> dict:
     actual = [(row["relative_path"], row["sha256"]) for row in selection["ordered_manifest"]]
     if expected != actual:
         raise ReceiptError("bounded fixture paths or content hashes do not match expectations")
+    review_status = document.get("review_status")
+    exact = document.get("exact_loss_expectations")
+    if review_status not in ("roles_only", "reviewed_exact"):
+        raise ReceiptError("bounded expectations review_status is invalid")
+    if (review_status == "reviewed_exact") != (exact is not None):
+        raise ReceiptError("bounded exact expectations and review_status disagree")
+    if exact is not None and (
+        not isinstance(exact, dict)
+        or exact.get("schema") != "genshare-exact-loss/v1"
+    ):
+        raise ReceiptError("bounded exact expectations schema is invalid")
     retained = root / "contracts" / "bounded-corpus-expectations.json"
     _atomic_write(retained, path.read_bytes())
     return {
@@ -1421,15 +1438,43 @@ def _fixture_observations(
         for delta in keyed_deltas.values()
     ):
         raise ReceiptError("keyed changed output despite having no production caller")
+    corpus = ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"]
+    exact_loss_payload = {
+        "schema": "genshare-exact-loss/v1",
+        "corpus": corpus,
+        "modes": {
+            mode: {
+                "matched_lost": reconciliations[mode]["matched_lost"],
+                "missing_by_file": {
+                    relative: projections[mode]["per_file"][relative][
+                        "missing_occurrences"
+                    ]
+                    for relative in corpus
+                },
+            }
+            for mode in [*TOKENS, "union"]
+        },
+        "aac_producers_removed": [
+            row["raw_key"] for row in producer_aac_delta["removed"]
+        ],
+        "aac_union_equals_producers": True,
+        "icc_engine_matched_lost": engine_icc["matched_lost"],
+    }
+    expectation_document = expectations.get("document", {})
+    reviewed_exact = expectation_document.get("exact_loss_expectations")
+    review_status = expectation_document.get("review_status", "roles_only")
+    if review_status == "reviewed_exact" and reviewed_exact != exact_loss_payload:
+        raise ReceiptError("observed losses do not match reviewed exact expectations")
     return {
-        "review_status": "observed_unreviewed",
+        "review_status": review_status,
         "expectations_sha256": expectations["sha256"],
         "token_observations": observations,
         "icc_engine": engine_icc,
         "icc_engine_sequence_delta": icc_delta,
         "aac_producers_sequence_delta": producer_aac_delta,
         "keyed_sequence_deltas": keyed_deltas,
-        "exact_loss_expectations": None,
+        "observed_loss_payload": exact_loss_payload,
+        "exact_loss_expectations": reviewed_exact,
     }
 
 
@@ -1723,9 +1768,14 @@ def census_main(argv: list[str]) -> int:
         stage = "finalize"
         _append_stage(root, stage, "start")
         _append_stage(root, stage, "end", exit_code=0)
+        receipt_status = (
+            "success"
+            if fixture_contract["review_status"] == "reviewed_exact"
+            else "observed_unreviewed"
+        )
         receipt = {
             "schema": SCHEMA,
-            "status": "observed_unreviewed",
+            "status": receipt_status,
             "run_id": root.name,
             "created_at": version["started_at"],
             "completed_at": utc_now(),
@@ -1765,7 +1815,7 @@ def census_main(argv: list[str]) -> int:
             root / "validator.json",
             {"returncode": 0, "receipt_sha256": receipt_hash, "completed_at": utc_now()},
         )
-        _atomic_write(root / ".complete", b"observed_unreviewed\n")
+        _atomic_write(root / ".complete", f"{receipt_status}\n".encode())
         print(root / "receipt.json")
         return 0
     except (ReceiptError, OSError, subprocess.SubprocessError) as exc:

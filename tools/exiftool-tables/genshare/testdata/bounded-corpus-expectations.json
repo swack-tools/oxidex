@@ -1,6 +1,6 @@
 {
   "schema": "genshare-bounded-expectations/v1",
-  "review_status": "roles_only",
+  "review_status": "reviewed_exact",
   "fixtures": [
     {
       "relative_path": "ICC_Profile.icc",
@@ -10,7 +10,7 @@
     {
       "relative_path": "AAC.aac",
       "sha256": "5eac3eb5435a37bcaaf4f81eb0f37e487e50b65b67d486ac7d671c3f0a1d4671",
-      "roles": ["hand_only_zero_loss_control"]
+      "roles": ["hand_only_nonproducer_control", "producer_identity_observation"]
     },
     {
       "relative_path": "OOXML.docx",
@@ -19,12 +19,48 @@
     }
   ],
   "tokens": {
-    "engine": "observed_unreviewed",
+    "engine": "reviewed_exact",
     "legacy-l1": "unexercised",
     "legacy-l2": "unexercised",
-    "producers": "unexercised",
+    "producers": "reviewed_exact",
     "serial": "unexercised",
     "keyed": "unexercised_no_production_caller"
   },
-  "exact_loss_expectations": null
+  "exact_loss_expectations": {
+    "schema": "genshare-exact-loss/v1",
+    "corpus": ["ICC_Profile.icc", "AAC.aac", "OOXML.docx"],
+    "modes": {
+      "engine": {
+        "matched_lost": 16,
+        "missing_by_file": {"ICC_Profile.icc": 16, "AAC.aac": 0, "OOXML.docx": 102}
+      },
+      "legacy-l1": {
+        "matched_lost": 0,
+        "missing_by_file": {"ICC_Profile.icc": 0, "AAC.aac": 0, "OOXML.docx": 102}
+      },
+      "legacy-l2": {
+        "matched_lost": 0,
+        "missing_by_file": {"ICC_Profile.icc": 0, "AAC.aac": 0, "OOXML.docx": 102}
+      },
+      "producers": {
+        "matched_lost": 9,
+        "missing_by_file": {"ICC_Profile.icc": 3, "AAC.aac": 3, "OOXML.docx": 105}
+      },
+      "serial": {
+        "matched_lost": 0,
+        "missing_by_file": {"ICC_Profile.icc": 0, "AAC.aac": 0, "OOXML.docx": 102}
+      },
+      "keyed": {
+        "matched_lost": 0,
+        "missing_by_file": {"ICC_Profile.icc": 0, "AAC.aac": 0, "OOXML.docx": 102}
+      },
+      "union": {
+        "matched_lost": 25,
+        "missing_by_file": {"ICC_Profile.icc": 19, "AAC.aac": 3, "OOXML.docx": 105}
+      }
+    },
+    "aac_producers_removed": ["File:FileType", "File:FileTypeExtension", "File:MIMEType"],
+    "aac_union_equals_producers": true,
+    "icc_engine_matched_lost": 16
+  }
 }
