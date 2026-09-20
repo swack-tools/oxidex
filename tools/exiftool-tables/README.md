@@ -213,11 +213,15 @@ need their own measured refresh and refusal record.
 Start from a clean owned branch, including ordinary untracked files. The command
 captures that commit, source contents and index before creating two private
 clones in a unique external report directory. It does not register Git worktrees.
-An ordinary BEFORE builds committed artifacts; `--from` on a retrospective dry
-run regenerates every selected tier for BEFORE. AFTER always regenerates every
-selected tier. Both variants use exact copied ExifTool sources, the selected
-capable Perl, fresh dumps, separate oracle/build targets and the fresh executable
-reported by Cargo. Corpus A/B uses one target-version oracle and the same inputs.
+When the ordinary BEFORE version equals the pinned release, BEFORE consumes the
+committed generated state. Retrospective (`--from`) or otherwise regenerated
+BEFORE evidence reruns every selected tier from its copied ExifTool source.
+AFTER always regenerates every selected tier from the candidate and records its
+source/dump provenance. Both variants use the selected capable Perl, fresh
+dumps, separate oracle/build targets and the fresh executable reported by
+Cargo. Corpus A/B uses one target-version oracle and the same inputs. Dry runs
+may grade releases whose split-module inventories differ; live promotion refuses such a path-set change
+until the recovery journal can represent file additions and removals.
 
 ```sh
 bash tools/exiftool-tables/bump-exiftool.sh 13.59 --dry-run \

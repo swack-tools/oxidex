@@ -90,6 +90,18 @@ for a in artifacts.select():
     (root/a.path).write_text(version+'|'+a.key+'\\n'+''.join('mod %s;\\n'%s for s in (artifacts.module_stems(a.key) if a.key in artifacts.MODULE_FAMILIES else ())))
     if fail=='generate-'+label and a.tier==1: sys.exit(7)
 if fail=='undeclared': (root/'surprise.rs').write_text('oops')
+if fail in ('added-module','removed-module'):
+    hub=root/'src/exiftool_tables/binary/mod.rs'
+    lines=hub.read_text().splitlines()
+    modules=[line for line in lines if line.startswith('mod ')]
+    if fail=='added-module':
+        (root/'src/exiftool_tables/binary/zzz_upgrade_added.rs').write_text(version+'|binary-zzz_upgrade_added\\n')
+        lines.append('mod zzz_upgrade_added;')
+    else:
+        removed=modules[-1]
+        lines.remove(removed)
+        (root/'src/exiftool_tables/binary'/ (removed[4:-1]+'.rs')).unlink()
+    hub.write_text('\\n'.join(lines)+'\\n')
 if fail=='ignored-write': (root/'ignored.tmp').write_text('oops')
 if fail=='deleted-output': (root/artifacts.select()[0].path).unlink()
 if fail=='symlink-output':
@@ -268,6 +280,14 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
         self.assertEqual((self.root/tx.PIN).read_text(),'13.60\n')
         self.assertEqual(self.report()['phase'],'promoted')
         for a in artifacts.select():self.assertEqual((self.root/a.path).read_text(),output_text('13.60',a))
+
+    def test_live_promotion_refuses_split_module_set_changes_without_partial_write(self):
+        for fail in ('added-module','removed-module'):
+            with self.subTest(fail=fail):
+                result=self.run_bump(fail=fail)
+                self.assertNotEqual(result.returncode,0,result.stdout)
+                self.assertIn('generated artifact path set changed',result.stderr)
+                self.unchanged()
 
     def prepared(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)
