@@ -2624,7 +2624,9 @@ def _terminate_unrecorded_process(process: subprocess.Popen[Any]) -> None:
     _terminate_group(process.pid)
 
 
-def _terminate_authenticated_process(record: Mapping[str, Any]) -> None:
+def _terminate_authenticated_process(
+    record: Mapping[str, Any], signum: signal.Signals = signal.SIGTERM
+) -> None:
     """Terminate only the process group named by an authenticated record."""
     pid = record.get("pid")
     group = record.get("process_group")
@@ -2634,7 +2636,15 @@ def _terminate_authenticated_process(record: Mapping[str, Any]) -> None:
             or not isinstance(record.get("argv"), list)
             or not isinstance(record.get("kernel_argv"), list)):
         raise Refused("authenticated process record is incomplete; refusing group signal")
-    _terminate_group(group)
+    if signum == signal.SIGTERM:
+        _terminate_group(group)
+        return
+    try:
+        os.killpg(group, signum)
+    except ProcessLookupError:
+        return
+    except PermissionError as exc:
+        raise Refused(f"cannot signal process group {group}") from exc
 
 
 def launch_intent_path(store: StateStore, task_number: int, segment: int) -> Path:
@@ -3256,7 +3266,9 @@ def _write_recovery_prompt(store: StateStore, task: Mapping[str, Any]) -> Path:
         check=False,
     ).stdout
     content = (
-        f"PRD SHA-256: {task['prd_sha256']}\n"
+        f"Canonical PRD: {task['paths']['prd']}\n"
+        f"Canonical PRD SHA-256: {task['prd_sha256']}\n"
+        "Required recovery action: reread the canonical PRD in full before acting.\n"
         f"Last checkpoint: {task['head_sha']}\n"
         f"State: {task['state']}\n"
         f"Next action: {task['next_command']}\n"
@@ -3421,7 +3433,7 @@ def stop_task(store: StateStore, task_number: int, signal_name: str) -> dict[str
         signum = getattr(signal, f"SIG{signal_name.upper()}")
     except AttributeError as exc:
         raise Refused(f"unknown signal {signal_name}") from exc
-    os.kill(record["pid"], signum)
+    _terminate_authenticated_process(record, signum)
     store.append_event({"event": "stop", "task": task_number, "stopped": True, "signal": signal_name.upper()})
     return {"stopped": True, "signal": signal_name.upper()}
 
