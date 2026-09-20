@@ -9,7 +9,8 @@ use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::exif_entry_to_tag_value;
 use crate::core::tiff_helpers::{
-    parse_exif_subifd_with_session, parse_gps_subifd, parse_ifd1_with_session,
+    parse_exif_subifd_with_session_and_options, parse_gps_subifd, parse_ifd1_with_session,
+    physical_entry_indices,
 };
 use crate::exiftool_tables::session::Session;
 use crate::exiftool_tables::{Ctx, decode_binary_table, find_table};
@@ -176,6 +177,17 @@ pub fn process_exif_segments(
     metadata: &mut MetadataMap,
     diagnostics: &mut DiagnosticSink,
 ) {
+    let options = ReadOptions::default_full_listing();
+    process_exif_segments_with_options(segments, reader, &options, metadata, diagnostics);
+}
+
+pub(crate) fn process_exif_segments_with_options(
+    segments: &[Segment],
+    reader: &dyn FileReader,
+    options: &ReadOptions,
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
     let mut session = Session::new();
     let mut members = std::collections::HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
@@ -258,28 +270,33 @@ pub fn process_exif_segments(
                     )));
                 }
                 Ok(tags) => {
+                    let physical_indices =
+                        physical_entry_indices(&tiff_reader, ifd_offset, byte_order, &tags);
                     // Process IFD0 tags and get sub-IFD offsets. The
                     // generated `Exif::Main` produces every ordinary entry it
                     // reports (per-field mixed mode, slice v2-ifd0); the hand
                     // arm keeps the rest, the pointers and the order.
-                    let mut engine = crate::core::exif_dir_engine::ifd0_walk_with_session(
-                        tiff_data,
-                        tiff_offset,
-                        ifd_offset,
-                        byte_order,
-                        metadata,
-                        &mut session,
-                        &mut cond_ctx,
-                    );
+                    let mut engine = physical_indices.as_ref().and_then(|_| {
+                        crate::core::exif_dir_engine::ifd0_walk_with_session(
+                            tiff_data,
+                            tiff_offset,
+                            ifd_offset,
+                            byte_order,
+                            metadata,
+                            &mut session,
+                            &mut cond_ctx,
+                        )
+                    });
                     let (exif_ifd_offset, gps_ifd_offset) = process_ifd0_tags(
                         &tags,
+                        physical_indices.as_deref(),
                         byte_order,
                         engine.as_mut(),
                         metadata,
                         diagnostics,
                     );
                     if let Some(engine) = engine {
-                        engine.drain_ifd0(metadata);
+                        engine.finish_ifd0(metadata);
                     }
 
                     // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
@@ -292,12 +309,13 @@ pub fn process_exif_segments(
                     // of the two limits and keeps a MakerNote out of the JPEG's
                     // compressed scan data.
                     if let Some(offset) = exif_ifd_offset {
-                        parse_exif_subifd_with_session(
+                        parse_exif_subifd_with_session_and_options(
                             &tiff_reader,
                             offset,
                             byte_order,
                             tiff_offset,
                             tiff_data.len() as u64,
+                            options,
                             &mut session,
                             &mut cond_ctx,
                             metadata,
@@ -390,6 +408,7 @@ pub fn process_exif_segments(
 /// A tuple of (exif_ifd_offset, gps_ifd_offset) for sub-IFD parsing
 fn process_ifd0_tags(
     tags: &[(u16, u16, u32, std::borrow::Cow<[u8]>)],
+    physical_indices: Option<&[usize]>,
     byte_order: ByteOrder,
     mut engine: Option<&mut crate::core::exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
@@ -399,7 +418,11 @@ fn process_ifd0_tags(
     let mut gps_ifd_offset = None;
 
     // Convert raw tag data to MetadataMap entries
-    for (tag_id, field_type, value_count, raw_bytes) in tags {
+    for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in tags.iter().enumerate() {
+        let entry_index = physical_indices
+            .and_then(|indices| indices.get(survivor_index))
+            .copied()
+            .unwrap_or(survivor_index);
         // Convert Cow<[u8]> to &[u8] for processing
         let bytes = raw_bytes.as_ref();
 
@@ -481,10 +504,21 @@ fn process_ifd0_tags(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
-        if let Some(engine) = engine.as_deref_mut()
-            && engine.take_ifd0(*tag_id, metadata)
-        {
-            continue;
+        if let Some(engine) = engine.as_deref_mut() {
+            match engine.route_entry(
+                entry_index,
+                *tag_id,
+                false,
+                false,
+                crate::core::exif_dir_engine::Owner::Silent,
+                metadata,
+                |name| format!("IFD0:{name}"),
+                |_, _| true,
+            ) {
+                crate::core::exif_dir_engine::Owner::Engine
+                | crate::core::exif_dir_engine::Owner::Silent => continue,
+                crate::core::exif_dir_engine::Owner::Hand => {}
+            }
         }
 
         // An Exif::Main RawConv that returns undef creates no tag at all
@@ -2958,6 +2992,7 @@ mod transfer_function_tests {
 
         process_ifd0_tags(
             &tags,
+            None,
             ByteOrder::LittleEndian,
             None,
             &mut metadata,
