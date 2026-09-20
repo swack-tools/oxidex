@@ -471,6 +471,25 @@ mod value_conv_projection_tests {
     use crate::core::formatters::numeric_precision::perl_number;
 
     #[test]
+    fn normal_projection_does_not_reapply_apex_conversion_to_native_value() {
+        let occurrence = TagOccurrence::from_insert_shim(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 249519,
+                denominator: 32768,
+            },
+            0,
+        );
+        let native_value = occurrence.value_conv();
+
+        assert_eq!(
+            resolved_display_value(&occurrence, false),
+            native_value,
+            "a missing explicit PrintConv must leave the native ValueConv untouched"
+        );
+    }
+
+    #[test]
     fn raw_projections_share_native_apex_readvalue_and_preserve_occurrence_winner() {
         let mut map = MetadataMap::new();
         // Actual pinned Canon.jpg EXIF value, plus ExifTool.jpg's different

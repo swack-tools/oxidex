@@ -341,10 +341,20 @@ pub fn resolved_display_value(occurrence: &TagOccurrence, no_print_conv: bool) -
 /// display strings while retaining the public output contract during the
 /// migration.
 fn resolved_print_value(occurrence: &TagOccurrence) -> TagValue {
-    if occurrence.print.is_some() {
+    if occurrence.print.is_some() || occurrence.value.is_some() {
         occurrence.project(ValueChannel::PrintConv).into_owned()
     } else {
         let value = occurrence.project(ValueChannel::ValueConv);
+        // APEX is the one legacy shim conversion whose ValueConv changes the
+        // value's type/meaning. `format_tag_value_rules` expects the stored
+        // APEX input for its PrintConv arm; passing this already-converted
+        // float back through it would apply ValueConv a second time
+        // (`14.0` -> `128.0`).
+        if crate::core::exiftool_compat::apex_value_conv(&occurrence.name, &occurrence.raw)
+            .is_some()
+        {
+            return value.into_owned();
+        }
         crate::core::exiftool_compat::format_tag_value_rules(
             &occurrence.lookup_key(),
             value.as_ref(),
