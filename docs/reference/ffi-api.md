@@ -168,10 +168,12 @@ These values are defined in `src/ffi/error.rs`.
 
 ### Thread Safety
 
-- **Handle Isolation** - Each `ExifToolHandle` is independent and thread-safe if not shared
+- **Read-only access** - Read-only operations, including tag string/name getters, are safe
+  to call concurrently on a shared handle.
+- **Mutations** - `exiftool_read_file`, tag setters/removers, and file writes must not run
+  concurrently with any other operation on the same handle.
 - **No Global State** - Multiple handles can be used simultaneously from different threads
 - **Error Messages** - Thread-local storage for error messages
-- **Recommendation** - Use one handle per thread or add your own synchronization
 
 ## API Reference
 
@@ -260,7 +262,7 @@ Returns 1 if the tag exists. It returns 0 if the tag does not exist, or if
 Gets tag value as a null-terminated string.
 
 ```c
-const char* exiftool_get_tag_string(ExifToolHandle* handle, const char* tag_name);
+const char* exiftool_get_tag_string(const ExifToolHandle* handle, const char* tag_name);
 ```
 
 **Parameters:**
@@ -484,7 +486,7 @@ Gets the name of the tag at an index, for iterating all tags together with
 `exiftool_get_tag_count()`.
 
 ```c
-const char* exiftool_get_tag_name_at(ExifToolHandle* handle, size_t index);
+const char* exiftool_get_tag_name_at(const ExifToolHandle* handle, size_t index);
 ```
 
 **Parameters:**

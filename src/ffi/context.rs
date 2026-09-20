@@ -18,9 +18,11 @@ use crate::core::MetadataMap;
 pub struct ExifToolContext {
     /// The metadata map containing all loaded tags
     pub metadata: MetadataMap,
-    /// Cache of CString instances for string returns
-    /// This ensures strings remain valid until the next mutating API call.
-    /// Read-only accessors may cache concurrently on the same handle.
+    /// Cache of CString instances for string returns.
+    ///
+    /// Its allocations remain stable across read-only getter calls, including
+    /// concurrent getters. A successful file read or handle destruction invalidates
+    /// the returned pointers; callers must synchronize those operations.
     pub string_cache: Mutex<Vec<CString>>,
     /// Iterator cache: stores tag names for iteration
     pub tag_names_cache: Vec<String>,
@@ -122,6 +124,29 @@ mod tests {
     use std::ffi::CStr;
     use std::sync::Arc;
     use std::thread;
+
+    #[test]
+    fn string_cache_supports_concurrent_shared_handle_getters() {
+        let context = ExifToolContext::new();
+
+        thread::scope(|scope| {
+            for worker in 0..8 {
+                let context = &context;
+                scope.spawn(move || {
+                    for iteration in 0..128 {
+                        let expected = format!("worker-{worker}-{iteration}");
+                        let pointer =
+                            context.cache_string(CString::new(expected.as_str()).unwrap());
+
+                        let actual = unsafe { CStr::from_ptr(pointer) };
+                        assert_eq!(actual.to_str().unwrap(), expected);
+                    }
+                });
+            }
+        });
+
+        assert_eq!(context.string_cache.lock().unwrap().len(), 8 * 128);
+    }
 
     #[test]
     fn shared_context_caches_strings_concurrently_without_invalidating_pointers() {

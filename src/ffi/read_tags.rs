@@ -472,3 +472,53 @@ pub extern "C" fn exiftool_get_tag_float(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{CStr, CString};
+    use std::thread;
+
+    use super::{ExifToolHandle, exiftool_get_tag_name_at, exiftool_get_tag_string};
+    use crate::ffi::error::EXIFTOOL_OK;
+    use crate::ffi::lifecycle::{exiftool_create, exiftool_destroy};
+    use crate::ffi::write_tags::exiftool_set_tag_string;
+
+    #[test]
+    fn const_string_getters_are_safe_for_concurrent_calls() {
+        let handle = exiftool_create();
+        assert!(!handle.is_null());
+
+        let tag_name = CString::new("EXIF:Make").unwrap();
+        let tag_value = CString::new("Test Camera").unwrap();
+        assert_eq!(
+            exiftool_set_tag_string(handle, tag_name.as_ptr(), tag_value.as_ptr()),
+            EXIFTOOL_OK
+        );
+
+        let shared_handle = handle as usize;
+        thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    let handle = shared_handle as *const ExifToolHandle;
+                    for _ in 0..128 {
+                        let value = exiftool_get_tag_string(handle, tag_name.as_ptr());
+                        assert!(!value.is_null());
+                        assert_eq!(
+                            unsafe { CStr::from_ptr(value) }.to_str().unwrap(),
+                            "Test Camera"
+                        );
+
+                        let name = exiftool_get_tag_name_at(handle, 0);
+                        assert!(!name.is_null());
+                        assert_eq!(
+                            unsafe { CStr::from_ptr(name) }.to_str().unwrap(),
+                            "EXIF:Make"
+                        );
+                    }
+                });
+            }
+        });
+
+        exiftool_destroy(handle);
+    }
+}
