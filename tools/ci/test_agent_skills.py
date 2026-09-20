@@ -35,30 +35,49 @@ def bash_snippets(skill: str, relative: str) -> list[str]:
     return re.findall(r"```bash\n(.*?)```", canonical(skill, relative), re.DOTALL)
 
 
-def _without_heredoc_bodies(snippet: str) -> str:
-    """Remove heredoc data while retaining the command that opens each one."""
+def _shell_tokens(snippet: str):
+    """Yield raw shell words/operators, excluding comments and heredoc data.
 
-    output: list[str] = []
-    delimiters: list[tuple[str, bool]] = []
-    heredoc = re.compile(
-        r"(?<!<)<<(?P<tabs>-?)(?!<)\s*"
-        r"(?:'(?P<single>[^']+)'|\"(?P<double>[^\"]+)\"|(?P<bare>[A-Za-z_]\w*))"
+    Keep quoting until after operator classification: a printed ';' is a word,
+    and a newline inside a quoted word is not a command boundary.
+    """
+
+    token_pattern = re.compile(
+        r"(?P<space>[^\S\n]+)|(?P<comment>\#[^\n]*)|"
+        r"(?P<word>(?:\\[\s\S]|'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"|"
+        r"[^\s\\'\";&|()<>])+)|(?P<operator><<-|[;&|()<>]+)|(?P<newline>\n)"
     )
-    for line in snippet.splitlines(keepends=True):
-        if delimiters:
-            delimiter, strip_tabs = delimiters[0]
-            candidate = line.rstrip("\r\n")
-            if strip_tabs:
-                candidate = candidate.lstrip("\t")
-            if candidate == delimiter:
-                delimiters.pop(0)
+    delimiters: list[tuple[str, bool]] = []
+    heredoc_operator = None
+    position = 0
+    while position < len(snippet):
+        match = token_pattern.match(snippet, position)
+        if match is None:
+            raise ValueError("Unclosed shell quote or escape")
+        position = match.end()
+        kind, token = match.lastgroup, match.group()
+        if kind in {"space", "comment"}:
             continue
-        output.append(line)
-        for match in heredoc.finditer(line):
-            delimiter = match.group("single", "double", "bare")
-            assert delimiter is not None
-            delimiters.append((delimiter, match.group("tabs") == "-"))
-    return "".join(output)
+        if heredoc_operator is not None and kind == "word":
+            delimiters.append((shlex.split(token)[0], heredoc_operator == "<<-"))
+            heredoc_operator = None
+        if kind == "operator" and token in {"<<", "<<-"}:
+            heredoc_operator = token
+        yield token
+        if kind == "newline":
+            # Consume raw lines, not shell tokens: heredoc data may contain
+            # unmatched quotes, comments, and apparent command separators.
+            for delimiter, strip_tabs in delimiters:
+                while position < len(snippet):
+                    end = snippet.find("\n", position)
+                    end = len(snippet) if end == -1 else end + 1
+                    candidate = snippet[position:end].rstrip("\r\n")
+                    position = end
+                    if strip_tabs:
+                        candidate = candidate.lstrip("\t")
+                    if candidate == delimiter:
+                        break
+            delimiters.clear()
 
 
 def active_shell_commands(snippets: list[str]) -> list[tuple[str, ...]]:
@@ -77,22 +96,17 @@ def active_shell_commands(snippets: list[str]) -> list[tuple[str, ...]]:
             while words and (words[0].startswith("-") or assignment.match(words[0])):
                 words.pop(0)
         if words:
-            commands.append(tuple(words))
+            commands.append(tuple(shlex.split(" ".join(words))))
 
     for snippet in snippets:
-        normalized = _without_heredoc_bodies(snippet).replace("\\\n", " ")
-        lexer = shlex.shlex(
-            normalized.replace("\n", " ; "),
-            posix=True,
-            punctuation_chars=";&|()<>",
-        )
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
+        normalized = snippet.replace("\\\n", "")
         current: list[str] = []
-        for token in lexer:
-            if token in separators or (token and set(token) <= set(";&|()")):
+        for token in _shell_tokens(normalized):
+            if token == "\n" or (token and set(token) <= set(";&|()")):
                 append_command(current)
                 current = []
+            elif not current and token in separators:
+                continue
             else:
                 current.append(token)
         append_command(current)
@@ -151,6 +165,76 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
 
 
 class SkillMirrorTests(unittest.TestCase):
+    def test_active_shell_text_keeps_printed_separators_inert(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        for printer in ("echo", "printf '%s\\n'"):
+            for separator in (";", "&&", "||", "|", "(", ")", "then", "do", "else"):
+                for quoted in (f"'{separator}'", f'"{separator}"'):
+                    snippet = f"{printer} {quoted} {command}\n"
+                    with self.subTest(snippet=snippet):
+                        self.assertFalse(
+                            has_shell_command(active_shell_commands([snippet]), command)
+                        )
+
+    def test_active_shell_text_keeps_escaped_and_quoted_newlines_inert(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        for snippet in (
+            f"echo \\; {command}\n",
+            f"echo then {command}\n",
+            f"echo '\n{command}\n'\n",
+            f'printf "%s\\n" "\n{command}\n"\n',
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertFalse(
+                    has_shell_command(active_shell_commands([snippet]), command)
+                )
+
+    def test_active_shell_text_finds_commands_after_comments(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        for preceding in ("# note", "echo note # trailing note", "# 'unclosed quote"):
+            with self.subTest(preceding=preceding):
+                self.assertTrue(has_shell_command(
+                    active_shell_commands([f"{preceding}\n{command}\n"]), command
+                ))
+
+    def test_active_shell_text_resumes_after_heredocs(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        for opening, closing in (
+            ("<<END", "END"), ("<<'END'", "END"), ('<<"END"', "END"),
+            ("<<-END", "\tEND"),
+        ):
+            snippet = f"cat {opening}\n{command}\n{closing}\n{command}\n"
+            with self.subTest(opening=opening):
+                commands = active_shell_commands([snippet])
+                self.assertEqual(commands.count(tuple(command.split())), 1)
+
+    def test_active_shell_text_resumes_after_multiple_heredocs(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        snippet = f"cat <<FIRST <<'SECOND'\n{command}\nFIRST\n{command}\nSECOND\n{command}\n"
+        self.assertEqual(active_shell_commands([snippet]).count(tuple(command.split())), 1)
+
+    def test_active_shell_text_ignores_inert_heredoc_openers(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        for preceding in ("echo '<<END'", 'echo "<<END"', "# cat <<END"):
+            with self.subTest(preceding=preceding):
+                self.assertTrue(has_shell_command(
+                    active_shell_commands([f"{preceding}\n{command}\n"]), command
+                ))
+
+    def test_active_shell_text_preserves_real_command_forms(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        for snippet in (
+            command, f"echo note; {command}", f"true && {command}",
+            f"false || {command}", f"printf data | {command}", f"({command})",
+            f"if true; then {command}; fi", f"while false; do {command}; done",
+            f"if false; then :; elif {command}; then :; else {command}; fi",
+            f"CHECK=1 {command}", f"command {command}", f"env CHECK=1 {command}",
+            "python3 tools/ci/validate_release_receipt.py \\\n --kind parity",
+            '"python3" tools/ci/validate_release_receipt.py --kind "parity"',
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertTrue(has_shell_command(active_shell_commands([snippet]), command))
+
     def test_active_shell_text_ignores_inert_validator_mentions(self):
         command = "python3 tools/ci/validate_release_receipt.py --kind parity"
         inert = (
