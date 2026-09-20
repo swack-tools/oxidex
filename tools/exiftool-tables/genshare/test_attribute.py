@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -459,18 +460,33 @@ class RouteLedgerTests(unittest.TestCase):
 
 
 class PreSeamControlTests(unittest.TestCase):
-    def test_introducing_commit_resolves_to_integration_parent(self):
+    def test_introducing_commit_resolves_to_its_unique_parent(self):
         self.assertTrue(hasattr(attribute, "_resolve_pre_seam"))
         proof = attribute._resolve_pre_seam(ROOT)
+        introducing = proof["introducing_commit"]
+        parent = proof["parent_commit"]
+        path = proof["path"]
         self.assertEqual(
-            proof["introducing_commit"],
-            "718df53832221cf9b9e803aa6ce5e00cbedfac38",
+            proof["introducing_parents"],
+            attribute._git(ROOT, "show", "-s", "--format=%P", introducing).split(),
+        )
+        self.assertEqual(proof["introducing_parents"], [parent])
+        self.assertEqual(
+            proof["introducing_tree"],
+            attribute._git(ROOT, "rev-parse", f"{introducing}^{{tree}}"),
         )
         self.assertEqual(
-            proof["parent_commit"],
-            "3ba91cc934b55bac32537e8c537d3dcfc7d16c38",
+            proof["parent_tree"], attribute._git(ROOT, "rev-parse", f"{parent}^{{tree}}")
         )
-        self.assertEqual(proof["parent_tree"], attribute._git(ROOT, "rev-parse", "3ba91cc9^{tree}"))
+        self.assertEqual(
+            attribute._git(ROOT, "cat-file", "-t", f"{introducing}:{path}"), "blob"
+        )
+        absent = subprocess.run(
+            ["git", "-C", str(ROOT), "cat-file", "-e", f"{parent}:{path}"],
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(absent.returncode, 0)
 
     def test_pre_seam_control_requires_normalized_output_and_stderr_equality(self):
         self.assertTrue(hasattr(attribute, "_validate_pre_seam_control"))
