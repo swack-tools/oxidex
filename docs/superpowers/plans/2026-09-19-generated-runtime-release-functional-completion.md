@@ -1073,6 +1073,9 @@ conversion still living in `exiftool_compat.rs`, commit SHA, exact tests, and
 - Modify: `src/composite/compute.rs`
 - Modify: `src/composite/mod.rs`
 - Modify: `src/core/operations.rs`
+- Modify: `include/oxidex.h`
+- Modify: `bindings/python/oxidex.py`
+- Add: `tests/ffi/c_integration_test.c`
 - Add: `tests/typed_value_projection_tests.rs`
 - Add: `tools/exiftool-tables/fixtures/typed_value_projection.json`
 - Do not modify Task 2 core files or generated/engine files
@@ -1093,7 +1096,7 @@ list, undefined/suppressed, duplicate/grouped occurrences, units, and negative
 zero. Assert normal output uses PrintConv and `-n` uses ValueConv from the same
 occurrence.
 
-- [ ] **Step 2: Prove at least one pre-migration test fails**
+- [ ] **Step 2: Prove the remaining consumer seams fail before migration**
 
 Run the focused integration test under the shared lock:
 
@@ -1104,8 +1107,24 @@ python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shar
   cargo test --test typed_value_projection_tests -- --nocapture
 ```
 
-The generated IFD case must demonstrate the current wrong-channel behavior
-rather than a fabricated unit-only failure.
+PR #867 already fixed generated-IFD production of explicit PrintConv forms.
+Do not recreate or simulate that superseded producer failure. Instead, add
+honest red tests for the remaining consumer defects identified by the
+independent review at
+`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reviews/03-typed-consumers-supersession.md`:
+
+1. Construct one valid occurrence whose raw, ValueConv, and explicit
+   PrintConv forms differ. Normal CLI resolution must select the explicit
+   PrintConv form and `--no-print-conv` must select ValueConv from that same
+   occurrence. The current normal path incorrectly recomputes from raw.
+2. Add an additive FFI value-channel enum and channel-selecting entry point,
+   with a red compile/use test before implementation. Existing entry points
+   must remain present and retain their documented default and ABI layout.
+3. Add a source-cited allowlist and verifier for intentional composite
+   display stringify/reparse sites. The verifier must fail for an unlisted
+   site; comments alone are insufficient.
+4. Add the fixture-backed consumer projection matrix from Step 1. Fixture
+   absence is a failure, not a skip or behavior receipt.
 
 - [ ] **Step 3: Migrate consumers by intent**
 
@@ -1143,6 +1162,8 @@ and read-receipt blocks only after that commit leaves the worktree clean.
 git add src/cli/tag_resolution.rs src/cli/output_formatter.rs \
   src/cli/batch_processor.rs src/ffi src/composite/compute.rs \
   src/composite/mod.rs src/core/operations.rs \
+  include/oxidex.h bindings/python/oxidex.py \
+  tests/ffi/c_integration_test.c \
   tests/typed_value_projection_tests.rs \
   tools/exiftool-tables/fixtures/typed_value_projection.json
 git commit -S -m "refactor: project typed metadata values consistently"
