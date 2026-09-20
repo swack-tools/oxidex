@@ -346,7 +346,7 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
             "oxidex-x86_64-unknown-linux-musl",
             "oxidex-aarch64-unknown-linux-musl",
             "oxidex-x86_64-pc-windows-gnu.exe",
-            "oxidex-aarch64-apple-darwin",
+            "oxidex-universal-apple-darwin",
             "oxidex-v${{ steps.version.outputs.version }}.dmg",
         ):
             with self.subTest(asset=asset):
@@ -362,13 +362,26 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         self.assertEqual(
             copies,
             {
-                "cp artifacts/oxidex-x86_64-unknown-linux-musl/oxidex-x86_64-unknown-linux-musl release-assets/",
-                "cp artifacts/oxidex-aarch64-unknown-linux-musl/oxidex-aarch64-unknown-linux-musl release-assets/",
-                "cp artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe release-assets/",
-                "cp artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin release-assets/",
-                "cp artifacts/oxidex-dmg/*.dmg release-assets/",
+                "cp artifacts/oxidex-x86_64-unknown-linux-musl-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-x86_64-unknown-linux-musl release-assets/",
+                "cp artifacts/oxidex-aarch64-unknown-linux-musl-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-aarch64-unknown-linux-musl release-assets/",
+                "cp artifacts/oxidex-x86_64-pc-windows-gnu-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-x86_64-pc-windows-gnu.exe release-assets/",
+                "cp artifacts/oxidex-universal-apple-darwin-${{ github.run_id }}-${{ github.run_attempt }}/oxidex-universal-apple-darwin release-assets/",
             },
         )
+        self.assertIn("find artifacts/oxidex-dmg-${{ github.run_id }}-${{ github.run_attempt }}", prepare)
+
+    def test_finalization_requires_universal_binary_and_complete_asset_inventory(self):
+        payload = fixture("finalization")
+        payload["packaging"]["targets"].remove("x86_64-apple-darwin")
+        self.assert_invalid("finalization", payload, "packaging.targets")
+        for missing in ("SHA256SUMS", f"oxidex-v{VERSION}.sbom.cdx.json"):
+            payload = fixture("finalization")
+            payload["packaging"]["expected_assets"].remove(missing)
+            payload["artifacts"] = [a for a in payload["artifacts"] if a["name"] != missing]
+            self.assert_invalid("finalization", payload, "packaging.expected_assets")
+        payload = fixture("finalization")
+        payload["macos_verification"]["raw_binary_artifact"] = "oxidex-aarch64-apple-darwin"
+        self.assert_invalid("finalization", payload, "macos_verification.raw_binary_artifact")
 
     def test_cli_returns_two_and_prints_field_paths_for_invalid_receipt(self):
         payload = fixture("parity")

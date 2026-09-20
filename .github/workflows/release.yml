@@ -405,7 +405,7 @@ jobs:
 
           **macOS:**
           - `oxidex-universal-apple-darwin` - Signed universal macOS binary (Apple Silicon and Intel)
-          - `oxidex-v$VERSION.dmg` - Signed and notarized macOS DMG installer
+          - `oxidex-v$VERSION.dmg` - Notarized and stapled macOS DMG containing the signed executable
           - `oxidex-v$VERSION.sbom.cdx.json` - Deterministic CycloneDX SBOM for the release source and payloads
           - `SHA256SUMS` - SHA-256 checksums for every release asset
 

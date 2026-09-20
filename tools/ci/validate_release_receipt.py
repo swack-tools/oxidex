@@ -32,7 +32,8 @@ SCHEMAS = {
 }
 
 TARGET_ASSETS = {
-    "aarch64-apple-darwin": ("oxidex-aarch64-apple-darwin", "oxidex-v{version}.dmg"),
+    "aarch64-apple-darwin": ("oxidex-universal-apple-darwin", "oxidex-v{version}.dmg"),
+    "x86_64-apple-darwin": ("oxidex-universal-apple-darwin", "oxidex-v{version}.dmg"),
     "x86_64-unknown-linux-musl": ("oxidex-x86_64-unknown-linux-musl",),
     "aarch64-unknown-linux-musl": ("oxidex-aarch64-unknown-linux-musl",),
     "x86_64-pc-windows-gnu": ("oxidex-x86_64-pc-windows-gnu.exe",),
@@ -627,14 +628,14 @@ def _validate_finalization(
             "packaging.targets",
             f"must exactly match the reviewed release matrix: {sorted(REQUIRED_TARGETS)!r}",
         )
-    derived_assets: list[str] = []
+    derived_assets = {"SHA256SUMS", f"oxidex-v{payload.get('version')}.sbom.cdx.json"}
     for target in targets:
         patterns = TARGET_ASSETS.get(target)
         if patterns is None:
             checks.error("packaging.targets", f"unsupported release target {target!r}")
             continue
         for pattern in patterns:
-            derived_assets.append(pattern.format(version=payload.get("version")))
+            derived_assets.add(pattern.format(version=payload.get("version")))
     if sorted(expected_assets) != sorted(derived_assets):
         checks.error(
             "packaging.expected_assets",
@@ -886,7 +887,7 @@ def _validate_finalization(
     checks.equal("macos_verification.stapler_status", "validated")
     checks.equal("macos_verification.cleanup_status", "verified")
     checks.string_list("macos_verification.evidence")
-    checks.equal("macos_verification.raw_binary_artifact", "oxidex-aarch64-apple-darwin")
+    checks.equal("macos_verification.raw_binary_artifact", "oxidex-universal-apple-darwin")
     checks.equal(
         "macos_verification.dmg_artifact", f"oxidex-v{payload.get('version')}.dmg"
     )

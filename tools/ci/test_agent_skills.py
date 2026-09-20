@@ -39,7 +39,7 @@ Use Opus for architecture, release-promotion judgment, security-sensitive work,
 and final broad reviews. Use Sonnet for bounded implementation and routine
 review. Use Haiku only for low-risk, read-only inventory or summarization.
 
-Prefer fast mode for delegated Claude work when it is available.
+Do not use fast mode for delegated Claude work.
 """
 
 
@@ -539,6 +539,10 @@ class SkillMirrorTests(unittest.TestCase):
             bash_snippets("oxidex-release-finalization", "references/gates.md")
         )
         self.assertTrue(has_shell_command(parity, "python3 tools/ci/release_oracle.py"))
+        self.assertTrue(has_shell_command(
+            parity, "python3 tools/release/bootstrap_oracle.py verify",
+            "--root /Users/allen/oxidex-ops", '--pin "$PARITY_PIN"',
+        ))
         self.assertTrue(
             has_shell_command(
                 parity,
@@ -596,6 +600,20 @@ class SkillMirrorTests(unittest.TestCase):
             "TeamIdentifier",
         ):
             self.assertIn(required, combined)
+
+    def test_macos_recipe_binds_universal_assets_to_run_attempt(self):
+        skill = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        for required in (
+            'oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}',
+            'oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}',
+            '--name "$MAC_RUN_ARTIFACT" --name "$DMG_RUN_ARTIFACT"',
+            'lipo -verify_arch arm64 x86_64 "$MAC_BIN"',
+            'lipo -verify_arch arm64 x86_64 "$MAC_DMG_PAYLOAD"',
+            'SHA256SUMS', 'sbom.cdx.json',
+        ):
+            self.assertIn(required, skill)
 
     def test_parity_receipt_separates_measurement_families(self):
         path = REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json"

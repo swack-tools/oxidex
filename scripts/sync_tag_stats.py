@@ -66,7 +66,7 @@ class Rule:
 # these files says so explicitly, and that wording should not be softened.
 RULES = [
     Rule("README.md",
-         r"(?P<pre>It defines )(?P<val>[\d,]+)(?P<post> metadata tags)",
+         r"(?P<pre>current development snapshot contains )(?P<val>[\d,]+)(?P<post> generated metadata tag\s+definitions)",
          "definitions"),
     Rule("oxidex-tags/src/lib.rs",
          r"(?P<pre>//! Contains )(?P<val>[\d,]+)(?P<post> metadata tag definitions)",

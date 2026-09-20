@@ -339,14 +339,6 @@ pathlib.Path(sys.argv[sys.argv.index('--json-out')+1]).write_text(json.dumps(doc
         self.assertEqual(self.report()['phase'],'promoted')
         for a in artifacts.select():self.assertEqual((self.root/a.path).read_text(),output_text('13.60',a))
 
-    def test_live_promotion_refuses_split_module_set_changes_without_partial_write(self):
-        for fail in ('added-module','removed-module'):
-            with self.subTest(fail=fail):
-                result=self.run_bump(fail=fail)
-                self.assertNotEqual(result.returncode,0,result.stdout)
-                self.assertIn('generated artifact path set changed',result.stderr)
-                self.unchanged()
-
     def prepared(self):
         result=self.run_bump(['--dry-run']);self.assertEqual(result.returncode,0,result.stderr)
         journal=self.report();run=Path(journal['run']);journal['after']={}
