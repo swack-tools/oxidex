@@ -302,6 +302,44 @@ class ReleaseAssetProvenanceTests(unittest.TestCase):
                 self.assertNotEqual(verified.returncode, 0)
                 self.assertIn("SBOM", verified.stderr)
 
+    def test_verify_assets_rejects_self_rehashed_duplicate_key_sbom(self):
+        """Ambiguous duplicate-key JSON must fail before SBOM semantics are checked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            assets = root / "release-assets"
+            provenance = root / "provenance"
+            self.create_payloads(assets)
+            created = self.run_assets(
+                "create-provenance", "--assets", str(assets),
+                "--provenance", str(provenance), *self.identity_args(),
+                *self.source_args())
+            self.assertEqual(created.returncode, 0, created.stderr)
+
+            sbom_path = assets / self.SBOM_NAME
+            duplicate = sbom_path.read_bytes().replace(
+                b'"bomFormat":"CycloneDX"',
+                b'"bomFormat":"not-CycloneDX","bomFormat":"CycloneDX"',
+                1)
+            self.assertNotEqual(duplicate, sbom_path.read_bytes())
+            sbom_path.write_bytes(duplicate)
+
+            manifest_path = provenance / "provenance.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["sbom"]["sha256"] = hashlib.sha256(duplicate).hexdigest()
+            manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+            checksums = "".join(
+                f"{hashlib.sha256((assets / name).read_bytes()).hexdigest()}  {name}\n"
+                for name in sorted((*self.PAYLOAD_NAMES, self.SBOM_NAME)))
+            (assets / "SHA256SUMS").write_text(checksums)
+            (provenance / "SHA256SUMS").write_text(checksums)
+
+            verified = self.run_assets(
+                "verify-assets", "--assets", str(assets),
+                "--provenance", str(provenance), *self.identity_args(),
+                *self.source_args())
+            self.assertNotEqual(verified.returncode, 0)
+            self.assertIn("duplicate", verified.stderr.lower())
+
     def test_release_json_binds_exact_id_state_commit_and_asset_set(self):
         """Accepting a different release ID or state must make publication fail."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -701,12 +739,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "count=0; test -f \"$COUNT_FILE\" && count=$(cat \"$COUNT_FILE\")\n"
                 "count=$((count + 1)); printf '%s' \"$count\" > \"$COUNT_FILE\"\n"
+                "include=0; printf '%s\\n' \"$*\" | grep -F -- '--include' >/dev/null && include=1 || true\n"
+                "emit() { if [ \"$include\" -eq 1 ]; then printf 'HTTP/2.0 %s\\n\\n%s\\n' \"$1\" \"$2\"; else printf '%s\\n' \"$2\"; fi; }\n"
                 "case \"$POLL_MODE\" in\n"
                 "  stale-then-current) if [ \"$count\" -eq 1 ]; then "
-                "echo '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}'; "
-                "else echo '{\"tag_name\":\"v2.0.0\",\"draft\":false,\"prerelease\":false}'; fi;;\n"
-                "  stale) echo '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}';;\n"
-                "  not-found) echo 'HTTP 404: Not Found' >&2; exit 1;;\n"
+                "emit 200 '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}'; "
+                "else emit 200 '{\"tag_name\":\"v2.0.0\",\"draft\":false,\"prerelease\":false}'; fi;;\n"
+                "  stale) emit 200 '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}';;\n"
+                "  not-found-then-current) if [ \"$count\" -eq 1 ]; then "
+                "if [ \"$include\" -eq 1 ]; then emit 404 '{\"message\":\"Not Found\"}'; else "
+                "echo 'HTTP 404: Not Found' >&2; fi; exit 1; "
+                "else emit 200 '{\"tag_name\":\"v1.9.0\",\"draft\":false,\"prerelease\":false}'; fi;;\n"
+                "  not-found) if [ \"$include\" -eq 1 ]; then emit 404 '{\"message\":\"Not Found\"}'; else "
+                "echo 'HTTP 404: Not Found' >&2; fi; exit 1;;\n"
+                "  server-error-not-found) if [ \"$include\" -eq 1 ]; then emit 500 '{\"message\":\"Not Found\"}'; else "
+                "echo 'HTTP 500: Not Found' >&2; fi; exit 1;;\n"
                 "esac\n")
             gh.chmod(0o755)
             env = os.environ.copy()
@@ -746,9 +793,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_latest_poll_accepts_prerelease_without_any_stable_release(self):
         result, latest, history, count = self.run_latest_poll("not-found", True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 3)
         self.assertEqual(json.loads(latest), {"status": 404})
-        self.assertEqual(len(history.splitlines()), 1)
+        self.assertEqual(len(history.splitlines()), 3)
+
+    def test_latest_poll_retries_404_until_a_later_stable_latest(self):
+        result, latest, history, count = self.run_latest_poll(
+            "not-found-then-current", True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(count, 2)
+        self.assertEqual(json.loads(latest)["tag_name"], "v1.9.0")
+        self.assertEqual(len(history.splitlines()), 2)
+
+    def test_latest_poll_rejects_500_even_when_error_text_says_not_found(self):
+        result, _latest, history, count = self.run_latest_poll(
+            "server-error-not-found", True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(count, 1)
+        self.assertEqual(history, "")
 
     def test_release_is_bound_to_exact_id_and_fails_closed_on_rerun(self):
         create = job_block(self.text, "create-release")

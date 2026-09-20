@@ -593,39 +593,89 @@ jobs:
           LATEST_HISTORY=latest-release-attempts.jsonl
           : > "$LATEST_HISTORY"
           valid=0
+          all_404=1
 
           for attempt in $(seq 1 "$LATEST_MAX_ATTEMPTS"); do
             response_path="latest-release-response-${attempt}.json"
             error_path="latest-release-response-${attempt}.stderr"
             if gh api "repos/$GITHUB_REPOSITORY/releases/latest" \
+                --include \
                 > "$response_path" 2> "$error_path"; then
-              cp "$response_path" "$LATEST_JSON"
-              {
-                printf '{"attempt":%s,"status":200,"response":' "$attempt"
-                python3 -c 'import json,sys; sys.stdout.write(json.dumps(json.load(open(sys.argv[1])), separators=(",", ":")))' \
-                  "$response_path"
-                printf '}\n'
-              } >> "$LATEST_HISTORY"
+              gh_status=0
             else
-              status=$?
-              if ! grep -Eq 'HTTP 404|404 Not Found|Not Found' "$error_path" "$response_path"; then
-                cat "$error_path" >&2
-                exit "$status"
-              fi
-              printf '{"status":404}\n' > "$LATEST_JSON"
-              printf '{"attempt":%s,"status":404,"response":{"status":404}}\n' \
-                "$attempt" >> "$LATEST_HISTORY"
+              gh_status=$?
             fi
 
-            if python3 - "$LATEST_JSON" "$GITHUB_REF_NAME" "$PRERELEASE" <<'PY'
+            http_status=$(python3 - "$response_path" <<'PY'
+          import re
+          import sys
+
+          raw = open(sys.argv[1], "rb").read()
+          match = re.match(rb"HTTP/[0-9.]+\s+([0-9]{3})(?:\s|$)", raw)
+          if match is None:
+              raise SystemExit("GitHub API response did not contain an HTTP status line")
+          print(match.group(1).decode())
+          PY
+            ) || {
+              cat "$error_path" >&2
+              exit "${gh_status:-1}"
+            }
+
+            case "$http_status" in
+              200|404)
+                if [ "$http_status" -ne 404 ]; then
+                  all_404=0
+                fi
+                receipt=$(python3 - "$response_path" "$LATEST_JSON" "$attempt" "$http_status" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          raw = Path(sys.argv[1]).read_bytes()
+          separator = b"\r\n\r\n" if b"\r\n\r\n" in raw else b"\n\n"
+          body = raw.split(separator, 1)[1]
+          status = int(sys.argv[4])
+          try:
+              response = json.loads(body)
+          except json.JSONDecodeError:
+              response = {"raw": body.decode("utf-8", errors="replace").strip()}
+          if status == 200:
+              Path(sys.argv[2]).write_bytes(body)
+          else:
+              Path(sys.argv[2]).write_text('{"status":404}\n')
+          print(json.dumps({
+              "attempt": int(sys.argv[3]), "status": status, "response": response,
+          }, separators=(",", ":")))
+          PY
+                )
+                printf '%s\n' "$receipt" >> "$LATEST_HISTORY"
+                ;;
+              *)
+                cat "$error_path" >&2
+                exit "${gh_status:-1}"
+                ;;
+            esac
+
+            if python3 - "$LATEST_JSON" "$GITHUB_REF_NAME" "$PRERELEASE" "$attempt" "$LATEST_MAX_ATTEMPTS" "$all_404" <<'PY'
           import json
           import sys
 
-          latest = json.load(open(sys.argv[1]))
+          def reject_duplicate_keys(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError(f"duplicate JSON object key: {key!r}")
+                  result[key] = value
+              return result
+
+          latest = json.load(open(sys.argv[1]), object_pairs_hook=reject_duplicate_keys)
           tag = sys.argv[2]
           prerelease = sys.argv[3] == "true"
+          attempt = int(sys.argv[4])
+          max_attempts = int(sys.argv[5])
+          all_404 = sys.argv[6] == "1"
           if latest.get("status") == 404:
-              ok = prerelease
+              ok = prerelease and attempt == max_attempts and all_404
           elif prerelease:
               ok = (latest.get("tag_name") != tag and
                     latest.get("draft") is False and

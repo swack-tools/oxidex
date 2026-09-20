@@ -23,6 +23,23 @@ class ReleaseAssetError(ValueError):
     """The release asset set or its provenance is invalid."""
 
 
+def reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReleaseAssetError(f"duplicate JSON object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def load_json(path: pathlib.Path) -> object:
+    try:
+        return json.loads(
+            path.read_text(), object_pairs_hook=reject_duplicate_json_keys)
+    except json.JSONDecodeError as error:
+        raise ReleaseAssetError(f"invalid JSON in {path}: {error}") from error
+
+
 def expected_payload_names(version: str) -> tuple[str, ...]:
     return (*PAYLOAD_NAMES, f"oxidex-v{version}.dmg")
 
@@ -148,7 +165,7 @@ def verify_assets(args: argparse.Namespace) -> None:
     expected_names = set(expected_asset_names(args.version))
     require_exact_files(assets, expected_names)
     require_exact_files(provenance, {"SHA256SUMS", "provenance.json"})
-    manifest = json.loads((provenance / "provenance.json").read_text())
+    manifest = load_json(provenance / "provenance.json")
     expected_manifest = identity_from_args(args)
     if any(manifest.get(field) != value for field, value in expected_manifest.items()) \
             or manifest.get("payloads") != list(payload_names):
@@ -162,7 +179,7 @@ def verify_assets(args: argparse.Namespace) -> None:
             or not isinstance(source.get("cargo_lock_sha256"), str):
         raise ReleaseAssetError("provenance SBOM binding is invalid")
     sbom_path = assets / sbom_name(args.version)
-    released_sbom = json.loads(sbom_path.read_text())
+    released_sbom = load_json(sbom_path)
     if sha256(sbom_path) != manifest_sbom["sha256"]:
         raise ReleaseAssetError("released SBOM differs from run provenance")
     expected_checksums = (provenance / "SHA256SUMS").read_text()
@@ -187,7 +204,7 @@ def parse_bool(value: str) -> bool:
 
 
 def verify_release(args: argparse.Namespace) -> None:
-    release = json.loads(pathlib.Path(args.release_json).read_text())
+    release = load_json(pathlib.Path(args.release_json))
     expected = {
         "id": int(args.release_id),
         "tag_name": args.tag,
@@ -216,7 +233,7 @@ def verify_release(args: argparse.Namespace) -> None:
     if not args.draft:
         if not args.latest_json:
             raise ReleaseAssetError("published release requires latest API evidence")
-        latest = json.loads(pathlib.Path(args.latest_json).read_text())
+        latest = load_json(pathlib.Path(args.latest_json))
         if not isinstance(latest, dict):
             raise ReleaseAssetError("latest API response must be an object")
         if latest.get("status") == 404:
