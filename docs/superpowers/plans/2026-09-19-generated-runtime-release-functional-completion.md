@@ -248,10 +248,14 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | Path or glob | Sequential task owners | Release condition |
 |---|---:|---|
 | `justfile` | 0, then 1, then 18 | each prior owner remotely merged; no concurrent edits |
-| `tools/release/fleet_controller.py`, `tools/release/fleet-schema.json`, `tools/release/test_fleet_controller.py` | 0 | Task 0 only |
+| `tools/release/fleet_controller.py`, `tools/release/fleet-schema.json` | 0 | Task 0 only |
+| `tools/release/test_fleet_controller.py` | 0, then 8 | Task 0 remotely merges before Task 8's focused lease-contract tests |
 | `tools/exiftool-tables/runtime_ownership.py`, `runtime_ownership.json`, `test_runtime_ownership.py` | 1 | Task 1 only; vendors own distinct fragment files |
 | `src/core/tag_occurrence.rs`, `src/core/tag_sink.rs`, `src/core/metadata_map.rs` | 2 | Task 2 remote merge before consumer/runtime work |
-| `src/cli/tag_resolution.rs`, `src/cli/output_formatter.rs`, `src/cli/batch_processor.rs`, `src/ffi/**`, `src/composite/mod.rs` | 3 | Task 3 only; Task 14 may not edit `src/composite/mod.rs` |
+| `src/cli/tag_resolution.rs`, `src/cli/output_formatter.rs`, `src/cli/batch_processor.rs`, `src/ffi/**` | 3 | Task 3 only |
+| `src/composite/mod.rs` | 3, then 8 | Task 3 remotely merges before Task 8's producers-composite boundary; Task 14 may not edit it |
+| `src/composite/compute.rs` | 3, then 8, then 13 | Task 3 remotely merges before Task 8; Task 13 may later edit only its named Panasonic arm |
+| `src/core/operations.rs` | 3, then 8, then 16 | each prior owner remotely merges before the next; Task 16 retains only its trailer changes |
 | `tools/exiftool-tables/conv_codegen.py`, `conv_oracle.py`, conversion generated outputs and manifest | 4, then 10 | Task 4 remotely merges before Task 10 acquires the lease |
 | `tools/exiftool-tables/upgrade_transaction.py`, `test_upgrade_transaction.py`, version-rehearsal executor/adapter tests | 5 | Task 5 only; Task 3 may not edit them |
 | `tools/exiftool-tables/conformance.py`, `test_conformance.py` | 6 | Task 6 only; Task 8 explicitly denies these paths |
@@ -263,6 +267,8 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | `src/exiftool_tables/enabled_ifd.rs` | 9 | Task 9 only |
 | `src/exiftool_tables/engine.rs`, `keyed_engine.rs`, `serial_engine.rs` | 8, then 17, then 18 | every prior owner remotely merges before the next acquires the lease |
 | `src/exiftool_tables/mod.rs` | 8, then 17 | Task 8 remotely merges before Task 17 acquires the lease |
+| `src/main.rs` | 8 | Task 8 only; process-start attribution validation must precede CLI parsing |
+| `src/parsers/tiff/makernotes/nikon/settings.rs` | 8, then 12 | Task 8 remotely merges before Task 12's Nikon directory lease |
 | `tools/exiftool-tables/conv_exif_main_ledger.json` and its exact refusal-closure inputs/outputs | 10 | Task 10 only |
 | `src/parsers/tiff/makernotes/olympus.rs`, `src/parsers/tiff/makernotes/olympus/**`, `runtime_ownership.d/olympus.json` | 11 | Task 11 only |
 | each Task 12-16 parser/test lease and distinct `runtime_ownership.d/TASK_SLUG.json` | 12-16 respectively | no shared dispatcher, engine, composite, or generated output edits |
@@ -1570,10 +1576,29 @@ Record scope semantics, call-site inventory, tests, commit SHA, and
 - Modify: `src/exiftool_tables/keyed_engine.rs`
 - Modify: `src/exiftool_tables/serial_engine.rs`
 - Modify: `src/exiftool_tables/runtime.rs`
+- Modify: `src/main.rs`
+- Modify: `src/composite/compute.rs`
+- Modify: `src/composite/mod.rs`
+- Modify: `src/core/file_metadata.rs`
+- Modify: `src/core/operations.rs`
+- Modify: `src/parsers/archive/ar.rs`
+- Modify: `src/parsers/canon_vrd/mod.rs`
+- Modify: `src/parsers/elf/metadata_extractor.rs`
+- Modify: `src/parsers/flir_fpf.rs`
+- Modify: `src/parsers/jpeg/app_segments/infiray.rs`
+- Modify: `src/parsers/macho/metadata_extractor.rs`
+- Modify: `src/parsers/specialized/fits.rs`
+- Modify: `src/parsers/tiff/geotiff_parser.rs`
+- Modify: `src/parsers/tiff/makernotes/canon/custom_functions2.rs`
+- Modify: `src/parsers/tiff/makernotes/nikon/settings.rs`
+- Modify: `src/parsers/tiff/makernotes/shared/binary_subdir.rs`
+- Modify: `src/parsers/tiff/makernotes/sony.rs`
+- Modify: `src/parsers/tiff/makernotes/sony/binary_data.rs`
+- Add: `tools/exiftool-tables/genshare/testdata/bounded-corpus-expectations.json`
 - Do not change tag conversion semantics
 - Do not modify: `tools/exiftool-tables/conformance.py`,
-  `tools/exiftool-tables/test_conformance.py`, any vendor parser, or generated
-  table output
+  `tools/exiftool-tables/test_conformance.py`, any parser path not listed
+  above, or generated table output
 
 **Interfaces:** Produces an authenticated paired control/probe receipt consumed
 by Tasks 11 and 18. Replaces positional worktree arguments with this maintained
@@ -1591,24 +1616,43 @@ tools/exiftool-tables/genshare/census.sh \
 ```
 
 The script builds one maintained binary whose unset/empty
-`OXIDEX_GENSHARE_SILENCE` hook is the control,
-then runs each explicit token as a probe. It writes `receipt.json` and exits
-nonzero on a refused token, process failure, floor miss, inertness difference,
-hash mismatch, or attribution reconciliation failure.
+`OXIDEX_GENSHARE_SILENCE` hook is the control, then runs all six explicit
+tokens individually and a separate all-six union probe
+(`engine,legacy-l1,legacy-l2,producers,serial,keyed`). The union is a real
+execution, not the arithmetic sum of individual deltas. It writes
+`receipt.json` and exits nonzero on a refused token, process failure, floor
+miss, inertness difference, hash mismatch, or attribution reconciliation
+failure in any individual or union run.
 
 `attribution::Token::{Engine,LegacyL1,LegacyL2,Producers,Serial,Keyed}` parses
 the comma-separated environment once. `silenced(token) -> bool` is false when
 the variable is absent/empty. Engine guards drop only the outward emission
 after stateful work succeeds; disabled-hook behavior must remain byte-identical
-on the bounded corpus. Unknown tokens and the unsafe `conv` token exit 2 before
-corpus traversal.
+on the bounded corpus. The `legacy-l2` boundary is limited to the six listed
+manifest-walker outputs (`infiray.rs`, `custom_functions2.rs`,
+`binary_subdir.rs`, `sony.rs`, `sony/binary_data.rs`, and
+`nikon/settings.rs`). The `producers` boundary is limited to the listed
+identity, generated-composite, DICOM/FITS, and GeoTIFF output sites; it must
+not silence hand fallback rows or every declared Composite row. Unknown and
+unsafe tokens (including `conv`) exit 2 before corpus traversal, and the
+maintained Rust validator is called from `src/main.rs` before CLI parsing or
+the first file is opened. Every advertised token must have at least one real
+late-emission guard; a corpus token with no production caller is reported as
+`unexercised`, never silently accepted as measured zero.
 
 - [ ] **Step 1: Add failing receipt-authentication tests**
 
 Require control/probe binary SHA-256, source SHA/dirty state, exact process
 return codes, raw stdout/stderr hashes, oracle/corpus identity, inertness result,
 per-occurrence deltas, and token set. Refuse historical `attr-72ea`-style data
-missing paired outputs.
+missing paired outputs. Add black-box tests that execute the maintained binary
+with `conv`, an unknown token, an empty component, and a duplicate token; each
+must exit 2 before corpus traversal and produce no receipt. `legacy-l2` and
+`producers` are valid only after their listed emission guards exist. The test
+must also prove that a
+valid probe records the child process start identity (PID plus kernel start
+time, or the platform-equivalent immutable start token) and refuses a reused
+PID whose start identity does not match.
 
 - [ ] **Step 2: Run the focused tests red**
 
@@ -1633,16 +1677,33 @@ all deterministic fields.
 - [ ] **Step 4: Harden `census.sh`**
 
 Use explicit `CARGO_TARGET_DIR` paths, pinned Perl/source probes, candidate
-hashes, corpus floors, `pipefail`, and durable per-stage status. Never infer a
-successful command from `tail` or another pipeline consumer.
+hashes, corpus floors, `pipefail`, and durable per-stage status. Invoke
+`conformance.py` with a valid corpus root plus a committed selection manifest;
+do not pass individual files where the instrument requires roots. Capture the
+exact child argv, PID/start identity, return code, stderr, and parse status for
+every selected file. Never infer a successful command from `tail` or another
+pipeline consumer. Compare unset and explicit-empty controls, require exact
+control/probe path-set equality, and emit a terminal failed receipt rather
+than leaving stale output to be mistaken for a run.
 
 - [ ] **Step 5: Run bounded controls, commit, and run a small real census**
 
 Use the exclusive lock. Prove one known generated fixture loses its generated
 occurrence, one hand-only fixture does not, and the inert control matches.
 The test invokes `census.sh` with an explicit three-file manifest committed at
-`tools/exiftool-tables/genshare/testdata/bounded-corpus.txt` and writes its
-authenticated receipt under
+`tools/exiftool-tables/genshare/testdata/bounded-corpus.txt`; the companion
+`tools/exiftool-tables/genshare/testdata/bounded-corpus-expectations.json`
+binds each relative path to its content hash, expected group-qualified
+occurrence identities, expected token loss/zero-loss result, and the sole
+volatile normalization (`System:FileAccessDate`, if present). The ledger must
+include one positive generated-loss fixture, one hand-only zero-loss fixture,
+and one duplicate/order or capability fixture. A token not reached by those
+three fixtures is `unexercised` in the bounded receipt; it cannot be described
+as a measured zero or used as deletion evidence. The full-corpus receipt (and
+Task 18's post-Task-17 rerun) must separately resolve every token used for a
+deletion claim. The census must refuse a manifest or expectation hash mismatch.
+It writes its authenticated receipt
+under
 `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/generated-attribution/`.
 Run the Python/shell tests, Rust tests for the maintained seam, formatting, and
 Clippy first. Commit the signed task candidate and require a clean worktree.
@@ -1654,7 +1715,19 @@ Then run the full command above through the exclusive lock.
 git add tools/exiftool-tables/genshare src/exiftool_tables/attribution.rs \
   src/exiftool_tables/mod.rs src/exiftool_tables/engine.rs \
   src/exiftool_tables/ifd_engine.rs src/exiftool_tables/keyed_engine.rs \
-  src/exiftool_tables/serial_engine.rs src/exiftool_tables/runtime.rs
+  src/exiftool_tables/serial_engine.rs src/exiftool_tables/runtime.rs \
+  src/main.rs src/composite/compute.rs src/composite/mod.rs \
+  src/core/file_metadata.rs src/core/operations.rs \
+  src/parsers/archive/ar.rs src/parsers/canon_vrd/mod.rs \
+  src/parsers/elf/metadata_extractor.rs src/parsers/flir_fpf.rs \
+  src/parsers/jpeg/app_segments/infiray.rs \
+  src/parsers/macho/metadata_extractor.rs src/parsers/specialized/fits.rs \
+  src/parsers/tiff/geotiff_parser.rs \
+  src/parsers/tiff/makernotes/canon/custom_functions2.rs \
+  src/parsers/tiff/makernotes/nikon/settings.rs \
+  src/parsers/tiff/makernotes/shared/binary_subdir.rs \
+  src/parsers/tiff/makernotes/sony.rs \
+  src/parsers/tiff/makernotes/sony/binary_data.rs
 git commit -S -m "test: authenticate generated route attribution"
 ```
 
