@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0-beta.1] - Unreleased
 
-Built from `refactor/tag-machinery`. This is a **beta**: output and API may still change before 2.0.0.
+This is pre-tag release-note material for the `refactor/tag-machinery`
+development line, not a published beta. The final reviewed `main` SHA, release
+date, signed tag, release assets, and release receipts are still pending. This
+is a **beta**: output and API may still change before 2.0.0.
 Upgrading from 1.x? Read the migration guide, `docs/guide/migrating-from-1x.md`
 (https://oxidex.net/guide/migrating-from-1x once published).
 
@@ -52,7 +55,11 @@ Every entry below was checked against the v1.2.1 tag and the code at the tip.
 
 
 ### Changed
-- **`tag-comparison`'s full-corpus sweep now processes formats concurrently** - the per-format loop in `src/bin/tag-comparison/main.rs` (used by `just compare-exiftool-full` and the fix-loop dispatcher's per-round attribution rebuild) now runs on a `rayon` thread pool instead of one format at a time in a single thread; measured 1.2-1.7x faster wall-clock on a full ~4,200-file/126-format corpus sweep depending on cache warmth, with byte-for-byte identical output. What gets measured and how gaps are attributed is unchanged
+Timing observations in this unreleased section are historical context, not
+v2.0.0-beta.1 performance evidence. An exact-release-SHA benchmark receipt is
+still required before any beta performance claim.
+
+- **`tag-comparison`'s full-corpus sweep now processes formats concurrently** - the per-format loop in `src/bin/tag-comparison/main.rs` (used by `just compare-exiftool-full` and the fix-loop dispatcher's per-round attribution rebuild) now runs on a `rayon` thread pool instead of one format at a time in a single thread. A prior workload measurement observed 1.2-1.7x faster wall-clock on a full ~4,200-file/126-format corpus sweep depending on cache warmth, with byte-for-byte identical output. That observation is historical, not v2.0.0-beta.1 performance evidence; an exact-release-SHA receipt remains required. What gets measured and how gaps are attributed is unchanged.
 - **Benchmark baseline discontinuity (2026-08-08)** - CI benchmarks moved from GitHub-hosted `ubuntu-latest` to `warp-ubuntu-latest-x64-8x`, and are now tuned for throughput over measurement fidelity. *(The runner has since moved back to GitHub-hosted `ubuntu-latest`; the `--quick`, `lto = false` and `codegen-units = 16` settings remain.)*
   - **Affects**: the 90-day benchmark artifact published by `ci.yml`, and the timings on the docs performance page published by `deploy-docs.yml`
   - **What changed**: runner class; `--quick` (fewer criterion samples — `deploy-docs.yml` already used it and `ci.yml` did not, so the two had been publishing different methodologies); `lto = false` and `codegen-units = 16` on the bench profile, applied via CI env so `Cargo.toml` is unchanged

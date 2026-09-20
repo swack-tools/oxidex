@@ -1,15 +1,17 @@
 # Rust library
 
 ::: warning Beta: v2.0.0-beta.1
-The library API may still change before 2.0.0. OxiDex is not published on
-crates.io (the `oxidex` name there belongs to an unrelated crate), so depend
-on the Git repository. The 2.0 API differs from 1.x; see
+The library API may still change before 2.0.0. This is pre-tag guidance: the
+v2.0.0-beta.1 signed tag is pending. OxiDex is not published on crates.io (the
+`oxidex` name there belongs to an unrelated crate), so depend on the Git
+repository for development use. The final crates.io decision and signed-tag
+dependency instructions remain pending. The 2.0 API differs from 1.x; see
 [Migrating from 1.x to 2.0](/guide/migrating-from-1x).
 :::
 
 ```toml
 [dependencies]
-oxidex = { git = "https://github.com/swack-tools/oxidex", branch = "refactor/tag-machinery" }
+oxidex = { git = "https://github.com/swack-tools/oxidex", branch = "refactor/tag-machinery" } # pre-tag development only
 ```
 
 The API is synchronous. It takes file paths and returns

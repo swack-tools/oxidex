@@ -1,9 +1,11 @@
 # Release readiness: v2.0.0-beta.1
 
-The first pre-release of the `refactor/tag-machinery` line. This page lists
-what must be true **before** the tag is pushed, and then exactly what the
-maintainer runs and what the workflows do in response. Nothing here has been
-tagged or published; publishing is the maintainer's decision.
+The intended first pre-release of the `refactor/tag-machinery` line. This page
+lists what must be true **before** the tag is pushed, and then exactly what the
+maintainer runs and what the workflows do in response. It is a checklist, not
+a release receipt: no final `main` SHA, date, tag, assets, parity receipt, or
+benchmark receipt has been recorded here. Nothing here has been tagged or
+published; publishing is the maintainer's decision.
 
 `2.0.0-beta.1` is a SemVer pre-release: the dot before the number is what
 makes `beta.10` sort after `beta.2`. Python tooling would spell it `2.0.0b1`
