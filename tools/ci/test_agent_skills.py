@@ -43,10 +43,11 @@ def _shell_tokens(snippet: str):
     """
 
     token_pattern = re.compile(
-        r"(?P<space>[^\S\n]+)|(?P<comment>\#[^\n]*)|"
+        r"(?P<continuation>\\\n)|(?P<space>[^\S\n]+)|(?P<comment>\#[^\n]*)|"
         r"(?P<word>(?:\\[\s\S]|'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"|"
         r"[^\s\\'\";&|()<>])+)|(?P<operator><<-|[;&|()<>]+)|(?P<newline>\n)"
     )
+    word_parts = re.compile(r"'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\"|\\[\s\S]|[^\\'\"]+")
     delimiters: list[tuple[str, bool]] = []
     heredoc_operator = None
     position = 0
@@ -56,8 +57,19 @@ def _shell_tokens(snippet: str):
             raise ValueError("Unclosed shell quote or escape")
         position = match.end()
         kind, token = match.lastgroup, match.group()
-        if kind in {"space", "comment"}:
+        if kind in {"continuation", "space", "comment"}:
             continue
+        if kind == "word":
+            # Single quotes preserve every byte. Elsewhere consume escapes
+            # in pairs, so an escaped backslash cannot continue a newline.
+            token = "".join(
+                part if part.startswith("'") else re.sub(
+                    r"\\[\s\S]",
+                    lambda escape: "" if escape.group() == "\\\n" else escape.group(),
+                    part,
+                )
+                for part in word_parts.findall(token)
+            )
         if heredoc_operator is not None and kind == "word":
             delimiters.append((shlex.split(token)[0], heredoc_operator == "<<-"))
             heredoc_operator = None
@@ -99,9 +111,8 @@ def active_shell_commands(snippets: list[str]) -> list[tuple[str, ...]]:
             commands.append(tuple(shlex.split(" ".join(words))))
 
     for snippet in snippets:
-        normalized = snippet.replace("\\\n", "")
         current: list[str] = []
-        for token in _shell_tokens(normalized):
+        for token in _shell_tokens(snippet):
             if token == "\n" or (token and set(token) <= set(";&|()")):
                 append_command(current)
                 current = []
@@ -165,6 +176,23 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
 
 
 class SkillMirrorTests(unittest.TestCase):
+    def test_active_shell_text_preserves_single_quoted_backslash_newline(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        snippet = "'python\\\n3' tools/ci/validate_release_receipt.py --kind parity\n"
+        commands = active_shell_commands([snippet])
+        self.assertFalse(has_shell_command(commands, command))
+        self.assertEqual(commands[0][0], "python\\\n3")
+
+    def test_active_shell_text_comment_backslash_does_not_hide_next_command(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        snippet = "# note \\\n" + command + "\n"
+        self.assertTrue(has_shell_command(active_shell_commands([snippet]), command))
+
+    def test_active_shell_text_escaped_backslash_does_not_continue_newline(self):
+        command = "python3 tools/ci/validate_release_receipt.py --kind parity"
+        snippet = "echo \\\\\n" + command + "\n"
+        self.assertTrue(has_shell_command(active_shell_commands([snippet]), command))
+
     def test_active_shell_text_keeps_printed_separators_inert(self):
         command = "python3 tools/ci/validate_release_receipt.py --kind parity"
         for printer in ("echo", "printf '%s\\n'"):
