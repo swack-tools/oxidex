@@ -712,6 +712,8 @@ def _validate_finalization(
             f"workspace manifest coverage mismatch; missing={missing!r}, extra={extra!r}",
         )
     checks.equal("version_reconciliation.status", "verified")
+    checks.string("version_reconciliation.reviewer")
+    checks.string("version_reconciliation.reviewed_at")
     reconciliation_path = checks.string("version_reconciliation.path")
     reconciliation_sha = checks.sha256("version_reconciliation.sha256")
     try:
@@ -754,6 +756,7 @@ def _validate_finalization(
                 "reconciled_files", "reconciled_lines", "unresolved",
                 "fields_scan_sha256", "fields_tracked_files", "fields_matching_lines",
                 "reconciled_field_files", "reconciled_field_lines",
+                "reviewer", "reviewed_at",
             ):
                 if record.get(field) != checks.value(f"version_reconciliation.{field}"):
                     checks.error(f"version_reconciliation.{field}", "does not match referenced reconciliation")

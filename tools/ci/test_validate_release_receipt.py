@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import pathlib
-import re
 import tempfile
 import unittest
 
@@ -301,6 +300,10 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         self.assert_invalid("finalization", payload, "version_reconciliation.sha256")
 
         payload = fixture("finalization")
+        payload["version_reconciliation"]["reviewer"] = ""
+        self.assert_invalid("finalization", payload, "version_reconciliation.reviewer")
+
+        payload = fixture("finalization")
         mac = payload["macos_verification"]
         mac["raw_binary_artifact"], mac["dmg_artifact"] = (
             mac["dmg_artifact"], mac["raw_binary_artifact"]
@@ -330,17 +333,19 @@ class ReleaseReceiptValidationTests(unittest.TestCase):
         prepare = workflow.split("- name: Prepare release assets", 1)[1].split(
             "- name: Extract version and create release notes", 1
         )[0]
-        copies = set(
-            re.findall(r"^\s*cp\s+(artifacts/\S+)\s+(release-assets/\S*)\s*$", prepare, re.MULTILINE)
-        )
+        copies = {
+            line.strip()
+            for line in prepare.splitlines()
+            if line.strip().startswith("cp ")
+        }
         self.assertEqual(
             copies,
             {
-                ("artifacts/oxidex-x86_64-unknown-linux-musl/oxidex-x86_64-unknown-linux-musl", "release-assets/"),
-                ("artifacts/oxidex-aarch64-unknown-linux-musl/oxidex-aarch64-unknown-linux-musl", "release-assets/"),
-                ("artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe", "release-assets/"),
-                ("artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin", "release-assets/"),
-                ("artifacts/oxidex-dmg/*.dmg", "release-assets/"),
+                "cp artifacts/oxidex-x86_64-unknown-linux-musl/oxidex-x86_64-unknown-linux-musl release-assets/",
+                "cp artifacts/oxidex-aarch64-unknown-linux-musl/oxidex-aarch64-unknown-linux-musl release-assets/",
+                "cp artifacts/oxidex-x86_64-pc-windows-gnu/oxidex-x86_64-pc-windows-gnu.exe release-assets/",
+                "cp artifacts/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin release-assets/",
+                "cp artifacts/oxidex-dmg/*.dmg release-assets/",
             },
         )
 

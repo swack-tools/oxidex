@@ -20,6 +20,8 @@
   "version_inventory": [],
   "version_reconciliation": {
     "status": "unverified",
+    "reviewer": null,
+    "reviewed_at": null,
     "path": null,
     "sha256": null,
     "scan_sha256": null,
