@@ -103,6 +103,18 @@ void test_tag_operations() {
     TEST_ASSERT(make != NULL, "Get string tag returns non-NULL");
     TEST_ASSERT(strcmp(make, "Test Camera") == 0, "String value is correct");
 
+    /* Explicit channel selection is additive; the legacy accessor remains valid. */
+    const char* value_conv = exiftool_get_tag_string_in_channel(
+        handle, "EXIF:Make", EXIFTOOL_VALUE_CHANNEL_VALUE_CONV);
+    TEST_ASSERT(value_conv != NULL, "ValueConv string accessor returns non-NULL");
+    TEST_ASSERT(strcmp(value_conv, "Test Camera") == 0, "ValueConv string is correct");
+
+    /* The ABI accepts an integer so invalid values can be rejected safely. */
+    const char* invalid_channel = exiftool_get_tag_string_in_channel(handle, "EXIF:Make", 99);
+    TEST_ASSERT(invalid_channel == NULL, "Unknown value channel is rejected");
+    TEST_ASSERT(strstr(exiftool_get_last_error(), "Unknown value channel: 99") != NULL,
+                "Unknown value channel records an error before conversion");
+
     /* Set integer tag */
     result = exiftool_set_tag_integer(handle, "EXIF:ISO", 800);
     TEST_ASSERT(result == EXIFTOOL_OK, "Set integer tag succeeds");

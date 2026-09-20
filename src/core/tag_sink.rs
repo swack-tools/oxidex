@@ -237,6 +237,26 @@ impl TagSink {
         }
     }
 
+    /// Attaches a late `ValueConv` form when the current `raw` value is known
+    /// to be the producer's already-formatted display.
+    ///
+    /// This deliberately narrow crate-private seam exists for legacy
+    /// `MetadataMap::set_value_form` producers. Generic callers must use
+    /// [`TagSink::set_winner_value`], which cannot assume stored raw data is an
+    /// explicit PrintConv form.
+    pub(crate) fn set_winner_display_value(&mut self, key: &str, value: TagValue) -> bool {
+        match self.winners.get(key) {
+            Some(&idx) => {
+                if self.occurrences[idx].print.is_none() {
+                    self.occurrences[idx].print = Some(self.occurrences[idx].raw.clone());
+                }
+                self.occurrences[idx].value = Some(value);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Removes `key` from the winner projection **and retires the occurrence
     /// that held it**, so a removed algorithmic state can never be observed
     /// again through any projection.
@@ -546,6 +566,29 @@ mod tests {
                 "{channel:?} must project the replacement after mutation"
             );
         }
+    }
+
+    #[test]
+    fn generic_winner_value_does_not_invent_a_print_form_from_stored_raw() {
+        let mut sink = TagSink::new();
+        let raw = TagValue::Rational {
+            numerator: 1,
+            denominator: 80,
+        };
+        let occurrence = TagOccurrence::from_insert_shim("ExifIFD:ExposureTime", raw.clone(), 0);
+        sink.record("ExifIFD:ExposureTime".to_string(), occurrence);
+
+        assert!(sink.set_winner_value("ExifIFD:ExposureTime", TagValue::Float(0.0125)));
+
+        let occurrence = sink.winner_occurrence("ExifIFD:ExposureTime").unwrap();
+        assert_eq!(occurrence.raw, raw);
+        assert_eq!(occurrence.value, Some(TagValue::Float(0.0125)));
+        assert_eq!(occurrence.print, None);
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::Float(0.0125),
+            "without an explicit print form, PrintConv must fall back to ValueConv"
+        );
     }
 
     /// Every winner projection yields keys in the file order of the

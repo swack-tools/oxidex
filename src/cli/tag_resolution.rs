@@ -25,9 +25,8 @@
 //! arbitration and keeps every match, in file order.
 
 use crate::cli::args::CliArgs;
-use crate::core::exiftool_compat::format_tag_value_rules;
 use crate::core::read_options::ReadOptions;
-use crate::core::tag_occurrence::{Instance, TagOccurrence};
+use crate::core::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use crate::core::{MetadataMap, TagValue};
 use std::collections::HashSet;
 
@@ -324,9 +323,42 @@ pub fn resolve_requested_tags<'a>(
 /// and composite dependency resolution without inverting printed labels.
 pub fn resolved_display_value(occurrence: &TagOccurrence, no_print_conv: bool) -> TagValue {
     if no_print_conv {
-        occurrence.value_conv()
+        occurrence.project(ValueChannel::ValueConv).into_owned()
     } else {
-        format_tag_value_rules(&occurrence.lookup_key(), &occurrence.raw)
+        resolved_print_value(occurrence)
+    }
+}
+
+/// Projects a tag for normal output while preserving the compatibility
+/// formatter used by legacy parser call sites.
+///
+/// Most migrated producers attach an explicit `print` form, which is the
+/// canonical typed projection. The remaining `insert()` shim producers keep
+/// a typed `raw` value with no print form; those rows historically went
+/// through the name-keyed ExifTool compatibility rules (GPS reference labels,
+/// APP14 flags, Ducky quality, and similar conversions). Apply those rules to
+/// the typed ValueConv result only in that legacy case. This avoids reparsing
+/// display strings while retaining the public output contract during the
+/// migration.
+fn resolved_print_value(occurrence: &TagOccurrence) -> TagValue {
+    if occurrence.print.is_some() || occurrence.value.is_some() {
+        occurrence.project(ValueChannel::PrintConv).into_owned()
+    } else {
+        let value = occurrence.project(ValueChannel::ValueConv);
+        // APEX is the one legacy shim conversion whose ValueConv changes the
+        // value's type/meaning. `format_tag_value_rules` expects the stored
+        // APEX input for its PrintConv arm; passing this already-converted
+        // float back through it would apply ValueConv a second time
+        // (`14.0` -> `128.0`).
+        if crate::core::exiftool_compat::apex_value_conv(&occurrence.name, &occurrence.raw)
+            .is_some()
+        {
+            return value.into_owned();
+        }
+        crate::core::exiftool_compat::format_tag_value_rules(
+            &occurrence.lookup_key(),
+            value.as_ref(),
+        )
     }
 }
 
@@ -592,25 +624,26 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
         return ResolvedFileOutput::Metadata(metadata);
     }
 
-    let metadata = if no_print_conv {
-        // strip_extended_only rebuilt the display map and discarded value
-        // forms. Use its key selection with the original winning occurrences.
-        let values = raw_metadata.without_print_conv();
-        values
-            .iter()
-            .filter(|(key, _)| surviving.contains_key(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
+    // `strip_extended_only` supplies only the surviving key set. Values must
+    // remain attached to their original winning occurrence so selection never
+    // reconstructs a channel from the flattened raw map.
+    let channel = if no_print_conv {
+        ValueChannel::ValueConv
     } else {
-        // Keep the complete PrintConv scalar until the chosen renderer:
-        // JSON checks numeric/boolean typing before deleting NULs, while
-        // plain output applies Printable's own control/whitespace rules.
-        let mut formatted = MetadataMap::with_capacity(surviving.len());
-        for (key, value) in surviving.iter() {
-            formatted.insert(key.clone(), format_tag_value_rules(key, value));
-        }
-        formatted
+        ValueChannel::PrintConv
     };
+    let metadata = raw_metadata
+        .winner_occurrences()
+        .filter(|(key, _)| surviving.contains_key(*key))
+        .map(|(key, occurrence)| {
+            let value = if no_print_conv {
+                occurrence.project(channel).into_owned()
+            } else {
+                resolved_print_value(occurrence)
+            };
+            (key.clone(), value)
+        })
+        .collect();
     ResolvedFileOutput::Metadata(metadata)
 }
 
@@ -649,8 +682,22 @@ mod tests {
             "IFD0",
             Instance::default(),
         );
-        source.insert("IFD0:Orientation", TagValue::new_integer(6));
-        source.insert("ExifIFD:FNumber", TagValue::new_rational(28, 10));
+        source.insert_occurrence_with_raw(
+            "IFD0:Orientation",
+            TagValue::new_string("Rotate 90 CW"),
+            TagValue::new_integer(6),
+            1,
+            "IFD0",
+            Instance::default(),
+        );
+        source.insert_occurrence_with_raw(
+            "ExifIFD:FNumber",
+            TagValue::new_string("2.8"),
+            TagValue::new_rational(28, 10),
+            1,
+            "ExifIFD",
+            Instance::default(),
+        );
         // Exercise unfiltered, selected, grouped and duplicate projection;
         // --no-print-conv must preserve the same complete string as well.
         for (selected, grouped, all_tags) in [
@@ -895,6 +942,39 @@ mod tests {
             TagValue::new_string("26 kB")
         );
     }
+
+    #[test]
+    fn legacy_untyped_occurrences_keep_name_based_print_conversions() {
+        // These producers still use the compatibility insert shim: their raw
+        // values are typed, but no explicit PrintConv form is attached.  The
+        // CLI must retain the old ExifTool-compatible display projection
+        // while the typed occurrence consumers are being migrated.
+        let mut metadata = MetadataMap::new();
+        metadata.insert("Ducky:Quality", TagValue::new_integer(84));
+        metadata.insert("GPS:GPSLatitudeRef", TagValue::new_string("N"));
+        metadata.insert("GPS:GPSLongitudeRef", TagValue::new_string("W"));
+        metadata.insert("GPS:GPSDestDistanceRef", TagValue::new_string(""));
+        metadata.insert_with_group1("APP14:APP14Flags0", TagValue::new_integer(0), "Adobe");
+        metadata.insert_with_group1("APP14:APP14Flags1", TagValue::new_integer(0), "Adobe");
+
+        for (request, expected) in [
+            ("Quality", TagValue::new_string("84%")),
+            ("GPSLatitudeRef", TagValue::new_string("North")),
+            ("GPSLongitudeRef", TagValue::new_string("West")),
+            ("GPSDestDistanceRef", TagValue::new_string("Unknown ()")),
+            ("APP14Flags0", TagValue::new_string("(none)")),
+            ("APP14Flags1", TagValue::new_string("(none)")),
+        ] {
+            let resolved = resolve_requested_tags(&metadata, &[request.to_string()], false);
+            assert_eq!(resolved.len(), 1, "request {request} must resolve");
+            assert_eq!(
+                resolved_display_value(resolved[0].occurrence, false),
+                expected,
+                "legacy PrintConv compatibility for {request}"
+            );
+        }
+    }
+
     #[test]
     fn raw_projection_and_renderers_keep_values_in_default_and_selected_modes() {
         use crate::cli::args::DetectorMode;
@@ -917,7 +997,14 @@ mod tests {
                 Instance::default(),
             );
         }
-        source.insert("IFD0:Orientation", TagValue::new_integer(6));
+        source.insert_occurrence_with_raw(
+            "IFD0:Orientation",
+            TagValue::new_string("Rotate 90 CW"),
+            TagValue::new_integer(6),
+            1,
+            "IFD0",
+            Instance::default(),
+        );
         source.insert("IFD0:0xDEAD", TagValue::new_string("hidden"));
         for (selected, grouped, all_tags) in [
             (false, false, false),
