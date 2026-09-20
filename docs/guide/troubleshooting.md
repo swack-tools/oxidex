@@ -79,8 +79,8 @@ reports them.
 
 ## Build problems
 
-- **`cargo install oxidex` installs something else.** The crates.io name
-  belongs to an unrelated stub crate. Build from source; see
+- **`cargo install oxidex` does not install this beta.** No root or tag crate
+  is published to crates.io for this beta. Build from source; see
   [Installation](/guide/getting-started).
 - **`cargo test --workspace --release` fails with bogus `panic strategy` or
   duplicate `chrono` errors.** This is an output filename collision after

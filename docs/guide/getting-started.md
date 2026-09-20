@@ -2,9 +2,8 @@
 
 ::: warning Beta: v2.0.0-beta.1
 These docs describe the pre-tag 2.0 development line, not a published beta.
-The signed v2.0.0-beta.1 tag and binary assets are pending; until they are
-published on the [releases page](https://github.com/swack-tools/oxidex/releases),
-build this development line from source as shown below. The previous stable release is
+The v2.0.0-beta.1 signed tag and binary assets are pending; build this
+development line from source as shown below. The previous stable release is
 [v1.2.1](https://github.com/swack-tools/oxidex/releases/tag/v1.2.1). It
 behaves differently in several ways; see
 [Migrating from 1.x to 2.0](/guide/migrating-from-1x).
@@ -35,17 +34,16 @@ Optional Cargo features:
 | `magika` | the Magika file-type detector (`--detector magika`) |
 | `exiftool-comparison` | the ExifTool comparison tests (development only) |
 
-::: danger Do not run `cargo install oxidex`
-The `oxidex` name on crates.io belongs to an unrelated, reserved stub crate
-(version 0.0.1). OxiDex is not published on crates.io. Install from source
-or from a GitHub release.
+::: danger Do not install this beta from crates.io
+No root or tag crate is published to crates.io for this beta. Build from the
+development checkout shown above. Do not assume a beta GitHub release exists.
 :::
 
 ## Prebuilt binaries
 
-Published GitHub releases carry prebuilt binaries. v1.2.1 has these; do not
-assume a v2.0.0-beta.1 asset exists until its signed tag and release receipt
-are recorded:
+Published GitHub releases carry prebuilt binaries. The following are planned
+beta asset names, not currently available beta assets; do not use them until
+the signed tag and release receipt are recorded:
 
 | Platform | Asset |
 | --- | --- |
@@ -54,9 +52,9 @@ are recorded:
 | macOS universal (Apple Silicon and Intel) | `oxidex-universal-apple-darwin`, or the `.dmg` |
 | Windows x86_64 | `oxidex-x86_64-pc-windows-gnu.exe` |
 
-Download the asset for your platform, make it executable (`chmod +x`) and
-put it on your `PATH`. Release tags also publish a container image,
-`swackhamer/oxidex`, on Docker Hub.
+After a signed beta tag and release receipt exist, the installation instructions
+will name the applicable asset and container image. Until then, build from the
+development checkout.
 
 ## First commands
 

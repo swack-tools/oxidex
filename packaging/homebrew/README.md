@@ -1,8 +1,8 @@
 # Homebrew distribution
 
-Homebrew is not enabled for the beta `2.0.0-beta.1` release.
-The release workflow publishes signed GitHub release assets only; it does not
-publish a formula or bottles to Homebrew.
+Homebrew is not enabled for the beta `2.0.0-beta.1` development line. Its
+signed tag and binary assets are pending. If the release workflow later runs,
+it will not publish a formula or bottles to Homebrew.
 
 There is deliberately no active formula in this directory. The disabled
 placeholder is retained only as a reminder that a future formula must be

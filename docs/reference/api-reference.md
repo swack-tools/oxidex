@@ -1,13 +1,15 @@
 # Rust API reference
 
 This page lists the public read and write API at the `refactor/tag-machinery`
-tip (v2.0.0-beta.1), with signatures taken from the source. For a tutorial,
-see the [Rust library guide](/guide/library-api). For every item, run
+development branch or commit (v2.0.0-beta.1), with signatures taken from the
+source. For a tutorial, see the [Rust library guide](/guide/library-api). For
+every item, run
 `cargo doc --open`.
 
 ::: warning Beta
-The API may still change before 2.0.0. The crate is not on crates.io:
-depend on the Git repository.
+The API may still change before 2.0.0. The root and tag crates are not on
+crates.io for this beta. Depend on a development branch or commit in the Git
+repository. The signed tag and exact `main` SHA remain pending.
 :::
 
 ## Paths

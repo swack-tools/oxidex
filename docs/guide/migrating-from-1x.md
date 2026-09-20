@@ -72,8 +72,9 @@ already the keys in 1.2.1.
   1.2.1 keep their signatures.
 - **Toolchain:** the crate now uses edition 2024, so build it with a recent
   Rust. The repository pins 1.97.1 in `rust-toolchain.toml`.
-- **Depend on Git, not crates.io.** The `oxidex` crate on crates.io is not
-  this project. See [Installation](/guide/getting-started).
+- **Depend on a development Git branch or commit, not crates.io.** No root or
+  tag crate is published to crates.io for this beta. See
+  [Installation](/guide/getting-started).
 
 ## If you use the C API
 

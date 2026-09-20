@@ -26,10 +26,8 @@ documentation = "https://github.com/swack-tools/oxidex"
 readme = "README.md"
 keywords = ["exif", "metadata", "xmp", "exiftool", "image"]
 categories = ["multimedia::images", "multimedia::video", "command-line-utilities", "parsing"]
-# Not publishable to crates.io until the maintainer settles the name: the
-# crates.io name `oxidex` belongs to another account (a 0.0.1 placeholder).
-# This keeps `cargo publish --workspace` from attempting it and failing after
-# the tag crates have already gone up. See docs/RELEASE-2.0.0-beta.1.md.
+# The selected beta policy publishes no workspace crate to crates.io. Keep this
+# explicit in every workspace manifest; see docs/RELEASE-2.0.0-beta.1.md.
 publish = false
 
 [lib]

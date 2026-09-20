@@ -26,12 +26,13 @@ labelled historical measurements.
 
 ## Quick Start
 
-### Download Binary
+### Build the development snapshot
 
-Pre-built binaries available on the [Releases page](https://github.com/swack-tools/oxidex/releases).
-The `2.0.0-beta.1` release is not published to crates.io; Rust users should
-use the signed Git tag or build from a checkout. Debian/RPM and Homebrew
-packages are not published by the beta release automation either.
+The `2.0.0-beta.1` signed tag and binary assets are pending. This beta is not
+published to crates.io: neither the root crate nor tag crates are available
+there. Build from source on the current development branch or an explicitly
+chosen development commit. Debian/RPM and Homebrew packages are not published
+by the beta release automation either.
 
 ## Usage
 

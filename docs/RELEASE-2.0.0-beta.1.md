@@ -59,9 +59,21 @@ recollection.
 
 ## Tag and publish
 
-Run from a clean checkout of the exact reviewed `main` commit. First perform
-the local dry run. It exercises every guard and creates and verifies the signed
-tag locally, then removes it without pushing:
+The signed tag and final `main` SHA remain pending. Before those release inputs
+exist, validate only an honest development branch or commit; do not describe a
+development build as a release asset:
+
+```bash
+git switch refactor/tag-machinery
+DEV_SHA=$(git rev-parse HEAD)
+cargo build --release
+./target/release/oxidex --version
+```
+
+After a reviewed `main` commit is frozen and the exact tag authorization is
+recorded, run the guarded recipe from a clean checkout of that commit. First
+perform the local dry run. It exercises every guard and creates and verifies
+the signed tag locally, then removes it without pushing:
 
 ```bash
 SSH='ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer'
@@ -116,75 +128,12 @@ publishes a tag reachable from `origin/main`; the guarded recipe above and the
 release workflow enforce the same ancestry. For this pre-release it publishes
 only `:v2.0.0-beta.1` and `:2.0.0-beta.1` and never moves `:latest`.
 
-**crates.io: not published by this release, and blocked for the root crate.**
-No workflow publishes to crates.io, and a tag push doesn't publish crates.
-`tools/ci/test_release_workflow.py` fails if any workflow gains a
-non-dry-run `cargo publish`, and the root `Cargo.toml` now carries
-`publish = false`, so a tag can't leave a half-published set of crates
-(crates.io only yanks, it never deletes). Checked 2026-09-18 against
-`https://crates.io/api/v1/crates/<name>` and `/owners`, with the probe
-validated on `serde` (200):
-
-- **`oxidex`: taken, not ours.** It is 0.0.1, created 2025-08-12, owned by
-  crates.io user `qodeninja`, repository `github.com/oxidex-rs/oxidex`,
-  described as a "reserved name stub". `cargo publish` of the root crate
-  fails on ownership.
-- **`oxidex-tags`, `-core`, `-camera`, `-media`, `-image`, `-document`,
-  `-specialty`, `-shared`: free.** None exists (404 on the crate and its
-  owners), so nothing has been published under them by anyone, the
-  maintainer included.
-- **Size, independent of the name.** The root crate packages to 288.7 MiB
-  (25.7 MiB compressed) and crates.io's limit is 10 MiB. It needs an
-  `include`/`exclude` list whatever it's called (mostly test data).
-
-The name is the maintainer's decision. The options:
-
-- [ ] **(a) Get the name transferred.** Ask `qodeninja` directly (the
-      `oxidex-rs/oxidex` repository is the contact point). If that goes
-      nowhere, crates.io's usage policy handles squatted placeholder crates
-      through help@crates.io, case by case and with no guaranteed outcome
-      or timeline. That rules it out as a blocker for a beta.
-- [ ] **(b) Publish under another name.** These are verified free on
-      crates.io's API and sparse index (both 404): `oxidex-rs`,
-      `oxidex-metadata`, `swack-oxidex`. Renaming is cheaper than it
-      sounds, because `Cargo.toml` already pins `[lib] name = "oxidex"` and
-      `[[bin]] name = "oxidex"`. Rust imports (`use oxidex::...`), the
-      `oxidex` binary, `liboxidex.{a,dylib,so}`, the C header and the
-      Python ctypes binding all stay as they are. What changes:
-      `[package] name` and `Cargo.lock`; `fuzz/Cargo.toml` and
-      `benches/spike/Cargo.toml` (`oxidex = { path = ... }` becomes
-      `oxidex = { package = "<new>", path = ... }`); every `-p oxidex` in
-      docs and `CLAUDE.md`; the install instructions (`cargo install <new>`
-      in `docs/guide/getting-started.md`, and the "not on crates.io" notes
-      in `docs/guide/library-api.md`, `troubleshooting.md`,
-      `migrating-from-1x.md` and `docs/reference/api-reference.md`); the
-      crates.io badge in `README.md`; and the snippet in the
-      `src/parsers/magika_detector.rs` docs. The tag crates keep their
-      names.
-- [x] **(c) No crates.io for the beta.** Ship the GitHub pre-release
-      binaries only. Rust users take a git dependency on the signed tag:
-      `oxidex = { git = "https://github.com/swack-tools/oxidex", tag = "v2.0.0-beta.1" }`.
-      This needs nothing else from this PR, and it is what happens by
-      default if no box above is ticked.
-
-The docs tell users not to run `cargo install oxidex` and to depend on Git,
-which matches the selected policy. The README no longer advertises a crates.io
-package or docs.rs API page for this beta.
-
-If the tag crates are published (under (a) or (b)), do it by hand. Cargo
-orders the crates by dependency, and `publish = false` keeps the root crate
-out:
-
-```bash
-cargo publish --workspace --exclude oxidex --dry-run   # rehearse (passes today)
-cargo publish --workspace --exclude oxidex             # uploads in this order:
-# oxidex-tags-shared 0.1.0, oxidex-tags-core, -camera, -document, -image,
-# -media, -specialty, then oxidex-tags (all 2.0.0-beta.1)
-```
-
-A published pre-release is only selected by a requirement that names a
-pre-release (`=2.0.0-beta.1` or `^2.0.0-beta.1`). `^2` will not pick it,
-and that is intended.
+**crates.io: disabled for this beta.** Option (c) is selected: there is no
+crates.io publication for the root crate or any tag crate. Every workspace
+manifest sets `publish = false`, and workflow tests reject any registry upload
+step. There is no manual registry-upload recipe for this beta and no claim
+about package-name availability or prior publication. Build from a development
+branch or commit while the signed tag and final `main` SHA remain pending.
 
 **Homebrew.** Homebrew is disabled for this beta. There is no active formula;
 the placeholder is retained as `packaging/homebrew/oxidex.rb.disabled` and

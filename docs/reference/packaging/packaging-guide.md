@@ -6,16 +6,17 @@ local package helpers. It is intentionally explicit about what the
 
 ## Beta distribution policy
 
-The current beta release automation publishes signed GitHub release assets
-only: platform binaries, the macOS DMG, checksums, and independent release
-provenance. Debian/RPM, Homebrew, and crates.io packages are not published
-by the current beta release automation. Do not upload a locally generated package to a beta release or
+The v2.0.0-beta.1 signed tag and binary assets are pending. Its planned release
+automation will publish platform binaries, the macOS DMG, checksums, and
+independent release provenance only after those inputs exist. Debian/RPM,
+Homebrew, and crates.io packages are not published by the current beta release
+automation. Do not upload a locally generated package to a beta release or
 describe it as an official distribution channel.
 
-The supported beta installation path is the signed asset on the
-[GitHub Releases page](https://github.com/swack-tools/oxidex/releases). Rust
-users who need the library can use the signed Git tag as a Git dependency or
-build from a checkout. The root crate remains intentionally unpublished.
+Until the pending tag and assets exist, build from a development checkout.
+Rust users who need the library can depend on a development branch or commit
+in the Git repository. The root crate and every tag crate are intentionally
+unpublished for this beta.
 
 ## Optional local experiments
 
@@ -124,6 +125,7 @@ future release. Each requires a separate maintainer decision, publication
 workflow, signing/checksum policy, and factual documentation update. Do not
 pre-populate those surfaces with guessed URLs, tags, checksums, or artifacts.
 
-For the current release workflow and its signed macOS assets, see
+For the planned release workflow, see
 [`docs/RELEASE-2.0.0-beta.1.md`](../../RELEASE-2.0.0-beta.1.md) and
-`.github/workflows/release.yml`.
+`.github/workflows/release.yml`. Neither establishes a signed beta tag, a
+GitHub release, or Apple verification while those release inputs are pending.

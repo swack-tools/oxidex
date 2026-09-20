@@ -1146,24 +1146,20 @@ class ReleaseGuideTests(unittest.TestCase):
 
 
 class CratesIoTests(unittest.TestCase):
-    """No tag push may reach crates.io while the root crate's name is unresolved.
-
-    The crates.io name `oxidex` belongs to another account. A publish step
-    run from a tag would upload the eight tag crates and then fail on the
-    root one, leaving a half-published release that can't be withdrawn
-    (crates.io only yanks). Publishing stays a manual, maintainer-run step
-    (docs/RELEASE-2.0.0-beta.1.md) until the name is settled. Lift these
-    two guards together, in the same change that settles the name.
-    """
+    """The selected beta policy must fail closed for every workspace crate."""
 
     def test_no_workflow_publishes_to_crates_io(self):
         for wf in sorted(WORKFLOWS.glob("*.y*ml")):
             with self.subTest(workflow=wf.name):
                 self.assertNotRegex(wf.read_text(), r"cargo\s+publish\b(?![^\n]*--dry-run)")
 
-    def test_root_crate_is_not_publishable(self):
-        with (REPO / "Cargo.toml").open("rb") as fh:
-            self.assertIs(tomllib.load(fh)["package"].get("publish"), False)
+    def test_workspace_crates_are_not_publishable_for_the_beta(self):
+        manifests = [REPO / "Cargo.toml", *sorted(REPO.glob("oxidex-tags*/Cargo.toml"))]
+        self.assertEqual(len(manifests), 9)
+        for manifest in manifests:
+            with self.subTest(manifest=manifest):
+                with manifest.open("rb") as fh:
+                    self.assertIs(tomllib.load(fh)["package"].get("publish"), False)
 
 
 if __name__ == "__main__":

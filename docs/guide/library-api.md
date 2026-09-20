@@ -4,10 +4,10 @@
 The library API may still change before 2.0.0. This is pre-tag guidance: the
 v2.0.0-beta.1 signed tag is pending. The selected beta package policy is no
 crates.io publication: neither the root crate nor the tag crates will be
-published to crates.io for this beta. Depend on the Git repository for
-development use. The signed tag and exact `main` SHA are still pending;
-signed-tag dependency instructions remain pending until those release inputs
-exist. The 2.0 API differs from 1.x; see
+published to crates.io for this beta. Depend on the Git repository at a
+development branch or commit for development use. The signed tag and exact
+`main` SHA remain pending; signed-tag dependency instructions remain pending
+until those release inputs exist. The 2.0 API differs from 1.x; see
 [Migrating from 1.x to 2.0](/guide/migrating-from-1x).
 :::
 
