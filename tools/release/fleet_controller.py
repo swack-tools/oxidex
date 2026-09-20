@@ -472,9 +472,23 @@ def _parse_file_lease(section: str) -> list[str]:
         return []
     paths: list[str] = []
     for line in files_match.group(1).splitlines():
-        match = re.match(r"\s*-\s+(?:Add|Create|Modify|Delete|Test):\s+`([^`]+)`", line)
+        entry = re.match(r"\s*-\s+(.*)$", line)
+        if not entry:
+            continue
+        value = entry.group(1).strip()
+        if re.match(r"(?i)^do not\b", value):
+            continue
+        match = re.fullmatch(
+            r"(?i)(?:Add|Create|Modify|Delete|Test|Replace or update):\s*`([^`]+)`",
+            value,
+        )
         if match:
             paths.append(match.group(1))
+            continue
+        if re.match(r"(?i)^(?:Add|Create|Modify|Delete|Test|Replace or update):", value):
+            raise Refused(
+                "file lease operation requires one literal backtick path: " + value
+            )
     return sorted(set(paths))
 
 
@@ -727,6 +741,7 @@ def materialize_prd(
             require_operational_path(Path(value))
     _, task_section = sections[task_number]
     planned_worker = _parse_worker(task_section)
+    planned_file_lease = _parse_file_lease(task_section)
     existing_worker = task["worker"]
     policy_fields = ("kind", "model", "effort")
     if all(
@@ -736,6 +751,7 @@ def materialize_prd(
         planned_worker["identity"] = existing_worker.get("identity")
     materialized_task = dict(task)
     materialized_task["worker"] = planned_worker
+    materialized_task["file_lease"] = planned_file_lease
     content = (
         "# Materialized Beta 1 Functional Task PRD\n\n"
         + global_constraints
@@ -763,6 +779,7 @@ def materialize_prd(
         current["target_sha"] = base_sha
         current["expected_merge_parent"] = base_sha
         current["worker"] = dict(planned_worker)
+        current["file_lease"] = list(planned_file_lease)
         current["prd_sha256"] = digest
         current["next_command"] = f"launch --task {task_number}"
 
@@ -1939,7 +1956,8 @@ def inspect_worktree(task: Mapping[str, Any]) -> dict[str, Any]:
     head_sha = require_sha(_git(worktree, "rev-parse", "HEAD"), "worktree HEAD")
     branch = _git(worktree, "branch", "--show-current")
     changed: list[str] = []
-    for line in _git(worktree, "status", "--porcelain=v1", "--untracked-files=all").splitlines():
+    status = _git(worktree, "status", "--porcelain=v1", "--untracked-files=all")
+    for line in status.splitlines():
         path = line[3:]
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
@@ -2822,6 +2840,84 @@ def launch_worker(
     return record
 
 
+def _rendered_prd_file_lease(prd: Path) -> list[str]:
+    if not prd.is_file() or prd.is_symlink():
+        raise Blocked(f"canonical PRD missing: {prd}")
+    content = prd.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^### Exact file lease\s*\n(.*?)(?=^### |\Z)", content
+    )
+    if not match:
+        raise Blocked(f"canonical PRD has no exact file lease: {prd}")
+    paths: list[str] = []
+    saw_none = False
+    for raw_line in match.group(1).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line == "- none":
+            if saw_none or paths:
+                raise Blocked(f"canonical PRD has ambiguous file lease: {prd}")
+            saw_none = True
+            continue
+        literal = re.fullmatch(r"- `([^`]+)`", line)
+        if not literal:
+            raise Blocked(f"canonical PRD has ambiguous file lease: {prd}")
+        if saw_none:
+            raise Blocked(f"canonical PRD has ambiguous file lease: {prd}")
+        paths.append(literal.group(1))
+    return sorted(set(paths))
+
+
+def validate_launch_preflight(task: Mapping[str, Any], state: Mapping[str, Any]) -> None:
+    """Refuse a launch unless the task's materialized identity is still exact."""
+    worktree = require_operational_path(Path(task["paths"]["worktree"]))
+    if not (worktree / ".git").exists():
+        raise Blocked(f"Task {task['number']} worktree is missing: {worktree}")
+    changed = []
+    for line in _git(worktree, "status", "--porcelain=v1", "--untracked-files=all").splitlines():
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path != "HANDOFF.md":
+            changed.append(path)
+    if changed:
+        raise Blocked(
+            f"Task {task['number']} worktree is not clean before launch: "
+            f"{', '.join(changed)}"
+        )
+    expected_branch = _task_branch(task)
+    branch = _git(worktree, "branch", "--show-current")
+    if branch != expected_branch:
+        raise Blocked(
+            f"Task {task['number']} worktree branch mismatch: expected "
+            f"{expected_branch}, got {branch or '<detached>'}"
+        )
+    head_sha = require_sha(_git(worktree, "rev-parse", "HEAD"), "worktree HEAD")
+    expected = require_sha(str(task["expected_merge_parent"]), "expected_merge_parent")
+    identities = {
+        "worktree HEAD": head_sha,
+        "base_sha": require_sha(str(task["base_sha"]), "base_sha"),
+        "task target_sha": require_sha(
+            str(task["target_sha"]), "task target_sha"
+        ),
+        "expected_merge_parent": expected,
+        "controller target_sha": require_sha(str(state["target_sha"]), "controller target_sha"),
+    }
+    if len(set(identities.values())) != 1:
+        raise Blocked(
+            f"Task {task['number']} launch identities diverged: "
+            + ", ".join(f"{name}={value}" for name, value in identities.items())
+        )
+    prd = require_operational_path(Path(task["paths"]["prd"]))
+    rendered_lease = _rendered_prd_file_lease(prd)
+    state_lease = sorted(set(str(path) for path in task["file_lease"]))
+    if rendered_lease != state_lease:
+        raise Blocked(
+            f"Task {task['number']} PRD file lease does not reconcile with state"
+        )
+
+
 def launch_task(
     store: StateStore, task_number: int, executable: Path
 ) -> dict[str, Any]:
@@ -2838,6 +2934,7 @@ def launch_task(
     prd = Path(task["paths"]["prd"])
     if not prd_hash_matches(prd, task["prd_sha256"] or ""):
         raise Blocked(f"Task {task_number} PRD hash does not reconcile")
+    validate_launch_preflight(task, state)
     segment = task["launch_count"] + 1
     record = launch_worker(
         store,
