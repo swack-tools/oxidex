@@ -766,6 +766,7 @@ def reconcile_task(
     def update(state: dict[str, Any]) -> dict[str, Any]:
         task = _task(store, state, task_number)
         merge_sha = remote.get("merge_sha")
+        explicit_blocker = task.get("blocker") not in {None, "dependency"}
         if merge_sha:
             require_sha(str(merge_sha), "merge_sha")
             validate_merge_parent(
@@ -789,7 +790,7 @@ def reconcile_task(
         if merge_sha:
             _transition(task, "merged")
             task["next_command"] = "complete"
-        elif remote.get("pushed_sha"):
+        elif remote.get("pushed_sha") and not explicit_blocker:
             _transition(task, "pushed")
             task["next_command"] = f"reconcile --task {task_number}"
         return task
@@ -1563,6 +1564,14 @@ def reconcile_pending_launch_intents(store: StateStore) -> dict[int, dict[str, A
     token/executable/argv are sufficient to authenticate exactly one detached
     child in a fresh process.
     """
+    explicitly_blocked: set[int] = set()
+    if store.snapshot_path.exists():
+        snapshot = store.read_snapshot()
+        explicitly_blocked = {
+            int(number)
+            for number, task in snapshot["tasks"].items()
+            if task.get("blocker") not in {None, "dependency"}
+        }
     adopted: dict[int, dict[str, Any]] = {}
     for process_root in sorted((store.root / "processes").glob("[0-9][0-9]")) if (store.root / "processes").is_dir() else []:
         for path in sorted(process_root.glob("launch-intent-*.json")):
@@ -1575,6 +1584,8 @@ def reconcile_pending_launch_intents(store: StateStore) -> dict[int, dict[str, A
             required = {"task", "segment", "token", "executable", "argv", "worktree", "prd", "prd_sha256", "model", "events", "final", "prompt", "prompt_sha256"}
             if not required <= intent.keys() or not isinstance(intent["task"], int):
                 raise Blocked(f"incomplete durable launch intent: {path}")
+            if intent["task"] in explicitly_blocked:
+                continue
             matches = _find_intent_children(intent)
             if len(matches) > 1:
                 raise Blocked(
@@ -2195,6 +2206,8 @@ def _release_ready_dependencies(store: StateStore) -> None:
         for task in state["tasks"].values():
             if task["state"] not in {"blocked", "queued"}:
                 continue
+            if task.get("blocker") not in {None, "dependency"}:
+                continue
             try:
                 require_dependencies(task, state["tasks"])
             except Blocked:
@@ -2271,6 +2284,9 @@ def _recover_controller(
                             f"Task {key} durable process record names task "
                             f"{durable_process.get('task')}"
                         )
+                    if task.get("blocker") not in {None, "dependency"}:
+                        durable_process = None
+                if durable_process is not None:
                     existing = task.get("process")
                     candidate_segment = int(durable_process.get("segment", 0))
                     existing_segment = int(existing.get("segment", 0)) if existing else 0

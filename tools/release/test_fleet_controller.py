@@ -609,6 +609,7 @@ class FleetControllerTests(unittest.TestCase):
         pushed = task(0, "committed")
         merged = task(1, "pushed")
         dependent = task(2, "blocked", [1])
+        dependent["blocker"] = "dependency"
         controller_state = state(pushed, merged, dependent)
         controller_state["target_sha"] = head_sha
         store = fleet.StateStore(self.root / "controller")
@@ -633,6 +634,7 @@ class FleetControllerTests(unittest.TestCase):
 
         after = store.read_snapshot()
         self.assertEqual(after["tasks"]["0"]["pushed_sha"], head_sha)
+        self.assertEqual(after["tasks"]["0"]["state"], "pushed")
         self.assertEqual(after["tasks"]["0"]["pr_ci_state"]["ci"], "success")
         self.assertEqual(after["tasks"]["1"]["state"], "merged")
         self.assertEqual(after["tasks"]["1"]["merge_sha"], head_sha)
@@ -646,6 +648,228 @@ class FleetControllerTests(unittest.TestCase):
             check=True,
         ).stdout
         self.assertEqual(remote_after, remote_before)
+
+    def test_recover_does_not_release_explicit_typed_producer_blocker(self) -> None:
+        dependency = task(2, "merged")
+        dependency["merge_sha"] = SHA_B
+        blocked = task(3, "blocked", [2])
+        blocked["blocker"] = "typed-producer"
+        blocked["next_command"] = "review --task 3"
+        store = fleet.StateStore(self.root / "controller")
+        store.write_snapshot(state(dependency, blocked))
+        remote = {
+            "target_sha": SHA_A,
+            "tasks": {"2": {"merge_sha": SHA_B, "merge_parent": SHA_A}},
+        }
+
+        first = fleet.recover_controller_for_test(store, self.root, remote)
+        after_first = store.read_snapshot()
+        second = fleet.recover_controller_for_test(store, self.root, remote)
+        after_second = store.read_snapshot()
+
+        self.assertEqual(after_first, after_second)
+        self.assertEqual(after_second["tasks"]["2"]["state"], "merged")
+        self.assertEqual(after_second["tasks"]["3"]["state"], "blocked")
+        self.assertEqual(after_second["tasks"]["3"]["blocker"], "typed-producer")
+        self.assertEqual(after_second["tasks"]["3"]["next_command"], "review --task 3")
+        self.assertEqual(second["actions"]["3"], "reconcile --task 3")
+        self.assertEqual(first["actions"], second["actions"])
+
+    def test_recover_preserves_review_and_runtime_blockers(self) -> None:
+        remote = {
+            "target_sha": SHA_A,
+            "tasks": {"2": {"merge_sha": SHA_B, "merge_parent": SHA_A}},
+        }
+        for blocker in ("review", "runtime"):
+            with self.subTest(blocker=blocker):
+                dependency = task(2, "merged")
+                dependency["merge_sha"] = SHA_B
+                blocked = task(3, "blocked", [2])
+                blocked["blocker"] = blocker
+                store = fleet.StateStore(self.root / f"controller-{blocker}")
+                store.write_snapshot(state(dependency, blocked))
+
+                fleet.recover_controller_for_test(store, self.root, remote)
+                fleet.recover_controller_for_test(store, self.root, remote)
+
+                recovered = store.read_snapshot()["tasks"]["3"]
+                self.assertEqual(recovered["state"], "blocked")
+                self.assertEqual(recovered["blocker"], blocker)
+
+    def test_recover_preserves_explicit_blockers_with_remote_pushed_task(self) -> None:
+        remote = {
+            "target_sha": SHA_A,
+            "tasks": {
+                "3": {
+                    "head_sha": SHA_B,
+                    "pushed_sha": SHA_B,
+                    "pr": 103,
+                    "pr_state": "OPEN",
+                    "ci": "pending",
+                }
+            },
+        }
+        for blocker in ("manual", "review", "runtime"):
+            with self.subTest(blocker=blocker):
+                blocked = task(3, "blocked")
+                blocked["blocker"] = blocker
+                blocked["next_command"] = f"{blocker} --task 3"
+                store = fleet.StateStore(self.root / f"remote-{blocker}")
+                store.write_snapshot(state(blocked))
+
+                first = fleet.recover_controller_for_test(store, self.root, remote)
+                after_first = store.read_snapshot()
+                second = fleet.recover_controller_for_test(store, self.root, remote)
+                after_second = store.read_snapshot()
+
+                self.assertEqual(after_first, after_second)
+                recovered = after_second["tasks"]["3"]
+                self.assertEqual(recovered["state"], "blocked")
+                self.assertEqual(recovered["blocker"], blocker)
+                self.assertEqual(recovered["next_command"], f"{blocker} --task 3")
+                self.assertEqual(second["actions"]["3"], "reconcile --task 3")
+                self.assertEqual(first["actions"], second["actions"])
+
+    def test_recover_does_not_adopt_live_process_for_explicit_blockers(self) -> None:
+        remote = {"target_sha": SHA_A, "tasks": {}}
+        for blocker in ("manual", "review", "runtime"):
+            with self.subTest(blocker=blocker):
+                store = fleet.StateStore(self.root / f"live-process-{blocker}")
+                blocked = task(3, "blocked")
+                blocked["blocker"] = blocker
+                blocked["next_command"] = f"{blocker} --task 3"
+                store.write_snapshot(state(blocked))
+                process = subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(30)", blocker],
+                    start_new_session=True,
+                )
+                self.processes.append(process.pid)
+                process_root = store.root / "processes/03"
+                process_root.mkdir(parents=True)
+                argv = fleet.process_kernel_argv(process.pid)
+                durable = {
+                    "pid": process.pid,
+                    "start_time": fleet.process_start_time(process.pid),
+                    "token": blocker,
+                    "task": 3,
+                    "executable": sys.executable,
+                    "model": "gpt-5.6-terra",
+                    "argv": argv,
+                    "observed_command": fleet.process_command(process.pid),
+                    "events": str(process_root / "events-1.jsonl"),
+                    "final": str(process_root / "final-1.md"),
+                    "segment": 1,
+                    "session_id": f"{blocker}-session",
+                    "offset": 0,
+                    "launch_count": 1,
+                    "kernel_argv": argv,
+                    "kernel_executable": fleet.process_kernel_executable(process.pid),
+                    "process_group": os.getpgid(process.pid),
+                }
+                fleet.atomic_json(process_root / "process-1.json", durable)
+
+                first = fleet.recover_controller_for_test(store, self.root, remote)
+                after_first = store.read_snapshot()
+                second = fleet.recover_controller_for_test(store, self.root, remote)
+                after_second = store.read_snapshot()
+
+                self.assertEqual(after_first, after_second)
+                recovered = after_second["tasks"]["3"]
+                self.assertEqual(recovered["state"], "blocked")
+                self.assertEqual(recovered["blocker"], blocker)
+                self.assertEqual(recovered["next_command"], f"{blocker} --task 3")
+                self.assertIsNone(recovered["process"])
+                self.assertEqual(second["actions"]["3"], "reconcile --task 3")
+                self.assertEqual(first["actions"], second["actions"])
+
+    def test_recover_does_not_adopt_stale_process_for_explicit_blockers(self) -> None:
+        remote = {"target_sha": SHA_A, "tasks": {}}
+        for blocker in ("manual", "review", "runtime"):
+            with self.subTest(blocker=blocker):
+                store = fleet.StateStore(self.root / f"stale-process-{blocker}")
+                blocked = task(3, "blocked")
+                blocked["blocker"] = blocker
+                blocked["next_command"] = f"{blocker} --task 3"
+                store.write_snapshot(state(blocked))
+                process_root = store.root / "processes/03"
+                process_root.mkdir(parents=True)
+                fleet.atomic_json(
+                    process_root / "process-1.json",
+                    process_record(3, process_root / "events-1.jsonl", "stale-session"),
+                )
+
+                first = fleet.recover_controller_for_test(store, self.root, remote)
+                after_first = store.read_snapshot()
+                second = fleet.recover_controller_for_test(store, self.root, remote)
+                after_second = store.read_snapshot()
+
+                self.assertEqual(after_first, after_second)
+                recovered = after_second["tasks"]["3"]
+                self.assertEqual(recovered["state"], "blocked")
+                self.assertEqual(recovered["blocker"], blocker)
+                self.assertEqual(recovered["next_command"], f"{blocker} --task 3")
+                self.assertIsNone(recovered["process"])
+                self.assertEqual(second["actions"]["3"], "reconcile --task 3")
+                self.assertEqual(first["actions"], second["actions"])
+
+    def test_recover_does_not_adopt_prepared_intent_for_explicit_blockers(self) -> None:
+        remote = {"target_sha": SHA_A, "tasks": {}}
+        fake = self.root / "fake-codex"
+        fake.write_text("#!/bin/sh\nwhile :; do sleep 1; done\n", encoding="utf-8")
+        fake.chmod(0o755)
+        for blocker in ("manual", "review", "runtime"):
+            with self.subTest(blocker=blocker):
+                store = fleet.StateStore(self.root / f"intent-{blocker}")
+                store.write_snapshot(state(task(3, "launchable")))
+                worktree = self.root / f"worktree-{blocker}"
+                worktree.mkdir()
+                prd = self.root / f"prd-{blocker}.md"
+                prd.write_text("task\n", encoding="utf-8")
+                record = fleet.launch_worker(
+                    store,
+                    fake,
+                    worktree,
+                    f"intent-{blocker}-token",
+                    prd,
+                    task_number=3,
+                    model="gpt-5.6-terra",
+                    segment=1,
+                )
+                self.processes.append(record["pid"])
+                intent_path = fleet.launch_intent_path(store, 3, 1)
+                intent = json.loads(intent_path.read_text(encoding="utf-8"))
+                intent["lifecycle"] = "prepared"
+                intent.pop("record", None)
+                fleet.atomic_json(intent_path, intent)
+                (store.root / "processes/03/process-1.json").unlink()
+
+                def block(snapshot: dict[str, object]) -> None:
+                    current = snapshot["tasks"]["3"]
+                    fleet._transition(current, "blocked")
+                    current["blocker"] = blocker
+                    current["process"] = None
+                    current["launch_count"] = 0
+                    current["next_command"] = f"{blocker} --task 3"
+
+                store.mutate(block)
+                first = fleet.recover_controller_for_test(store, self.root, remote)
+                after_first = store.read_snapshot()
+                second = fleet.recover_controller_for_test(store, self.root, remote)
+                after_second = store.read_snapshot()
+
+                self.assertEqual(after_first, after_second)
+                recovered = after_second["tasks"]["3"]
+                self.assertEqual(recovered["state"], "blocked")
+                self.assertEqual(recovered["blocker"], blocker)
+                self.assertIsNone(recovered["process"])
+                self.assertEqual(recovered["launch_count"], 0)
+                self.assertEqual(recovered["next_command"], f"{blocker} --task 3")
+                self.assertEqual(
+                    json.loads(intent_path.read_text(encoding="utf-8"))["lifecycle"],
+                    "prepared",
+                )
+                self.assertEqual(second["actions"]["3"], "reconcile --task 3")
+                self.assertEqual(first["actions"], second["actions"])
 
     def test_remote_pr_must_target_the_controller_integration_branch(self) -> None:
         """A valid PR against another base cannot release this controller's task."""
