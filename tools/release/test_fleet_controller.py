@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -720,6 +721,211 @@ class FleetControllerTests(unittest.TestCase):
             ):
                 fleet.dispatch(parser.parse_args(arguments))
             operation.assert_not_called()
+
+    def test_second_repair_manifest_cannot_strand_prepared_transaction(self) -> None:
+        fixture = repair_fixture(self.root)
+        store = fixture["store"]
+        original_atomic_json = fleet.atomic_json
+        environment = {
+            "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+            "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+        }
+
+        def fail_before_snapshot(path: Path, value: dict) -> None:
+            if path == store.snapshot_path:
+                raise OSError("forced crash before first snapshot")
+            original_atomic_json(path, value)
+
+        with mock.patch.dict(
+            os.environ, environment, clear=False
+        ), mock.patch.object(
+            fleet, "atomic_json", side_effect=fail_before_snapshot
+        ), self.assertRaisesRegex(OSError, "before first snapshot"):
+            fleet.repair_merge_receipts(
+                store,
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+
+        original_journal = fleet.repair_transaction_path(
+            store, fixture["manifest_sha256"]
+        )
+        self.assertEqual(json.loads(original_journal.read_text())["phase"], "prepared")
+        second_manifest = json.loads(json.dumps(fixture["manifest"]))
+        second_manifest["tasks"] = second_manifest["tasks"][:1]
+        second_manifest_path = self.root / "second-repair-manifest.json"
+        second_hash = write_repair_manifest(second_manifest_path, second_manifest)
+        durable_paths = (
+            store.snapshot_path,
+            store.events_path,
+            store.receipt_index_path,
+            original_journal,
+        )
+        before = {path: path.read_bytes() for path in durable_paths}
+
+        with mock.patch.dict(
+            os.environ, environment, clear=False
+        ), self.assertRaisesRegex(
+            fleet.Blocked, "pending merge-receipt repair"
+        ):
+            fleet.repair_merge_receipts(
+                store,
+                fixture["repository"],
+                second_manifest_path,
+                second_hash,
+            )
+
+        self.assertEqual({path: path.read_bytes() for path in durable_paths}, before)
+        self.assertFalse(fleet.repair_transaction_path(store, second_hash).exists())
+        with mock.patch.dict(os.environ, environment, clear=False):
+            resumed = fleet.repair_merge_receipts(
+                store,
+                fixture["repository"],
+                fixture["manifest_path"],
+                fixture["manifest_sha256"],
+            )
+        self.assertFalse(resumed["idempotent"])
+        self.assertEqual(json.loads(original_journal.read_text())["phase"], "complete")
+
+    def test_prepared_replay_refusal_never_mutates_any_durable_file(self) -> None:
+        for case in (
+            "divergent-event",
+            "divergent-index",
+            "planned-state-hash",
+            "planned-event-hash",
+            "planned-index-hash",
+        ):
+            with self.subTest(case=case):
+                fixture = repair_fixture(self.root / case)
+                store = fixture["store"]
+                original_atomic_json = fleet.atomic_json
+                environment = {
+                    "FLEET_GH_EXECUTABLE": str(fixture["fake_gh"]),
+                    "FLEET_GITHUB_REPOSITORY": "swack-tools/oxidex",
+                }
+
+                def fail_before_snapshot(path: Path, value: dict) -> None:
+                    if path == store.snapshot_path:
+                        raise OSError("forced crash before replay snapshot")
+                    original_atomic_json(path, value)
+
+                with mock.patch.dict(
+                    os.environ, environment, clear=False
+                ), mock.patch.object(
+                    fleet, "atomic_json", side_effect=fail_before_snapshot
+                ), self.assertRaisesRegex(OSError, "before replay snapshot"):
+                    fleet.repair_merge_receipts(
+                        store,
+                        fixture["repository"],
+                        fixture["manifest_path"],
+                        fixture["manifest_sha256"],
+                    )
+
+                journal_path = fleet.repair_transaction_path(
+                    store, fixture["manifest_sha256"]
+                )
+                if case == "divergent-event":
+                    with store.events_path.open("a", encoding="utf-8") as output:
+                        output.write('{"event":"divergent"}\n')
+                elif case == "divergent-index":
+                    index = store.read_receipt_index()
+                    index["divergent"] = True
+                    original_atomic_json(store.receipt_index_path, index)
+                else:
+                    journal = json.loads(journal_path.read_text())
+                    field = {
+                        "planned-state-hash": "fleet_state_sha256",
+                        "planned-event-hash": "fleet_events_sha256",
+                        "planned-index-hash": "receipt_index_sha256",
+                    }[case]
+                    journal["after"][field] = "0" * 64
+                    original_atomic_json(journal_path, journal)
+
+                durable_paths = (
+                    store.snapshot_path,
+                    store.events_path,
+                    store.receipt_index_path,
+                    journal_path,
+                )
+                before = {path: path.read_bytes() for path in durable_paths}
+                with mock.patch.dict(
+                    os.environ, environment, clear=False
+                ), self.assertRaisesRegex(
+                    fleet.Refused, "repair"
+                ):
+                    fleet.repair_merge_receipts(
+                        store,
+                        fixture["repository"],
+                        fixture["manifest_path"],
+                        fixture["manifest_sha256"],
+                    )
+                self.assertEqual(
+                    {path: path.read_bytes() for path in durable_paths}, before
+                )
+
+    def test_monitor_follow_releases_lock_for_status_and_authenticated_stop(self) -> None:
+        store = fleet.StateStore(self.root)
+        current = task(0, "running")
+        current["process"] = process_record(0, self.root / "events.jsonl")
+        current["process"]["start_time"] = "start"
+        store.write_snapshot(state(current))
+        parser = fleet.build_parser()
+        follow_args = parser.parse_args(
+            ["monitor", "--root", str(store.root), "--task", "0", "--follow"]
+        )
+        status_args = parser.parse_args(["status", "--root", str(store.root)])
+        stop_args = parser.parse_args(["stop", "--root", str(store.root), "--task", "0"])
+        sleeping = threading.Event()
+        release_sleep = threading.Event()
+        worker_running = threading.Event()
+        worker_running.set()
+        results: dict[str, object] = {}
+
+        def controlled_sleep(_seconds: float) -> None:
+            sleeping.set()
+            release_sleep.wait(2)
+
+        def run(name: str, args: object) -> None:
+            try:
+                results[name] = fleet.dispatch(args)
+            except BaseException as exc:
+                results[name] = exc
+
+        def authenticated_kill(_pid: int, _signal: int) -> None:
+            worker_running.clear()
+
+        patches = (
+            mock.patch.object(fleet, "monitor_task", return_value={"events": []}),
+            mock.patch.object(
+                fleet, "worker_is_live", side_effect=lambda _record: worker_running.is_set()
+            ),
+            mock.patch.object(fleet, "process_start_time", return_value="start"),
+            mock.patch.object(fleet, "process_command", return_value="worker token-0"),
+            mock.patch.object(fleet.os, "kill", side_effect=authenticated_kill),
+            mock.patch.object(fleet.time, "sleep", side_effect=controlled_sleep),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            follow = threading.Thread(target=run, args=("follow", follow_args))
+            status = threading.Thread(target=run, args=("status", status_args))
+            stop = threading.Thread(target=run, args=("stop", stop_args))
+            follow.start()
+            self.assertTrue(sleeping.wait(1), "follow monitor never reached wait")
+            status.start()
+            stop.start()
+            status_available = status.join(0.25) is None and not status.is_alive()
+            stop_available = stop.join(0.25) is None and not stop.is_alive()
+            release_sleep.set()
+            follow.join(2)
+            status.join(2)
+            stop.join(2)
+
+        self.assertTrue(status_available, "status blocked behind monitor --follow")
+        self.assertTrue(stop_available, "stop blocked behind monitor --follow")
+        self.assertFalse(follow.is_alive())
+        self.assertIsInstance(results["status"], dict)
+        self.assertEqual(results["stop"], {"stopped": True, "signal": "TERM"})
+        self.assertNotIsInstance(results["follow"], BaseException)
 
     def test_repair_merge_receipts_refuses_stale_before_hash_and_manifest_hash(self) -> None:
         for case in ("before-state", "manifest"):

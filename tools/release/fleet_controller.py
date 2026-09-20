@@ -339,7 +339,9 @@ class StateStore:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
             stream.close()
 
-    def _require_no_pending_repair(self) -> None:
+    def _require_no_pending_repair(
+        self, *, allowed_journal: Path | None = None
+    ) -> None:
         transactions = self.root / "repair-transactions"
         if not transactions.is_dir():
             return
@@ -348,7 +350,10 @@ class StateStore:
                 value = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise Refused(f"malformed merge-receipt repair journal: {path}") from exc
-            if not isinstance(value, Mapping) or value.get("phase") != "complete":
+            if (
+                not isinstance(value, Mapping)
+                or value.get("phase") != "complete"
+            ) and path != allowed_journal:
                 raise Blocked(
                     "pending merge-receipt repair must be resumed before controller mutation"
                 )
@@ -1459,6 +1464,7 @@ def _validate_repair_journal(
         "before",
         "after",
         "events_before_size",
+        "outputs",
         "tasks",
         "event",
         "receipt",
@@ -1537,58 +1543,88 @@ def _validate_repair_journal(
     }
     if receipt != expected_receipt:
         raise Refused("repair journal receipt does not match its event")
+    outputs = journal.get("outputs")
+    if not isinstance(outputs, Mapping) or set(outputs) != {
+        "snapshot",
+        "receipt_index",
+    }:
+        raise Refused("repair journal exact outputs are incomplete")
+    snapshot = outputs["snapshot"]
+    receipt_index = outputs["receipt_index"]
+    if not isinstance(snapshot, Mapping) or not isinstance(receipt_index, Mapping):
+        raise Refused("repair journal exact outputs must be objects")
+    validate_state(snapshot)
+    if _bytes_hash(_json_document_bytes(snapshot)) != after["fleet_state_sha256"]:
+        raise Refused("repair journal planned snapshot hash mismatch")
+    for key, change in changes.items():
+        task = snapshot["tasks"].get(key)
+        if not isinstance(task, Mapping):
+            raise Refused("repair journal planned snapshot lacks repaired task")
+        new = change["new"]
+        if (
+            task.get("expected_merge_parent") != new["expected_merge_parent"]
+            or task.get("remote_branch") != new["remote_branch"]
+            or _recorded_pr(task) != new["pr"]
+        ):
+            raise Refused("repair journal planned snapshot identity mismatch")
+    if _bytes_hash(_json_document_bytes(receipt_index)) != after[
+        "receipt_index_sha256"
+    ]:
+        raise Refused("repair journal planned receipt-index hash mismatch")
+    planned_repairs = receipt_index.get("merge_receipt_repairs", {})
+    if not isinstance(planned_repairs, Mapping) or planned_repairs.get(
+        manifest_hash
+    ) != receipt:
+        raise Refused("repair journal planned receipt-index identity mismatch")
     return dict(journal)
 
 
-def _resume_repair_transaction(
+def _validate_repair_replay(
     store: StateStore,
-    journal_path: Path,
     journal: dict[str, Any],
 ) -> dict[str, Any]:
     before = journal["before"]
     after = journal["after"]
+    outputs = journal["outputs"]
+    snapshot_output = outputs["snapshot"]
+    receipt_index_output = outputs["receipt_index"]
+
     state_hash = sha256_file(store.snapshot_path)
     if state_hash == before["fleet_state_sha256"]:
         state = store.read_snapshot()
-        _apply_repair_changes(store, state, journal["tasks"])
-        atomic_json(store.snapshot_path, state)
-        if sha256_file(store.snapshot_path) != after["fleet_state_sha256"]:
-            raise Refused("repair snapshot write did not produce journaled hash")
+        planned_state = json.loads(json.dumps(state))
+        _apply_repair_changes(store, planned_state, journal["tasks"])
+        if planned_state != snapshot_output:
+            raise Refused("repair planned snapshot identity mismatch")
+        write_snapshot = True
     elif state_hash == after["fleet_state_sha256"]:
         state = store.read_snapshot()
-        for key, change in journal["tasks"].items():
-            task = _task(store, state, int(key))
-            new = change["new"]
-            if (
-                task.get("expected_merge_parent") != new["expected_merge_parent"]
-                or task.get("remote_branch") != new["remote_branch"]
-                or _recorded_pr(task) != new["pr"]
-            ):
-                raise Refused("journaled repair snapshot bindings do not reconcile")
+        if state != snapshot_output:
+            raise Refused("journaled repair snapshot identity mismatch")
+        write_snapshot = False
     else:
         raise Refused("repair snapshot matches neither journaled before nor after hash")
 
     events_bytes = store.events_path.read_bytes()
-    events_hash = _bytes_hash(events_bytes)
     before_size = journal["events_before_size"]
+    if len(events_bytes) < before_size:
+        raise Refused("repair event log is shorter than its journaled prefix")
     prefix = events_bytes[:before_size]
     tail = events_bytes[before_size:]
+    if _bytes_hash(prefix) != before["fleet_events_sha256"]:
+        raise Refused("repair event prefix does not match journaled before hash")
     encoded_event = (
         json.dumps(journal["event"], sort_keys=True) + "\n"
     ).encode("utf-8")
-    recoverable_partial = (
-        len(events_bytes) >= before_size
-        and _bytes_hash(prefix) == before["fleet_events_sha256"]
-        and encoded_event.startswith(tail)
-    )
-    if events_hash == before["fleet_events_sha256"] or recoverable_partial:
-        record = _append_event_locked(store, journal["event"])
-        if record != journal["event"]:
-            raise Refused("repair event sequence changed during journal replay")
-        if sha256_file(store.events_path) != after["fleet_events_sha256"]:
-            raise Refused("repair event append did not produce journaled hash")
-    elif events_hash != after["fleet_events_sha256"]:
-        raise Refused("repair events match neither journaled before nor after hash")
+    events_output = prefix + encoded_event
+    if _bytes_hash(events_output) != after["fleet_events_sha256"]:
+        raise Refused("repair journal planned event hash mismatch")
+    if events_bytes == events_output:
+        write_event = False
+    elif encoded_event.startswith(tail):
+        write_event = True
+    else:
+        raise Refused("repair events match neither journaled before nor after identity")
 
     index_hash = sha256_file(store.receipt_index_path)
     if index_hash == before["receipt_index_sha256"]:
@@ -1596,15 +1632,52 @@ def _resume_repair_transaction(
         repairs = index.get("merge_receipt_repairs", {})
         if not isinstance(repairs, Mapping):
             raise Refused("receipt index merge_receipt_repairs must be an object")
-        updated_index = dict(index)
-        updated_repairs = dict(repairs)
-        updated_repairs[journal["manifest_sha256"]] = journal["receipt"]
-        updated_index["merge_receipt_repairs"] = updated_repairs
-        atomic_json(store.receipt_index_path, updated_index)
+        planned_index = dict(index)
+        planned_repairs = dict(repairs)
+        planned_repairs[journal["manifest_sha256"]] = journal["receipt"]
+        planned_index["merge_receipt_repairs"] = planned_repairs
+        if planned_index != receipt_index_output:
+            raise Refused("repair planned receipt-index identity mismatch")
+        write_index = True
+    elif index_hash == after["receipt_index_sha256"]:
+        index = store.read_receipt_index()
+        if index != receipt_index_output:
+            raise Refused("journaled repair receipt-index identity mismatch")
+        write_index = False
+    else:
+        raise Refused("repair index matches neither journaled before nor after hash")
+
+    return {
+        "snapshot": snapshot_output,
+        "events": events_output,
+        "receipt_index": receipt_index_output,
+        "write_snapshot": write_snapshot,
+        "write_event": write_event,
+        "write_index": write_index,
+    }
+
+
+def _resume_repair_transaction(
+    store: StateStore,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    after = journal["after"]
+    replay = _validate_repair_replay(store, journal)
+    if replay["write_snapshot"]:
+        atomic_json(store.snapshot_path, replay["snapshot"])
+        if sha256_file(store.snapshot_path) != after["fleet_state_sha256"]:
+            raise Refused("repair snapshot write did not produce journaled hash")
+    if replay["write_event"]:
+        record = _append_event_locked(store, journal["event"])
+        if record != journal["event"]:
+            raise Refused("repair event sequence changed during journal replay")
+        if sha256_file(store.events_path) != after["fleet_events_sha256"]:
+            raise Refused("repair event append did not produce journaled hash")
+    if replay["write_index"]:
+        atomic_json(store.receipt_index_path, replay["receipt_index"])
         if sha256_file(store.receipt_index_path) != after["receipt_index_sha256"]:
             raise Refused("repair receipt write did not produce journaled hash")
-    elif index_hash != after["receipt_index_sha256"]:
-        raise Refused("repair index matches neither journaled before nor after hash")
 
     journal["phase"] = "complete"
     atomic_json(journal_path, journal)
@@ -1659,6 +1732,10 @@ def _prepare_repair_journal(
         "manifest_sha256": manifest_hash,
         "before": transaction["before"],
         "events_before_size": len(events_before),
+        "outputs": {
+            "snapshot": state,
+            "receipt_index": updated_index,
+        },
         "after": {
             "fleet_state_sha256": state_after_hash,
             "fleet_events_sha256": _bytes_hash(events_after),
@@ -1683,6 +1760,7 @@ def repair_merge_receipts(
     )
     journal_path = repair_transaction_path(store, manifest_sha256)
     with store._locked():
+        store._require_no_pending_repair(allowed_journal=journal_path)
         state = store.read_snapshot()
         index = store.read_receipt_index()
         repairs = index.get("merge_receipt_repairs", {})
@@ -3475,12 +3553,7 @@ def _dispatch(store: StateStore, args: argparse.Namespace) -> Any:
         require_operational_path(args.repo)
         return launch_task(store, args.task, args.executable)
     if args.command == "monitor":
-        result = monitor_task(store, args.task)
-        if args.follow:
-            while task_status(store, args.task).get("process") and worker_is_live(task_status(store, args.task)["process"]):
-                time.sleep(0.5)
-                result = monitor_task(store, args.task)
-        return result
+        return monitor_task(store, args.task)
     if args.command == "status":
         return task_status(store, args.task)
     if args.command == "heartbeat":
@@ -3495,10 +3568,25 @@ def _dispatch(store: StateStore, args: argparse.Namespace) -> Any:
     raise Refused(f"unhandled command {args.command}")
 
 
+def _dispatch_monitor_follow(store: StateStore, args: argparse.Namespace) -> Any:
+    while True:
+        with store._locked():
+            store._require_no_pending_repair()
+            result = monitor_task(store, args.task)
+            task = task_status(store, args.task)
+            process = task.get("process")
+            live = bool(process) and worker_is_live(process)
+        if not live:
+            return result
+        time.sleep(0.5)
+
+
 def dispatch(args: argparse.Namespace) -> Any:
     store = StateStore(args.root)
     if args.command == "repair-merge-receipts":
         return _dispatch(store, args)
+    if args.command == "monitor" and args.follow:
+        return _dispatch_monitor_follow(store, args)
     with store._locked():
         if args.command != "status":
             store._require_no_pending_repair()
