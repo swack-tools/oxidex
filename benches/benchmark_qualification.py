@@ -178,10 +178,16 @@ def _durable_artifact(value: Any, evidence: Path, label: str) -> Path:
     if not path.is_absolute() or path.is_symlink() or not path.is_file():
         raise Refused(f"{label} must be an existing regular file")
     resolved = path.resolve()
+    evidence_resolved = evidence.resolve()
     try:
-        resolved.relative_to(evidence)
+        resolved.relative_to(evidence_resolved)
     except ValueError as exc:
         raise Refused(f"{label} is outside the durable run directory") from exc
+    cursor = path
+    while cursor.resolve() != evidence.resolve():
+        if cursor.is_symlink():
+            raise Refused(f"{label} uses a symlink path component")
+        cursor = cursor.parent
     return resolved
 
 
@@ -342,11 +348,12 @@ def validate_result_document(
         raise Refused("result cache policy is not bound to the requested policy")
     if not RUN_ID_RE.fullmatch(str(identity["run_id"])) or "historical" in str(identity["run_id"]).lower():
         raise Refused("result run_id is invalid or historical")
-    evidence = Path(str(identity["evidence_path"])).resolve()
-    if not evidence.is_dir() or evidence.name != identity["run_id"]:
+    evidence_input = Path(str(identity["evidence_path"]))
+    evidence = evidence_input.resolve()
+    if evidence_input.is_symlink() or not evidence.is_dir() or evidence.name != identity["run_id"]:
         raise Refused("result evidence path is not the durable run directory")
-    if identity["source_artifact_sha256"] != trusted_manifest["manifest_sha256"]:
-        raise Refused("result source artifact is not the trusted corpus manifest")
+    if identity["source_artifact_sha256"] != _require_sha(identity["source_artifact_sha256"], "source artifact SHA-256"):
+        raise Refused("invalid source artifact SHA-256")
     try:
         measured = datetime.fromisoformat(str(identity["measured_at"]).replace("Z", "+00:00"))
     except ValueError as exc:
@@ -356,10 +363,14 @@ def validate_result_document(
     now = datetime.now(timezone.utc).timestamp()
     if abs(now - measured.timestamp()) > 86400:
         raise Refused("result measured_at is outside the 24-hour freshness window")
-    artifacts = [_durable_artifact(identity[key], evidence, key) for key in
+    artifacts = [_durable_artifact(identity[key], evidence_input, key) for key in
                  ("result_artifact_path", "raw_artifact_path", "source_artifact_path", "cache_artifact_path")]
     if any(abs(path.stat().st_mtime - measured.timestamp()) > 86400 for path in artifacts):
         raise Refused("result artifact freshness is outside the 24-hour window")
+    for key, path in zip(("raw_artifact_path", "source_artifact_path", "cache_artifact_path"), artifacts[1:]):
+        digest_key = key.replace("_path", "_sha256")
+        if digest_key not in identity or sha256_file(path) != _require_sha(identity[digest_key], digest_key):
+            raise Refused(f"{key} bytes do not match trusted SHA-256")
     row_count = 0
     for name in EXPECTED_SCENARIOS:
         scenario = document.get(name)

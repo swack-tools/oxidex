@@ -34,13 +34,13 @@ def result_row(command: str, *, candidate: bool = False) -> dict:
 
 
 def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
-    source_hash = qualification.build_corpus_manifest(corpus, expected_count=2)["manifest_sha256"]
     evidence = corpus.parent / "evidence" / "run-20260920-a"
     evidence.parent.mkdir(exist_ok=True)
     evidence.mkdir(exist_ok=True)
     artifact_paths = {name: evidence / name for name in ("result.json", "raw.json", "source.json", "cache.json")}
     for artifact in artifact_paths.values():
         artifact.write_text("artifact")
+    artifact_hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in artifact_paths.items()}
     measured_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     commands = {
         "single_file": ["single-file-oracle", binary],
@@ -61,7 +61,9 @@ def result_document(binary: str, corpus: Path, *, commit: str = SHA) -> dict:
                       "source_artifact_path": str(artifact_paths["source.json"]),
                       "cache_artifact_path": str(artifact_paths["cache.json"]),
                       "cache_policy": "warm-cache", "result_artifact_sha256": "f" * 64,
-                      "source_artifact_sha256": source_hash},
+                      "source_artifact_sha256": artifact_hashes["source.json"],
+                      "raw_artifact_sha256": artifact_hashes["raw.json"],
+                      "cache_artifact_sha256": artifact_hashes["cache.json"]},
         "instrument": {
             "commit": commit,
             "dirty": False,
