@@ -7,8 +7,8 @@
   },
   "instrument": {
     "build_timeout_seconds": 1800,
-    "et_lib": "/tmp/oxidex-exiftool-cache/exiftool/lib",
-    "perl": "/tmp/oxidex-perl538-build-20260913-r2/prefix/bin/perl5.38.2",
+    "et_lib": "/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/lib",
+    "perl": "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
     "perl_version": "v5.38.2",
     "probe_timeout_seconds": 180,
     "rust": "cargo build --locked --jobs 2 --bin expr_oracle_harness; execute reported artifact",
@@ -21,7 +21,7 @@
     "skip": 14
   },
   "schema": 2,
-  "tables_sha256": "536386691b0df2e6a6ebabed21bb8eb2de5dd66947901a4ea3284c87eecaf461",
+  "tables_sha256": "002b1f70711db04f411287256a69d57744841eeacfacf6c4d6fffda060f0d8ea",
   "use_counts": {
     "total": 7377,
     "verified": 5511
