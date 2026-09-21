@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess, sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -197,6 +198,9 @@ class AdapterTests(unittest.TestCase):
         read = adapter.read(self.args("read"), run=self.fake_run)
         self.assertEqual(built["binary"]["sha256"], read["binary"]["sha256"])
         self.assertEqual(read["state"], "passed"); self.assertEqual(read["comparison"], {"kind": "oxidex_vs_native", "native_release": "11.78", "matched": 2, "mismatched": 0})
+        self.assertEqual(read["classification_counts"], {
+            "matched": 2, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0,
+        })
         self.assertEqual(read["fixtures"]["entries"][0]["sha256"], adapter._sha(self.fixture))
         self.assertTrue(any(row[0][0] == sys.executable and "conformance.py" in row[0][1] for row in self.seen))
 
@@ -577,6 +581,24 @@ class LiveInventoryProofTests(unittest.TestCase):
             (checkout / "src/exiftool_tables/ifd/json.rs").write_text("changed")
             with self.assertRaisesRegex(adapter.Refused, "no longer matches"):
                 adapter._validate_artifacts(checkout, rows)
+
+    def test_generated_refusals_are_explicitly_counted_by_artifact_and_json_path(self):
+        with TemporaryDirectory() as temporary:
+            checkout = Path(temporary)
+            ledger = checkout / "generated-ledger.json"
+            ledger.write_text(json.dumps({
+                "stats": {"refused": 2, "omitted_rows": [1, 2, 3]},
+                "rows": [{"withheld": ["reason"]}, {"withheld": []}],
+            }))
+            with patch.object(adapter.artifacts, "inventory",
+                              return_value=[SimpleNamespace(path="generated-ledger.json")]):
+                result = adapter.generated_refusal_counts(checkout)
+            self.assertEqual(result["total"], 6)
+            self.assertEqual(
+                {(row["json_path"], row["count"]) for row in result["counters"]},
+                {("stats.refused", 2), ("stats.omitted_rows", 3),
+                 ("rows[0].withheld", 1), ("rows[1].withheld", 0)},
+            )
 
 
 class CurrentGeneratedMatrixContractTests(unittest.TestCase):

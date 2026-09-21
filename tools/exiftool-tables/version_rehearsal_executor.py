@@ -11,6 +11,7 @@ It deliberately has no promotion action.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import fcntl
 import hashlib
 import json
@@ -39,8 +40,10 @@ _PLACEHOLDERS = {
     "release", "checkout", "target", "report", "native_source", "native_lib",
     "native_program", "native_perl", "native_probe", "native_probe_sha256", "source_commit",
     "write_fixture_manifest",
+    "read_fixture_manifest",
 }
 _WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
+_READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 
 
 class Refused(ValueError):
@@ -81,40 +84,45 @@ def _sha_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_fixture_binding(value: Any) -> dict[str, Any]:
-    """Capture a write fixture manifest and every requested JPEG identity.
+def _fixture_binding(value: Any, *, kind: str, jpeg_only: bool) -> dict[str, Any]:
+    """Capture a fixture manifest and every requested source identity.
 
     The path alone cannot be immutable execution input: both the manifest and
     its listed source fixtures must still equal this snapshot at execution.
     """
+    label = "write fixture" if jpeg_only else "read fixture"
     if not isinstance(value, str) or not os.path.isabs(value) or "\x00" in value:
-        raise Refused("write fixture manifest path is malformed")
-    manifest = _regular(Path(value), "write fixture manifest")
+        raise Refused(f"{label} manifest path is malformed")
+    manifest = _regular(Path(value), f"{label} manifest")
     try:
         document = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise Refused("write fixture manifest is unreadable") from exc
+        raise Refused(f"{label} manifest is unreadable") from exc
     if (not isinstance(document, dict) or document.get("schema") != 1
-            or document.get("kind") != _WRITE_FIXTURE_KIND
+            or document.get("kind") != kind
             or not isinstance(document.get("fixtures"), list) or not document["fixtures"]):
-        raise Refused("write fixture manifest schema is unsupported")
+        raise Refused(f"{label} manifest schema is unsupported")
     fixtures = []
     for item in document["fixtures"]:
         if (not isinstance(item, dict) or set(item) != {"path", "sha256", "bytes"}
                 or not isinstance(item["path"], str) or not os.path.isabs(item["path"])
                 or not isinstance(item["sha256"], str) or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
                 or type(item["bytes"]) is not int or item["bytes"] < 1):
-            raise Refused("write fixture manifest item is malformed")
-        fixture = _regular(Path(item["path"]), "write fixture")
+            raise Refused(f"{label} manifest item is malformed")
+        fixture = _regular(Path(item["path"]), label)
         if _sha_file(fixture) != item["sha256"] or fixture.stat().st_size != item["bytes"]:
-            raise Refused("write fixture differs from immutable manifest")
-        if fixture.read_bytes()[:2] != b"\xff\xd8":
+            raise Refused(f"{label} differs from immutable manifest")
+        if jpeg_only and fixture.read_bytes()[:2] != b"\xff\xd8":
             raise Refused("write fixture manifest contains a non-JPEG fixture")
         fixtures.append({"path": str(fixture), "sha256": item["sha256"], "bytes": item["bytes"]})
     if len({(item["path"], item["sha256"]) for item in fixtures}) != len(fixtures):
-        raise Refused("write fixture manifest has duplicate fixture identity")
+        raise Refused(f"{label} manifest has duplicate fixture identity")
     return {"path": str(manifest), "sha256": _sha_file(manifest), "bytes": manifest.stat().st_size,
             "fixtures": fixtures}
+
+
+def _write_fixture_binding(value: Any) -> dict[str, Any]:
+    return _fixture_binding(value, kind=_WRITE_FIXTURE_KIND, jpeg_only=True)
 
 
 def _config(value: Any, releases: list[str]) -> dict[str, Any]:
@@ -137,13 +145,19 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
                 raise Refused(f"{stage} command has malformed placeholder") from exc
             if any(field not in _PLACEHOLDERS for field in fields):
                 raise Refused(f"{stage} command has an unsupported placeholder")
+    execution_releases = value.get("execution_releases", releases)
+    if (not isinstance(execution_releases, list) or not execution_releases
+            or len(set(execution_releases)) != len(execution_releases)
+            or any(release not in releases for release in execution_releases)):
+        raise Refused("execution releases must be a unique nonempty subset of the verified plan")
     perls = value.get("perls")
     cases = value.get("native_cases")
-    if not isinstance(perls, dict) or not isinstance(cases, dict) or set(perls) != set(releases) or set(cases) != set(releases):
-        raise Refused("config must bind an explicit Perl and native cases to every selected release")
-    if any(not isinstance(perls[row], str) or not perls[row] for row in releases):
+    if (not isinstance(perls, dict) or not isinstance(cases, dict)
+            or set(perls) != set(execution_releases) or set(cases) != set(execution_releases)):
+        raise Refused("config must bind an explicit Perl and native cases to every execution release")
+    if any(not isinstance(perls[row], str) or not perls[row] for row in execution_releases):
         raise Refused("native Perl binding is malformed")
-    if any(not isinstance(cases[row], list) or not cases[row] for row in releases):
+    if any(not isinstance(cases[row], list) or not cases[row] for row in execution_releases):
         raise Refused("native cases must be a nonempty list for every selected release")
     lock = value.get("host_lock")
     if not isinstance(lock, str) or not os.path.isabs(lock) or "\x00" in lock:
@@ -151,18 +165,36 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
     source_commit = value.get("execution_source_commit")
     if not isinstance(source_commit, str) or rehearsal.GIT_OID_RE.fullmatch(source_commit) is None:
         raise Refused("config must bind an immutable execution source commit")
+    targets = value.get("target_directories")
+    if targets is not None:
+        if (not isinstance(targets, dict) or set(targets) != set(execution_releases)
+                or any(not isinstance(targets[release], str) or not os.path.isabs(targets[release])
+                       or "\x00" in targets[release] for release in execution_releases)
+                or len({str(Path(targets[release]).resolve()) for release in execution_releases}) != len(execution_releases)):
+            raise Refused("target directories must uniquely bind every execution release")
+    read_manifests = value.get("read_fixture_manifests")
+    if not isinstance(read_manifests, dict) or set(read_manifests) != set(execution_releases):
+        raise Refused("read command requires one immutable fixture manifest per execution release")
+    current_reads = {
+        release: _fixture_binding(read_manifests[release], kind=_READ_FIXTURE_KIND, jpeg_only=False)
+        for release in execution_releases
+    }
+    saved_reads = value.get("read_fixture_bindings")
+    if saved_reads is not None and saved_reads != current_reads:
+        raise Refused("read fixture manifest or requested scope changed after initialization")
+    normalized = dict(value)
+    normalized["read_fixture_bindings"] = current_reads
     has_write = "write" in commands
     manifests, bindings = value.get("write_fixture_manifests"), value.get("write_fixture_bindings")
     if not has_write:
         if manifests is not None or bindings is not None:
             raise Refused("write fixture bindings require a configured write command")
-        return value
-    if not isinstance(manifests, dict) or set(manifests) != set(releases):
+        return normalized
+    if not isinstance(manifests, dict) or set(manifests) != set(execution_releases):
         raise Refused("write command requires one immutable fixture manifest per selected release")
-    current = {release: _write_fixture_binding(manifests[release]) for release in releases}
+    current = {release: _write_fixture_binding(manifests[release]) for release in execution_releases}
     if bindings is not None and bindings != current:
         raise Refused("write fixture manifest or requested JPEG scope changed after initialization")
-    normalized = dict(value)
     normalized["write_fixture_bindings"] = current
     return normalized
 
@@ -184,7 +216,7 @@ def _verify_inputs(run_dir: Path, archive_cache: Path, source_root: Path) -> tup
 
 
 def _journal_payload(plan: dict[str, Any], materialization: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    releases = _selected(plan)
+    releases = config.get("execution_releases", _selected(plan))
     return {
         "schema": SCHEMA,
         "kind": KIND,
@@ -247,8 +279,9 @@ def _load_journal(run_dir: Path, archive_cache: Path, source_root: Path) -> tupl
     docs = _verify_inputs(run_dir, archive_cache, source_root)
     config = _read(run_dir / "inputs" / "config.json")
     plan, materialization = docs[2], docs[4]
-    releases = _selected(plan)
-    _config(config, releases)
+    selected_releases = _selected(plan)
+    _config(config, selected_releases)
+    releases = config.get("execution_releases", selected_releases)
     journal = _read(run_dir / "execution-status.json")
     if (journal.get("schema") != SCHEMA or journal.get("kind") != KIND
             or journal.get("plan_sha256") != plan["plan_sha256"]
@@ -746,6 +779,7 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
               "native_source": str(source), "native_lib": str(lib), "native_program": str(program),
               "native_perl": perl, "native_probe": str(_result_path(run_dir, release, "native")),
               "native_probe_sha256": str(native_probe.get("probe_sha256", "")),
+              "read_fixture_manifest": str(config["read_fixture_bindings"][release]["path"]),
               "write_fixture_manifest": str(config.get("write_fixture_bindings", {}).get(release, {}).get("path", "")),
               "source_commit": config["execution_source_commit"]}
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), OXIDEX_REHEARSAL_RELEASE=release,
@@ -754,6 +788,7 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                OXIDEX_REHEARSAL_NATIVE_PROBE=values["native_probe"], OXIDEX_REHEARSAL_REPORT=str(output),
                OXIDEX_REHEARSAL_NATIVE_PROBE_SHA256=values["native_probe_sha256"],
                OXIDEX_REHEARSAL_CHECKOUT=str(checkout), OXIDEX_REHEARSAL_SOURCE_COMMIT=config["execution_source_commit"],
+               OXIDEX_REHEARSAL_READ_FIXTURE_MANIFEST=values["read_fixture_manifest"],
                OXIDEX_REHEARSAL_WRITE_FIXTURE_MANIFEST=values["write_fixture_manifest"])
     def started(pid: int, pgid: int) -> None:
         journal["active"]["child"] = {"pid": pid, "pgid": pgid}
@@ -775,6 +810,12 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("binary") != build_report.get("binary"):
                 raise Refused("read result did not use the proven build binary")
+            fixture_binding = config["read_fixture_bindings"][release]
+            fixture_report = result.get("fixtures", {})
+            if (not isinstance(fixture_report, dict)
+                    or fixture_report.get("manifest") != fixture_binding["path"]
+                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]):
+                raise Refused("read result did not use the immutable selected fixture manifest")
         if stage == "write":
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("writer_binary") != build_report.get("writer_binary"):
@@ -871,12 +912,33 @@ class _HostLock:
         if self.file: fcntl.flock(self.file.fileno(), fcntl.LOCK_UN); self.file.close()
 
 
+def _external_host_lock(config: Mapping[str, Any], descriptor: int | None):
+    if descriptor is None:
+        return _HostLock(Path(config["host_lock"]))
+    if type(descriptor) is not int or descriptor < 0:
+        raise Refused("external host lock descriptor is malformed")
+    try:
+        held = os.fstat(descriptor)
+        configured = os.stat(config["host_lock"], follow_symlinks=False)
+    except (OSError, BlockingIOError) as exc:
+        raise Refused("external host lock descriptor is not a held configured lease") from exc
+    if not __import__("stat").S_ISREG(configured.st_mode) or (held.st_dev, held.st_ino) != (configured.st_dev, configured.st_ino):
+        raise Refused("external host lock descriptor differs from configured lease")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, BlockingIOError) as exc:
+        raise Refused("external host lock descriptor is not held exclusively") from exc
+    return nullcontext()
+
+
 def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: Path, *,
             run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-            checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout) -> dict[str, Any]:
+            checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout,
+            host_lock_fd: int | None = None) -> dict[str, Any]:
     """Run each selected release once. Failed or interrupted stages are never retried."""
     journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
-    with _HostLock(Path(config["host_lock"])):
+    lock = _external_host_lock(config, host_lock_fd)
+    with lock:
         if journal["phase"] == "running":
             raise Refused("execution is interrupted; recover it before any later run")
         if journal["phase"] in {"failed", "interrupted", "complete"}:
@@ -885,9 +947,11 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         repository = repository.resolve()
         if repository.is_symlink() or not (repository / ".git").exists():
             raise Refused("repository must be an existing Git checkout")
-        for release in _selected(plan):
+        for release in journal["releases"]:
             checkout_path = run_dir / "checkouts" / _safe_name(release)
-            target = run_dir / "targets" / _safe_name(release)
+            configured_targets = config.get("target_directories")
+            target = (Path(configured_targets[release]) if configured_targets is not None
+                      else run_dir / "targets" / _safe_name(release))
             try:
                 journal["phase"], journal["active"] = "running", {"release": release, "stage": "checkout"}
                 _event(journal, "checkout_started", release=release)
@@ -897,7 +961,9 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                     raise Refused("checkout provider did not return the owned release checkout")
                 _verify_checkout_head(owned, config["execution_source_commit"], run)
                 journal["releases"][release]["source_tree"] = _source_tree(owned)
-                target.mkdir(parents=True, exist_ok=True)
+                if target.exists() or target.is_symlink():
+                    raise Refused("execution target already exists; stale target reuse is forbidden")
+                target.mkdir(parents=True)
                 journal["active"] = None
                 _event(journal, "checkout_completed", release=release)
                 _store_journal(run_dir, journal)

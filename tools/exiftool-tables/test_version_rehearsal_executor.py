@@ -50,7 +50,12 @@ class ExecutorTests(unittest.TestCase):
         self.lock = self.root / "shared-host.lock"
         self.fixture = self.root / "fixture.jpg"; self.fixture.write_bytes(b"fixture")
         self.fixture_manifest = self.root / "fixtures.json"
-        self.fixture_manifest.write_text(json.dumps({"fixtures": [str(self.fixture)]}))
+        self.fixture_manifest.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+            "fixtures": [{"path": str(self.fixture),
+                          "sha256": __import__("hashlib").sha256(self.fixture.read_bytes()).hexdigest(),
+                          "bytes": self.fixture.stat().st_size}],
+        }))
         self.write_fixture = self.root / "write.jpg"; self.write_fixture.write_bytes(b"\xff\xd8fixture")
         self.write_fixture_manifest = self.root / "write-fixtures.json"
         self.write_fixture_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.write_fixture), "sha256": __import__("hashlib").sha256(self.write_fixture.read_bytes()).hexdigest(), "bytes": self.write_fixture.stat().st_size}]}))
@@ -92,7 +97,8 @@ class ExecutorTests(unittest.TestCase):
         result = {"schema": executor.SCHEMA, "commands": commands, "host_lock": str(self.lock),
                 "execution_source_commit": self.plan["repository_commit"],
                 "perls": {release: str(Path(sys.executable).resolve()) for release in self.releases},
-                "native_cases": {release: [{"case": release}] for release in self.releases}}
+                "native_cases": {release: [{"case": release}] for release in self.releases},
+                "read_fixture_manifests": {release: str(self.fixture_manifest) for release in self.releases}}
         if write:
             result["write_fixture_manifests"] = {release: str(self.write_fixture_manifest) for release in self.releases}
         return result
@@ -151,6 +157,10 @@ class ExecutorTests(unittest.TestCase):
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],
                         comparison={"kind": "oxidex_vs_native", "native_release": env["OXIDEX_REHEARSAL_RELEASE"],
                                     "matched": 3, "mismatched": 0})
+        if stage == "read":
+            body["classification_counts"] = {
+                "matched": 3, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0,
+            }
         if stage == "write":
             body["write_mode"] = {"kind": "selected-release-live-native", "release": env["OXIDEX_REHEARSAL_RELEASE"],
                                   "ledger_sha256": __import__("hashlib").sha256((checkout / "tools/exiftool-tables/tiff_scalar_final_ledger.json").read_bytes()).hexdigest(),
@@ -187,6 +197,27 @@ class ExecutorTests(unittest.TestCase):
             self.assertEqual(journal["releases"][release]["reports"]["write"]["denominator"], 3)
             command_log = self.run_dir / journal["releases"][release]["reports"]["build"]["command"]["path"]
             self.assertEqual(json.loads(command_log.read_text())["stdout"], "ok")
+
+    def test_selected_release_uses_one_verified_plan_side_and_explicit_target(self):
+        selected = self.releases[0]
+        config = self.config()
+        config["execution_releases"] = [selected]
+        config["perls"] = {selected: config["perls"][selected]}
+        config["native_cases"] = {selected: config["native_cases"][selected]}
+        config["read_fixture_manifests"] = {
+            selected: config["read_fixture_manifests"][selected],
+        }
+        config["write_fixture_manifests"] = {
+            selected: config["write_fixture_manifests"][selected],
+        }
+        explicit_target = self.root / "assigned-target" / selected
+        config["target_directories"] = {selected: str(explicit_target)}
+        self.initialize(config)
+        journal = self.execute()
+        self.assertEqual(set(journal["releases"]), {selected})
+        self.assertEqual(self.native_calls, [selected])
+        self.assertEqual({target for _, _, target in self.calls}, {str(explicit_target)})
+        self.assertTrue(explicit_target.is_dir())
 
     def test_absent_write_command_is_visible_not_parity(self):
         self.initialize(self.config(write=False))
@@ -277,6 +308,25 @@ class ExecutorTests(unittest.TestCase):
         with executor._HostLock(self.lock):
             with self.assertRaisesRegex(executor.Refused, "host lock"):
                 executor.execute(other, self.repository, self.cache, self.sources, run=self.command, checkout=self.checkout)
+
+    def test_external_lock_descriptor_must_be_the_held_configured_lease(self):
+        self.initialize(self.config())
+        self.lock.touch()
+        unrelated = self.root / "unrelated.lock"
+        unrelated.touch()
+        with unrelated.open("r+") as stream:
+            with self.assertRaisesRegex(executor.Refused, "differs from configured lease"):
+                executor.execute(
+                    self.run_dir, self.repository, self.cache, self.sources,
+                    run=self.command, checkout=self.checkout, host_lock_fd=stream.fileno(),
+                )
+        with executor._HostLock(self.lock) as held, \
+             patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(
+                self.run_dir, self.repository, self.cache, self.sources,
+                run=self.command, checkout=self.checkout, host_lock_fd=held.file.fileno(),
+            )
+        self.assertEqual(journal["phase"], "complete")
 
     def test_live_child_cannot_be_recovered_as_interrupted(self):
         self.initialize(self.config())
@@ -372,6 +422,20 @@ class ExecutorTests(unittest.TestCase):
         with self.assertRaisesRegex(executor.Refused, "write fixture"):
             self.execute()
         self.assertEqual(journal["phase"], "planned")
+
+    def test_read_fixture_manifest_and_scope_are_bound_at_init_and_rechecked(self):
+        journal = self.initialize(self.config())
+        binding = json.loads((self.run_dir / "inputs" / "config.json").read_text())["read_fixture_bindings"]
+        self.assertEqual(
+            binding[self.releases[0]]["sha256"],
+            __import__("hashlib").sha256(self.fixture_manifest.read_bytes()).hexdigest(),
+        )
+        self.fixture.write_bytes(b"changed")
+        with self.assertRaisesRegex(executor.Refused, "read fixture"):
+            self.execute()
+        self.assertEqual(journal["phase"], "planned")
+        self.assertEqual(self.checkouts, [])
+        self.assertEqual(self.calls, [])
 
     def test_write_stage_refuses_replaced_writer_binary_or_read_fixture_substitution(self):
         self.initialize(self.config())

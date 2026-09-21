@@ -201,6 +201,48 @@ def _validate_artifacts(checkout: Path, rows: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
+    """Count explicit refusal/omission fields in the live generated ledgers.
+
+    This is evidence that a historical generation refused source behavior
+    explicitly; it is not permission to reinterpret a refusal as coverage.
+    JSON paths are retained so a total can never hide which generated ledger
+    and field contributed to it.
+    """
+    counters: list[dict[str, Any]] = []
+    key_pattern = re.compile(r"(?:refus|omitt|withheld)", re.IGNORECASE)
+
+    def walk(value: Any, location: str, artifact_path: str) -> None:
+        if isinstance(value, dict):
+            for key in sorted(value):
+                child = value[key]
+                child_location = f"{location}.{key}" if location else key
+                if key_pattern.search(key):
+                    if type(child) is int and child >= 0:
+                        counters.append({"artifact": artifact_path, "json_path": child_location,
+                                         "kind": "integer", "count": child})
+                    elif isinstance(child, list):
+                        counters.append({"artifact": artifact_path, "json_path": child_location,
+                                         "kind": "array-length", "count": len(child)})
+                walk(child, child_location, artifact_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{location}[{index}]", artifact_path)
+
+    for item in artifacts.inventory(checkout):
+        if not item.path.endswith(".json"):
+            continue
+        artifact_path = _regular(checkout / item.path, f"generated refusal ledger {item.path}")
+        try:
+            document = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise Refused(f"generated refusal ledger is unreadable: {item.path}") from exc
+        walk(document, "", item.path)
+    counters.sort(key=lambda row: (row["artifact"], row["json_path"], row["kind"]))
+    return {"kind": "explicit-generated-refusal-counts", "counters": counters,
+            "total": sum(row["count"] for row in counters)}
+
+
 def _environment(perl: Path, native_lib: Path, target: Path) -> dict[str, str]:
     env = dict(os.environ)
     for key in ("PERL5LIB", "PERLLIB", "PERL5OPT", "PERL_MM_OPT", "PERL_MB_OPT", "PERL_LOCAL_LIB_ROOT"):
@@ -410,17 +452,21 @@ def read(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPro
     if record["state"] != "ok" or not comparison.is_file(): raise Refused("actual conformance.py comparison failed")
     _verify_staged_fixtures(fixtures)
     data = _json(comparison); _verify_conformance_scope(data, fixtures); per_format = data["per_format"]
-    matched = mismatched = 0
-    for counts in per_format.values():
-        if not isinstance(counts, dict): raise Refused("conformance format counts are malformed")
+    classification_counts = {"matched": 0, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0}
+    for format_counts in per_format.values():
+        if not isinstance(format_counts, dict): raise Refused("conformance format counts are malformed")
         for key in ("matched", "value_diff", "missing", "renames", "extra"):
-            if type(counts.get(key)) is not int or counts[key] < 0: raise Refused("conformance count is malformed")
-        matched += counts["matched"]; mismatched += counts["value_diff"] + counts["missing"] + counts["renames"] + counts["extra"]
+            if type(format_counts.get(key)) is not int or format_counts[key] < 0: raise Refused("conformance count is malformed")
+        for key in ("matched", "value_diff", "missing", "renames", "extra"):
+            classification_counts[key] += format_counts[key]
+    matched = classification_counts["matched"]
+    mismatched = sum(classification_counts[key] for key in ("value_diff", "missing", "renames", "extra"))
     denominator = matched + mismatched
     state = "passed" if denominator > 0 and mismatched == 0 else "failed"
     result = {**_base("read", args, checkout, identity), "state": state, "denominator": denominator,
               "native_release": args.release, "native_probe_sha256": args.native_probe_sha256,
               "comparison": {"kind": "oxidex_vs_native", "native_release": args.release, "matched": matched, "mismatched": mismatched},
+              "classification_counts": classification_counts,
               "generated_artifacts": generated, "binary": {"path": str(executable), "sha256": _sha(executable), "bytes": executable.stat().st_size},
               "fixtures": {"manifest": str(Path(args.fixture_manifest).absolute()), "manifest_sha256": fixture_digest, "entries": fixtures}, "raw_report": raw,
               "conformance_report": {"path": str(comparison), "sha256": _sha(comparison)}}

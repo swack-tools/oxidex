@@ -1,5 +1,30 @@
 # ExifTool upgrade execution plan
 
+## Task19 transition qualification: tooling ready, execution pending
+
+The early Task19 slice provides
+`tools/exiftool-tables/version_transition_qualification.py` and a checked
+three-row matrix for dynamic same-pin, 11.78 to 12.64, and 12.64 to 11.78.
+It wraps the existing catalog/materialization, planner, native oracle,
+executor, and stage adapter. Each side requires fresh generation, an isolated
+target, immutable read fixtures, mandatory native write/readback fixtures, a
+live generated-artifact manifest, zero silent EXTRA retention, explicit
+generated-refusal counts, interruption recovery, and caller restoration.
+
+This is not transition qualification. Canonical 11.78 and 12.64 source bundles
+and fixture manifests are not present, and the final runs must use the
+converged post-Task18 candidate. The wrapper therefore fails closed today.
+After those inputs are provisioned and independently reviewed, run same-pin,
+forward, then reverse through the entry point's single nonblocking
+`transition.host.lock`, with unique run IDs and complete owner, heartbeat,
+expiry, release, and handoff receipts. Do not use the old fleet-controller or
+outer `locked.py` Task19 examples.
+
+Historical 11.78/12.64 Rust-test failures still identify release-specific facts
+outside the Task19 tooling lease. Exact current locations and correction
+proposals are recorded in
+[`reference/upgrade-rehearsal-11.78-12.64.md`](reference/upgrade-rehearsal-11.78-12.64.md#first-genuine-failures-and-root-causes).
+
 The [plain-English autogeneration plan](./AUTOGENERATION-PLAN.md) owns the goals,
 work order and progress measures. This file retains technical execution detail for the PR #737–#764 tranche;
 the mechanism going forward is the [autogeneration v2 design](./AUTOGENERATION-V2-DESIGN.md) and the

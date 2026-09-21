@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Contracts for the non-promoting Task19 transition wrapper."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+from pathlib import Path
+
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import version_transition_qualification as qualification
+import test_version_rehearsal_native_oracle as native_fixture
+
+
+class MatrixContractTests(unittest.TestCase):
+    def test_checked_matrix_has_all_required_rows_and_dynamic_same_pin(self) -> None:
+        matrix = qualification.load_matrix(HERE / "version_transition_matrix.json", "13.59")
+        self.assertEqual(
+            [row["id"] for row in matrix["rows"]],
+            ["same-pin-13.59", "11.78-to-12.64", "12.64-to-11.78"],
+        )
+        self.assertEqual(matrix["rows"][0]["before_version"], "13.59")
+        self.assertEqual(matrix["rows"][0]["after_version"], "13.59")
+
+    def test_every_row_binds_sources_fixtures_artifacts_targets_and_write(self) -> None:
+        matrix = qualification.load_matrix(HERE / "version_transition_matrix.json", "13.60")
+        self.assertEqual(len({row["target_directory"] for row in matrix["rows"]}), 3)
+        self.assertEqual(len({row["durable_output_directory"] for row in matrix["rows"]}), 3)
+        for row in matrix["rows"]:
+            self.assertEqual(row["fresh_generation"], "both-sides")
+            self.assertEqual(row["native_read"], "mandatory")
+            self.assertEqual(row["native_write_readback"], "mandatory")
+            self.assertEqual(row["promotion"], "forbidden")
+            self.assertEqual(set(row["immutable_source_identities"]), {"before", "after"})
+            for side in ("before", "after"):
+                self.assertEqual(row["immutable_source_identities"][side]["resolver"], "verified-input-bundle")
+                self.assertEqual(set(row["fixtures"][side]),
+                                 {"read_manifest", "write_manifest", "native_cases"})
+            self.assertEqual(row["artifact_manifest"]["resolver"], "live-generated-inventory")
+
+    def test_missing_mandatory_write_contract_is_refused(self) -> None:
+        raw = json.loads((HERE / "version_transition_matrix.json").read_text())
+        raw["rows"][1]["native_write_readback"] = "optional"
+        with TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "matrix.json"
+            candidate.write_text(json.dumps(raw))
+            with self.assertRaisesRegex(qualification.Refused, "mandatory"):
+                qualification.load_matrix(candidate, "13.59")
+
+
+class VerifiedInputTests(unittest.TestCase):
+    def test_source_identity_uses_real_catalog_and_materialization_verifiers(self) -> None:
+        temporary, capture, catalog, plan, resolution, materialization, cache, sources, release = native_fixture.make_state()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        bundle = root / "bundle"
+        bundle.mkdir()
+        for name, document in zip(qualification.INPUT_NAMES,
+                                  (capture, catalog, plan, resolution, materialization), strict=True):
+            (bundle / f"{name}.json").write_text(json.dumps(document))
+        (bundle / "locations.json").write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_transition_input_locations",
+            "archive_cache": str(cache), "source_root": str(sources),
+        }))
+        side = next(side for pair in plan["pairs"] for side in (pair["old"], pair["new"])
+                    if side["release"] == release)
+        identity = qualification.resolve_source_identity(
+            {"expected_release": release, "expected_peeled_commit": side["peeled_commit"]}, bundle,
+        )
+        self.assertEqual(identity["release"], release)
+        self.assertEqual(identity["peeled_commit"], side["peeled_commit"])
+        self.assertRegex(identity["source_tree_sha256"], r"^[0-9a-f]{64}$")
+
+        changed = dict(side)
+        changed["peeled_commit"] = "0" * 40
+        with self.assertRaisesRegex(qualification.Refused, "checked expectation"):
+            qualification.resolve_source_identity(
+                {"expected_release": release, "expected_peeled_commit": changed["peeled_commit"]}, bundle,
+            )
+
+
+class CallerRestorationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.repository = Path(self.temporary.name) / "repo"
+        self.repository.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.repository)], check=True)
+        subprocess.run(["git", "-C", str(self.repository), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(self.repository), "config", "user.email", "test@example.invalid"], check=True)
+        (self.repository / ".exiftool-version").write_text("13.59\n")
+        (self.repository / "tracked").write_text("clean\n")
+        subprocess.run(["git", "-C", str(self.repository), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.repository), "commit", "-qm", "fixture"], check=True)
+
+    def test_clean_snapshot_verifies_and_pin_or_index_tampering_refuses(self) -> None:
+        with patch.object(qualification.artifacts, "inventory", return_value=[]):
+            snapshot = qualification.snapshot_caller(self.repository)
+            qualification.verify_caller(snapshot)
+            (self.repository / ".exiftool-version").write_text("12.64\n")
+            with self.assertRaisesRegex(qualification.Refused, "clean"):
+                qualification.verify_caller(snapshot)
+            subprocess.run(["git", "-C", str(self.repository), "checkout", "--", ".exiftool-version"], check=True)
+            (self.repository / "tracked").write_text("staged\n")
+            subprocess.run(["git", "-C", str(self.repository), "add", "tracked"], check=True)
+            with self.assertRaisesRegex(qualification.Refused, "clean"):
+                qualification.verify_caller(snapshot)
+
+    def test_dirty_caller_is_refused_before_work(self) -> None:
+        (self.repository / "untracked").write_text("no")
+        with patch.object(qualification.artifacts, "inventory", return_value=[]):
+            with self.assertRaisesRegex(qualification.Refused, "clean"):
+                qualification.snapshot_caller(self.repository)
+
+
+class SideAndRecoveryTests(unittest.TestCase):
+    def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = root / "fixture.jpg"
+            fixture.write_bytes(b"\xff\xd8fixture")
+            manifest = root / "write.json"
+            manifest.write_text(json.dumps({
+                "schema": 1,
+                "kind": "oxidex_version_rehearsal_write_fixture_manifest",
+                "fixtures": [{"path": str(fixture), "sha256": qualification._sha_file(fixture),
+                              "bytes": fixture.stat().st_size}],
+            }))
+            read_manifest = root / "read.json"
+            read_manifest.write_text(json.dumps({
+                "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+                "fixtures": [{"path": str(fixture), "sha256": qualification._sha_file(fixture),
+                              "bytes": fixture.stat().st_size}],
+            }))
+            config = qualification._side_config(
+                release="11.78", source_commit="a" * 40, perl=Path(sys.executable).resolve(),
+                read_manifest=read_manifest, write_manifest=manifest,
+                native_cases=[{"name": "case"}], lease=root / "lease", target=root / "target",
+            )
+            normalized = qualification.executor._config(config, ["11.78", "12.64"])
+            self.assertEqual(normalized["execution_releases"], ["11.78"])
+            self.assertIn("write", normalized["commands"])
+            self.assertEqual(set(normalized["write_fixture_bindings"]), {"11.78"})
+
+    def test_same_pin_tampering_and_reverse_without_removal_are_refused(self) -> None:
+        artifact = [{"path": "generated", "sha256": "a" * 64, "bytes": 1}]
+        side = {"generated_artifacts": artifact}
+        qualification._compare_sides(
+            {"artifact_manifest": {"comparison": "identical"}}, side, side,
+        )
+        changed = {"generated_artifacts": [{"path": "generated", "sha256": "b" * 64, "bytes": 1}]}
+        with self.assertRaisesRegex(qualification.Refused, "different"):
+            qualification._compare_sides(
+                {"artifact_manifest": {"comparison": "identical"}}, side, changed,
+            )
+        with self.assertRaisesRegex(qualification.Refused, "removed"):
+            qualification._compare_sides(
+                {"artifact_manifest": {"comparison": "manifest-delta-with-removals"}}, side, side,
+            )
+
+    def test_running_execution_is_recovered_but_terminal_is_not_reused(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            run_dir.mkdir()
+            journal = {"phase": "running", "active": {"release": "11.78", "stage": "generate"}}
+            (run_dir / "execution-status.json").write_text(json.dumps(journal))
+            with patch.object(qualification.executor, "recover") as recover:
+                qualification._recover_if_running(run_dir, Path("cache"), Path("sources"))
+            recover.assert_called_once_with(run_dir, Path("cache"), Path("sources"))
+            journal["phase"] = "interrupted"
+            (run_dir / "execution-status.json").write_text(json.dumps(journal))
+            with patch.object(qualification.executor, "recover") as recover:
+                qualification._recover_if_running(run_dir, Path("cache"), Path("sources"))
+            recover.assert_not_called()
+
+
+class LeaseTests(unittest.TestCase):
+    def test_nonblocking_lease_emits_all_receipts(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease_path = root / "transition.host.lock"
+            lease_path.touch()
+            receipts = [root / name for name in ("owner.json", "heartbeat.jsonl", "expiry.json", "release.json")]
+            with qualification.TransitionLease(
+                lease=lease_path, run_id="unit-run", owner_receipt=receipts[0],
+                heartbeat_receipt=receipts[1], expiry_receipt=receipts[2], release_receipt=receipts[3],
+            ) as lease:
+                lease.heartbeat("unit", "same-pin", "before")
+                lease.finish("complete")
+            self.assertTrue(all(receipt.is_file() for receipt in receipts))
+            self.assertEqual(json.loads(receipts[3].read_text())["release_status"], "released")
+            self.assertGreaterEqual(len(receipts[1].read_text().splitlines()), 2)
+
+
+class WrapperCallTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.output = self.root / "durable-output"
+        self.target = self.root / "durable-target"
+        self.output.mkdir()
+        self.target.mkdir()
+        self.lease = self.output / "transition.host.lock"
+        self.lease.touch()
+        self.run_id = "unit-wrapper"
+        receipt_root = self.output / self.run_id
+        self.receipts = {
+            "owner_receipt": receipt_root / "lease-owner.json",
+            "heartbeat_receipt": receipt_root / "lease-heartbeat.jsonl",
+            "expiry_receipt": receipt_root / "lease-expiry.json",
+            "release_receipt": receipt_root / "lease-release.json",
+            "handoff_receipt": receipt_root / "handoff.jsonl",
+        }
+        self.row_output = self.output / self.run_id / "same-pin-13.59"
+        self.row_target = self.target / self.run_id / "same-pin-13.59"
+        self.row = {
+            "id": "same-pin-13.59", "before_version": "13.59", "after_version": "13.59",
+            "immutable_source_identities": {
+                side: {"expected_release": "13.59", "input_bundle": str(self.root / "bundle")}
+                for side in qualification.SIDES
+            },
+            "fixtures": {
+                side: {"read_manifest": str(self.root / "read.json"),
+                       "write_manifest": str(self.root / "write.json"),
+                       "native_cases": str(self.root / "cases.json")}
+                for side in qualification.SIDES
+            },
+            "artifact_manifest": {"comparison": "identical"},
+            "target_directory": str(self.row_target),
+            "durable_output_directory": str(self.row_output),
+        }
+        (self.root / "read.json").write_text("{}")
+        (self.root / "write.json").write_text("{}")
+        (self.root / "cases.json").write_text('[{"name":"case"}]')
+        self.caller = {"pin_version": "13.59", "head": "a" * 40}
+        self.identity = {
+            "release": "13.59", "tag_object": "b" * 40, "peeled_commit": "c" * 40,
+            "source_directory": "source", "source_tree_sha256": "d" * 64,
+            "materialization_sha256": "e" * 64, "bundle": str(self.root / "bundle"),
+            "archive_cache": str(self.root / "cache"), "source_root": str(self.root / "sources"),
+            "documents": {name: ({"repository_commit": "a" * 40} if name == "plan" else {})
+                          for name in qualification.INPUT_NAMES},
+        }
+
+    def invoke(self, execute):
+        configs = []
+        def initialize(run_dir, _capture, _catalog, _plan, _resolution, _materialization, config):
+            run_dir.mkdir(parents=True)
+            configs.append(config)
+        artifact = [{"path": "generated", "sha256": "f" * 64, "bytes": 1}]
+        side_receipt = {
+            "release": "13.59", "source_identity": {}, "generated_artifacts": artifact,
+            "classification_counts": {"matched": 1, "value_diff": 0, "missing": 0,
+                                      "renames": 0, "extra": 0},
+            "generated_refusals": {"total": 0, "counters": []},
+        }
+        with patch.object(qualification, "snapshot_caller", return_value=self.caller), \
+             patch.object(qualification, "verify_caller"), \
+             patch.object(qualification, "load_matrix", return_value={"rows": [self.row]}), \
+             patch.object(qualification, "materialize_matrix", return_value={"rows": [self.row]}), \
+             patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
+             patch.object(qualification, "resolve_source_identity", return_value=self.identity), \
+             patch.object(qualification.executor, "initialize_run", side_effect=initialize), \
+             patch.object(qualification, "_side_receipt", return_value=side_receipt):
+            result = qualification.run_qualification(
+                matrix_path=Path("matrix"), repository=Path("repository"),
+                output_root=self.output, target_root=self.target,
+                lease_path=self.lease, run_id=self.run_id, execute=execute, **self.receipts,
+            )
+        return result, configs
+
+    def test_wrapper_calls_real_executor_seam_twice_with_write_and_owned_lock(self) -> None:
+        calls = []
+        def execute(run_dir, repository, archive_cache, source_root, **kwargs):
+            calls.append((run_dir, repository, archive_cache, source_root, kwargs))
+            return {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}}
+        result, configs = self.invoke(execute)
+        self.assertEqual(result["status"], "tooling-executed-nonpromoting")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(set(call[-1]) == {"host_lock_fd"}
+                            and type(call[-1]["host_lock_fd"]) is int for call in calls))
+        self.assertEqual([config["execution_releases"] for config in configs], [["13.59"], ["13.59"]])
+        self.assertTrue(all("write" in config["commands"] for config in configs))
+        self.assertEqual(configs[0]["target_directories"]["13.59"], str(self.row_target / "before"))
+        self.assertEqual(configs[1]["target_directories"]["13.59"], str(self.row_target / "after"))
+
+    def test_interruption_recovers_active_executor_journal(self) -> None:
+        def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            (run_dir / "execution-status.json").write_text(json.dumps({
+                "phase": "running", "active": {"release": "13.59", "stage": "generate"},
+            }))
+            raise KeyboardInterrupt()
+        with patch.object(qualification.executor, "recover") as recover:
+            with self.assertRaises(KeyboardInterrupt):
+                self.invoke(interrupted)
+        recover.assert_called_once()
+        self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())["terminal_status"], "failed")
+
+    def test_stale_target_refuses_before_executor(self) -> None:
+        self.row_target.mkdir(parents=True)
+        execute = unittest.mock.Mock()
+        with self.assertRaisesRegex(qualification.Refused, "stale reuse"):
+            self.invoke(execute)
+        execute.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

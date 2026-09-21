@@ -18,6 +18,7 @@ def archive_bytes(label):
                 'exiftool': label,
                 'lib/Image/ExifTool.pm': f"$VERSION = '{label}';",
                 'fixture.jpg': json.dumps({'FileType': 'JPEG', 'Comment': 'before'}),
+                't/images/OOXML.docx': json.dumps({'FileType': 'DOCX'}),
             }
             for name, data in files.items():
                 info = tarfile.TarInfo(f'x-{label}/{name}')
@@ -61,23 +62,46 @@ class T(unittest.TestCase):
   def run(argv,**kw):
    calls.append(argv); return subprocess.CompletedProcess(argv,0,'0.00\n','')
   report=self.invoke(run); self.assertEqual(report['state'],'failed'); self.assertEqual(report['cases'],[]); self.assertTrue(any(x[-1]=='-ver' for x in calls)); self.assertFalse(any('-Comment=x' in x for x in calls))
+ def test_capability_requires_exact_modules_and_docx(self):
+  calls=[]
+  def run(argv,**kw):
+   calls.append(argv)
+   if argv[-1]=='print $^V': output='v5.38.2'
+   elif argv[-1]=='-ver': output='13.59\n'
+   elif '-FileType' in argv: output='DOCX\n' if str(argv[-1]).endswith('.docx') else 'JPEG\n'
+   elif any(item == '-Comment' for item in argv): output='x\n'
+   else: output=''
+   return subprocess.CompletedProcess(argv,0,output,'')
+  report=self.invoke(run)
+  self.assertEqual(report['state'],'ready')
+  self.assertEqual(report['perl_capability']['required_modules'],
+                   ['strict','warnings','Archive::Zip','Compress::Zlib'])
+  self.assertEqual(report['docx_capability']['stdout'],'DOCX\n')
+  self.assertTrue(any('-config' in argv and '' in argv and '-FileType' in argv for argv in calls))
  def test_public_stale_tree_refuses_before_oracle(self):
   with self.assertRaisesRegex(Exception,'verified archive'): self.invoke(lambda *a,**k: self.fail('oracle called'),mutate=True)
  def test_public_missing_fixture_refuses(self):
-  def run(argv,**kw): return subprocess.CompletedProcess(argv,0,'13.59\n' if argv[-1]=='-ver' else '', '')
+  def run(argv,**kw):
+   output = ('v5.38.2' if argv[-1]=='print $^V' else
+             ('13.59\n' if argv[-1]=='-ver' else ('DOCX\n' if '-FileType' in argv else '')))
+   return subprocess.CompletedProcess(argv,0,output,'')
   with self.assertRaisesRegex(o.Refused,'fixture'): self.invoke(run,missing=True)
  def test_public_timeout_persists_report(self):
   def run(argv,**kw):
+   if argv[-1]=='print $^V': return subprocess.CompletedProcess(argv,0,'v5.38.2','')
    if argv[-1]=='-ver': return subprocess.CompletedProcess(argv,0,'13.59\n','')
-   if '-MArchive::Zip' in argv: return subprocess.CompletedProcess(argv,0,'','')
+   if any(item.startswith('-M') for item in argv): return subprocess.CompletedProcess(argv,0,'','')
+   if '-FileType' in argv and str(argv[-1]).endswith('.docx'): return subprocess.CompletedProcess(argv,0,'DOCX\n','')
    raise subprocess.TimeoutExpired(argv,1)
   report=self.invoke(run); self.assertEqual(report['state'],'failed'); self.assertEqual(report['cases'][0]['read']['state'],'timeout')
   with TemporaryDirectory() as d:
    out=Path(d)/'timeout.json'; o.write_probe_report(out,report); self.assertEqual(json.loads(out.read_text())['cases'][0]['read']['state'],'timeout')
  def test_public_spawn_persists_report(self):
   def run(argv,**kw):
+   if argv[-1]=='print $^V': return subprocess.CompletedProcess(argv,0,'v5.38.2','')
    if argv[-1]=='-ver': return subprocess.CompletedProcess(argv,0,'13.59\n','')
-   if '-MArchive::Zip' in argv: return subprocess.CompletedProcess(argv,0,'','')
+   if any(item.startswith('-M') for item in argv): return subprocess.CompletedProcess(argv,0,'','')
+   if '-FileType' in argv and str(argv[-1]).endswith('.docx'): return subprocess.CompletedProcess(argv,0,'DOCX\n','')
    raise OSError('gone')
   report=self.invoke(run); self.assertEqual(report['state'],'failed'); self.assertEqual(report['cases'][0]['read']['state'],'spawn_failed')
   with TemporaryDirectory() as d:
@@ -103,7 +127,10 @@ from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ['OXIDEX_TEST_NATIVE_LOG'], 'a') as log:
     log.write(json.dumps(args) + '\n')
-if '-MArchive::Zip' in args:
+if any(item.startswith('-M') for item in args):
+    raise SystemExit(0)
+if args == ['-e', 'print $^V']:
+    print('v5.38.2', end='')
     raise SystemExit(0)
 program = Path(args[1])
 assert args[2:4] == ['-config', ''], 'ambient ExifTool configuration must be disabled'
