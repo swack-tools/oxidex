@@ -22,7 +22,9 @@
 //! multi-threaded runner instead of racing every other test that might read
 //! or rely on the ambient time zone.
 
-use std::path::Path;
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use std::process::Command;
 
 const OXIDEX_BIN: &str = env!(
@@ -32,21 +34,19 @@ const OXIDEX_BIN: &str = env!(
 
 /// Pinned ExifTool sample corpus populated by `just compare-exiftool-full`.
 /// This is a local developer/CI cache, not a committed fixture -- see
-/// `oxidex::test_support::PINNED_CORPUS_ROOT` -- so every test reading from
-/// it gates on the file's presence and skips (rather than fails) when it is
-/// absent.
-const CR3_FIXTURE: &str = "/tmp/oxidex-exiftool-cache/combined-samples/CanonRaw.cr3";
-const MOV_FIXTURE: &str = "/tmp/oxidex-exiftool-cache/combined-samples/QuickTime.mov";
-
-fn run_oxidex_json(path: &str, tz: &str) -> serde_json::Value {
+/// it resolves each file independently from the configured combined corpus and
+/// skips only in ordinary optional-fixture mode.
+fn run_oxidex_json(path: &std::path::Path, tz: &str) -> serde_json::Value {
     let output = Command::new(OXIDEX_BIN)
-        .args(["-j", path])
+        .arg("-j")
+        .arg(path)
         .env("TZ", tz)
         .output()
         .expect("failed to execute oxidex");
     assert!(
         output.status.success(),
-        "oxidex exited non-zero for {path}: {}",
+        "oxidex exited non-zero for {}: {}",
+        path.display(),
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -61,10 +61,10 @@ fn run_oxidex_json(path: &str, tz: &str) -> serde_json::Value {
 
 #[test]
 fn cr3_create_date_renders_local_time_with_offset_under_america_chicago() {
-    if !Path::new(CR3_FIXTURE).is_file() {
-        eprintln!("skipping: corpus fixture not present at {CR3_FIXTURE}");
+    let Some(path) = fixtures::pinned_combined_fixture_path("CanonRaw.cr3") else {
+        eprintln!("skipping: combined corpus fixture CanonRaw.cr3 is absent");
         return;
-    }
+    };
 
     // Ground truth, instrument named: pinned oracle
     // (`/usr/bin/perl5.34 -I/tmp/oxidex-exiftool-cache/exiftool/lib
@@ -76,7 +76,7 @@ fn cr3_create_date_renders_local_time_with_offset_under_america_chicago() {
     // camera-local and UTC instants coincide, which is why the local-time
     // conversion and the EXIF zone-less rendering both surface a
     // recognizable "12:08:56"/"06:08:56" pair instead of an unrelated time.
-    let json = run_oxidex_json(CR3_FIXTURE, "America/Chicago");
+    let json = run_oxidex_json(&path, "America/Chicago");
 
     assert_eq!(
         json.get("QuickTime:CreateDate").and_then(|v| v.as_str()),
@@ -110,10 +110,10 @@ fn cr3_create_date_renders_local_time_with_offset_under_america_chicago() {
 
 #[test]
 fn generic_quicktime_create_date_stays_zone_less_under_america_chicago() {
-    if !Path::new(MOV_FIXTURE).is_file() {
-        eprintln!("skipping: corpus fixture not present at {MOV_FIXTURE}");
+    let Some(path) = fixtures::pinned_combined_fixture_path("QuickTime.mov") else {
+        eprintln!("skipping: combined corpus fixture QuickTime.mov is absent");
         return;
-    }
+    };
 
     // QuickTime.pm's local-time conversion is gated on
     // `$$self{FileType} eq 'CR3'` (QuickTime.pm:271,280); a plain .mov never
@@ -121,7 +121,7 @@ fn generic_quicktime_create_date_stays_zone_less_under_america_chicago() {
     // rendering regardless of the process TZ. Ground truth (same pinned
     // oracle instrument as above): `QuickTime:CreateDate` on QuickTime.mov is
     // `2005:08:11 14:03:54` under any TZ.
-    let json = run_oxidex_json(MOV_FIXTURE, "America/Chicago");
+    let json = run_oxidex_json(&path, "America/Chicago");
 
     assert_eq!(
         json.get("QuickTime:CreateDate").and_then(|v| v.as_str()),

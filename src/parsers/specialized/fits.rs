@@ -1260,10 +1260,9 @@ mod dicom_tests {
 
     #[test]
     fn parses_requested_tags_from_real_dicom_sample() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("DICOM.dcm") else {
             return;
-        }
-        let path = format!("{}/DICOM.dcm", crate::test_support::PINNED_CORPUS_ROOT);
+        };
         let data = std::fs::read(path).expect("pinned DICOM sample should be readable");
         let metadata = parse_dicom_metadata(&crate::test_support::TestReader::new(data))
             .expect("pinned DICOM sample should parse");

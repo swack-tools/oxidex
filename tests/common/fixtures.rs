@@ -3,28 +3,49 @@
 //! CI stages ExifTool outside the default developer cache. Resolve its sample
 //! files through the same explicit script/cache settings as the pinned oracle.
 
+#![allow(dead_code)] // Standalone integration targets use different fixture routes.
+
 use oxidex::exiftool_oracle;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[path = "pinned_fixtures.rs"]
+mod pinned_fixtures;
+pub use pinned_fixtures::{FixtureConfig, FixturePopulation};
+
 /// Find optional sample data without turning present but unreadable files into
 /// a successful skip. The caller must report any subsequent read/parse error.
 pub fn pinned_fixture_path(name: &str) -> Option<PathBuf> {
-    let named = std::env::var(exiftool_oracle::BINARY_ENV).ok();
-    let binary = named
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(Path::new);
-    let cache = exiftool_oracle::cache_dir();
-    let path = fixture_path_in(name, binary, &cache);
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    let path = pinned_fixture_path_with_config(name, &config);
     if path.is_none() {
         eprintln!(
-            "note: skipping pinned-fixture case -- {name} absent beside EXIFTOOL or under {}",
-            cache.display()
+            "note: skipping pinned-fixture case -- {name} absent from configured fixture roots"
         );
     }
     path
+}
+
+pub fn pinned_fixture_path_with_config(name: &str, config: &FixtureConfig) -> Option<PathBuf> {
+    config
+        .resolve_for_mode(name, FixturePopulation::Any)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve only a `t/images` source fixture; never substitute a combined sample.
+pub fn pinned_t_images_fixture_path(name: &str) -> Option<PathBuf> {
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    config
+        .resolve_for_mode(name, FixturePopulation::TImages)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve only a combined-corpus fixture; never substitute a source fixture.
+pub fn pinned_combined_fixture_path(name: &str) -> Option<PathBuf> {
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    config
+        .resolve_for_mode(name, FixturePopulation::Combined)
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn fixture_path_in(name: &str, exiftool: Option<&Path>, cache: &Path) -> Option<PathBuf> {
@@ -48,6 +69,21 @@ fn fixture_path_in(name: &str, exiftool: Option<&Path>, cache: &Path) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integration_wrapper_routes_injected_required_resolution() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let cache = temp.path().join("cache");
+        let path = cache.join("exiftool/t/images/fixture.bin");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"synthetic integration-wrapper bytes").unwrap();
+        let config = FixtureConfig::new(None, cache, true);
+
+        assert_eq!(
+            pinned_fixture_path_with_config("fixture.bin", &config),
+            Some(path)
+        );
+    }
 
     #[test]
     fn genuine_fixture_resolves_from_each_source_and_respects_precedence() {
