@@ -15,7 +15,7 @@
 # USAGE
 #   tools/preflight.sh                     # worktree + branch + cleanliness
 #   tools/preflight.sh --upstream          # ... plus base freshness vs origin
-#   tools/preflight.sh --host allen@server # ... plus ssh reachability
+#   tools/preflight.sh --host <host>       # ... plus ssh reachability
 #   tools/preflight.sh --github            # ... plus gh identity + push scope
 #   tools/preflight.sh --k8s               # ... plus current kube context
 #   tools/preflight.sh --all --host X
@@ -64,7 +64,7 @@ say "dirty    : $DIRTY file(s)"
 for p in $PROTECTED; do
   if [ "$BRANCH" = "$p" ]; then
     fail "branch '$BRANCH' is protected -- create a worktree for your own branch:"
-    fail "  git -C $ROOT worktree add -b <branch> /Users/allen/git/<dir> <base>"
+    fail "  git -C $(printf '%q' "$ROOT") worktree add -b <branch> \"\${OXIDEX_WORKTREE_ROOT:-\$HOME/git}/<dir>\" <base>"
     RC=2
   fi
 done
