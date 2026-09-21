@@ -881,6 +881,7 @@ fn process_tiff_ifd_tags_indexed<'a>(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
+        let opcode_residual = matches!(*tag_id, 0xC740 | 0xC741 | 0xC74E);
         if let Some(engine) = engine.as_deref_mut() {
             match engine.route_entry(
                 entry_index,
@@ -890,8 +891,9 @@ fn process_tiff_ifd_tags_indexed<'a>(
                 exif_dir_engine::Owner::Silent,
                 metadata,
                 |name| format!("{ifd_name}:{name}"),
-                |_, _| true,
+                |_, _| !opcode_residual,
             ) {
+                exif_dir_engine::Owner::Engine if opcode_residual => {}
                 exif_dir_engine::Owner::Engine | exif_dir_engine::Owner::Silent => continue,
                 exif_dir_engine::Owner::Hand => {}
             }
@@ -943,7 +945,26 @@ fn process_tiff_ifd_tags_indexed<'a>(
             (_, value) => value,
         };
         let tag_value = apply_tile_offsets_value_conv(*tag_id, tag_value);
-        metadata.insert(tag_name, tag_value);
+        if matches!(
+            tag_name.rsplit(':').next(),
+            Some("OpcodeList1" | "OpcodeList2" | "OpcodeList3")
+        ) {
+            // `%opcodeInfo` applies equally when a DNG stores an OpcodeList
+            // in IFD0: ConvertBinary retains the exact UNDEFINED payload and
+            // PrintOpcode supplies only its display form.
+            let binary = TagValue::Binary(bytes.to_vec());
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                tag_value,
+                binary.clone(),
+                Some(binary),
+                SHIM_DEFAULT_PRIORITY,
+                "",
+                Instance::default(),
+            );
+        } else {
+            metadata.insert(tag_name, tag_value);
+        }
     }
 
     // Parse GeoTiff keys if directory tag is present

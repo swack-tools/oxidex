@@ -58,6 +58,42 @@ fn jpeg_with_exif_entries(entries: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
     jpeg
 }
 
+fn tiff_with_ifd0_entries(entries: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+    let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+    let directory_len = 2 + entries.len() * 12 + 4;
+    let mut directory = Vec::with_capacity(directory_len);
+    let mut tail = Vec::new();
+    directory.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, field_type, bytes) in entries {
+        directory.extend_from_slice(&tag.to_le_bytes());
+        directory.extend_from_slice(&field_type.to_le_bytes());
+        directory.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        if bytes.len() <= 4 {
+            directory.extend_from_slice(bytes);
+            directory.resize(directory.len() + 4 - bytes.len(), 0);
+        } else {
+            let offset = 8 + directory_len + tail.len();
+            directory.extend_from_slice(&(offset as u32).to_le_bytes());
+            tail.extend_from_slice(bytes);
+        }
+    }
+    directory.extend_from_slice(&0u32.to_le_bytes());
+    tiff.extend_from_slice(&directory);
+    tiff.extend_from_slice(&tail);
+    tiff
+}
+
+fn jpeg_with_ifd0_entries(entries: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+    let tiff = tiff_with_ifd0_entries(entries);
+    let app1_len = 2 + 6 + tiff.len();
+    let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1];
+    jpeg.extend_from_slice(&(app1_len as u16).to_be_bytes());
+    jpeg.extend_from_slice(b"Exif\0\0");
+    jpeg.extend_from_slice(&tiff);
+    jpeg.extend_from_slice(&[0xff, 0xd9]);
+    jpeg
+}
+
 fn opcode_record(opcode: u32, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&opcode.to_be_bytes());
@@ -66,6 +102,27 @@ fn opcode_record(opcode: u32, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(payload);
     out
+}
+
+fn assert_single_opcode_list1(path: &std::path::Path) {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        .args(["-a", "-G1", "-s", "-OpcodeList1"])
+        .arg(path)
+        .output()
+        .expect("runs oxidex duplicate projection");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.contains("OpcodeList1"))
+            .count(),
+        1,
+        "the engine row must be consumed, not duplicated"
+    );
 }
 
 #[test]
@@ -104,6 +161,39 @@ fn opcode_lists_match_print_opcode() {
         without_print_conv.get("ExifIFD:OpcodeList1"),
         Some(&TagValue::Binary(expected_raw)),
         "ConvertBinary must retain the exact UNDEFINED bytes before PrintOpcode"
+    );
+}
+
+#[test]
+fn ifd0_opcode_list_preserves_convert_binary_bytes() {
+    let mut raw = 1u32.to_be_bytes().to_vec();
+    raw.extend_from_slice(&opcode_record(9, &[0xde, 0xad, 0xbe, 0xef]));
+    let jpeg = jpeg_with_ifd0_entries(&[(0xC740, UNDEFINED, raw.clone())]);
+    let file = NamedTempFile::new().expect("creates JPEG fixture");
+    std::fs::write(file.path(), jpeg).expect("writes JPEG fixture");
+
+    let metadata = read_metadata(file.path()).expect("reads JPEG fixture");
+    assert_eq!(metadata.get_string("IFD0:OpcodeList1"), Some("GainMap"));
+    assert_single_opcode_list1(file.path());
+    assert_eq!(
+        metadata.without_print_conv().get("IFD0:OpcodeList1"),
+        Some(&TagValue::Binary(raw.clone())),
+        "JPEG IFD0 must retain the exact ConvertBinary payload"
+    );
+
+    let file = NamedTempFile::new().expect("creates TIFF fixture");
+    std::fs::write(
+        file.path(),
+        tiff_with_ifd0_entries(&[(0xC740, UNDEFINED, raw.clone())]),
+    )
+    .expect("writes TIFF fixture");
+    let metadata = read_metadata(file.path()).expect("reads TIFF fixture");
+    assert_eq!(metadata.get_string("IFD0:OpcodeList1"), Some("GainMap"));
+    assert_single_opcode_list1(file.path());
+    assert_eq!(
+        metadata.without_print_conv().get("IFD0:OpcodeList1"),
+        Some(&TagValue::Binary(raw)),
+        "TIFF IFD0 must retain the exact ConvertBinary payload"
     );
 }
 
