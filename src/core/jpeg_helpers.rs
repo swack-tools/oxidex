@@ -535,8 +535,7 @@ fn process_ifd0_tags(
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
-        if *tag_id == 0xC763 {
-            let forms = time_codes_forms(bytes);
+        if let Some(forms) = time_codes_forms(*tag_id, bytes) {
             metadata.insert_occurrence_with_forms(
                 tag_name,
                 forms.print,

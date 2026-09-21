@@ -219,8 +219,8 @@ pub fn raw_bytes_to_tag_value(
     // Exif.pm 13.59 0xc763: ValueConv groups eight int8u values as lowercase
     // two-digit hex, then PrintConv reverses the first four BCD fields into a
     // time and optionally appends the date/timezone carried by BGF2.
-    if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::TimeCodes) {
-        return time_codes_forms(bytes).print;
+    if let Some(forms) = time_codes_forms(tag_id, bytes) {
+        return forms.print;
     }
 
     // Exif.pm 13.59 tag 0xA20C applies `PrintSFR` to its opaque payload.
@@ -548,6 +548,10 @@ fn perl_numeric_i64(text: &str) -> i64 {
     crate::exiftool_tables::session::numify_str(text).as_f64() as i64
 }
 
+fn perl_numeric_f64(text: &str) -> f64 {
+    crate::exiftool_tables::session::numify_str(text).as_f64()
+}
+
 fn format_time_codes(bytes: &[u8]) -> String {
     bytes
         .chunks_exact(8)
@@ -569,16 +573,21 @@ fn format_time_codes(bytes: &[u8]) -> String {
                 let minute = perl_numeric_i64(&bcd_text(group[2] & 0x7f));
                 let second = perl_numeric_i64(&bcd_text(group[1] & 0x7f));
                 let fraction = bcd_text(group[0] & 0x3f);
-                let julian = perl_numeric_i64(&format!(
+                let julian = perl_numeric_f64(&format!(
                     "{}{}{}",
                     format!("{:x}", group[6]),
                     bcd_text(group[5]),
                     bcd_text(group[4]),
                 ));
                 let zone_hours = zone.unwrap_or(0.0);
-                let unix = ((julian - 40_587) * 24 * 3_600) as f64
+                let unix = (julian - 40_587.0) * 24.0 * 3_600.0
                     + (((hour as f64 + zone_hours) * 60.0 + minute as f64) * 60.0 + second as f64);
                 rendered = crate::exiftool_tables::exprs::convert_unix_time(unix, false);
+                if !unix.is_finite() {
+                    // ExifTool's ConvertUnixTime reaches failed gmtime with a
+                    // NaN fractional component for +/-Inf and appends `NaN`.
+                    rendered.push_str("NaN");
+                }
                 if rendered.len() >= 10 {
                     rendered.replace_range(4..5, "-");
                     rendered.replace_range(7..8, "-");
@@ -618,8 +627,13 @@ pub(crate) struct TimeCodesForms {
     pub(crate) print: TagValue,
 }
 
-#[must_use]
-pub(crate) fn time_codes_forms(bytes: &[u8]) -> TimeCodesForms {
+fn time_codes_forms_for_admission(
+    admission: Option<ExifMainResidualPort>,
+    bytes: &[u8],
+) -> Option<TimeCodesForms> {
+    if admission != Some(ExifMainResidualPort::TimeCodes) {
+        return None;
+    }
     let complete = bytes.len() / 8 * 8;
     let stored = bytes
         .iter()
@@ -637,11 +651,19 @@ pub(crate) fn time_codes_forms(bytes: &[u8]) -> TimeCodesForms {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    TimeCodesForms {
+    Some(TimeCodesForms {
         stored: TagValue::new_string(stored),
         value: TagValue::new_string(value),
         print: TagValue::new_string(format_time_codes(bytes)),
-    }
+    })
+}
+
+/// Returns TimeCodes forms only while the tag's exact pinned source hash is
+/// admitted. All adapters use this seam, so registry drift disables the hand
+/// conversion instead of publishing behavior proved against an older body.
+#[must_use]
+pub(crate) fn time_codes_forms(tag_id: u16, bytes: &[u8]) -> Option<TimeCodesForms> {
+    time_codes_forms_for_admission(exif_main_residual_port(tag_id), bytes)
 }
 
 /// The existing Exif::Main RawConv trims implemented by this converter.
@@ -2309,7 +2331,7 @@ mod tests {
                             .split_ascii_whitespace()
                             .map(|part| part.parse::<u8>().expect("u8"))
                             .collect::<Vec<_>>();
-                        let forms = time_codes_forms(&bytes);
+                        let forms = time_codes_forms(tag_id, &bytes).expect("admitted TimeCodes");
                         (
                             forms
                                 .stored
@@ -2338,6 +2360,14 @@ mod tests {
                 assert_eq!(print, channel(case, "print"), "{key} PrintConv");
             }
         }
+    }
+
+    #[test]
+    fn time_codes_forms_refuse_an_unadmitted_source() {
+        assert!(
+            time_codes_forms_for_admission(None, &[0x01, 0x02, 0x03, 0x04, 0, 0, 0, 0]).is_none(),
+            "the forms API used by adapters must fail closed without the admitted source port"
+        );
     }
 
     #[test]

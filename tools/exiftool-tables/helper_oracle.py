@@ -728,6 +728,8 @@ def residual_cases():
         [0, 0, 0, 0x81, 0x87, 0x05, 0x04, 0x8b],
         [0, 0, 0, 0x80, 1, 1, 0x7a, 0],
         [0, 0, 0, 0x80, 0x01, 0x00, 0x1e, 0x80],
+        [0, 0, 0, 0x80, 0x15, 0x00, 0x1e, 0x80],
+        [0, 0, 0, 0x80, 0x99, 0x99, 0x9e, 0x80],
     ):
         out.append(case("0xc763", S(" ".join(map(str, raw)))))
     return out
@@ -768,7 +770,7 @@ def instrument(perl, et_dir):
     print(f"=== instrument: helper_oracle ===\n"
           f"perl      {perl} ({pv})\nexiftool  {exiftool} -ver {ver} (pinned {pinned}); "
           f"OOXML.docx -> {ft}\nTZ        UTC")
-    return pv, ver
+    return pv, ver, ft
 
 
 def oracle_env():
@@ -808,7 +810,7 @@ def pinned_residual_sources(perl, et_lib):
 
 
 def build(perl, et_dir):
-    pv, ver = instrument(perl, et_dir)
+    pv, ver, ft = instrument(perl, et_dir)
     et_lib = Path(et_dir) / "lib"
     sources = pinned_sources(et_lib)
     missing = [h["perl"] for h in HELPERS if sources[h["perl"]][0] is None]
@@ -851,7 +853,12 @@ def build(perl, et_dir):
     return {
         "capture": {
             "tool": "tools/exiftool-tables/helper_oracle.py",
-            "perl": perl, "perl_version": pv, "exiftool_version": ver, "tz": "UTC",
+            "perl": Path(perl).name,
+            "perl_sha256": hashlib.sha256(Path(perl).read_bytes()).hexdigest(),
+            "perl_version": pv,
+            "exiftool_version": ver,
+            "capability_probe": {"OOXML.docx": ft},
+            "tz": "UTC",
             "note": "each case is the pinned sub called directly on `args` (prototypes "
                     "bypassed), `options` set in $$et{OPTIONS} and mirrored into "
                     "%static_vars as ExifTool::Init does; `out` is Perl's stringified "
