@@ -4898,6 +4898,21 @@ mod makernote_structured_tests {
         note
     }
 
+    fn olympus_low_priority_shutter_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x1000u16.to_le_bytes());
+        note.extend_from_slice(&10u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&30u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.extend_from_slice(&1i32.to_le_bytes());
+        note.extend_from_slice(&3i32.to_le_bytes());
+        note
+    }
+
     #[test]
     fn olympus_generated_forms_are_atomic_per_occurrence() {
         let note = olympus_duplicate_pressure_note();
@@ -5019,6 +5034,61 @@ mod makernote_structured_tests {
                 &TagValue::new_string("88.8 kPa")
             );
         }
+    }
+
+    #[test]
+    fn olympus_source_priority_zero_row_loses_to_existing_standard_occurrence() {
+        let note = olympus_low_priority_shutter_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        metadata.insert_occurrence(
+            "ExifIFD:ShutterSpeedValue",
+            TagValue::Float(2.0),
+            1,
+            "ExifIFD",
+            Instance::default(),
+        );
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            assert!(
+                metadata
+                    .occurrences_for("Olympus:ShutterSpeedValue")
+                    .is_empty()
+            );
+            return;
+        }
+
+        let olympus = metadata.occurrences_for("Olympus:ShutterSpeedValue");
+        assert_eq!(olympus.len(), 1, "one physical Olympus::Main 0x1000 row");
+        assert_eq!(olympus[0].id, oxidex_tags::TagId::Numeric(0x1000));
+        assert_eq!(olympus[0].origin.module, Some("Olympus"));
+        assert_eq!(olympus[0].origin.table, Some("Main"));
+        assert_eq!(olympus[0].priority, 0, "source Priority => 0");
+        assert_eq!(
+            olympus[0].project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_rational(1, 3)
+        );
+
+        let winner =
+            crate::cli::tag_resolution::resolve_requested_tag(&metadata, "ShutterSpeedValue")
+                .expect("bare request sees both source-backed occurrences");
+        assert_eq!(&*winner.group1, "ExifIFD");
+        assert_eq!(winner.priority, 1);
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "ShutterSpeedValue")
+                .count(),
+            2,
+            "the losing Olympus occurrence remains retained"
+        );
     }
 
     #[test]

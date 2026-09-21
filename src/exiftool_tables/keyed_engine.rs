@@ -381,13 +381,14 @@ fn process_word_directory(
             // Format/Count/Size guide tag selection but do not re-read or
             // truncate this masked u16 value.
             let raw = runtime::DecodedValue::Integer(i64::from(value));
+            let stored = runtime::to_stored_tag_value(&raw, block.byte_order);
             if matches!(
                 emit_resolved_scalar(
                     table,
                     block.scope,
                     resolved,
                     raw,
-                    block.byte_order,
+                    stored,
                     ctx,
                     sink,
                     &mut result,
@@ -715,7 +716,7 @@ fn process_entry<'a>(
     };
     let format = tag.format.unwrap_or_else(|| default_format(entry_type));
     let count = native_count(tag, format, value_size, inline);
-    let Some(raw) = engine::read_value(
+    let Some(read) = engine::read_value_with_stored(
         value,
         0,
         format,
@@ -730,8 +731,8 @@ fn process_entry<'a>(
         table,
         block.scope,
         resolved,
-        raw,
-        block.byte_order,
+        read.decoded,
+        read.stored,
         ctx,
         sink,
         result,
@@ -755,13 +756,12 @@ fn emit_resolved_scalar(
     scope: KeyedScope,
     resolved: ResolvedTag,
     raw: runtime::DecodedValue,
-    byte_order: ByteOrder,
+    stored: TagValue,
     ctx: &mut Ctx,
     sink: &mut dyn KeyedEmissionSink,
     result: &mut KeyedWalkResult,
 ) -> ScalarAction {
     let tag = resolved.tag;
-    let stored = runtime::to_stored_tag_value(&raw, byte_order);
     if tag.flags.unknown {
         return ScalarAction::Continue;
     }
@@ -1813,6 +1813,42 @@ mod tests {
         );
         assert_eq!(result.gate_b_blocked, 1);
         assert!(result.word_traces.is_empty());
+    }
+
+    #[test]
+    fn real_keyed_word_table_retains_source_coordinate_storage_and_list_fact() {
+        let table = find_keyed_table("CanonCustom", "FunctionsD30")
+            .expect("generated CanonCustom::FunctionsD30 table");
+        let data = words(ByteOrder::Big, 4, &[0x0101], &[]);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            table,
+            KeyedBlock::new(
+                &data,
+                ByteOrder::Big,
+                KeyedScope {
+                    group1_override: Some("Canon"),
+                },
+            ),
+            &mut ctx,
+            &mut sink,
+        );
+        assert_eq!(result.emitted, 1);
+        assert_eq!(sink.rows.len(), 1);
+        let row = &sink.rows[0];
+        assert_eq!(row.name, "LongExposureNoiseReduction");
+        assert_eq!(row.source_id, oxidex_tags::TagId::Numeric(1));
+        assert_eq!(row.stored, TagValue::Integer(1));
+        assert_eq!(row.value, TagValue::String("On".to_owned()));
+        assert_eq!(row.group0, "MakerNotes");
+        assert_eq!(row.group1, "Canon");
+        assert_eq!(row.group2, "Camera");
+        assert!(!row.is_list, "source flags do not declare List");
     }
 
     #[test]

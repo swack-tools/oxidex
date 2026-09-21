@@ -192,7 +192,7 @@ pub fn process_serial_directory(
             result.tainted = true;
             break;
         };
-        let Some(raw) = engine::read_value(
+        let Some(read) = engine::read_value_with_stored(
             dir.data,
             offset,
             tag.format.format,
@@ -203,7 +203,7 @@ pub fn process_serial_directory(
             result.unreadable_value += 1;
             break;
         };
-        prior_raw.insert(entry.serial_index, raw.clone());
+        prior_raw.insert(entry.serial_index, read.decoded.clone());
 
         // No serial SubDirectory is currently represented. It would run
         // after raw storage and before FoundTag, so an omitted edge taints the
@@ -232,8 +232,8 @@ pub fn process_serial_directory(
             tag,
             entry.serial_index,
             condition_resolved,
-            raw,
-            dir.byte_order,
+            read.decoded,
+            read.stored,
             ctx,
             sink,
             &mut result,
@@ -320,12 +320,11 @@ fn emit_selected(
     serial_index: usize,
     condition_resolved: bool,
     raw: DecodedValue,
-    byte_order: ByteOrder,
+    stored: TagValue,
     ctx: &mut Ctx,
     sink: &mut dyn SerialEmissionSink,
     result: &mut SerialWalkResult,
 ) -> bool {
-    let stored = runtime::to_stored_tag_value(&raw, byte_order);
     let mut omitted = tag.omitted;
     if condition_resolved {
         omitted.condition = false;
@@ -854,6 +853,36 @@ mod tests {
         let result = walk(&TABLE, &[2, 1, 0, 2, 0], &mut sink, &mut members);
         assert_eq!(result.gate_b_blocked, 1);
         assert!(sink.rows.is_empty());
+    }
+
+    #[test]
+    fn real_serial_table_retains_nonzero_source_coordinate_storage_and_list_fact() {
+        let table = super::super::find_serial_table("Canon", "AFInfo")
+            .expect("generated Canon::AFInfo serial table");
+        let mut data = Vec::new();
+        for value in [1u16, 1, 6000, 4000, 120, 80, 40, 30, 10, 20, 1, 0, 7] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let mut members = HashMap::new();
+        let result = walk(table, &data, &mut sink, &mut members);
+        assert!(!result.tainted);
+
+        let width = sink
+            .rows
+            .iter()
+            .find(|row| row.name == "CanonImageWidth")
+            .expect("actual serial index 2 emitted");
+        assert_eq!(width.source_id, oxidex_tags::TagId::Numeric(2));
+        assert_eq!(width.stored, TagValue::Integer(6000));
+        assert_eq!(width.value, TagValue::Integer(6000));
+        assert_eq!(width.group0, "MakerNotes");
+        assert_eq!(width.group1, "Canon");
+        assert_eq!(width.group2, "Image");
+        assert!(!width.is_list, "source flags do not declare List");
     }
 
     #[test]

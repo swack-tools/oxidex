@@ -651,6 +651,35 @@ fn decode_plan(located: &Located<'_>, plan: ReadPlan, order: ByteOrder) -> Optio
     }
 }
 
+/// Project the bytes selected by `ReadValue` into the stored channel before
+/// its string repair or later rational rounding. Numeric IFD formats already
+/// have exact typed representations; strings need the physical byte scalar
+/// because `FixUTF8` belongs only to the value/display path.
+fn stored_plan(
+    located: &Located<'_>,
+    plan: ReadPlan,
+    order: ByteOrder,
+    decoded: &DecodedValue,
+) -> TagValue {
+    let source_bytes = |bytes: &[u8]| match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => TagValue::String(text),
+        Err(_) => TagValue::Binary(bytes.to_vec()),
+    };
+    match plan.kind {
+        Kind::Str => {
+            let end = located
+                .bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(located.bytes.len());
+            source_bytes(&located.bytes[..end])
+        }
+        Kind::Utf8 => source_bytes(located.bytes),
+        Kind::Undef => TagValue::Binary(located.bytes.to_vec()),
+        Kind::Num(_) => runtime::to_stored_tag_value(decoded, order),
+    }
+}
+
 /// `%intFormat` (Exif.pm:125-136): the formats a `SubIFD` pointer may be
 /// read in (Exif.pm:6747, else "Wrong format" and the entry is skipped).
 fn is_int_format(kind: Kind) -> bool {
@@ -1103,7 +1132,7 @@ fn walk_scoped(
         let Some(raw) = decode_plan(&located, plan, dir.byte_order) else {
             continue;
         };
-        let stored = runtime::to_stored_tag_value(&raw, dir.byte_order);
+        let stored = stored_plan(&located, plan, dir.byte_order, &raw);
         if let Some(reads) = decoded.as_deref_mut() {
             reads.entries[index] = EntryRead::Decoded;
         }
@@ -3460,6 +3489,103 @@ mod tests {
             &mut Vec::new(),
         );
         assert_eq!(refused, None);
+    }
+
+    #[test]
+    fn real_static_and_generated_walks_preserve_physical_string_and_rational_storage() {
+        fn exercise(
+            table: &'static IfdTable,
+            string_id: u16,
+            rational_id: u16,
+            expected_display: &str,
+        ) {
+            let order = ByteOrder::Big;
+            let floor = trailer_at(2) as u32;
+            let string_bytes = [b'A', 0xff, b'B', 0, 0];
+            let mut trailer = string_bytes.to_vec();
+            trailer.extend_from_slice(&1u32.to_be_bytes());
+            trailer.extend_from_slice(&3u32.to_be_bytes());
+            let data = ifd(
+                order,
+                &[
+                    entry(order, string_id, 2, 5, bytes32(order, floor)),
+                    entry(
+                        order,
+                        rational_id,
+                        5,
+                        1,
+                        bytes32(order, floor + string_bytes.len() as u32),
+                    ),
+                ],
+                &trailer,
+            );
+            let mut members = HashMap::new();
+            let mut ctx = cond::Ctx::new(&mut members);
+            let mut session = Session::new();
+            let mut rows = Vec::new();
+            super::process_exif(
+                table,
+                IfdDir {
+                    data: &data,
+                    data_domain: 0,
+                    ifd_start: 0,
+                    base: Some(0),
+                    byte_order: order,
+                    group1: table.set_group1.map(|_| table.group1),
+                },
+                &mut session,
+                &mut ctx,
+                &mut rows,
+            );
+            let string = rows
+                .iter()
+                .find(|row| row.source_id == oxidex_tags::TagId::Numeric(string_id))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "string row from the real {}::{} table walk; rows={rows:?}",
+                        table.module, table.table
+                    )
+                });
+            assert_eq!(string.stored, TagValue::Binary(vec![b'A', 0xff, b'B']));
+            assert_eq!(
+                string.value,
+                TagValue::String(expected_display.to_owned()),
+                "the existing display conversion must not change"
+            );
+
+            let rational = rows
+                .iter()
+                .find(|row| row.source_id == oxidex_tags::TagId::Numeric(rational_id))
+                .expect("rational row from the real table walk");
+            assert_eq!(rational.stored, TagValue::new_rational(1, 3));
+            match &rational.value {
+                TagValue::Float(value) => assert_eq!(*value, 0.333_333_333_3),
+                TagValue::String(value) => assert!(
+                    value.contains("0.3333333333"),
+                    "converted rational display kept its existing rounded quotient: {value}"
+                ),
+                other => panic!("unexpected rational display shape: {other:?}"),
+            }
+        }
+
+        let olympus = find_ifd_table("Olympus", "Equipment").expect("Olympus::Equipment");
+        assert!(conv::decoder(olympus).is_none(), "static residual control");
+        exercise(olympus, 0x0100, 0x0103, "Unknown (A?B)");
+
+        let exif = find_ifd_table("Exif", "Main").expect("Exif::Main");
+        let image_description = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == 0x010e)
+            .expect("ImageDescription");
+        let x_resolution = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == 0x011a)
+            .expect("XResolution");
+        assert!(conv::claims(exif, image_description));
+        assert!(conv::claims(exif, x_resolution));
+        exercise(exif, 0x010e, 0x011a, "A?B");
     }
 
     #[test]

@@ -780,6 +780,176 @@ mod tests {
         );
     }
 
+    fn canonical_cli_args(
+        requested: &[&str],
+        all_tags: bool,
+        numeric: bool,
+        groups: Option<Vec<u8>>,
+    ) -> CliArgs {
+        let mut args = requested
+            .iter()
+            .map(|name| format!("-{name}"))
+            .collect::<Vec<_>>();
+        args.push("fixture.orf".to_owned());
+        CliArgs {
+            detector: crate::cli::args::DetectorMode::Signature,
+            json: true,
+            csv: false,
+            short_format: false,
+            all_tags,
+            group_display: groups,
+            extended_output: false,
+            recursive: false,
+            preserve_file_times: false,
+            backup: false,
+            readonly: true,
+            exiftool_compat: !numeric,
+            tags_from_file: None,
+            date_format: None,
+            dry_run: false,
+            strict: false,
+            args,
+        }
+    }
+
+    fn output_map(metadata: &MetadataMap, args: &CliArgs) -> MetadataMap {
+        match resolve_file_output(metadata, args) {
+            ResolvedFileOutput::Metadata(map) => map,
+            ResolvedFileOutput::Lines(_) => panic!("JSON matrix must return metadata"),
+        }
+    }
+
+    #[test]
+    fn resolve_file_output_replays_the_complete_canonical_occurrence_matrix() {
+        fn occurrence(
+            name: &str,
+            stored: i64,
+            value: f64,
+            print: &str,
+            priority: u8,
+            instance: Instance,
+        ) -> TagOccurrence {
+            TagOccurrence {
+                id: oxidex_tags::TagId::Numeric(stored as u16),
+                name: crate::core::tag_occurrence::intern(name),
+                group0: crate::core::tag_occurrence::intern("MakerNotes"),
+                group1: crate::core::tag_occurrence::intern("Olympus"),
+                group2: Some(crate::core::tag_occurrence::intern("Camera")),
+                instance,
+                raw: TagValue::Float(value),
+                value: Some(TagValue::Float(value)),
+                print: Some(TagValue::new_string(print)),
+                stored: Some(TagValue::Integer(stored)),
+                priority,
+                is_list: false,
+                order: u32::MAX,
+                origin: Provenance {
+                    module: Some("Olympus"),
+                    table: Some("CameraSettings"),
+                    byte_range: None,
+                },
+            }
+        }
+
+        let mut metadata = MetadataMap::new();
+        for row in [
+            occurrence("NormalWinner", 1, 1.0, "old", 1, Instance::default()),
+            occurrence("NormalWinner", 2, 2.0, "new", 1, Instance::default()),
+            occurrence("PriorityZero", 3, 3.0, "first-zero", 0, Instance::default()),
+            occurrence("PriorityZero", 4, 4.0, "later-zero", 0, Instance::default()),
+            occurrence("InstanceWinner", 5, 5.0, "track-one", 1, Instance(1)),
+            occurrence("InstanceWinner", 6, 6.0, "track-two", 9, Instance(2)),
+            occurrence(
+                "ChannelReplay",
+                1013,
+                101.3,
+                "101.3 kPa",
+                1,
+                Instance::default(),
+            ),
+        ] {
+            let key = format!("Olympus:{}", row.name);
+            metadata.record_occurrence(key, row);
+        }
+
+        let default = output_map(&metadata, &canonical_cli_args(&[], false, false, None));
+        assert_eq!(default.get_string("Olympus:NormalWinner"), Some("new"));
+        assert_eq!(
+            default.get_string("Olympus:PriorityZero"),
+            Some("first-zero")
+        );
+        assert_eq!(
+            default.get_string("Olympus:InstanceWinner"),
+            Some("track-one")
+        );
+        assert_eq!(
+            default.get_string("Olympus:ChannelReplay"),
+            Some("101.3 kPa")
+        );
+
+        let requested = output_map(
+            &metadata,
+            &canonical_cli_args(
+                &[
+                    "NormalWinner",
+                    "PriorityZero",
+                    "InstanceWinner",
+                    "ChannelReplay",
+                ],
+                false,
+                false,
+                None,
+            ),
+        );
+        assert_eq!(requested.get_string("Olympus:NormalWinner"), Some("new"));
+        assert_eq!(
+            requested.get_string("Olympus:PriorityZero"),
+            Some("first-zero")
+        );
+        assert_eq!(
+            requested.get_string("Olympus:InstanceWinner"),
+            Some("track-one")
+        );
+
+        let all = output_map(
+            &metadata,
+            &canonical_cli_args(&["PriorityZero"], true, false, None),
+        );
+        assert_eq!(all.get_string("Olympus:PriorityZero"), Some("first-zero"));
+        assert_eq!(
+            all.get_string("Olympus:PriorityZero (2)"),
+            Some("later-zero")
+        );
+
+        let numeric = output_map(
+            &metadata,
+            &canonical_cli_args(&["ChannelReplay"], false, true, None),
+        );
+        assert_eq!(
+            numeric.get("Olympus:ChannelReplay"),
+            Some(&TagValue::Float(101.3))
+        );
+
+        let grouped = output_map(
+            &metadata,
+            &canonical_cli_args(&["ChannelReplay"], false, false, Some(vec![0, 1, 2])),
+        );
+        assert_eq!(
+            grouped.get_string("MakerNotes:Olympus:Camera:ChannelReplay"),
+            Some("101.3 kPa")
+        );
+
+        let replay = metadata
+            .keyed_occurrences()
+            .find(|(_, row)| row.name.as_ref() == "ChannelReplay")
+            .map(|(_, row)| row)
+            .expect("canonical row retained");
+        assert_eq!(replay.stored, Some(TagValue::Integer(1013)));
+        assert_eq!(replay.value, Some(TagValue::Float(101.3)));
+        assert_eq!(replay.print, Some(TagValue::new_string("101.3 kPa")));
+        assert_eq!(replay.raw, TagValue::Float(101.3));
+    }
+
     fn sample_metadata() -> MetadataMap {
         // Mirrors the pinned oracle's ExifTool.jpg shape: IFD0's Make comes
         // first (lower order), CIFF's Make second (higher order), both

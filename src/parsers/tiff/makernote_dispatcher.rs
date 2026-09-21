@@ -691,6 +691,18 @@ mod staleness_tests {
 mod tests {
     use super::*;
 
+    fn panasonic_quality_note() -> Vec<u8> {
+        let mut data = b"Panasonic\0\0\0".to_vec();
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0x0001u16.to_le_bytes());
+        data.extend_from_slice(&3u16.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&2u16.to_le_bytes());
+        data.extend_from_slice(&[0, 0]);
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data
+    }
+
     #[test]
     fn test_dispatch_canon_makernote() {
         let data = b"Canon data here";
@@ -719,5 +731,40 @@ mod tests {
         // Should succeed but not extract any tags
         assert!(result.is_ok());
         assert!(tags.is_empty(), "Should not extract tags for unknown make");
+    }
+
+    #[test]
+    fn real_untouched_vendor_uses_the_structured_default_without_behavior_change() {
+        let data = panasonic_quality_note();
+        let mut legacy = HashMap::new();
+        dispatch_makernote("Panasonic", &data, ByteOrder::LittleEndian, &mut legacy)
+            .expect("real Panasonic dispatcher path");
+        assert_eq!(
+            legacy.get("Panasonic:ImageQuality").map(String::as_str),
+            Some("High")
+        );
+
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        let mut structured = HashMap::new();
+        let mut values = HashMap::new();
+        let mut occurrences = Vec::new();
+        dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+            "Panasonic",
+            None,
+            &MakerNoteContext::detached(&data),
+            ByteOrder::LittleEndian,
+            &mut session,
+            &mut cond_ctx,
+            &mut structured,
+            &mut values,
+            &mut occurrences,
+        )
+        .expect("structured dispatcher reaches the real default implementation");
+
+        assert_eq!(structured, legacy);
+        assert!(values.is_empty());
+        assert!(occurrences.is_empty());
     }
 }

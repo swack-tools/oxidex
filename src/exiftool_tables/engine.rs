@@ -213,6 +213,29 @@ pub fn read_value(
     more: i64,
     byte_order: ByteOrder,
 ) -> Option<DecodedValue> {
+    read_value_with_stored(data, offset, format, count, more, byte_order).map(|read| read.decoded)
+}
+
+/// One physical `ReadValue` result and its source-exact storage projection.
+///
+/// Fixed-point decoders intentionally reproduce ExifTool's decimal rounding,
+/// so their [`DecodedValue`] cannot also serve as the stored channel. For
+/// those formats the physical bytes are the only exact representation in the
+/// public [`TagValue`] model. All other formats retain their exact typed form.
+pub(crate) struct ReadValue {
+    pub decoded: DecodedValue,
+    pub stored: TagValue,
+}
+
+#[must_use]
+pub(crate) fn read_value_with_stored(
+    data: &[u8],
+    offset: usize,
+    format: Fmt,
+    count: usize,
+    more: i64,
+    byte_order: ByteOrder,
+) -> Option<ReadValue> {
     let more = usize::try_from(more).ok()?;
     // ExifTool's ($len, $count) for this field. A sized string/undef is
     // `len == 1` repeated N times in ExifTool's own table, never one N-wide
@@ -243,7 +266,7 @@ pub fn read_value(
 
     if blob {
         // ExifTool.pm:6309-6311: one value spanning every byte.
-        return Some(match format {
+        let decoded = match format {
             Fmt::Str(_) | Fmt::RemainderString => {
                 let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
                 // RawConv receives this byte scalar before FoundTag's output
@@ -252,16 +275,29 @@ pub fn read_value(
                 DecodedValue::StringBytes(bytes[..end].to_vec())
             }
             _ => DecodedValue::Undefined(bytes.to_vec()),
-        });
+        };
+        let stored = super::runtime::to_stored_tag_value(&decoded, byte_order);
+        return Some(ReadValue { decoded, stored });
     }
-    if elem_count == 1 {
-        return decode_value_of(bytes, format, byte_order);
-    }
-    let values = bytes
-        .chunks_exact(elem_len)
-        .map(|chunk| decode_value_of(chunk, format, byte_order))
-        .collect::<Option<Vec<_>>>()?;
-    Some(DecodedValue::Array(values))
+    let decoded = if elem_count == 1 {
+        decode_value_of(bytes, format, byte_order)?
+    } else {
+        DecodedValue::Array(
+            bytes
+                .chunks_exact(elem_len)
+                .map(|chunk| decode_value_of(chunk, format, byte_order))
+                .collect::<Option<Vec<_>>>()?,
+        )
+    };
+    let stored = if matches!(
+        format,
+        Fmt::Fixed16s | Fmt::Fixed16u | Fmt::Fixed32s | Fmt::Fixed32u | Fmt::Extended
+    ) {
+        TagValue::Binary(bytes.to_vec())
+    } else {
+        super::runtime::to_stored_tag_value(&decoded, byte_order)
+    };
+    Some(ReadValue { decoded, stored })
 }
 
 /// ExifTool.pm:10079 -- `$val = ($val & $mask) >> $$tagInfo{BitShift} if $mask`,
@@ -641,14 +677,13 @@ fn walk_with_policy(
             Err(_) => continue,
         };
         // ExifTool.pm:10076-10077.
-        let Some(stored_raw) =
-            read_value(dir.data, offset, format, field.count, more, dir.byte_order)
+        let Some(read) =
+            read_value_with_stored(dir.data, offset, format, field.count, more, dir.byte_order)
         else {
             continue;
         };
-        let stored = super::runtime::to_stored_tag_value(&stored_raw, dir.byte_order);
         // ExifTool.pm:10079.
-        let Some(raw) = apply_mask(stored_raw, field.mask) else {
+        let Some(raw) = apply_mask(read.decoded, field.mask) else {
             continue;
         };
 
@@ -727,7 +762,7 @@ fn walk_with_policy(
                 group2: table.group2,
                 name: field.name,
                 source_id: binary_source_id(field),
-                stored,
+                stored: read.stored,
                 value,
                 value_conv,
                 low_priority: table.priority == Some(0),
@@ -1220,6 +1255,64 @@ mod tests {
             read_value(&data, 0, Fmt::Int16uRev, 1, 2, ByteOrder::Big),
             Some(DecodedValue::Integer(0x3412))
         );
+    }
+
+    #[test]
+    fn real_lossy_numeric_producers_keep_physical_storage_before_rounding() {
+        let table = find_table("ICC_Profile", "Chromaticity")
+            .expect("generated ICC_Profile::Chromaticity table");
+        let mut data = vec![0u8; 44];
+        data[8..10].copy_from_slice(&2u16.to_be_bytes());
+        data[10..12].copy_from_slice(&1u16.to_be_bytes());
+        data[12..16].copy_from_slice(&1u32.to_be_bytes());
+        data[16..20].copy_from_slice(&65_536u32.to_be_bytes());
+
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut rows = Vec::new();
+        process_binary_data(
+            table,
+            Dir::whole(&data, ByteOrder::Big),
+            &mut ctx,
+            &mut rows,
+        );
+
+        let channel = rows
+            .iter()
+            .find(|row| row.name == "ChromaticityChannel1")
+            .expect("real fixed32u field emitted");
+        assert_eq!(
+            channel.stored,
+            TagValue::Binary(data[12..20].to_vec()),
+            "stored channel must retain the exact fixed-point source bytes"
+        );
+        assert_eq!(
+            channel.value,
+            TagValue::String("2e-05 1".to_owned()),
+            "display decoding remains ExifTool-compatible and rounded"
+        );
+        assert_eq!(channel.source_id, TagId::Numeric(12));
+        assert!(!channel.is_list);
+
+        let aiff = find_table("AIFF", "Common").expect("generated AIFF::Common table");
+        let mut common = vec![0u8; 20];
+        common[8..18].copy_from_slice(&[0x3f, 0xff, 0x80, 0, 0, 0, 0, 0, 0, 0]);
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut rows = Vec::new();
+        process_binary_data(
+            aiff,
+            Dir::whole(&common, ByteOrder::Big),
+            &mut ctx,
+            &mut rows,
+        );
+        let sample_rate = rows
+            .iter()
+            .find(|row| row.name == "SampleRate")
+            .expect("real 80-bit extended field emitted");
+        assert_eq!(sample_rate.stored, TagValue::Binary(common[8..18].to_vec()));
+        assert_eq!(sample_rate.value, TagValue::Float(1.0));
+        assert_eq!(sample_rate.source_id, TagId::Numeric(4));
     }
 
     // -- The walk -----------------------------------------------------------
