@@ -23,9 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 @contextmanager
 def isolated_roots():
     """Give this test a durable root and an external sibling it owns."""
-    parent = REPO.parent / "oxidex-beta1-targets/test-root-isolation/test-roots"
-    parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=parent, prefix="case-") as case:
+    with tempfile.TemporaryDirectory(prefix="docs-test-roots-") as case:
         root = Path(case)
         durable = root / "durable"
         external = root / "external"
@@ -42,8 +40,7 @@ class DocsComparisonRecipeTests(unittest.TestCase):
         ).group(1)
         with isolated_roots() as (durable, external):
             cache = external / "runner-cache"
-            environment = {**os.environ, "EXIFTOOL_CACHE_DIR": str(cache),
-                           "OXIDEX_OPS_DIR": str(durable)}
+            environment = {**os.environ, "EXIFTOOL_CACHE_DIR": str(cache)}
             environment.pop("EXIFTOOL_SOURCE", None)
             result = subprocess.run(
                 ["bash", "-c", command], cwd=REPO, env=environment,
@@ -55,7 +52,7 @@ class DocsComparisonRecipeTests(unittest.TestCase):
 
     def test_generator_builds_with_exact_oracle_and_retains_reports(self):
         with isolated_roots() as (durable, external):
-            repo = external / f"repo-{os.getpid()}"
+            repo = external / "repo"
             repo.mkdir()
             source = repo / "source's tree"
             cache = repo / "runner cache"
@@ -114,7 +111,6 @@ class DocsComparisonRecipeTests(unittest.TestCase):
                 "EXIFTOOL_SOURCE": str(source), "EXIFTOOL_CACHE_DIR": str(cache),
                 "OXIDEX_TABLES_PERL": perl, "CARGO_TARGET_DIR": str(target),
                 "DOCS_TEST_CAPTURE": str(capture), "EXIFTOOL": "/untrusted/oracle",
-                "OXIDEX_OPS_DIR": str(durable),
             }), mock.patch.object(docs_comparison.bootstrap, "DURABLE_ROOT", durable), mock.patch.object(
                 docs_comparison.bootstrap, "LOCK", lock), mock.patch.object(
                 docs_comparison.bootstrap, "MIN_CORPUS_FILES", 2
