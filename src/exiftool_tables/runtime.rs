@@ -439,6 +439,54 @@ pub fn to_tag_value(value: &DecodedValue) -> TagValue {
     }
 }
 
+/// The source-stored form of a decoded value before Mask, RoundFloat,
+/// RawConv, ValueConv, or PrintConv. Unlike [`to_tag_value`], this never
+/// repairs invalid string bytes and never replaces an unsigned rational that
+/// exceeds `TagValue::Rational`'s signed components with its quotient text.
+#[must_use]
+pub(crate) fn to_stored_tag_value(value: &DecodedValue, order: ByteOrder) -> TagValue {
+    match value {
+        DecodedValue::Integer(v) => TagValue::Integer(*v),
+        DecodedValue::Float(v) => TagValue::Float(*v),
+        DecodedValue::UnsignedRational(n, d) => match (i32::try_from(*n), i32::try_from(*d)) {
+            (Ok(numerator), Ok(denominator)) => TagValue::Rational {
+                numerator,
+                denominator,
+            },
+            _ => {
+                let mut bytes = Vec::with_capacity(8);
+                match order {
+                    ByteOrder::Big => {
+                        bytes.extend_from_slice(&n.to_be_bytes());
+                        bytes.extend_from_slice(&d.to_be_bytes());
+                    }
+                    ByteOrder::Little => {
+                        bytes.extend_from_slice(&n.to_le_bytes());
+                        bytes.extend_from_slice(&d.to_le_bytes());
+                    }
+                }
+                TagValue::Binary(bytes)
+            }
+        },
+        DecodedValue::SignedRational(n, d) => TagValue::Rational {
+            numerator: *n,
+            denominator: *d,
+        },
+        DecodedValue::StringBytes(bytes) => match String::from_utf8(bytes.clone()) {
+            Ok(text) => TagValue::String(text),
+            Err(_) => TagValue::Binary(bytes.clone()),
+        },
+        DecodedValue::String(text) => TagValue::String(text.clone()),
+        DecodedValue::Undefined(bytes) => TagValue::Binary(bytes.clone()),
+        DecodedValue::Array(values) => TagValue::Array(
+            values
+                .iter()
+                .map(|value| to_stored_tag_value(value, order))
+                .collect(),
+        ),
+    }
+}
+
 /// [`to_tag_value`], except that a fixed-count field becomes the ONE value
 /// ExifTool reports for it: `ReadValue` joins the elements with a single
 /// space (ExifTool.pm:6312, `$val = join(' ', @vals)`), so `exiftool -j`
@@ -3127,6 +3175,35 @@ mod tests {
                     denominator: 2
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn stored_value_keeps_invalid_bytes_undefined_and_wide_rational_exact() {
+        assert_eq!(
+            to_stored_tag_value(
+                &DecodedValue::StringBytes(vec![0xff, 0x00, 0x61]),
+                ByteOrder::Little,
+            ),
+            TagValue::Binary(vec![0xff, 0x00, 0x61])
+        );
+        assert_eq!(
+            to_stored_tag_value(
+                &DecodedValue::Undefined(vec![0xde, 0xad]),
+                ByteOrder::Little,
+            ),
+            TagValue::Binary(vec![0xde, 0xad])
+        );
+        assert_eq!(
+            to_stored_tag_value(
+                &DecodedValue::UnsignedRational(u32::MAX, 2),
+                ByteOrder::Little,
+            ),
+            TagValue::Binary(vec![0xff, 0xff, 0xff, 0xff, 2, 0, 0, 0])
+        );
+        assert_eq!(
+            to_stored_tag_value(&DecodedValue::UnsignedRational(u32::MAX, 2), ByteOrder::Big,),
+            TagValue::Binary(vec![0xff, 0xff, 0xff, 0xff, 0, 0, 0, 2])
         );
     }
 }

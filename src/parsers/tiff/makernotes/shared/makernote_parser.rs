@@ -1,3 +1,4 @@
+use crate::core::TagOccurrence;
 use crate::exiftool_tables::Ctx;
 use crate::exiftool_tables::session::Session;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
@@ -144,6 +145,36 @@ pub trait MakerNoteParser {
         self.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms)
     }
 
+    /// Session-aware parsing with an optional canonical occurrence channel.
+    ///
+    /// Existing parsers keep their legacy map behavior through this default.
+    /// A parser that can retain source identity and all value forms overrides
+    /// it and appends `(public lookup key, occurrence)` rows in traversal
+    /// order without also projecting those rows into `tags`.
+    #[allow(clippy::too_many_arguments)]
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        let _ = occurrences;
+        self.parse_with_context_and_values_and_session(
+            ctx,
+            byte_order,
+            model,
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+        )
+    }
+
     /// Optional: Validate that this data belongs to this manufacturer
     ///
     /// Some manufacturers have header signatures (e.g., "Nikon\0\0")
@@ -161,5 +192,62 @@ pub trait MakerNoteParser {
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
         let _ = lens_id;
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct LegacyParser;
+
+    impl MakerNoteParser for LegacyParser {
+        fn manufacturer_name(&self) -> &'static str {
+            "Legacy"
+        }
+
+        fn tag_prefix(&self) -> &'static str {
+            "Legacy:"
+        }
+
+        fn parse(
+            &self,
+            _data: &[u8],
+            _byte_order: ByteOrder,
+            tags: &mut HashMap<String, String>,
+        ) -> Result<(), String> {
+            tags.insert("Legacy:Value".to_string(), "unchanged".to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn structured_default_preserves_legacy_map_parser() {
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut values = HashMap::new();
+        let mut occurrences = Vec::new();
+
+        LegacyParser
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &MakerNoteContext::detached(&[]),
+                ByteOrder::LittleEndian,
+                None,
+                &mut session,
+                &mut cond_ctx,
+                &mut tags,
+                &mut values,
+                &mut occurrences,
+            )
+            .expect("legacy parser still succeeds through the structured default");
+
+        assert_eq!(
+            tags.get("Legacy:Value").map(String::as_str),
+            Some("unchanged")
+        );
+        assert!(values.is_empty());
+        assert!(occurrences.is_empty());
     }
 }

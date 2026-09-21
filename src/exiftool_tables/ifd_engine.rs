@@ -1103,6 +1103,7 @@ fn walk_scoped(
         let Some(raw) = decode_plan(&located, plan, dir.byte_order) else {
             continue;
         };
+        let stored = runtime::to_stored_tag_value(&raw, dir.byte_order);
         if let Some(reads) = decoded.as_deref_mut() {
             reads.entries[index] = EntryRead::Decoded;
         }
@@ -1124,7 +1125,15 @@ fn walk_scoped(
                         continue;
                     };
                     if !super::attribution::silenced(super::attribution::Token::Engine) {
-                        out.push(generated_row(table, tag, group1, &raw, fraction, report));
+                        out.push(generated_row(
+                            table,
+                            tag,
+                            group1,
+                            &raw,
+                            stored.clone(),
+                            fraction,
+                            report,
+                        ));
                         if let Some(reads) = decoded.as_deref_mut() {
                             reads.rows.push((out.len() - 1, index));
                         }
@@ -1138,6 +1147,7 @@ fn walk_scoped(
             tag,
             &dir,
             raw,
+            stored,
             fraction,
             omitted,
             declined,
@@ -1162,6 +1172,7 @@ fn process_residual_entry(
     tag: &IfdTag,
     dir: &IfdDir<'_>,
     raw: DecodedValue,
+    stored: TagValue,
     fraction: Option<(i64, i64)>,
     omitted: Omitted,
     generated_declined: bool,
@@ -1243,12 +1254,15 @@ fn process_residual_entry(
             group1,
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
+            source_id: oxidex_tags::TagId::Numeric(tag.id),
+            stored,
             value,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
             rational: fraction
                 .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
             value_conv,
+            is_list: tag.flags.list,
         });
     }
     if out.len() > emitted_at
@@ -1466,6 +1480,7 @@ fn generated_row(
     tag: &'static IfdTag,
     group1: &'static str,
     raw: &DecodedValue,
+    stored: TagValue,
     fraction: Option<(i64, i64)>,
     report: conv::Report,
 ) -> Emitted {
@@ -1509,11 +1524,14 @@ fn generated_row(
         group1,
         group2: tag.groups.g2.unwrap_or(table.group2),
         name: tag.name,
+        source_id: oxidex_tags::TagId::Numeric(tag.id),
+        stored,
         value,
         low_priority: effective_priority(table, tag) == Some(0),
         avoid: tag.flags.avoid,
         rational: fraction.filter(|_| untouched),
         value_conv,
+        is_list: tag.flags.list,
     }
 }
 
@@ -2622,7 +2640,8 @@ mod tests {
             &TABLE,
             tag,
             &dir,
-            raw,
+            raw.clone(),
+            runtime::to_stored_tag_value(&raw, dir.byte_order),
             None,
             tag.omitted,
             true,
@@ -3412,6 +3431,25 @@ mod tests {
         assert_eq!(values(&out), vec![("Ratio", TagValue::Float(1.5))]);
         assert_eq!(out[0].rational, Some((3, 2)));
         assert_eq!(out[0].value_conv, None);
+        assert_eq!(out[0].stored, TagValue::new_rational(3, 2));
+        assert_eq!(out[0].source_id, oxidex_tags::TagId::Numeric(0x0002));
+        assert!(!out[0].is_list);
+
+        let generated = generated_row(
+            &NUMERIC,
+            &NUMERIC_TAGS[1],
+            "Numeric",
+            &DecodedValue::UnsignedRational(1, 3),
+            TagValue::new_rational(1, 3),
+            Some((1, 3)),
+            conv::Report {
+                value: None,
+                print: None,
+                writes: Vec::new(),
+            },
+        );
+        assert_eq!(generated.stored, TagValue::new_rational(1, 3));
+        assert_eq!(generated.source_id, oxidex_tags::TagId::Numeric(0x0002));
         let refused = process_exif_decoded(
             &NUMERIC,
             IfdDir {

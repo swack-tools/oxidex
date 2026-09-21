@@ -26,7 +26,8 @@ pub mod tables;
 pub mod text_info;
 
 use crate::const_decoder;
-use crate::core::{MetadataMap, TagValue};
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, MetadataMap, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
 use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{Ctx, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif};
@@ -494,7 +495,37 @@ impl MakerNoteParser for OlympusParser {
             cond_ctx,
             tags,
             value_forms,
+            None,
         )?;
+        absolutise_preview_image_start(preview_image_start_base(ctx), tags);
+        Ok(())
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        let first_new = occurrences.len();
+        self.parse_located_with_session(
+            ctx.window(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            ctx.payload_base(),
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+            Some(occurrences),
+        )?;
+        absolutise_preview_occurrence_start(preview_image_start_base(ctx), occurrences, first_new);
         absolutise_preview_image_start(preview_image_start_base(ctx), tags);
         Ok(())
     }
@@ -619,6 +650,41 @@ fn absolutise_preview_image_start(base: Option<u64>, tags: &mut HashMap<String, 
     }
 }
 
+/// Apply the same `IsOffset` adjustment to canonical generated rows while
+/// leaving their stored source value untouched. Detached MakerNotes cannot
+/// report an absolute file offset, so their generated start row is withheld
+/// just like the legacy map projection.
+fn absolutise_preview_occurrence_start(
+    base: Option<u64>,
+    rows: &mut Vec<(String, TagOccurrence)>,
+    first_new: usize,
+) {
+    let mut tail = rows.split_off(first_new);
+    tail.retain_mut(|(key, occurrence)| {
+        if key != PREVIEW_IMAGE_START {
+            return true;
+        }
+        let stored = match occurrence.value.as_ref().unwrap_or(&occurrence.raw) {
+            TagValue::Integer(value) => u64::try_from(*value).ok(),
+            TagValue::String(value) => value.parse::<u64>().ok(),
+            _ => None,
+        };
+        let Some(absolute) = base
+            .zip(stored)
+            .and_then(|(base, stored)| base.checked_add(stored))
+            .and_then(|value| i64::try_from(value).ok())
+        else {
+            return false;
+        };
+        let value = TagValue::Integer(absolute);
+        occurrence.raw = value.clone();
+        occurrence.value = Some(value.clone());
+        occurrence.print = Some(value);
+        true
+    });
+    rows.extend(tail);
+}
+
 impl OlympusParser {
     fn parse_located(
         &self,
@@ -642,6 +708,7 @@ impl OlympusParser {
             &mut cond_ctx,
             tags,
             value_forms,
+            None,
         )
     }
 
@@ -657,6 +724,7 @@ impl OlympusParser {
         cond_ctx: &mut Ctx<'_>,
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
+        mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -721,6 +789,7 @@ impl OlympusParser {
                 effective_byte_order,
                 model,
                 tags,
+                structured_rows.as_deref_mut(),
             );
             // The `MAIN` rows the generated table withholds or never
             // transcribed keep their hand conversion, and the three rows the
@@ -878,6 +947,7 @@ impl OlympusParser {
                 order,
                 model,
                 tags,
+                structured_rows.as_deref_mut(),
             );
             // The same remainder as for the top level: the withheld rows
             // (a MainInfo directory carries SpecialMode and DigitalZoom
@@ -993,6 +1063,7 @@ fn walk_main_through_engine(
     order: ByteOrder,
     model: Option<&str>,
     tags: &mut HashMap<String, String>,
+    mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
 ) {
     if let Some(model) = model {
         let model = model.to_string();
@@ -1015,14 +1086,41 @@ fn walk_main_through_engine(
         &mut emitted,
     );
     for tag in emitted {
-        let Some(text) = engine_value_text(&tag.value) else {
-            continue;
-        };
         // The tag's family-1 group as ExifTool reports it: `Olympus` for
         // every reported `Olympus::Main` row (the table's group 1; the only
         // `Groups => { 1 => 'MakerNotes' }` overrides sit on the `*IFD`
         // sub-directory variants, which are never values).
         let key = format!("{}:{}", tag.group1, tag.name);
+        if let Some(rows) = structured_rows.as_deref_mut() {
+            let value = tag.value_conv.clone().unwrap_or_else(|| tag.value.clone());
+            rows.push((
+                key,
+                TagOccurrence {
+                    id: tag.source_id,
+                    name: intern(tag.name),
+                    group0: intern(tag.group0),
+                    group1: intern(tag.group1),
+                    group2: (!tag.group2.is_empty()).then(|| intern(tag.group2)),
+                    instance: Instance::default(),
+                    raw: tag.value.clone(),
+                    value: Some(value),
+                    print: Some(tag.value),
+                    stored: Some(tag.stored),
+                    priority: u8::from(!(tag.low_priority || tag.avoid)),
+                    is_list: tag.is_list,
+                    order: 0,
+                    origin: Provenance {
+                        module: Some(tag.module),
+                        table: Some(tag.table),
+                        byte_range: None,
+                    },
+                },
+            ));
+            continue;
+        }
+        let Some(text) = engine_value_text(&tag.value) else {
+            continue;
+        };
         if tag.low_priority {
             super::shared::tag_priority::insert_low_priority(tags, key, text);
         } else {

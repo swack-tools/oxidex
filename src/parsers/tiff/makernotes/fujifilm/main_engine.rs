@@ -534,11 +534,14 @@ mod tests {
             group1,
             group2: "Camera",
             name: "AF-SPriority",
+            source_id: oxidex_tags::TagId::Numeric(0x102b),
+            stored: TagValue::Integer(1),
             value: TagValue::Integer(1),
             value_conv: None,
             low_priority: false,
             avoid: false,
             rational: None,
+            is_list: false,
         }
     }
 

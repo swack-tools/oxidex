@@ -382,7 +382,16 @@ fn process_word_directory(
             // truncate this masked u16 value.
             let raw = runtime::DecodedValue::Integer(i64::from(value));
             if matches!(
-                emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, &mut result),
+                emit_resolved_scalar(
+                    table,
+                    block.scope,
+                    resolved,
+                    raw,
+                    block.byte_order,
+                    ctx,
+                    sink,
+                    &mut result,
+                ),
                 ScalarAction::Tainted
             ) {
                 result.word_traces.push(trace);
@@ -717,7 +726,16 @@ fn process_entry<'a>(
         result.bad_value += 1;
         return KeyedEntryAction::Continue;
     };
-    match emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, result) {
+    match emit_resolved_scalar(
+        table,
+        block.scope,
+        resolved,
+        raw,
+        block.byte_order,
+        ctx,
+        sink,
+        result,
+    ) {
         ScalarAction::Continue => KeyedEntryAction::Continue,
         ScalarAction::Tainted => KeyedEntryAction::Tainted,
     }
@@ -737,11 +755,13 @@ fn emit_resolved_scalar(
     scope: KeyedScope,
     resolved: ResolvedTag,
     raw: runtime::DecodedValue,
+    byte_order: ByteOrder,
     ctx: &mut Ctx,
     sink: &mut dyn KeyedEmissionSink,
     result: &mut KeyedWalkResult,
 ) -> ScalarAction {
     let tag = resolved.tag;
+    let stored = runtime::to_stored_tag_value(&raw, byte_order);
     if tag.flags.unknown {
         return ScalarAction::Continue;
     }
@@ -810,6 +830,8 @@ fn emit_resolved_scalar(
                 .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
+            source_id: oxidex_tags::TagId::Numeric(tag.raw_id),
+            stored,
             value,
             value_conv,
             // The keyed compiler has already folded table PRIORITY and AVOID into
@@ -819,6 +841,7 @@ fn emit_resolved_scalar(
             // `Emitted::rational` is for IFD tables only (the binary walk sets
             // `None` too); a keyed directory never keeps the raw fraction.
             rational: None,
+            is_list: tag.flags.list,
         });
     }
     result.emitted += 1;
@@ -2478,9 +2501,26 @@ mod tests {
             TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
         );
         assert_eq!(
+            sink.rows[0].stored,
+            TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
+        );
+        assert_eq!(sink.rows[0].source_id, oxidex_tags::TagId::Numeric(2));
+        assert!(sink.rows[0].is_list);
+        assert_eq!(
             sink.rows[1].value,
             TagValue::String("(Binary data 2 bytes, use -b option to extract)".into())
         );
+        let scoped = re_scope(
+            sink.rows[0].clone(),
+            KeyedScope {
+                group1_override: Some("Nested"),
+                ..scope()
+            },
+        );
+        assert_eq!(scoped.group1, "Nested");
+        assert_eq!(scoped.stored, sink.rows[0].stored);
+        assert_eq!(scoped.source_id, sink.rows[0].source_id);
+        assert!(scoped.is_list);
         assert!(sink.rows[2].low_priority);
         assert!(sink.rows[2].avoid);
         assert!(!sink.rows[3].low_priority);
