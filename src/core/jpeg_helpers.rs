@@ -504,6 +504,7 @@ fn process_ifd0_tags(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
+        let opcode_residual = matches!(*tag_id, 0xC740 | 0xC741 | 0xC74E);
         if let Some(engine) = engine.as_deref_mut() {
             match engine.route_entry(
                 entry_index,
@@ -513,8 +514,9 @@ fn process_ifd0_tags(
                 crate::core::exif_dir_engine::Owner::Silent,
                 metadata,
                 |name| format!("IFD0:{name}"),
-                |_, _| true,
+                |_, _| !opcode_residual,
             ) {
+                crate::core::exif_dir_engine::Owner::Engine if opcode_residual => {}
                 crate::core::exif_dir_engine::Owner::Engine
                 | crate::core::exif_dir_engine::Owner::Silent => continue,
                 crate::core::exif_dir_engine::Owner::Hand => {}
@@ -533,7 +535,20 @@ fn process_ifd0_tags(
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
-        metadata.insert(tag_name, tag_value);
+        if opcode_residual {
+            let binary = TagValue::Binary(bytes.to_vec());
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                tag_value,
+                binary.clone(),
+                Some(binary),
+                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
+        } else {
+            metadata.insert(tag_name, tag_value);
+        }
     }
 
     (exif_ifd_offset, gps_ifd_offset)
