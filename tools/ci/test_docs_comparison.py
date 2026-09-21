@@ -40,7 +40,12 @@ class DocsComparisonRecipeTests(unittest.TestCase):
         ).group(1)
         with isolated_roots() as (durable, external):
             cache = external / "runner-cache"
-            environment = {**os.environ, "EXIFTOOL_CACHE_DIR": str(cache)}
+            environment = {**os.environ, "EXIFTOOL_CACHE_DIR": str(cache),
+                           "OXIDEX_OPS_DIR": str(durable),
+                           # Keep the subprocess resolver's temporary-root
+                           # classifier independent of the caller's hostile
+                           # TMPDIR while retaining the owned sibling topology.
+                           "TMPDIR": ""}
             environment.pop("EXIFTOOL_SOURCE", None)
             result = subprocess.run(
                 ["bash", "-c", command], cwd=REPO, env=environment,
@@ -111,6 +116,7 @@ class DocsComparisonRecipeTests(unittest.TestCase):
                 "EXIFTOOL_SOURCE": str(source), "EXIFTOOL_CACHE_DIR": str(cache),
                 "OXIDEX_TABLES_PERL": perl, "CARGO_TARGET_DIR": str(target),
                 "DOCS_TEST_CAPTURE": str(capture), "EXIFTOOL": "/untrusted/oracle",
+                "OXIDEX_OPS_DIR": str(durable),
             }), mock.patch.object(docs_comparison.bootstrap, "DURABLE_ROOT", durable), mock.patch.object(
                 docs_comparison.bootstrap, "LOCK", lock), mock.patch.object(
                 docs_comparison.bootstrap, "MIN_CORPUS_FILES", 2
