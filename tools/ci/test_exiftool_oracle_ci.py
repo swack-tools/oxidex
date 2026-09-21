@@ -6,12 +6,28 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import exiftool_oracle as oracle  # noqa: E402
+
+
+@contextmanager
+def isolated_roots():
+    """Give path-fence tests explicit durable and external sibling roots."""
+    parent = Path(__file__).resolve().parents[2].parent / \
+        "oxidex-beta1-targets/test-root-isolation/test-roots"
+    parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=parent, prefix="case-") as case:
+        root = Path(case)
+        durable = root / "durable"
+        external = root / "external"
+        durable.mkdir()
+        external.mkdir()
+        yield durable, external
 
 
 class TablePerlResolutionTests(unittest.TestCase):
@@ -94,8 +110,8 @@ class TablePerlResolutionTests(unittest.TestCase):
             strict.assert_called_once_with()
 
     def test_non_ci_override_remains_fenced_to_durable_root(self):
-        with tempfile.TemporaryDirectory() as directory:
-            perl = Path(directory) / "perl"
+        with isolated_roots() as (durable, external):
+            perl = external / "perl"
             perl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             perl.chmod(0o755)
             with mock.patch.dict(
@@ -106,7 +122,9 @@ class TablePerlResolutionTests(unittest.TestCase):
                     "OXIDEX_TABLES_PERL": str(perl),
                 },
                 clear=False,
-            ), self.assertRaisesRegex(oracle.OracleError, "durable root"):
+            ), mock.patch.object(oracle, "DURABLE_ROOT", durable), self.assertRaisesRegex(
+                oracle.OracleError, "durable root"
+            ):
                 oracle.choose_perl()
 
 
