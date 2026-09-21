@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import sys
 import unittest
 from pathlib import Path
 
@@ -14,6 +16,8 @@ TOOLS = ROOT / "tools" / "exiftool-tables"
 LEDGER = TOOLS / "conv_exif_main_ledger.json"
 WORKLIST = TOOLS / "exif_main_refusal_worklist.json"
 HELPER_CAPTURE = TOOLS / "testdata" / "helper_oracle_outputs.json"
+sys.path.insert(0, str(TOOLS))
+import helper_oracle as H  # noqa: E402
 
 
 class RefusalWorklist(unittest.TestCase):
@@ -135,12 +139,50 @@ class RefusalWorklist(unittest.TestCase):
     def test_helper_capture_uses_portable_verified_interpreter_identity(self):
         capture = json.loads(HELPER_CAPTURE.read_text(encoding="utf-8"))
         identity = capture["capture"]
-        self.assertEqual(identity["perl"], "perl5.38.2")
-        self.assertRegex(identity["perl_sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("perl", identity)
+        self.assertNotIn("perl_sha256", identity)
         self.assertEqual(identity["perl_version"], "v5.38.2")
         self.assertEqual(identity["exiftool_version"], "13.59")
         self.assertEqual(identity["capability_probe"], {"OOXML.docx": "DOCX"})
         self.assertNotIn(str(Path.home()), HELPER_CAPTURE.read_text(encoding="utf-8"))
+
+    def test_portable_comparison_ignores_only_interpreter_installation(self):
+        expected = json.loads(HELPER_CAPTURE.read_text(encoding="utf-8"))
+        expected["capture"]["perl"] = "/opt/toolchains/perl"
+        expected["capture"]["perl_sha256"] = "1" * 64
+        actual = copy.deepcopy(expected)
+        actual["capture"]["perl"] = "/home/runner/bin/perl5.38.2"
+        actual["capture"]["perl_sha256"] = "2" * 64
+
+        self.assertTrue(H.capture_matches(expected, actual))
+
+    def test_portable_comparison_rejects_behavioral_identity_drift(self):
+        expected = json.loads(HELPER_CAPTURE.read_text(encoding="utf-8"))
+        mutations = {
+            "perl version": lambda doc: doc["capture"].__setitem__(
+                "perl_version", "v5.38.3"
+            ),
+            "ExifTool version": lambda doc: doc["capture"].__setitem__(
+                "exiftool_version", "13.60"
+            ),
+            "capability": lambda doc: doc["capture"].__setitem__(
+                "capability_probe", {"OOXML.docx": "ZIP"}
+            ),
+            "Perl core source": lambda doc: doc["perl_sources"].__setitem__(
+                "CORE/perl.h", "0" * 64
+            ),
+            "helper source": lambda doc: doc["helpers"][
+                "Image::ExifTool::ASF::GetGUID"
+            ].__setitem__("source_sha256", "0" * 64),
+            "native output": lambda doc: doc["residuals"]["0xc763"]["cases"][0][
+                "print"
+            ].__setitem__("hex", "00"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                actual = copy.deepcopy(expected)
+                mutate(actual)
+                self.assertFalse(H.capture_matches(expected, actual))
 
 
 if __name__ == "__main__":

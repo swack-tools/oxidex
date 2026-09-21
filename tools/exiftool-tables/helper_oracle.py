@@ -753,6 +753,8 @@ def instrument(perl, et_dir):
     """Assert the pinned interpreter and tree before producing any number."""
     pinned = (REPO / ".exiftool-version").read_text().strip()
     env = oracle_env()
+    perl_path = Path(perl).resolve()
+    perl_sha256 = hashlib.sha256(perl_path.read_bytes()).hexdigest()
     pv = subprocess.run([perl, "-e", "print $^V"], capture_output=True, text=True,
                         env=env, check=True).stdout.strip()
     if pv != PINNED_PERL_VERSION:
@@ -768,7 +770,8 @@ def instrument(perl, et_dir):
     if ft != "DOCX":
         sys.exit(f"capability probe: OOXML.docx -> {ft!r}, not DOCX (degraded perl)")
     print(f"=== instrument: helper_oracle ===\n"
-          f"perl      {perl} ({pv})\nexiftool  {exiftool} -ver {ver} (pinned {pinned}); "
+          f"perl      {perl_path} ({pv}); sha256 {perl_sha256}\n"
+          f"exiftool  {exiftool} -ver {ver} (pinned {pinned}); "
           f"OOXML.docx -> {ft}\nTZ        UTC")
     return pv, ver
 
@@ -853,8 +856,8 @@ def build(perl, et_dir):
     return {
         "capture": {
             "tool": "tools/exiftool-tables/helper_oracle.py",
-            "perl": Path(perl).name,
-            "perl_sha256": hashlib.sha256(Path(perl).read_bytes()).hexdigest(),
+            "perl": str(Path(perl).resolve()),
+            "perl_sha256": hashlib.sha256(Path(perl).resolve().read_bytes()).hexdigest(),
             "perl_version": pv,
             "exiftool_version": ver,
             # `instrument` refuses before returning unless this exact probe
@@ -876,9 +879,23 @@ def build(perl, et_dir):
     }
 
 
+def portable_capture(capture):
+    """Project out only installation-specific interpreter provenance."""
+    portable = {**capture, "capture": {**capture["capture"]}}
+    portable["capture"].pop("perl", None)
+    portable["capture"].pop("perl_sha256", None)
+    return portable
+
+
+def capture_matches(expected, actual):
+    """Compare all portable identity, source, capability, and output data."""
+    return portable_capture(expected) == portable_capture(actual)
+
+
 def render(capture):
     """Deterministic text: the envelope indented, each case on one line, so
     a re-capture diffs case by case and the file stays reviewable."""
+    capture = portable_capture(capture)
     lines = ["{", '"capture": ' + json.dumps(capture["capture"], sort_keys=True) + ",",
              '"charset_sources": ' + json.dumps(capture["charset_sources"], sort_keys=True)
              + ",",
@@ -926,8 +943,8 @@ def main():
         print(f"wrote {CAPTURE.relative_to(REPO)}: {n} helper cases, {rn} residual cases, "
               f"{len(capture['truthiness'])} truthiness cases")
         return 0
-    committed = CAPTURE.read_text(encoding="utf-8")
-    if committed != text:
+    committed = json.loads(CAPTURE.read_text(encoding="utf-8"))
+    if not capture_matches(committed, capture):
         print(f"MISMATCH: re-running the pinned Perl does not reproduce "
               f"{CAPTURE.relative_to(REPO)}", file=sys.stderr)
         return 1
@@ -937,7 +954,7 @@ def main():
         print(f"MISMATCH: the pinned tree does not regenerate "
               f"{codegen_charsets.OUT.relative_to(REPO)}", file=sys.stderr)
         return 1
-    print(f"PASS: pinned Perl reproduces {CAPTURE.relative_to(REPO)} byte for byte "
+    print(f"PASS: pinned Perl reproduces {CAPTURE.relative_to(REPO)} portable capture "
           f"({n} helper cases, {rn} residual cases, "
           f"{len(capture['truthiness'])} truthiness cases), and the "
           f"pinned tree regenerates {codegen_charsets.OUT.relative_to(REPO)}")
