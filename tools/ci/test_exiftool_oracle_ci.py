@@ -18,7 +18,9 @@ import exiftool_oracle as oracle  # noqa: E402
 @contextmanager
 def isolated_roots():
     """Give path-fence tests explicit durable and external sibling roots."""
-    with tempfile.TemporaryDirectory(prefix="oracle-test-roots-") as case:
+    with tempfile.TemporaryDirectory(
+        prefix="oracle-test-roots-", dir=Path(__file__).resolve().parents[2].parent
+    ) as case:
         root = Path(case)
         durable = root / "durable"
         external = root / "external"
