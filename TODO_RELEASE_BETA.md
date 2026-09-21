@@ -4,6 +4,21 @@ This is the living release ledger for OxiDex `v2.0.0-beta.1`. Add notes,
 evidence links, blocking defects, decisions, and exact SHAs here as the work
 progresses.
 
+> **Current integration protocol (post-#916):** After PR #916 merges, new task
+> branches and PRs use the verified current `refactor/tag-machinery` as their
+> base. The `staging/beta1-functional-integration` controller and commands
+> preserved below are historical and paused. Resume requires a journaled
+> reconciliation of task/PR/merge state, processes, leases, base SHAs, and
+> plan/spec/PRD/receipt hashes. This documentation update does not resume the
+> controller or change its ledger.
+
+Portable paths follow the execution plan's **Global Constraints**:
+`OXIDEX_OPS_DIR` defaults to `$HOME/oxidex-ops`, `OXIDEX_WORKTREE_ROOT` to
+`$HOME/git`, and `OXIDEX_TARGET_ROOT` to
+`$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`. The current ExifTool pin comes from
+`.exiftool-version`. Evidence paths below are templates to resolve under the
+configured root; write expanded absolute paths into JSON and receipts.
+
 The goal is to make `refactor/tag-machinery` and all supporting documentation,
 tests, measurements, and delivery automation ready for a real integration into
 `main`. The goal is **not** to rename `refactor/tag-machinery`, replace `main`
@@ -35,7 +50,7 @@ release notes are a checklist rather than a receipt; the branch/development
 installation instructions are pre-tag only; and historical benchmark or parity
 material must not be presented as v2.0.0-beta.1 evidence.
 
-## Current snapshot
+## Historical snapshot (2026-09-19)
 
 Refresh this section whenever the candidate changes. Historical green runs are
 context, not evidence for a later release SHA.
@@ -54,7 +69,7 @@ probe did not return.
 
 | Item | Current observation | Release implication |
 |---|---|---|
-| Controller integration tip | `114f87cf5b5e5ea10c463e9225b925bca716ea06` (`staging/beta1-functional-integration`) | Task integration continues; no promotion PR or `main` candidate exists. |
+| Controller integration tip | `114f87cf5b5e5ea10c463e9225b925bca716ea06` (`staging/beta1-functional-integration`) | Historical paused-controller state; no promotion PR or `main` candidate was recorded. |
 | PR #857 policy cleanup | Merged as `ca1eb126`; [CI run 35454301888](https://github.com/swack-tools/oxidex/actions/runs/35454301888) required checks passed (Benchmarks skipped) | Historical integration evidence only; see the GitHub observation and durable receipt below. |
 | PR #858 Darwin linker flags | Merged as `f24a2130`; [CI run 35454699431](https://github.com/swack-tools/oxidex/actions/runs/35454699431) required checks passed (Benchmarks skipped), independently reviewed | Requested flags are present; release signing/notarization gates remain open. |
 | PR #859 release-ledger refresh | Merged as `114f87cf`; [CI run 35456471578](https://github.com/swack-tools/oxidex/actions/runs/35456471578) required checks passed, including generated-table fanout (Benchmarks skipped) | The ledger is refreshed through the current integration tip; no promotion PR or `main` candidate exists. |
@@ -75,8 +90,8 @@ Current green-run references:
 
 Durable integration evidence:
 
-- PR #857 / `ca1eb126`: [Claude-only policy receipt](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/claude-only-policy/receipt.md).
-- PR #858 / `f24a2130`: [macOS linker final validation](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/macos-strip-linker/final-validation.txt) and [independent review](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/macos-strip-linker/independent-review.md).
+- PR #857 / `ca1eb126`: Claude-only policy receipt (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/claude-only-policy/receipt.md`).
+- PR #858 / `f24a2130`: macOS linker final validation (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/macos-strip-linker/final-validation.txt`) and independent review (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/macos-strip-linker/independent-review.md`).
 - PR #859 / `114f87cf`: release-ledger refresh; [CI run 35456471578](https://github.com/swack-tools/oxidex/actions/runs/35456471578) completed the required checks, including generated-table fanout (Benchmarks skipped).
 - GitHub observation on 2026-09-19 (instrument: `gh pr view` / `gh pr checks`):
   [PR #857](https://github.com/swack-tools/oxidex/pull/857) merged as
@@ -97,8 +112,9 @@ jobs finish.
       full SHAs before starting each release wave.
 - [ ] Use one dedicated worktree, branch, and `CARGO_TARGET_DIR` per task.
 - [ ] Keep every worktree, target, source cache, corpus, toolchain, log,
-      receipt, and recovery file under `/Users/allen/git` or
-      `/Users/allen/oxidex-ops`; reject ephemeral temporary-directory paths.
+      receipt, and recovery file under `$OXIDEX_WORKTREE_ROOT`,
+      `$OXIDEX_TARGET_ROOT`, or `$OXIDEX_OPS_DIR`; reject ephemeral
+      temporary-directory paths.
 - [ ] Run `tools/preflight.sh` before the first edit and before remote
       operations, then fetch and compare the task's literal base against its
       controller-owned remote target. Record `origin/main` divergence
@@ -119,7 +135,7 @@ jobs finish.
 - [ ] Keep the authoritative fleet snapshot, append-only event stream,
       canonical PRDs, process/session records, reports, reviews, and receipt
       index under
-      `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/`;
+      `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/`;
       rehearse recovery after all controller and worker processes terminate.
 - [ ] Create signed local checkpoint commits at meaningful milestones. The
       controller—not workers—pushes each task branch and opens or updates its
@@ -142,7 +158,7 @@ Notes:
 > **2026-09-19 — controller/oracle remains NO-GO.** Task 0 is running
 > Generation 12 corrections; the controller / oracle remains NO-GO pending the
 > Generation 12 final receipt and independent review. The current evidence is
-> retained under [Generation 12 correction evidence](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/gen12-correction/);
+> retained under Generation 12 correction evidence (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/gen12-correction/`);
 > no release waiver exists.
 >
 > **2026-09-19 — legacy fleet retirement is design-only.** Read-only discovery
@@ -151,8 +167,8 @@ Notes:
 > schedules, and credentials are unverified. No retirement action is authorized.
 > Keep `tools/release/fleet_controller.py` out of retirement scope: it is the
 > new local durable release controller, not legacy fleet tooling. See the
-> [discovery report](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/legacy-fleet-retirement-discovery/report.md)
-> and [design](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/legacy-fleet-retirement-design/report.md).
+> discovery report (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/legacy-fleet-retirement-discovery/report.md`)
+> and design (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/legacy-fleet-retirement-design/report.md`).
 >
 > **2026-09-19 — promotion remains unstarted.** There is no actual promotion
 > PR, merged `main` candidate, or release tag. A real signed tag still requires
@@ -166,7 +182,7 @@ Notes:
 > and missing authorization boundaries conflict with the protected-main,
 > integration, durable-oracle/evidence, worktree, and release-authorization
 > rules. Delete or archive it only after external-consumer verification and
-> explicit approval; do not fix it in place. See the [coverage-loop review](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/claude-policy-audit/coverage-loop-review.md).
+> explicit approval; do not fix it in place. See the coverage-loop review (`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/claude-policy-audit/coverage-loop-review.md`).
 
 > **2026-09-19 — Claude-only boundary and legacy fleet status verified.**
 > The final boundary audit records that `CLAUDE.md` is a non-duplicating
@@ -203,6 +219,12 @@ Already landed on `refactor/tag-machinery`:
 
 Still required:
 
+- [ ] Audit repeated-note deduplication in the retained Canon/Fuji/Olympus
+      residual handlers before release certification. That preexisting behavior
+      is outside #916's generated-row payload-collision repair.
+- [ ] Audit carrier fixtures that still use hard-coded ephemeral oracle paths.
+      Their missing-cache early returns cannot count toward release corpus
+      proof; require the intended fixtures to run before certification.
 - [ ] Finish the Olympus port on the generated path. Do not reintroduce the
       displaced hand-owned implementation merely to make a cherry-pick apply.
 - [ ] Finish the long-tail and remaining DJI/main ports: Nikon, Pentax,
@@ -312,7 +334,7 @@ release metric. A falling line count is not evidence of rising parity.
       `undef`, signed zero, list/scalar context, and source-specific formatting.
 - [ ] Port helpers in measured refusal/use-count order. Select behavior by the
       pinned source body/hash when ExifTool changed a helper between releases;
-      do not silently reuse a 13.59 implementation for an older source tree.
+      do not silently reuse the historical 13.59 implementation for an older source tree.
 - [ ] Add cycle and recursion protection equivalent to ExifTool's processed
       state without suppressing legitimate duplicate occurrences.
 - [ ] Test helper behavior at boundary values and with byte-exact fixtures,
@@ -460,10 +482,10 @@ Still required for an actual version-to-version upgrade:
       fixtures. Eliminate hard-coded 13.59 expectations that caused the
       historical 113 failures on 11.78 and 79 failures on 12.64 (F3).
 - [ ] Gate, version, or retire hand-written behavior that silently preserves
-      newer 13.59 tags when running older sources. Rehearsal EXTRA counts from
+      historical 13.59 tags when running older sources. Rehearsal EXTRA counts from
       the hand layer are compatibility drift, not successful coverage.
 - [ ] Generate per-release native write/readback expectations instead of using
-      the 13.59-only authenticated contract (F6).
+      the historical 13.59-only authenticated contract (F6).
 - [ ] Compare reads against each release's own pinned ExifTool oracle and
       writes against that release's own writable surface.
 - [ ] Prove both upgrade and downgrade transactions, plus a same-pin

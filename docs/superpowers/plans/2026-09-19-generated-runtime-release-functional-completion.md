@@ -9,23 +9,56 @@
 manual code, and prove repeatable ExifTool version transitions before
 `v2.0.0-beta.1` promotion work begins.
 
-**Architecture:** One controller preserves each task in a local named worktree
-and a remote draft PR, then squash-merges reviewed, green PRs into its
-single-writer `staging/beta1-functional-integration` branch and fast-forwards
-the integration mirror. A final requalified whole-branch PR lands into
-`refactor/tag-machinery`. Up to three Desktop subagents and six
+**Architecture:** After PR #916 merges, new task branches start from a verified
+`origin/refactor/tag-machinery` and new task PRs target `refactor/tag-machinery`.
+One controller preserves each task in a local named worktree and a remote draft
+PR, and integrates only reviewed, green changes. The staging-controller
+procedure retained below is historical and paused. Up to three Desktop
+subagents and six
 `codex --yolo exec` workers operate concurrently when their file leases do not
 overlap. Contract and engine work is serialized; vendor and container adapters
 fan out after those interfaces are frozen.
 
-**Tech Stack:** Rust, Python 3, Perl 5.38.2, ExifTool 13.59 and fixed rehearsal
-releases 11.78/12.64, Cargo, `uv`, `just`, Git worktrees, Codex Desktop
+**Tech Stack:** Rust, Python 3, Perl 5.38.2, the ExifTool release selected by
+`.exiftool-version`, and fixed historical rehearsal releases 11.78/12.64,
+Cargo, `uv`, `just`, Git worktrees, Codex Desktop
 subagents, and Codex CLI. Do not use fast mode.
 
 **Spec:**
 [`docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md`](../specs/2026-09-19-generated-runtime-release-functional-design.md)
 
 ## Global Constraints
+
+> **Current integration protocol:** After PR #916 merges, base new task
+> branches and PRs on `refactor/tag-machinery`, after verifying the current
+> remote SHA. Commands below naming `staging/beta1-functional-integration`
+> describe the historical, paused controller. Do not run its bootstrap,
+> launch, resume, or integration commands until a journaled reconciliation
+> accounts for its task/PR/merge state, active processes, file leases, base
+> SHAs, and plan/spec/PRD/receipt hashes. Updating these documents does not
+> resume the controller or authorize changing its ledger.
+
+Run this setup from the task repository before the shell examples. Keep these
+definitions in Global Constraints: the controller copies this complete section
+into every materialized PRD, before the selected task. Roots may be configured
+per host; defaults use the current user's home directory.
+
+```bash
+export OXIDEX_OPS_DIR="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}"
+export OXIDEX_WORKTREE_ROOT="${OXIDEX_WORKTREE_ROOT:-$HOME/git}"
+export OXIDEX_TARGET_ROOT="${OXIDEX_TARGET_ROOT:-$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets}"
+export OXIDEX_EXIFTOOL_VERSION="$(tr -d '\r\n' < .exiftool-version)"
+test -n "$OXIDEX_EXIFTOOL_VERSION"
+export EXIFTOOL_CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$OXIDEX_OPS_DIR/cache/exiftool/$OXIDEX_EXIFTOOL_VERSION}"
+export EXIFTOOL_PERL="${EXIFTOOL_PERL:-$OXIDEX_OPS_DIR/toolchains/perl-5.38.2/prefix/bin/perl5.38.2}"
+```
+
+`SUPERPOWERS_SDD_SCRIPTS`, when a historical Superpowers command is needed,
+must name the installed `subagent-driven-development/scripts` directory on
+this host. Resolve all path templates to absolute paths before writing a PRD,
+JSON receipt, ledger, or tool argument; JSON does not expand shell variables.
+Keep repository-relative file leases literal and unchanged. Configure Git/SSH
+authentication for the host rather than copying a machine-specific key path.
 
 - Never edit `main` or `refactor/tag-machinery` directly.
 - One task owns one branch, one named worktree, one absolute
@@ -36,19 +69,20 @@ subagents, and Codex CLI. Do not use fast mode.
   and `source-required` do not grant an edit lease. Resolve them to literal
   paths in the materialized PRD before dispatch or do not launch the task.
 - Use
-  `/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2` and
-  `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool`; never invoke bare
+  `$EXIFTOOL_PERL` and
+  `$EXIFTOOL_CACHE_DIR/exiftool`; never invoke bare
   `exiftool`.
 - Never place worktrees, Cargo targets, source caches, corpora, toolchains,
   receipts, logs, handoffs, or recovery state under an ephemeral temporary
-  directory. Release paths must be descendants of `/Users/allen/git` or
-  `/Users/allen/oxidex-ops`.
-- Before any oracle measurement, require `-ver == 13.59` and
+  directory. Release paths must be descendants of `$OXIDEX_WORKTREE_ROOT`,
+  `$OXIDEX_TARGET_ROOT`, or `$OXIDEX_OPS_DIR`.
+- Before any oracle measurement, require `-ver` to equal
+  `$OXIDEX_EXIFTOOL_VERSION` from `.exiftool-version` and
   `OOXML.docx -> FileType: DOCX`.
 - Never approximate a conversion. Derive it from the selected ExifTool source
   or refuse it with a machine-readable reason.
 - Use
-  `python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared`
+  `python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared`
   for Cargo builds, tests, and Clippy. Use the same wrapper without `--shared`
   for corpus, read/write, transition, and timing gates.
 - Every agent and CLI worker must not use fast mode. When two models are
@@ -77,13 +111,17 @@ subagents, and Codex CLI. Do not use fast mode.
 3. Duplicate order, groups, requested-tag behavior, suppression, and instance
    identity must survive consumer and engine migration; Tasks 3, 9, and 11 pin
    these behaviors.
-4. Same-pin and older-release runs must not reuse stale 13.59 artifacts or hand
+4. Same-pin and older-release runs must not reuse stale artifacts or hand
    behavior; Tasks 5, 18, and 19 prove fresh native expectations.
 5. Generated-on/off attribution must bind raw outputs, binary hashes, process
    results, corpus identity, and occurrence deltas; Task 8 makes those controls
    mandatory before Task 17 deletes code.
 
 ## Controller Workspace and Recovery Contract
+
+This section preserves the historical staging-controller procedure. It is
+paused under the current integration protocol in Global Constraints; its
+commands are not the startup instructions for new post-#916 tasks.
 
 This plan/specification branch must first be pushed, reviewed, and
 squash-merged into `refactor/tag-machinery`. No implementation task starts
@@ -94,13 +132,12 @@ After that PR lands, create the controller worktree from the remote target:
 ```bash
 git fetch origin refactor/tag-machinery main
 git worktree add -b staging/beta1-functional-integration \
-  /Users/allen/git/oxidex-beta1-functional-integration \
+  "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" \
   origin/refactor/tag-machinery
-cd /Users/allen/git/oxidex-beta1-functional-integration
+cd "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration"
 tools/preflight.sh
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/refactor/tag-machinery)"
-GIT_SSH_COMMAND="ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer" \
-  git push -u origin staging/beta1-functional-integration
+git push -u origin staging/beta1-functional-integration
 test "$(git rev-parse HEAD)" = \
   "$(git ls-remote origin refs/heads/staging/beta1-functional-integration | cut -f1)"
 ```
@@ -116,7 +153,7 @@ In the integration worktree, initialize the Superpowers workspace and controller
 handoff:
 
 ```bash
-bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/skills/subagent-driven-development/scripts/sdd-workspace \
+bash "${SUPERPOWERS_SDD_SCRIPTS:?Set the installed Superpowers scripts directory}/sdd-workspace" \
   docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md
 tools/preflight.sh
 ```
@@ -129,7 +166,7 @@ Do not copy a symbolic ref where the resolved SHA belongs.
 The durable controller root is:
 
 ```text
-/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/
+$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/
 ```
 
 It contains `fleet-state.json`, append-only `fleet-events.jsonl`,
@@ -170,8 +207,8 @@ The controller creates each task worktree with the branch, worktree, and base
 recorded in the task section and ledger:
 
 ```bash
-task_base=$(git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse HEAD)
-git -C /Users/allen/git/oxidex-beta1-functional-integration worktree add \
+task_base=$(git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" rev-parse HEAD)
+git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" worktree add \
   -b "$task_branch" "$task_worktree" "$task_base"
 ```
 
@@ -182,13 +219,13 @@ launching the worker.
 Every task uses a child directory named exactly after its task slug under:
 
 ```text
-/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/
+$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/
 ```
 
 The canonical task PRDs live under:
 
 ```text
-/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/
+$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/
 ```
 
 The controller copies the immutable PRD into the plan-specific Superpowers
@@ -199,8 +236,8 @@ For example, Task 5 launches through the durable controller as:
 
 ```bash
 python3 tools/release/fleet_controller.py launch \
-  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
-  --repo /Users/allen/git/oxidex-beta1-functional-integration --task 5
+  --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" \
+  --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 5
 ```
 
 The controller launches Desktop implementers with an isolated
@@ -317,13 +354,14 @@ Initial dispatch:
 
 ## Local Checkpoint, Remote PR, and Integration Procedure
 
+The staging-specific commands in this section remain historical and paused;
+new post-#916 task PRs target `refactor/tag-machinery`. Resuming the old
+controller requires the journaled reconciliation in Global Constraints.
+
 Every task is preserved twice: signed commits and `HANDOFF.md` in its local
 worktree, plus a pushed task branch and draft PR on GitHub. Workers never use
-GitHub credentials; the controller alone performs the remote steps with:
-
-```bash
-export GIT_SSH_COMMAND="ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer"
-```
+GitHub credentials; the controller alone performs the remote steps using the
+host's configured Git/SSH authentication.
 
 At each meaningful clean milestone, the worker creates a signed local
 checkpoint commit and updates `HANDOFF.md`. The controller verifies the commit,
@@ -332,7 +370,7 @@ pushes the task branch, and opens a draft PR if none exists:
 ```bash
 test -z "$(git -C "$task_worktree" status --short)"
 git -C "$task_worktree" cat-file -p HEAD | rg '^gpgsig '
-GIT_SSH_COMMAND="$GIT_SSH_COMMAND" git -C "$task_worktree" push -u origin "$task_branch"
+git -C "$task_worktree" push -u origin "$task_branch"
 gh pr create --repo swack-tools/oxidex --draft \
   --base staging/beta1-functional-integration --head "$task_branch" \
   --title "$task_pr_title" --body-file "$task_pr_body"
@@ -353,7 +391,7 @@ For final integration, load `task_worktree`, `task_base`, `task_head`,
 3. Create a review package from `$task_base..$task_head` using:
 
 ```bash
-bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package \
+bash "${SUPERPOWERS_SDD_SCRIPTS:?Set the installed Superpowers scripts directory}/review-package" \
   docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
   "$task_base" "$task_head"
 ```
@@ -363,7 +401,7 @@ bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/s
 
 ```bash
 git -C "$task_worktree" diff --name-only "$task_base..$task_head" | sort -u
-git -C /Users/allen/git/oxidex-beta1-functional-integration \
+git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" \
   diff --name-only "$task_base..origin/staging/beta1-functional-integration" | sort -u
 ```
 
@@ -392,12 +430,12 @@ gh pr merge "$task_pr" --repo swack-tools/oxidex --squash \
    mirror:
 
 ```bash
-git -C /Users/allen/git/oxidex-beta1-functional-integration fetch origin staging/beta1-functional-integration
-git -C /Users/allen/git/oxidex-beta1-functional-integration merge --ff-only origin/staging/beta1-functional-integration
+git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" fetch origin staging/beta1-functional-integration
+git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" merge --ff-only origin/staging/beta1-functional-integration
 task_merge=$(gh pr view "$task_pr" --repo swack-tools/oxidex \
   --json mergeCommit --jq .mergeCommit.oid)
-git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse "$task_merge^1"
-test "$(git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse "$task_merge^1")" = "$task_base"
+git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" rev-parse "$task_merge^1"
+test "$(git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" rev-parse "$task_merge^1")" = "$task_base"
 gh pr view "$task_pr" --repo swack-tools/oxidex --json state,mergeCommit,headRefOid,url
 ```
 
@@ -427,23 +465,22 @@ commit.
 
 ```bash
 task_slug=nikon-port
-task_target=/Users/allen/git/oxidex-beta1-targets/nikon-port
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/nikon-port
-export EXIFTOOL_CACHE_DIR=/Users/allen/oxidex-ops/cache/exiftool/13.59
-export EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2
+task_target="$OXIDEX_TARGET_ROOT/nikon-port"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/nikon-port"
+# Oracle variables come from Global Constraints and the current repository pin.
 mkdir -p "$task_target" "$task_evidence"
 
 cargo fmt --check
 CARGO_TARGET_DIR="$task_target" \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
   "$task_evidence/cargo-test.log" -- \
   cargo test --workspace --all-features
 CARGO_TARGET_DIR="$task_target" \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
   "$task_evidence/clippy.log" -- \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 CARGO_TARGET_DIR="$task_target" \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
   "$task_evidence/release-build.log" -- \
   cargo build --release --bin oxidex
 ```
@@ -452,12 +489,12 @@ After committing the candidate and proving `git status --short` is empty, run
 the combined-corpus receipt under the exclusive lock:
 
 ```bash
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
   "$task_evidence/conformance.log" -- \
   python3 tools/exiftool-tables/conformance.py \
-    /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
+    "$EXIFTOOL_CACHE_DIR/combined-samples" \
     --recursive --min-files 4000 --min-tags 400000 \
-    --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
+    --exiftool-dir "$EXIFTOOL_CACHE_DIR/exiftool" \
     --oxidex "$task_target/release/oxidex" \
     --json-out "$task_evidence/conformance.json"
 ```
@@ -468,23 +505,23 @@ exclusive measurement lock:
 
 ```bash
 CARGO_TARGET_DIR="$task_target" \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
   "$task_evidence/read-build.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py build \
     --output "$task_evidence/read-build"
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
   "$task_evidence/read-observe.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py observe \
     --build-proof "$task_evidence/read-build/build-proof.json" \
-    --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
-    --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
-    --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/t/images \
+    --perl "$EXIFTOOL_PERL" \
+    --exiftool-dir "$EXIFTOOL_CACHE_DIR/exiftool" \
+    --corpus "$EXIFTOOL_CACHE_DIR/exiftool/t/images" \
     --output "$task_evidence/read-observe"
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
   "$task_evidence/read-verify.log" -- \
   python3 tools/exiftool-tables/corpus_read_receipt.py verify \
     --receipt "$task_evidence/read-observe/receipt.json"
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
   "$task_evidence/read-gate.log" -- \
   python3 tools/ci/read_regression_gate.py \
     --receipt "$task_evidence/read-observe/receipt.json"
@@ -524,13 +561,13 @@ the task branch or opening/updating its draft PR.
 
 ### Task 0: Durable Controller, Oracle, and Corpus Bootstrap
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/durable-controller-oracle-bootstrap`
-**Worktree:** `/Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-durable-controller-oracle-bootstrap`
+**Target:** `$OXIDEX_TARGET_ROOT/durable-controller-oracle-bootstrap`
 **Commit:** `build: make release execution state durable`
 
 **Bootstrap PRD:** Task 0 is the sole manual bootstrap. Its canonical PRD is a
@@ -538,20 +575,20 @@ byte-for-byte copy of the reviewed, merged plan, so creating it does not depend
 on the not-yet-implemented materializer:
 
 ```bash
-task_base=$(git -C /Users/allen/git/oxidex-beta1-functional-integration rev-parse HEAD)
-git -C /Users/allen/git/oxidex-beta1-functional-integration worktree add \
+task_base=$(git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" rev-parse HEAD)
+git -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" worktree add \
   -b staging/beta1/durable-controller-oracle-bootstrap \
-  /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
+  "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-durable-controller-oracle-bootstrap" \
   "$task_base"
-cd /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap
+cd "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-durable-controller-oracle-bootstrap"
 tools/preflight.sh
-mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds
+mkdir -p "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds"
 cp docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md"
 cmp docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md"
 shasum -a 256 \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md"
 ```
 
 Record the merged plan commit and printed hash in `HANDOFF.md` before launch.
@@ -562,22 +599,22 @@ The Task 0 worker is told to execute Task 0 only.
 `controller/processes/00/bootstrap-process-1.txt`, then watch the JSONL file:
 
 ```bash
-mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
+mkdir -p "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00"
 bootstrap_token=$(uuidgen)
-bootstrap_prompt="Bootstrap process token ${bootstrap_token}. Execute Task 0 only from the canonical PRD at /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER."
+bootstrap_prompt="Bootstrap process token ${bootstrap_token}. Execute Task 0 only from the canonical PRD at $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/00-durable-controller-oracle-bootstrap.md. Obey its Global Constraints, update HANDOFF.md at every milestone, do not execute Task 1 or later, and finish with RETURN_TO_CONTROLLER."
 nohup codex --yolo exec --disable fast_mode --model gpt-5.6-terra --json \
-  -o /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/final-1.md \
-  -C /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap \
+  -o "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00/final-1.md" \
+  -C "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-durable-controller-oracle-bootstrap" \
   "$bootstrap_prompt" \
-  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl \
+  > "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl" \
   2>&1 < /dev/null &
 worker_pid=$!
 worker_start=$(ps -p "$worker_pid" -o lstart=)
 worker_command=$(ps -ww -p "$worker_pid" -o command=)
 printf 'pid=%s\nstart_time=%s\ntoken=%s\ncommand=%s\n' \
   "$worker_pid" "$worker_start" "$bootstrap_token" "$worker_command" \
-  > /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt
-tail -F /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl &
+  > "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt"
+tail -F "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00/events-1.jsonl" &
 tail_pid=$!
 if wait "$worker_pid"; then
   worker_status=0
@@ -586,7 +623,7 @@ else
 fi
 if kill "$tail_pid" 2>/dev/null; then :; fi
 printf 'exit_status=%s\n' "$worker_status" \
-  >> /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt
+  >> "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00/bootstrap-process-1.txt"
 ```
 
 If the supervisor dies, extract the exact session ID with
@@ -598,8 +635,8 @@ incomplete process may resume:
 
 ```bash
 set -euo pipefail
-cd /Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap
-process_root=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/00
+cd "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-durable-controller-oracle-bootstrap"
+process_root="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/00"
 process_file=$(printf '%s\n' "$process_root"/bootstrap-process-*.txt | sort -V | tail -n 1)
 segment=$(basename "$process_file" .txt | sed 's/^bootstrap-process-//')
 recorded_pid=$(sed -n 's/^pid=//p' "$process_file")
@@ -612,7 +649,7 @@ if kill -0 "$recorded_pid" 2>/dev/null; then
   test "$current_start" = "$recorded_start"
   test "$current_command" = "$recorded_command"
   printf '%s\n' "$current_command" | rg -F "$recorded_token"
-  printf '%s\n' "$current_command" | rg -F '/Users/allen/git/oxidex-beta1-durable-controller-oracle-bootstrap'
+  printf '%s\n' "$current_command" | rg -F "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-durable-controller-oracle-bootstrap"
   printf '%s\n' "$current_command" | rg -F 'gpt-5.6-terra'
   printf '%s\n' "$current_command" | rg -F "controller/processes/00/final-${segment}.md"
   tail -F "$process_root/events-${segment}.jsonl"
@@ -676,10 +713,10 @@ selects the newest process record and refuses `--last`.
 
 **Interfaces:**
 
-- `bootstrap_oracle.py provision --root /Users/allen/oxidex-ops` installs only
+- `bootstrap_oracle.py provision --root "$OXIDEX_OPS_DIR"` installs only
   beneath the durable root and writes an authenticated storage manifest.
-- `bootstrap_oracle.py verify --root /Users/allen/oxidex-ops --pin 13.59`
-  refuses symlinks or resolved paths outside `/Users/allen/oxidex-ops`, checks
+- `bootstrap_oracle.py verify --root "$OXIDEX_OPS_DIR" --pin "$OXIDEX_EXIFTOOL_VERSION"`
+  refuses symlinks or resolved paths outside `$OXIDEX_OPS_DIR`, checks
   locked source identities, and performs the version and DOCX probes.
 - `oracle-lock.json` pins Perl 5.38.2 source SHA-256
   `a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e`,
@@ -714,7 +751,7 @@ ExifTool tag object, a corpus below 4,000 files, and a DOCX probe other than
 `DOCX`. Assert the exact durable paths used by the remainder of this plan.
 
 In `test_fleet_controller.py`, use a durable test root beneath
-`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller-tests`
+`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller-tests`
 and assert: invalid/outside paths are refused; state writes are atomic;
 events are append-only; dependencies block dispatch until remote merge;
 materialized PRD hashes reconcile; PID reuse does not imply liveness; repeated
@@ -738,19 +775,19 @@ Expected: import failures because `bootstrap_oracle.py` and
 
 - [ ] **Step 3: Implement idempotent durable provisioning**
 
-Download archives into `/Users/allen/oxidex-ops/cache/downloads`, verify the
+Download archives into `$OXIDEX_OPS_DIR/cache/downloads`, verify the
 locked hashes before extraction, build Perl into
-`/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix`, install the locked
+`$OXIDEX_OPS_DIR/toolchains/perl-5.38.2/prefix`, install the locked
 Archive-Zip distribution into that prefix, materialize ExifTool and the
-combined corpus under `/Users/allen/oxidex-ops/cache/exiftool/13.59`, and use
+combined corpus under `$EXIFTOOL_CACHE_DIR`, and use
 atomic rename within the same durable filesystem. An interrupted run leaves
 the last verified installation intact and a journal naming the failed stage.
 
 - [ ] **Step 4: Implement the durable fleet controller and path fence**
 
 Implement all controller subcommands and the JSON schema above. Every command
-resolves paths before use and accepts only descendants of `/Users/allen/git`
-or `/Users/allen/oxidex-ops`. `materialize` combines the plan's Global
+resolves paths before use and accepts only descendants of `$OXIDEX_WORKTREE_ROOT`,
+`$OXIDEX_TARGET_ROOT`, or `$OXIDEX_OPS_DIR`. `materialize` combines the plan's Global
 Constraints, complete task section, resolved base SHA, literal paths,
 dependencies, exact file lease, handoff template, report contract, and launch
 command into the canonical PRD. `recover` reconciles the snapshot, append-only
@@ -768,7 +805,7 @@ executable and kill the controller parent to prove the worker remains alive.
 
 Set `scripts/exiftool_oracle.py` and the four named `justfile` recipes to the
 durable cache/evidence roots. Explicit environment overrides remain supported
-only when their resolved paths are under `/Users/allen/oxidex-ops`. Add a
+only when their resolved paths are under `$OXIDEX_OPS_DIR`. Add a
 repository test that fails if release tooling introduces a system
 temporary-directory default.
 
@@ -776,21 +813,22 @@ temporary-directory default.
 
 ```bash
 python3 tools/release/bootstrap_oracle.py provision \
-  --root /Users/allen/oxidex-ops
+  --root "$OXIDEX_OPS_DIR"
 python3 tools/release/bootstrap_oracle.py verify \
-  --root /Users/allen/oxidex-ops --pin 13.59 \
-  --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json
+  --root "$OXIDEX_OPS_DIR" --pin "$OXIDEX_EXIFTOOL_VERSION" \
+  --manifest "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json"
 python3 tools/release/fleet_controller.py init \
   --plan docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
   --spec docs/superpowers/specs/2026-09-19-generated-runtime-release-functional-design.md \
-  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
+  --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" \
   --target-ref origin/staging/beta1-functional-integration
 python3 tools/release/fleet_controller.py recover \
-  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller \
-  --repo /Users/allen/git/oxidex-beta1-functional-integration
+  --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" \
+  --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration"
 ```
 
-Require Perl `v5.38.2`, Archive::Zip `1.68`, ExifTool `13.59`, DOCX detection,
+Require Perl `v5.38.2`, Archive::Zip `1.68`, the ExifTool version in
+`.exiftool-version`, DOCX detection,
 at least 4,000 combined-corpus files, and recorded hashes for every archive,
 source tree, corpus manifest, and executable. The controller must report Task 0
 as the only launchable task and an idempotent recovery action.
@@ -800,8 +838,8 @@ as the only launchable task and an idempotent recovery action.
 ```bash
 uv run python -m unittest tools/release/test_bootstrap_oracle.py -v
 uv run python -m unittest tools/release/test_fleet_controller.py -v
-EXIFTOOL_CACHE_DIR=/Users/allen/oxidex-ops/cache/exiftool/13.59 \
-EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+EXIFTOOL_CACHE_DIR="$EXIFTOOL_CACHE_DIR" \
+EXIFTOOL_PERL="$EXIFTOOL_PERL" \
   python3 scripts/exiftool_oracle.py
 typos tools/release scripts/exiftool_oracle.py \
   docs/reference/durable-release-storage.md docs/reference/beta-fleet-controller.md \
@@ -834,13 +872,13 @@ squash-merges Task 0 before creating any other task worktree.
 
 ### Task 1: Ownership Inventory and Duplicate-Owner Verifier
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/01-ownership-inventory.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/01-ownership-inventory.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/ownership-inventory`
-**Worktree:** `/Users/allen/git/oxidex-beta1-ownership-inventory`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/ownership-inventory`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-ownership-inventory`
+**Target:** `$OXIDEX_TARGET_ROOT/ownership-inventory`
 **Commit:** `feat: verify generated and residual field ownership`
 
 **Files:**
@@ -905,7 +943,7 @@ Use stable identity shaped as:
     "field": {"kind": "numeric", "value": "0x829a"},
     "owner": "generated",
     "symbol": "src/exiftool_tables/conv/exif_main.rs::decode",
-    "source_release": "13.59",
+    "source_release": (repository_root / ".exiftool-version").read_text().strip(),
     "source_sha256": hashlib.sha256(source_row_bytes).hexdigest(),
     "refusal": None,
     "fixture": str(carrier.relative_to(repository_root)),
@@ -946,13 +984,13 @@ commit SHA, exact tests, and `RETURN_TO_CONTROLLER` as the next action in
 
 ### Task 2: Canonical Typed-Occurrence Core
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/02-typed-occurrence-core.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/02-typed-occurrence-core.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/typed-occurrence-core`
-**Worktree:** `/Users/allen/git/oxidex-beta1-typed-occurrence-core`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-typed-occurrence-core`
+**Target:** `$OXIDEX_TARGET_ROOT/typed-occurrence-core`
 **Commit:** `refactor: define canonical metadata value channels`
 
 **Files:**
@@ -995,9 +1033,9 @@ winners, tombstones, and instance-specific winners.
 - [ ] **Step 2: Run the focused library tests and observe failure**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-occurrence-core/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/typed-occurrence-core" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/typed-occurrence-core/red.log" -- \
 cargo test --lib projection
 ```
 
@@ -1031,13 +1069,13 @@ Clippy warnings:
 
 ```bash
 cargo fmt --check
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-occurrence-core/test.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/typed-occurrence-core" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/typed-occurrence-core/test.log" -- \
   cargo test --lib core::
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-occurrence-core \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-occurrence-core/clippy.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/typed-occurrence-core" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/typed-occurrence-core/clippy.log" -- \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
@@ -1056,17 +1094,17 @@ conversion still living in `exiftool_compat.rs`, commit SHA, exact tests, and
 
 ### Task 3: Migrate Typed-Occurrence Consumers
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/03-typed-consumers.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/03-typed-consumers.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/typed-consumers`
-**Worktree:** `/Users/allen/git/oxidex-beta1-typed-consumers`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/typed-consumers`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-typed-consumers`
+**Target:** `$OXIDEX_TARGET_ROOT/typed-consumers`
 **Commit:** `refactor: project typed metadata values consistently`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 3`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 3`
 
 **Files:**
 
@@ -1109,9 +1147,9 @@ occurrence.
 Run the focused integration test under the shared lock:
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/typed-consumers \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-consumers/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/typed-consumers" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/typed-consumers/red.log" -- \
   cargo test --test typed_value_projection_tests -- --nocapture
 ```
 
@@ -1119,7 +1157,7 @@ PR #867 already fixed generated-IFD production of explicit PrintConv forms.
 Do not recreate or simulate that superseded producer failure. Instead, add
 honest red tests for the remaining consumer defects identified by the
 independent review at
-`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reviews/03-typed-consumers-supersession.md`:
+`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/reviews/03-typed-consumers-supersession.md`:
 
 1. Construct one valid occurrence whose raw, ValueConv, and explicit
    PrintConv forms differ. Normal CLI resolution must select the explicit
@@ -1157,8 +1195,8 @@ then the Standard Candidate Acceptance Commands with:
 
 ```bash
 task_slug=typed-consumers
-task_target=/Users/allen/git/oxidex-beta1-targets/typed-consumers
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/typed-consumers
+task_target="$OXIDEX_TARGET_ROOT/typed-consumers"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/typed-consumers"
 ```
 
 Run formatting and Clippy before the signed task commit. Run the conformance
@@ -1184,13 +1222,13 @@ allowlist, and `RETURN_TO_CONTROLLER` next action to `HANDOFF.md`.
 
 ### Task 4: Generalize the Generated Conversion Registry
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/04-conv-registry.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/04-conv-registry.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/conv-registry`
-**Worktree:** `/Users/allen/git/oxidex-beta1-conv-registry`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/conv-registry`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-conv-registry`
+**Target:** `$OXIDEX_TARGET_ROOT/conv-registry`
 **Commit:** `feat: generate conversion registry for enabled tables`
 
 **Files:**
@@ -1223,9 +1261,9 @@ duplicate table identity controls.
 
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_conv_codegen.py -v
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/conv-registry" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/conv-registry/red.log" -- \
   cargo test --lib exiftool_tables::conv::tests
 ```
 
@@ -1262,16 +1300,16 @@ paths after the second run. Use:
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_conv_codegen.py -v
 uv run python tools/exiftool-tables/conv_oracle.py --check --all \
-  --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
-  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/regen-1.log -- \
+  --perl "$EXIFTOOL_PERL" \
+  --exiftool-dir "$EXIFTOOL_CACHE_DIR/exiftool"
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/conv-registry" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/conv-registry/regen-1.log" -- \
   tools/exiftool-tables/regen-all.sh
 git add src/exiftool_tables/conv tools/exiftool-tables
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/conv-registry \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/conv-registry/regen-2.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/conv-registry" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/conv-registry/regen-2.log" -- \
   tools/exiftool-tables/regen-all.sh
 git diff --exit-code -- src/exiftool_tables/conv tools/exiftool-tables
 ```
@@ -1293,17 +1331,17 @@ commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ### Task 5: Fresh BEFORE/AFTER Upgrade Transaction
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/05-upgrade-transaction.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/upgrade-transaction`
-**Worktree:** `/Users/allen/git/oxidex-beta1-upgrade-transaction`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/upgrade-transaction`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-upgrade-transaction`
+**Target:** `$OXIDEX_TARGET_ROOT/upgrade-transaction`
 **Commit:** `fix: regenerate both sides of ExifTool upgrades`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 5`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 5`
 
 **Files:**
 
@@ -1352,10 +1390,10 @@ artifacts.
 Save command/output in the task evidence directory:
 
 ```bash
-mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/upgrade-transaction
+mkdir -p "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/upgrade-transaction"
 set -o pipefail
 uv run python -m unittest tools/exiftool-tables/test_upgrade_transaction.py -v \
-  2>&1 | tee /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/upgrade-transaction/tests.log
+  2>&1 | tee "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/upgrade-transaction/tests.log"
 ```
 
 - [ ] **Step 6: Commit, update handoff, and report**
@@ -1373,17 +1411,17 @@ and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ### Task 6: Complete Occurrence-Aware Conformance Receipts
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/06-conformance-receipts.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/06-conformance-receipts.md`
 
 **Worker:** Codex CLI, `gpt-5.6-luna`
 **Reviewer:** `gpt-5.6-terra`
 **Branch:** `staging/beta1/conformance-receipts`
-**Worktree:** `/Users/allen/git/oxidex-beta1-conformance-receipts`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/conformance-receipts`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-conformance-receipts`
+**Target:** `$OXIDEX_TARGET_ROOT/conformance-receipts`
 **Commit:** `test: authenticate conformance occurrence totals`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 6`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 6`
 
 **Files:**
 
@@ -1442,13 +1480,13 @@ Record schema/reconciliation totals, test output, commit SHA, and
 
 ### Task 7: Make Session File-Scoped
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/07-file-session.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/07-file-session.md`
 
 **Worker:** Desktop subagent, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/file-session`
-**Worktree:** `/Users/allen/git/oxidex-beta1-file-session`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/file-session`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-file-session`
+**Target:** `$OXIDEX_TARGET_ROOT/file-session`
 **Commit:** `refactor: retain ExifTool session state for each file`
 
 **Files:**
@@ -1495,9 +1533,9 @@ duplicate-occurrence controls.
 - [ ] **Step 2: Run the focused Session and IFD tests red**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/file-session \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/file-session/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/file-session" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/file-session/red.log" -- \
   cargo test --test generated_file_session -- --nocapture
 ```
 
@@ -1521,13 +1559,13 @@ causes a generated decline rather than a guessed value.
 Use the shared lock. Require no ordering, group, or warning regression:
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/file-session \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/file-session/test.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/file-session" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/file-session/test.log" -- \
   cargo test --lib
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/file-session \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/file-session/integration.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/file-session" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/file-session/integration.log" -- \
   cargo test --test generated_file_session
 ```
 
@@ -1548,17 +1586,17 @@ Record scope semantics, call-site inventory, tests, commit SHA, and
 
 ### Task 8: Validate Generated-On/Generated-Off Attribution
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/08-generated-attribution.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/08-generated-attribution.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/generated-attribution`
-**Worktree:** `/Users/allen/git/oxidex-beta1-generated-attribution`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/generated-attribution`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-generated-attribution`
+**Target:** `$OXIDEX_TARGET_ROOT/generated-attribution`
 **Commit:** `test: authenticate generated route attribution`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 8`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 8`
 
 **Files:**
 
@@ -1606,12 +1644,12 @@ interface:
 
 ```bash
 tools/exiftool-tables/genshare/census.sh \
-  --repository /Users/allen/git/oxidex-beta1-generated-attribution \
-  --target-dir /Users/allen/git/oxidex-beta1-targets/generated-attribution \
-  --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/generated-attribution/census \
-  --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
-  --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
-  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
+  --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-generated-attribution" \
+  --target-dir "$OXIDEX_TARGET_ROOT/generated-attribution" \
+  --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/generated-attribution/census" \
+  --corpus "$EXIFTOOL_CACHE_DIR/combined-samples" \
+  --perl "$EXIFTOOL_PERL" \
+  --exiftool-dir "$EXIFTOOL_CACHE_DIR/exiftool" \
   --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
@@ -1704,7 +1742,7 @@ Task 18's post-Task-17 rerun) must separately resolve every token used for a
 deletion claim. The census must refuse a manifest or expectation hash mismatch.
 It writes its authenticated receipt
 under
-`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/generated-attribution/`.
+`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/generated-attribution/`.
 Run the Python/shell tests, Rust tests for the maintained seam, formatting, and
 Clippy first. Commit the signed task candidate and require a clean worktree.
 Then run the full command above through the exclusive lock.
@@ -1738,13 +1776,13 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 
 ### Task 9: Exact-Once Exif Shared Pipeline
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/09-exif-shared-pipeline.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/09-exif-shared-pipeline.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/exif-shared-pipeline`
-**Worktree:** `/Users/allen/git/oxidex-beta1-exif-shared-pipeline`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/exif-shared-pipeline`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-exif-shared-pipeline`
+**Target:** `$OXIDEX_TARGET_ROOT/exif-shared-pipeline`
 **Commit:** `refactor: route Exif directories through one tag pipeline`
 
 **Files:**
@@ -1798,9 +1836,9 @@ occurrence, and the residual's observable output.
 - [ ] **Step 2: Run focused engine tests red**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/exif-shared-pipeline \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-shared-pipeline/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/exif-shared-pipeline" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/exif-shared-pipeline/red.log" -- \
   cargo test --test exif_shared_pipeline -- --nocapture
 ```
 
@@ -1845,8 +1883,8 @@ and Clippy through the Standard Candidate Acceptance Commands with:
 
 ```bash
 task_slug=exif-shared-pipeline
-task_target=/Users/allen/git/oxidex-beta1-targets/exif-shared-pipeline
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-shared-pipeline
+task_target="$OXIDEX_TARGET_ROOT/exif-shared-pipeline"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/exif-shared-pipeline"
 ```
 
 Commit the signed task candidate after tests/formatting/Clippy and before the
@@ -1883,13 +1921,13 @@ path and its owner, test and receipt hashes, commit SHA, and
 
 ### Task 10: Close or Classify the 17 Exif::Main Refusals
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/10-refusal-closure.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/10-refusal-closure.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/refusal-closure`
-**Worktree:** `/Users/allen/git/oxidex-beta1-refusal-closure`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/refusal-closure`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-refusal-closure`
+**Target:** `$OXIDEX_TARGET_ROOT/refusal-closure`
 **Commit:** `feat: close Exif conversion refusal ownership`
 
 **Files:**
@@ -1955,12 +1993,12 @@ replaces it. Run:
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_exif_main_refusal_closure.py -v
 uv run python tools/exiftool-tables/conv_oracle.py --check --all \
-  --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
-  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool
+  --perl "$EXIFTOOL_PERL" \
+  --exiftool-dir "$EXIFTOOL_CACHE_DIR/exiftool"
 uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/refusal-closure \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/refusal-closure/test.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/refusal-closure" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/refusal-closure/test.log" -- \
   cargo test --test exif_main_refusal_closure
 ```
 
@@ -1993,13 +2031,13 @@ verification, commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 ### Task 11: Olympus End-to-End Pilot
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/11-olympus-pilot.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/11-olympus-pilot.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/olympus-pilot`
-**Worktree:** `/Users/allen/git/oxidex-beta1-olympus-pilot`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/olympus-pilot`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-olympus-pilot`
+**Target:** `$OXIDEX_TARGET_ROOT/olympus-pilot`
 **Commit:** `feat: complete Olympus generated runtime migration`
 
 **Files:**
@@ -2058,9 +2096,9 @@ Require target MISSING rows to become matched, zero matched-to-lost rows, zero
 new VALUE rows, and read-regression `lost 0`. Run the focused carrier suite:
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/olympus-pilot \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/olympus-pilot/focused.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/olympus-pilot" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/olympus-pilot/focused.log" -- \
   cargo test --test olympus_main_forward_port -- --include-ignored --nocapture
 ```
 
@@ -2087,8 +2125,8 @@ Run the Standard Candidate Acceptance measurement blocks with:
 
 ```bash
 task_slug=olympus-pilot
-task_target=/Users/allen/git/oxidex-beta1-targets/olympus-pilot
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/olympus-pilot
+task_target="$OXIDEX_TARGET_ROOT/olympus-pilot"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/olympus-pilot"
 ```
 
 The controller freezes the shared adapter interfaces after this task integrates.
@@ -2097,17 +2135,17 @@ The controller freezes the shared adapter interfaces after this task integrates.
 
 ### Task 12: Nikon Forward-Port on the Frozen Pipeline
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/12-nikon-port.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/12-nikon-port.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/nikon-port`
-**Worktree:** `/Users/allen/git/oxidex-beta1-nikon-port`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/nikon-port`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-nikon-port`
+**Target:** `$OXIDEX_TARGET_ROOT/nikon-port`
 **Commit:** `feat: forward-port remaining Nikon metadata parity`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 12`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 12`
 
 **Files:**
 
@@ -2146,9 +2184,9 @@ spine task. Do not copy a vendor-local approximation.
 - [ ] **Step 4: Run focused tests, fmt, Clippy, and commit the candidate**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/nikon-port \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/nikon-port/focused.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/nikon-port" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/nikon-port/focused.log" -- \
   cargo test --test nikon_main_forward_port -- --include-ignored --nocapture
 ```
 
@@ -2165,17 +2203,17 @@ gate `lost 0`.
 
 ### Task 13: Pentax and Panasonic Forward-Port
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/13-pentax-panasonic-port.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/13-pentax-panasonic-port.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/pentax-panasonic-port`
-**Worktree:** `/Users/allen/git/oxidex-beta1-pentax-panasonic-port`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/pentax-panasonic-port`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-pentax-panasonic-port`
+**Target:** `$OXIDEX_TARGET_ROOT/pentax-panasonic-port`
 **Commit:** `feat: forward-port Pentax and Panasonic metadata parity`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 13`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 13`
 
 **Files:**
 
@@ -2220,9 +2258,9 @@ Keep family edits within the lease. Escalate shared helper needs.
 - [ ] **Step 4: Run focused tests, fmt, Clippy, and commit the candidate**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/pentax-panasonic-port \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/pentax-panasonic-port/focused.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/pentax-panasonic-port" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/pentax-panasonic-port/focused.log" -- \
   cargo test --test pentax_panasonic_forward_port -- --include-ignored --nocapture
 ```
 
@@ -2238,17 +2276,17 @@ task values. Require zero lost reads and zero new VALUE rows.
 
 ### Task 14: Remaining DJI, Composite, and XMP Forward-Port
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/14-dji-composite-xmp-port.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/14-dji-composite-xmp-port.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/dji-composite-xmp-port`
-**Worktree:** `/Users/allen/git/oxidex-beta1-dji-composite-xmp-port`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/dji-composite-xmp-port`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-dji-composite-xmp-port`
+**Target:** `$OXIDEX_TARGET_ROOT/dji-composite-xmp-port`
 **Commit:** `feat: complete DJI and dependent metadata parity`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 14`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 14`
 
 **Files:**
 
@@ -2291,9 +2329,9 @@ an old commit.
 - [ ] **Step 4: Run focused tests, fmt, Clippy, and commit the candidate**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/dji-composite-xmp-port \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/dji-composite-xmp-port/focused.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/dji-composite-xmp-port" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/dji-composite-xmp-port/focused.log" -- \
   cargo test --test dji_main_forward_port -- --include-ignored --nocapture
 ```
 
@@ -2309,17 +2347,17 @@ Require zero lost reads and zero new VALUE rows.
 
 ### Task 15: Legacy Camera Long Tail
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/15-legacy-camera-tail.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/15-legacy-camera-tail.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/legacy-camera-tail`
-**Worktree:** `/Users/allen/git/oxidex-beta1-legacy-camera-tail`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/legacy-camera-tail`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-legacy-camera-tail`
+**Target:** `$OXIDEX_TARGET_ROOT/legacy-camera-tail`
 **Commit:** `feat: forward-port legacy camera metadata parity`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 15`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 15`
 
 **Files:**
 
@@ -2363,9 +2401,9 @@ instead of widening the lease.
 - [ ] **Step 4: Run family tests, fmt, Clippy, and commit the candidate**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/legacy-camera-tail \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/legacy-camera-tail/focused.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/legacy-camera-tail" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/legacy-camera-tail/focused.log" -- \
   cargo test --test legacy_camera_tail_forward_port -- --include-ignored --nocapture
 ```
 
@@ -2379,17 +2417,17 @@ measurement blocks with the literal legacy-camera task values.
 
 ### Task 16: Samsung, MediaJukebox, and Vivo Trailers
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/16-trailer-tail.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/16-trailer-tail.md`
 
 **Worker:** Codex CLI, `gpt-5.6-terra`
 **Reviewer:** `gpt-5.6-sol`
 **Branch:** `staging/beta1/trailer-tail`
-**Worktree:** `/Users/allen/git/oxidex-beta1-trailer-tail`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/trailer-tail`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-trailer-tail`
+**Target:** `$OXIDEX_TARGET_ROOT/trailer-tail`
 **Commit:** `feat: parse remaining metadata trailers`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 16`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 16`
 
 **Files:**
 
@@ -2428,9 +2466,9 @@ identity tags.
 - [ ] **Step 4: Run family tests, fmt, Clippy, and commit the candidate**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/trailer-tail \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/trailer-tail/focused.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/trailer-tail" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/trailer-tail/focused.log" -- \
   cargo test --test trailer_tail_forward_port -- --include-ignored --nocapture
 ```
 
@@ -2446,13 +2484,13 @@ values. Require zero lost reads and zero new VALUE rows.
 
 ### Task 17: Consolidate Walker Conversion Stages
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/17-walker-engine-consolidation.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/17-walker-engine-consolidation.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/walker-engine-consolidation`
-**Worktree:** `/Users/allen/git/oxidex-beta1-walker-engine-consolidation`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/walker-engine-consolidation`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-walker-engine-consolidation`
+**Target:** `$OXIDEX_TARGET_ROOT/walker-engine-consolidation`
 **Commit:** `refactor: share metadata conversion across walkers`
 
 **Files:**
@@ -2490,9 +2528,9 @@ the same occurrence shape through the shared contract.
 - [ ] **Step 2: Run focused tests red against a shared entry point**
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/walker-engine-consolidation \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/walker-engine-consolidation/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/walker-engine-consolidation" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/walker-engine-consolidation/red.log" -- \
   cargo test --test generated_runtime_walker_contract -- --nocapture
 ```
 
@@ -2522,8 +2560,8 @@ with:
 
 ```bash
 task_slug=walker-engine-consolidation
-task_target=/Users/allen/git/oxidex-beta1-targets/walker-engine-consolidation
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/walker-engine-consolidation
+task_target="$OXIDEX_TARGET_ROOT/walker-engine-consolidation"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/walker-engine-consolidation"
 ```
 
 Create the signed task commit before any authenticated measurement block and
@@ -2538,13 +2576,13 @@ the shared stage.
 
 ### Task 18: Delete Proven-Replaced Compatibility Code
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/18-proven-deletion.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/18-proven-deletion.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/proven-deletion`
-**Worktree:** `/Users/allen/git/oxidex-beta1-proven-deletion`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/proven-deletion`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-proven-deletion`
+**Target:** `$OXIDEX_TARGET_ROOT/proven-deletion`
 **Commit:** `refactor: remove metadata paths replaced by generated runtime`
 
 **Files:**
@@ -2595,9 +2633,9 @@ source fields, or a still-live duplicate owner. Run:
 
 ```bash
 uv run python -m unittest tools/exiftool-tables/test_runtime_deletion_ledger.py -v
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/proven-deletion \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/proven-deletion/red.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/proven-deletion" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/proven-deletion/red.log" -- \
   cargo test --test generated_runtime_deletion_controls -- --nocapture
 ```
 
@@ -2634,8 +2672,8 @@ Standard Candidate Acceptance Commands with:
 
 ```bash
 task_slug=proven-deletion
-task_target=/Users/allen/git/oxidex-beta1-targets/proven-deletion
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/proven-deletion
+task_target="$OXIDEX_TARGET_ROOT/proven-deletion"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/proven-deletion"
 ```
 
 Run the authenticated generated-attribution control/probe from Task 8 against
@@ -2652,17 +2690,17 @@ retained compatibility symbol with its reason.
 
 ### Task 19: Qualify ExifTool Version Transitions
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/19-version-transition-qualification.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/19-version-transition-qualification.md`
 
 **Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/version-transition-qualification`
-**Worktree:** `/Users/allen/git/oxidex-beta1-version-transition-qualification`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/version-transition-qualification`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification`
+**Target:** `$OXIDEX_TARGET_ROOT/version-transition-qualification`
 **Commit:** `test: prove reversible ExifTool version regeneration`
 
 **Launch:**
-`python3 tools/release/fleet_controller.py launch --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller --repo /Users/allen/git/oxidex-beta1-functional-integration --task 19`
+`python3 tools/release/fleet_controller.py launch --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller" --repo "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration" --task 19`
 
 **Files:**
 
@@ -2713,7 +2751,7 @@ exist.
 
 Create checked configurations for:
 
-- same-pin 13.59 -> 13.59;
+- same-pin: the current `.exiftool-version` -> that same version;
 - 11.78 -> 12.64; and
 - 12.64 -> 11.78.
 
@@ -2726,8 +2764,8 @@ target directory, and durable result path.
 ```bash
 python3 tools/exiftool-tables/version_transition_qualification.py \
   --matrix tools/exiftool-tables/version_transition_matrix.json \
-  --repository /Users/allen/git/oxidex-beta1-version-transition-qualification \
-  --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification
+  --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
+  --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification"
 ```
 
 It calls the existing planner/executor/stage adapter, refuses an unclean
@@ -2761,13 +2799,13 @@ git add tools/exiftool-tables/version_transition_qualification.py \
   docs/reference/upgrade-rehearsal-11.78-12.64.md
 git commit -S -m "test: prove reversible ExifTool version regeneration"
 test -z "$(git status --short)"
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification/same-pin.lock.log -- \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification/same-pin.lock.log" -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
-    --repository /Users/allen/git/oxidex-beta1-version-transition-qualification \
-    --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification \
-    --only same-pin-13.59
+    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
+    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification" \
+    --only "same-pin-$OXIDEX_EXIFTOOL_VERSION"
 ```
 
 If the worktree is not clean after the signed commit, do not start the
@@ -2780,12 +2818,12 @@ manifest delta, and recovery controls. No code or fixture edit is allowed after
 the run starts. Invoke the same entry point with `--only 11.78-to-12.64`.
 
 ```bash
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification/forward.lock.log -- \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification/forward.lock.log" -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
-    --repository /Users/allen/git/oxidex-beta1-version-transition-qualification \
-    --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification \
+    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
+    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification" \
     --only 11.78-to-12.64
 ```
 
@@ -2795,16 +2833,16 @@ Apply the same gates and prove removed artifacts are handled only by manifest
 delta. Invoke the same entry point with `--only 12.64-to-11.78`.
 
 ```bash
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification/reverse.lock.log -- \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification/reverse.lock.log" -- \
   python3 tools/exiftool-tables/version_transition_qualification.py \
     --matrix tools/exiftool-tables/version_transition_matrix.json \
-    --repository /Users/allen/git/oxidex-beta1-version-transition-qualification \
-    --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/version-transition-qualification \
+    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
+    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification" \
     --only 12.64-to-11.78
 ```
 
-- [ ] **Step 9: Restore/verify the 13.59 caller and run all rehearsal tests**
+- [ ] **Step 9: Restore/verify the original caller pin and run all rehearsal tests**
 
 ```bash
 uv run python -m unittest \
@@ -2816,7 +2854,7 @@ uv run python -m unittest \
   tools/exiftool-tables/test_version_rehearsal_stage_adapter.py \
   tools/exiftool-tables/test_version_transition_qualification.py -v
 git diff --exit-code
-test "$(tr -d '\n' < .exiftool-version)" = "13.59"
+test "$(tr -d '\r\n' < .exiftool-version)" = "$OXIDEX_EXIFTOOL_VERSION"
 ```
 
 - [ ] **Step 10: Update handoff, commit receipts/documentation, and report**
@@ -2827,12 +2865,12 @@ The source tree must end at its original pin and clean state.
 
 ### Task 20: Freeze and Qualify the Functional Candidate
 
-**PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-r1.md`
+**PRD:** `$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-r1.md`
 **Worker:** Controller-owned; no implementation worker
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/frozen-candidate-evidence-r1`
-**Worktree:** `/Users/allen/git/oxidex-beta1-frozen-candidate-evidence-r1`
-**Target:** `/Users/allen/git/oxidex-beta1-targets/final-r1`
+**Worktree:** `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-frozen-candidate-evidence-r1`
+**Target:** `$OXIDEX_TARGET_ROOT/final-r1`
 **Commit:** `docs: record beta functional qualification evidence`
 
 **Files:**
@@ -2882,13 +2920,13 @@ launch and refuses a collision:
 
 ```text
 branch:    staging/beta1/frozen-candidate-evidence-rN
-worktree:  /Users/allen/git/oxidex-beta1-frozen-candidate-evidence-rN
-target:    /Users/allen/git/oxidex-beta1-targets/final-rN
-evidence:  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-rN/
-PRD:       /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-rN.md
-report:    /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reports/20-frozen-candidate-evidence-rN.md
-review:    /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reviews/20-frozen-candidate-evidence-rN/
-process:   /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/processes/20-rN/
+worktree:  $OXIDEX_WORKTREE_ROOT/oxidex-beta1-frozen-candidate-evidence-rN
+target:    $OXIDEX_TARGET_ROOT/final-rN
+evidence:  $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-rN/
+PRD:       $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/prds/20-frozen-candidate-evidence-rN.md
+report:    $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/reports/20-frozen-candidate-evidence-rN.md
+review:    $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/reviews/20-frozen-candidate-evidence-rN/
+process:   $OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/processes/20-rN/
 receipts:  receipt-index.json key task-20/round-N
 ```
 
@@ -2900,16 +2938,16 @@ never deleted, reused, or overwritten before the release is complete.
 - [ ] **Step 2: Run clean full regeneration twice**
 
 ```bash
-mkdir -p /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1
+mkdir -p "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1"
 test -z "$(git status --short)"
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/regen-1.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/regen-1.log" -- \
   tools/exiftool-tables/regen-all.sh
 python3 tools/exiftool-tables/artifacts.py diff --tier all
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/regen-2.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/regen-2.log" -- \
   tools/exiftool-tables/regen-all.sh
 python3 tools/exiftool-tables/artifacts.py diff --tier all
 test -z "$(git status --short)"
@@ -2924,17 +2962,17 @@ the shared lock. Store separate logs and exit statuses:
 
 ```bash
 cargo fmt --check
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/ci.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/ci.log" -- \
   just ci
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/ignored.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/ignored.log" -- \
   cargo test --release --workspace --all-features -- --include-ignored
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/doc.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/doc.log" -- \
   cargo test --doc --workspace --all-features
 ```
 
@@ -2944,9 +2982,9 @@ Run the normal/`-n` oracle matrix, runtime ownership verifier, no-new-manual
 knowledge gate, and deletion ledger verifier:
 
 ```bash
-CARGO_TARGET_DIR=/Users/allen/git/oxidex-beta1-targets/final-r1 \
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/typed-values.log -- \
+CARGO_TARGET_DIR="$OXIDEX_TARGET_ROOT/final-r1" \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" --shared \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/typed-values.log" -- \
   cargo test --test typed_value_projection_tests
 uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 uv run python tools/exiftool-tables/runtime_deletion_ledger.py verify --root .
@@ -2961,8 +2999,8 @@ Run the Standard Candidate Acceptance conformance block with:
 
 ```bash
 task_slug=final-r1
-task_target=/Users/allen/git/oxidex-beta1-targets/final-r1
-task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1
+task_target="$OXIDEX_TARGET_ROOT/final-r1"
+task_evidence="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1"
 ```
 
 Record matched, MISSING, VALUE, EXTRA, RENAME, ceiling, files, and raw oracle
@@ -2975,15 +3013,15 @@ Run the Standard Candidate Acceptance read-receipt block using the final values
 above, then:
 
 ```bash
-python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py \
-  /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/genshare.log -- \
+python3 "$OXIDEX_OPS_DIR/evidence/20260917-group1-batch2/locked.py" \
+  "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/genshare.log" -- \
   tools/exiftool-tables/genshare/census.sh \
-    --repository /Users/allen/git/oxidex-beta1-frozen-candidate-evidence-r1 \
-    --target-dir /Users/allen/git/oxidex-beta1-targets/final-r1 \
-    --output /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/final-r1/genshare \
-    --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
-    --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
-    --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
+    --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-frozen-candidate-evidence-r1" \
+    --target-dir "$OXIDEX_TARGET_ROOT/final-r1" \
+    --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/final-r1/genshare" \
+    --corpus "$EXIFTOOL_CACHE_DIR/combined-samples" \
+    --perl "$EXIFTOOL_PERL" \
+    --exiftool-dir "$EXIFTOOL_CACHE_DIR/exiftool" \
     --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
@@ -2994,7 +3032,8 @@ control/probe receipts, and reconciled per-occurrence deltas.
 
 Validate same-pin, forward, reverse, native read, and native write/readback
 receipts against the frozen code/tool hashes. If `TODO_RELEASE_BETA.md` names
-an intended ExifTool pin after 13.59, run that current-to-next matrix row with
+an intended ExifTool pin after the current `.exiftool-version`, run that
+current-to-next matrix row with
 the same Task 19 entry point; otherwise record `not selected` rather than
 inventing or silently skipping a version.
 
@@ -3030,7 +3069,7 @@ rerun; a documentation-only fix reruns formatting, typos, links, and the
 scoped review.
 
 ```bash
-bash /Users/allen/.codex/plugins/cache/openai-curated-remote/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package \
+bash "${SUPERPOWERS_SDD_SCRIPTS:?Set the installed Superpowers scripts directory}/review-package" \
   docs/superpowers/plans/2026-09-19-generated-runtime-release-functional-completion.md \
   "$task_base" "$(git rev-parse HEAD)"
 ```
