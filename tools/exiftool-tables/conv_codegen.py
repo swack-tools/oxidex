@@ -49,6 +49,7 @@ import perl_subset as P  # noqa: E402
 LEDGER_SCHEMA = "oxidex_conv_ledger_v1"
 DEFAULT_TABLE = "Exif::Main"
 READ_SLOTS = ("RawConv", "ValueConv", "PrintConv")
+WORKLIST_SCHEMA = "oxidex_exif_main_refusal_worklist_v1"
 REGISTRY_BEGIN = "// BEGIN GENERATED CONVERSION REGISTRY"
 REGISTRY_END = "// END GENERATED CONVERSION REGISTRY"
 _IFD_KEY = re.compile(r"^(?:0|[1-9][0-9]*)$")
@@ -307,6 +308,105 @@ REFUSAL_NOTES = {
     0xC74E: "as OpcodeList1: ConvertBinary, PrintOpcode over $$val",
     0xC763: "PrintConv maps hex over split, then a while loop of sprintf('%.2x') BCD and "
             "timezone arithmetic (declarations, while): grammar work, not a helper",
+}
+
+# Task 10's checked disposition for every Exif::Main field that the scalar
+# conversion backend still refuses.  These entries deliberately do not turn a
+# traversal edge into a conversion: `walker` means the physical IFD route owns
+# the row, while `residual` names the exact hand implementation and regression
+# test.  `refusal_worklist()` requires this mapping to agree exactly with the
+# generator's current refusal set, so a new, removed, or reclassified refusal
+# cannot disappear in regeneration noise.
+REFUSAL_CLOSURES = {
+    0x00FE: dict(
+        required_behavior="planned residual: port SetPriorityDir, PageCount, MultiPage, and SubfileType per-file directory state",
+        probes=["full-resolution value 0", "reduced multi-page value 2", "second eligible directory"],
+        target_owner="residual", implementation_file="src/core/tiff_helpers.rs",
+        verification_status="planned_residual",
+        named_test="stateful_refusals_are_explicitly_planned_not_characterized"),
+    0x00FF: dict(
+        required_behavior="planned residual: OldSubfileType values 1 and 3 update priority/page state before reporting",
+        probes=["full-resolution value 1", "multi-page value 3", "non-page value 2"],
+        target_owner="residual", implementation_file="src/core/tiff_helpers.rs",
+        verification_status="planned_residual",
+        named_test="stateful_refusals_are_explicitly_planned_not_characterized"),
+    0x0103: dict(
+        required_behavior="planned residual: IdentifyRawFile may update TIFF type once, while Compression remains the reported scalar",
+        probes=["TIFF raw compression", "already identified file", "ordinary compression"],
+        target_owner="residual", implementation_file="src/core/tiff_helpers.rs",
+        verification_status="planned_residual",
+        named_test="stateful_refusals_are_explicitly_planned_not_characterized"),
+    0x0111: dict(
+        required_behavior="offset variants remain selected and consumed by the directory walker",
+        probes=["strip offset", "preview/JPEG offset", "other-image offset"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0x0117: dict(
+        required_behavior="byte-count variants remain paired with walker-owned offsets",
+        probes=["strip byte count", "preview/JPEG length", "other-image length"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0x014A: dict(
+        required_behavior="SubIFD traversal and A100DataOffset state remain walker-owned",
+        probes=["ordinary SubIFD", "Sony A100 data offset"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0x0201: dict(
+        required_behavior="thumbnail/preview/JPEG/other-image start variants remain walker-owned",
+        probes=["IFD1 thumbnail", "NRW override condition", "SubIFD JPEG start"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0x0202: dict(
+        required_behavior="thumbnail/preview/JPEG/other-image lengths remain paired with walker offsets",
+        probes=["IFD1 thumbnail length", "preview length", "SubIFD JPEG length"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0x8298: dict(
+        required_behavior="Copyright decodes once and IFD1 never double-inserts the residual",
+        probes=["photographer only", "photographer and editor", "IFD1 single occurrence"],
+        target_owner="residual", implementation_file="src/core/tag_conversion.rs",
+        named_test="copyright_xp_and_signed_zero_match_residual_behavior"),
+    0x927C: dict(
+        required_behavior="MakerNote variant selection and nested parsing remain walker-owned",
+        probes=["known maker signature", "make/model condition", "unknown maker note"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0x9287: dict(
+        required_behavior="shift discards the declared pair count and alternating usage/choice maps format the remainder",
+        probes=["known alternating values", "unknown usage", "unknown choice"],
+        target_owner="residual", implementation_file="src/core/tag_conversion.rs",
+        named_test="learning_opt_out_in_shift_semantics_match_exiftool"),
+    0xA462: dict(
+        required_behavior="seven rational64u values, two u16 counts, and trailing rationals decode in source order",
+        probes=["58-byte prefix", "trailing exposure rationals", "truncated boundary"],
+        target_owner="residual",
+        implementation_file="src/core/formatters/composite_image_exposure_times.rs",
+        named_test="composite_image_exposure_times_mixed_layout_matches_exiftool"),
+    0xC634: dict(
+        required_behavior="private-data and maker-note variants stay traversal/binary ownership, never scalar conversion",
+        probes=["Sony SR2 edge", "Adobe DNG data edge", "DNGPrivateData binary fallback"],
+        target_owner="walker", implementation_file="src/core/tiff_helpers.rs",
+        named_test="walker_owned_structural_refusals_are_classified_not_characterized"),
+    0xC740: dict(
+        required_behavior="ConvertBinary preserves bytes and PrintOpcode walks bounded big-endian opcode records",
+        probes=["known opcode", "unknown opcode", "truncated record"],
+        target_owner="residual", implementation_file="src/core/tag_conversion.rs",
+        named_test="opcode_lists_match_print_opcode"),
+    0xC741: dict(
+        required_behavior="ConvertBinary preserves bytes and PrintOpcode walks bounded big-endian opcode records",
+        probes=["known opcode", "unknown opcode", "truncated record"],
+        target_owner="residual", implementation_file="src/core/tag_conversion.rs",
+        named_test="opcode_lists_match_print_opcode"),
+    0xC74E: dict(
+        required_behavior="ConvertBinary preserves bytes and PrintOpcode walks bounded big-endian opcode records",
+        probes=["known opcode", "unknown opcode", "truncated record"],
+        target_owner="residual", implementation_file="src/core/tag_conversion.rs",
+        named_test="opcode_lists_match_print_opcode"),
+    0xC763: dict(
+        required_behavior="eight-byte groups use BCD sprintf formatting, flag masks, date, and timezone rules",
+        probes=["time only", "YYMMDD plus timezone", "incomplete trailing group"],
+        target_owner="residual", implementation_file="src/core/tag_conversion.rs",
+        named_test="time_codes_match_value_and_print_conversions"),
 }
 
 
@@ -1507,6 +1607,24 @@ def source_text(v):
     return json.dumps(v, sort_keys=True, ensure_ascii=False)
 
 
+def refusal_source_body(tag):
+    """Canonical source projection that explains a refusal.
+
+    Plain fields pin their three read-conversion slots and the non-serialized
+    extra-key names that can change conversion semantics.  Variant groups pin
+    the complete dumped alternatives because their Conditions/SubDirectory
+    bodies are precisely why traversal, rather than scalar conversion, owns
+    them.  The JSON string is both human-inspectable and independently hashed
+    in the checked worklist.
+    """
+    if tag.get("_variants"):
+        projection = {"_variants": tag["_variants"]}
+    else:
+        keys = (*READ_SLOTS, "_extra_keys")
+        projection = {key: tag[key] for key in keys if key in tag}
+    return source_text(projection)
+
+
 def compile_field(mod, tid, tag):
     """Rust source of one arm, or Refuse."""
     for key in ("Relist", "RawJoin", "ConvertBinary", "List"):
@@ -1605,7 +1723,8 @@ def generate(dump_path, table_name):
         if tag.get("_variants"):
             refused.append(dict(id=tid, name=name, reason=(
                 "_variants group: alternatives are chosen by the walker's compiled Condition "
-                "(offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm")))
+                "(offset/pointer, SubDirectory and MakerNote dispatch); not a conversion arm"),
+                source=tag))
             continue
         if tag.get("SubDirectory"):
             skipped.append(dict(id=tid, name=name, reason="SubDirectory edge: walked, never reported"))
@@ -1615,13 +1734,15 @@ def generate(dump_path, table_name):
             continue
         if tid in hand_owned:
             refused.append(dict(id=tid, name=name, reason=hand_owned[tid],
-                                slots=sorted(s for s in READ_SLOTS if tag.get(s) is not None)))
+                                slots=sorted(s for s in READ_SLOTS if tag.get(s) is not None),
+                                source=tag))
             continue
         try:
             src, slots, binary = compile_field(mod, tid, tag)
         except Refuse as e:
             refused.append(dict(id=tid, name=name, reason=e.reason,
-                                slots=sorted(s for s in READ_SLOTS if tag.get(s) is not None)))
+                                slots=sorted(s for s in READ_SLOTS if tag.get(s) is not None),
+                                source=tag))
             continue
         arms.append((tid, name, src))
         generated.append(dict(id=tid, name=name, slots=slots, binary=binary,
@@ -1786,12 +1907,65 @@ def ledger(g, dump_sha, rust_sha):
     }
 
 
+def refusal_worklist(g):
+    """Materialize the exact Exif::Main refusal closure contract."""
+    if f"{g['module']}::{g['table']}" != DEFAULT_TABLE:
+        raise ValueError("the refusal worklist is defined only for Exif::Main")
+    refused_ids = {row["id"] for row in g["refused"]}
+    closure_ids = set(REFUSAL_CLOSURES)
+    if refused_ids != closure_ids:
+        missing = sorted(refused_ids - closure_ids)
+        stale = sorted(closure_ids - refused_ids)
+        raise ValueError(
+            "Exif::Main refusal closure drift: "
+            f"missing={[hex(value) for value in missing]} "
+            f"stale={[hex(value) for value in stale]}"
+        )
+    rows = []
+    for refused in g["refused"]:
+        body = refusal_source_body(refused["source"])
+        closure = REFUSAL_CLOSURES[refused["id"]]
+        rows.append({
+            "id": f"0x{refused['id']:04x}",
+            "name": refused["name"],
+            "ledger_status": "refused",
+            "current_reason": refused["reason"],
+            "source_body": body,
+            "source_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "verification_status": closure.get(
+                "verification_status",
+                "classified_owner" if closure["target_owner"] == "walker"
+                else "characterized_behavior",
+            ),
+            **closure,
+        })
+    return {
+        "schema": WORKLIST_SCHEMA,
+        "table": DEFAULT_TABLE,
+        "source_release": g["version"],
+        "rows": rows,
+    }
+
+
+def write_or_check_worklist(path, rendered, *, write):
+    """Write only when explicitly requested; otherwise fail closed on drift."""
+    if write:
+        path.write_text(rendered)
+        return
+    if not path.is_file() or path.read_text() != rendered:
+        raise ValueError(
+            "checked refusal worklist differs from the pinned source; "
+            "regenerate it explicitly with --worklist"
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("dump")
     ap.add_argument("--table", default=DEFAULT_TABLE)
     ap.add_argument("-o", "--output")
     ap.add_argument("--ledger")
+    ap.add_argument("--worklist")
     ap.add_argument("--registry", default=str(REPO / "src/exiftool_tables/conv/mod.rs"))
     ap.add_argument("--check", action="store_true",
                     help="regenerate in memory and require the committed files to match")
@@ -1802,19 +1976,29 @@ def main():
     registry_with_candidate(discover_registry(REPO), candidate)
     output = Path(args.output or REPO / f"src/exiftool_tables/conv/{stem}.rs")
     ledger_path = Path(args.ledger or HERE / f"conv_{stem}_ledger.json")
+    worklist_path = Path(args.worklist or HERE / "exif_main_refusal_worklist.json")
     registry_path = Path(args.registry)
     g = generate(args.dump, args.table)
     dump_sha = g["table_sha"]
     text = rustfmt(render_rust(g, dump_sha))
     rust_sha = hashlib.sha256(text.encode()).hexdigest()
     led = json.dumps(ledger(g, dump_sha, rust_sha), indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+    worklist = None
+    if args.table == DEFAULT_TABLE:
+        worklist = json.dumps(
+            refusal_worklist(g), indent=1, sort_keys=True, ensure_ascii=False
+        ) + "\n"
     if args.check:
         entries = discover_registry(REPO)
         expected_registry = replace_registry(registry_path.read_text(), entries)
         ok = (output.read_text() == text and ledger_path.read_text() == led
               and registry_path.read_text() == expected_registry)
+        if worklist is not None:
+            ok = ok and worklist_path.is_file() and worklist_path.read_text() == worklist
         print("PASS" if ok else "MISMATCH: committed conversion arms differ from a regeneration")
         return 0 if ok else 1
+    if worklist is not None:
+        write_or_check_worklist(worklist_path, worklist, write=args.worklist is not None)
     output.write_text(text)
     ledger_path.write_text(led)
     entries = discover_registry(REPO)

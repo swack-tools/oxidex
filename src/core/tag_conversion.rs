@@ -120,6 +120,31 @@ pub fn raw_bytes_to_tag_value(
     tag_id: u16,
     byte_order: ByteOrder,
 ) -> TagValue {
+    // Exif.pm 13.59 0x8298 deliberately declares Copyright as `undef`
+    // despite its string semantics. Its RawConv therefore has to run before
+    // dispatching on the on-disk field type: translate the first NUL to a
+    // newline, trim spaces immediately before each of the first two NULs,
+    // and discard everything from the second NUL onward.
+    if tag_id == 0x8298 {
+        return TagValue::new_string(format_copyright(bytes));
+    }
+
+    // Exif.pm 13.59 `%opcodeInfo`: ConvertBinary preserves the UNDEFINED
+    // payload and PrintOpcode walks a big-endian record list from the scalar
+    // reference. Keep this on the residual path: the generated conversion
+    // backend intentionally refuses ConvertBinary, while this reader still
+    // has the exact bytes and can enforce every bounds check in the source.
+    if matches!(tag_id, 0xC740 | 0xC741 | 0xC74E) {
+        return TagValue::new_string(format_opcode_list(bytes));
+    }
+
+    // Exif.pm 13.59 0xc763: ValueConv groups eight int8u values as lowercase
+    // two-digit hex, then PrintConv reverses the first four BCD fields into a
+    // time and optionally appends the date/timezone carried by BGF2.
+    if tag_id == 0xC763 {
+        return TagValue::new_string(format_time_codes(bytes));
+    }
+
     // Exif.pm 13.59 tag 0xA20C applies `PrintSFR` to its opaque payload.
     // The header and rational matrix are both byte-order-dependent, so this
     // must happen while the TIFF reader's byte order is still available.
@@ -234,20 +259,6 @@ pub fn raw_bytes_to_tag_value(
 
             // ASCII (type 2): null-terminated string
             ExifType::Ascii => {
-                // Exif.pm 0x8298 stores photographer and editor notices as
-                // NUL-separated strings but exposes them separated by a newline.
-                if tag_id == 0x8298 {
-                    let mut parts = bytes.split(|byte| *byte == 0);
-                    let photographer = String::from_utf8_lossy(parts.next().unwrap_or_default());
-                    let editor = String::from_utf8_lossy(parts.next().unwrap_or_default());
-                    let photographer = photographer.trim_end_matches(' ');
-                    let editor = editor.trim_end_matches(' ');
-                    return TagValue::new_string(if editor.is_empty() {
-                        photographer.to_string()
-                    } else {
-                        format!("{photographer}\n{editor}")
-                    });
-                }
                 let value = handle_ascii_type(bytes);
                 // Exif.pm 0x010f Make declares
                 // `RawConv => '$val =~ s/\s+$//; $$self{Make} = $val'`.
@@ -348,6 +359,173 @@ pub fn raw_bytes_to_tag_value(
 
     // Fallback heuristic conversion for unknown types or when type-specific logic doesn't apply
     heuristic_bytes_to_tag_value(bytes, byte_order)
+}
+
+fn format_copyright(bytes: &[u8]) -> String {
+    // Exif.pm 13.59 0x8298 applies these substitutions in this exact order:
+    //   s/ *\0/\n/; s/ *\0.*//s; s/\n$//
+    // In particular, editor trailing spaces survive when there is no second
+    // NUL, and only one final newline is removed.
+    let mut rendered = bytes.to_vec();
+    if let Some(nul) = rendered.iter().position(|byte| *byte == 0) {
+        let spaces = rendered[..nul]
+            .iter()
+            .rposition(|byte| *byte != b' ')
+            .map_or(0, |index| index + 1);
+        rendered.splice(spaces..=nul, [b'\n']);
+    }
+    if let Some(nul) = rendered.iter().position(|byte| *byte == 0) {
+        let spaces = rendered[..nul]
+            .iter()
+            .rposition(|byte| *byte != b' ')
+            .map_or(0, |index| index + 1);
+        rendered.truncate(spaces);
+    }
+    if rendered.last() == Some(&b'\n') {
+        rendered.pop();
+    }
+    crate::exiftool_tables::runtime::fix_utf8(&rendered)
+        .unwrap_or_else(|| String::from_utf8_lossy(&rendered).into_owned())
+}
+
+fn format_opcode_list(bytes: &[u8]) -> String {
+    if bytes.len() <= 4 {
+        return String::new();
+    }
+    let count = u32::from_be_bytes(bytes[..4].try_into().expect("four-byte opcode count"));
+    let mut position = 4usize;
+    let mut operations = Vec::new();
+    for _ in 0..count {
+        let Some(header_end) = position.checked_add(16) else {
+            operations.push("<err>".to_string());
+            break;
+        };
+        let Some(header) = bytes.get(position..header_end) else {
+            operations.push("<err>".to_string());
+            break;
+        };
+        let opcode = u32::from_be_bytes(header[..4].try_into().expect("four-byte opcode"));
+        let payload_len =
+            u32::from_be_bytes(header[12..16].try_into().expect("four-byte opcode length"));
+        operations.push(match opcode {
+            1 => "WarpRectilinear".to_string(),
+            2 => "WarpFisheye".to_string(),
+            3 => "FixVignetteRadial".to_string(),
+            4 => "FixBadPixelsConstant".to_string(),
+            5 => "FixBadPixelsList".to_string(),
+            6 => "TrimBounds".to_string(),
+            7 => "MapTable".to_string(),
+            8 => "MapPolynomial".to_string(),
+            9 => "GainMap".to_string(),
+            10 => "DeltaPerRow".to_string(),
+            11 => "DeltaPerColumn".to_string(),
+            12 => "ScalePerRow".to_string(),
+            13 => "ScalePerColumn".to_string(),
+            14 => "WarpRectilinear2".to_string(),
+            other => format!("[opcode {other}]"),
+        });
+        let Ok(payload_len) = usize::try_from(payload_len) else {
+            break;
+        };
+        let Some(next) = header_end.checked_add(payload_len) else {
+            break;
+        };
+        position = next;
+    }
+    operations.join(", ")
+}
+
+fn bcd_text(value: u8) -> String {
+    format!("{value:02x}")
+}
+
+fn bcd_number(value: u8) -> Option<i32> {
+    bcd_text(value).parse().ok()
+}
+
+fn time_code_zone(value: u8) -> Option<f64> {
+    let zone = value & 0x3f;
+    let bcd = bcd_number(zone).unwrap_or(100);
+    if bcd < 26 {
+        Some(f64::from(if bcd < 13 { -bcd } else { 26 - bcd }))
+    } else if bcd == 32 {
+        Some(12.75)
+    } else if (28..=31).contains(&bcd) {
+        Some(0.0)
+    } else if bcd < 100 {
+        None
+    } else if zone < 0x20 {
+        let zone = i32::from(zone);
+        Some(f64::from((if zone < 0x10 { 10 } else { 20 }) - zone) - 0.5)
+    } else {
+        let zone = i32::from(zone);
+        Some(f64::from((if zone < 0x30 { 53 } else { 63 }) - zone) + 0.5)
+    }
+}
+
+fn decimal_prefix(text: &str) -> i64 {
+    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
+    text[..digits].parse().unwrap_or(0)
+}
+
+fn format_time_codes(bytes: &[u8]) -> String {
+    bytes
+        .chunks_exact(8)
+        .map(|group| {
+            let mut rendered = format!(
+                "{}:{}:{}.{}",
+                bcd_text(group[3] & 0x3f),
+                bcd_text(group[2] & 0x7f),
+                bcd_text(group[1] & 0x7f),
+                bcd_text(group[0] & 0x3f),
+            );
+            if group[3] & 0x80 == 0 {
+                return rendered;
+            }
+
+            let zone = time_code_zone(group[7]);
+            if group[7] & 0x80 != 0 {
+                let hour = decimal_prefix(&bcd_text(group[3] & 0x3f));
+                let minute = decimal_prefix(&bcd_text(group[2] & 0x7f));
+                let second = decimal_prefix(&bcd_text(group[1] & 0x7f));
+                let fraction = bcd_text(group[0] & 0x3f);
+                let julian = decimal_prefix(&format!(
+                    "{}{}{}",
+                    format!("{:x}", group[6]),
+                    bcd_text(group[5]),
+                    bcd_text(group[4]),
+                ));
+                let zone_hours = zone.unwrap_or(0.0);
+                let unix = ((julian - 40_587) * 24 * 3_600) as f64
+                    + (((hour as f64 + zone_hours) * 60.0 + minute as f64) * 60.0 + second as f64);
+                rendered = crate::exiftool_tables::exprs::convert_unix_time(unix, false);
+                if rendered.len() >= 10 {
+                    rendered.replace_range(4..5, "-");
+                    rendered.replace_range(7..8, "-");
+                    rendered.replace_range(10..11, "T");
+                }
+                rendered.push('.');
+                rendered.push_str(&fraction);
+            } else {
+                let mut year = bcd_number(group[6]).unwrap_or(0) + 1900;
+                if year < 1970 {
+                    year += 100;
+                }
+                rendered = format!(
+                    "{year}-{}-{}T{rendered}",
+                    bcd_text(group[5]),
+                    bcd_text(group[4])
+                );
+            }
+            if let Some(zone_hours) = zone {
+                rendered.push_str(&crate::io::timestamp::timezone_string(
+                    (zone_hours * 3_600.0) as i32,
+                ));
+            }
+            rendered
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The existing Exif::Main RawConv trims implemented by this converter.
@@ -1931,6 +2109,93 @@ mod tests {
         );
 
         assert_eq!(value.as_string(), Some("Photographer\nEditor"));
+    }
+
+    #[test]
+    fn copyright_applies_the_three_source_substitutions_in_order() {
+        for (raw, expected) in [
+            (&b"A\0B "[..], "A\nB "),
+            (&b"A \0B \0ignored"[..], "A\nB"),
+            (&b"A\n"[..], "A"),
+            (&b"A\n\n"[..], "A\n"),
+        ] {
+            let value =
+                raw_bytes_to_tag_value(raw, 7, raw.len() as u32, 0x8298, ByteOrder::LittleEndian);
+            assert_eq!(value.as_string(), Some(expected), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn every_time_code_zone_matches_the_exiftool_source_table() {
+        let expected = [
+            Some(0.0),
+            Some(-1.0),
+            Some(-2.0),
+            Some(-3.0),
+            Some(-4.0),
+            Some(-5.0),
+            Some(-6.0),
+            Some(-7.0),
+            Some(-8.0),
+            Some(-9.0),
+            Some(-0.5),
+            Some(-1.5),
+            Some(-2.5),
+            Some(-3.5),
+            Some(-4.5),
+            Some(-5.5),
+            Some(-10.0),
+            Some(-11.0),
+            Some(-12.0),
+            Some(13.0),
+            Some(12.0),
+            Some(11.0),
+            Some(10.0),
+            Some(9.0),
+            Some(8.0),
+            Some(7.0),
+            Some(-6.5),
+            Some(-7.5),
+            Some(-8.5),
+            Some(-9.5),
+            Some(-10.5),
+            Some(-11.5),
+            Some(6.0),
+            Some(5.0),
+            Some(4.0),
+            Some(3.0),
+            Some(2.0),
+            Some(1.0),
+            None,
+            None,
+            Some(0.0),
+            Some(0.0),
+            Some(11.5),
+            Some(10.5),
+            Some(9.5),
+            Some(8.5),
+            Some(7.5),
+            Some(6.5),
+            Some(0.0),
+            Some(0.0),
+            Some(12.75),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(5.5),
+            Some(4.5),
+            Some(3.5),
+            Some(2.5),
+            Some(1.5),
+            Some(0.5),
+        ];
+        for (code, expected) in expected.into_iter().enumerate() {
+            assert_eq!(time_code_zone(code as u8), expected, "zone=0x{code:02x}");
+        }
     }
 
     /// FujiFilm.raf stores Copyright as 510 spaces + NUL; Exif.pm 0x8298's
