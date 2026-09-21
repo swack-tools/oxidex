@@ -24,6 +24,13 @@ conformance, authenticated reads, regression gate, catalog checks, and JPEG
 matrix recipes. For a release claim, also read
 [`release-metrics.md`](references/release-metrics.md).
 
+## Oracle prerequisite
+
+Use the canonical durable Perl 5.38.2 installation and pinned ExifTool tree
+specified in `references/harnesses.md`. Require all capability probes and a
+freshly verified sibling combined-corpus manifest before measurement. Failed
+probes block the run; never fall back to another interpreter or oracle.
+
 ## Ordered workflow
 
 1. Run `tools/preflight.sh`, freeze the clean candidate identity, and create a

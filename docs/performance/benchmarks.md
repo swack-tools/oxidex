@@ -3,6 +3,13 @@
 OxiDex has two benchmark instruments. They answer different questions, and
 their numbers are not interchangeable.
 
+::: warning Historical benchmark material, not beta.1 evidence
+The results currently linked from [Performance](/performance/) were measured
+at commit `8f04e288` for OxiDex 1.2.1. They are historical context only. A
+v2.0.0-beta.1 exact-candidate-SHA benchmark receipt is pending, so this page
+does not establish beta.1 performance.
+:::
+
 | Instrument | Question it answers | Where it runs | Where results go |
 | --- | --- | --- | --- |
 | `benches/exiftool_comparison.sh` (hyperfine, CLI wall-clock) | How does the `oxidex` binary compare with the pinned Perl ExifTool? | Locally by hand; in CI via `benchmarks.yml` on every push to `refactor/tag-machinery` | A local run rewrites `benches/benchmark_results.{md,json,log}`, which are committed. A CI run produces a step summary and a `benchmark-comparison` artifact, which are never committed. |
@@ -64,7 +71,8 @@ its `<!-- historical -->` marker is kept verbatim. Commit a new table only
 from a quiet machine, and take the repository's exclusive heavy-job lock if
 other work shares the host. A starved measurement reads as a regression.
 
-The current committed results are on the [Performance](/performance/) page.
+The historical committed results are on the [Performance](/performance/) page;
+they are not v2.0.0-beta.1 evidence.
 
 ## Criterion micro-benchmarks
 

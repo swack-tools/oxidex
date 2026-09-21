@@ -283,6 +283,13 @@ adapters but call one shared stage sequence:
 Structural tags such as pointer, MakerNote, IPTC, GeoTIFF, and PrintIM edges
 remain walker-owned when they control traversal.
 
+Request filtering is part of the public read contract, not an adapter-local
+test seam. Existing read options must reach every shared-pipeline entry point;
+a normally silent structural edge is retained when explicitly requested.
+Physical-directory admission precedes all structural handlers, so an aliased
+or cyclic directory cannot replay MakerNote, pointer, IPTC, GeoTIFF, PrintIM,
+or other walker-owned side effects under a second logical directory name.
+
 ## 7. Work decomposition by code ownership
 
 Parallelism is decided from declared file leases, not from task names.

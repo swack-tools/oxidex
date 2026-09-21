@@ -196,6 +196,14 @@ def _capture_context(document: Mapping[str, Any]) -> dict[str, Any]:
     return values
 
 
+def portable_capture_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove host paths while retaining release, interpreter, and source identity."""
+    context = _capture_context({"native_capture_context": context})
+    context["selected_library"] = f"ExifTool {context['exiftool_version']}/lib"
+    context["perl_path"] = f"Perl {context['perl_version']}"
+    return context
+
+
 def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                                      ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -327,7 +335,7 @@ def compile_addressing(document: Mapping[str, Any]) -> tuple[Addressing, dict[st
                           "body_sha256": setnew_body_sha256},
         "source_rows_sha256": result.source_rows_sha256,
         "query_names_sha256": result.query_names_sha256,
-        "native_capture_context": result.capture_context,
+        "native_capture_context": portable_capture_context(result.capture_context),
         "admitted_qualifier_scope": [{"family": family, "group": group}
                                      for family, group in result.qualifier_scope],
     }

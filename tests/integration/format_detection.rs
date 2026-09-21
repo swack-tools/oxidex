@@ -3,10 +3,7 @@
 //! These tests verify that the format detection system correctly identifies
 //! camera raw formats and integrates them into the main FileFormat enum.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::core::FileFormat;
 use oxidex::core::ReadOptions;
 use oxidex::core::format_dispatch::dispatch_format_parser;

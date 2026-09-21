@@ -68,7 +68,7 @@ import json
 # load Archive::Zip still loads Image::ExifTool.pm and still reports the
 # right $VERSION, so a version-only check here would not have caught the
 # same wrong-interpreter failure exiftool_oracle.py exists to catch.
-_PERL = exiftool_oracle.choose_perl()
+_PERL = exiftool_oracle.choose_table_perl()
 if _PERL is None:
     sys.exit("❌ no usable perl found to run oracle.pl / probe ExifTool.pm")
 

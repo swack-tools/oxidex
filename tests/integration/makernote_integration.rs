@@ -88,7 +88,7 @@ fn test_jpeg_without_makernote() {
         .expect("Failed to write temp file");
     let temp_path = temp_file.path();
 
-    let _metadata = read_metadata(&temp_path).expect("Should parse JPEG without MakerNote");
+    let _metadata = read_metadata(temp_path).expect("Should parse JPEG without MakerNote");
 
     // Should succeed without crashing - if we get here, the test passed
 }

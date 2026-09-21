@@ -188,6 +188,30 @@ impl MakerNoteParser for SonyParser {
         tags: &mut HashMap<String, String>,
         value_forms: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        self.parse_with_context_and_values_and_session(
+            ctx,
+            byte_order,
+            model,
+            &mut session,
+            &mut cond_ctx,
+            tags,
+            value_forms,
+        )
+    }
+
+    fn parse_with_context_and_values_and_session(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut crate::exiftool_tables::session::Session,
+        cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
         // `payload_tiff_offset` is the `data_base` this decoder subtracts from a
         // TIFF-relative value offset: `None` rather than 0 when the caller had
         // no enclosing block, so the subtraction is skipped instead of landing
@@ -199,6 +223,8 @@ impl MakerNoteParser for SonyParser {
             model,
             ctx.payload_tiff_offset(),
             ctx.tiff_base(),
+            session,
+            cond_ctx,
         ) {
             Ok((parsed_tags, parsed_forms)) => {
                 tags.extend(parsed_tags);
@@ -326,6 +352,8 @@ fn parse_sony_makernote_impl(
     model: Option<&str>,
     data_base: Option<u32>,
     tiff_base: u64,
+    session: &mut crate::exiftool_tables::session::Session,
+    shared_ctx: &mut crate::exiftool_tables::Ctx<'_>,
 ) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
     if data.is_empty() {
         return Ok((HashMap::new(), HashMap::new()));
@@ -420,16 +448,19 @@ fn parse_sony_makernote_impl(
     // The generated parent definitions select migrated children. Conditions,
     // offsets and child table names stay in the native-source transcription.
     let shared_main = crate::exiftool_tables::find_ifd_table("Sony", "Main");
-    let mut shared_members = HashMap::new();
     if let Some(model) = model {
-        shared_members.insert(
+        let model = model.to_string();
+        shared_ctx.members.insert(
             "Model",
-            crate::exiftool_tables::MemberValue::Str(model.to_string()),
+            crate::exiftool_tables::MemberValue::Str(model.clone()),
+        );
+        let _ = session.set_member(
+            "Model",
+            crate::exiftool_tables::session::MemberVal::Str(model),
         );
     }
-    let mut shared_ctx = crate::exiftool_tables::Ctx::new(&mut shared_members);
     let mut shared_reader =
-        crate::exiftool_tables::ifd_engine::subdirectory_adapter::SubdirectoryReader::new();
+        crate::exiftool_tables::ifd_engine::subdirectory_adapter::SubdirectoryReader::new(session);
     for (index, entry) in entries.iter().enumerate() {
         if let Some(table) = shared_main {
             let mut emitted = Vec::new();
@@ -437,6 +468,7 @@ fn parse_sony_makernote_impl(
                 table,
                 crate::exiftool_tables::IfdDir {
                     data,
+                    data_domain: tiff_base,
                     ifd_start,
                     base: data_base.map(|base| -i64::from(base)),
                     byte_order: byte_order.to_io_byte_order(),
@@ -450,7 +482,7 @@ fn parse_sony_makernote_impl(
                     value_field_pos: ifd_start + 2 + index * 12 + 8,
                 },
                 entries.len(),
-                &mut shared_ctx,
+                shared_ctx,
                 &mut emitted,
             );
             if handled {
@@ -643,6 +675,9 @@ fn parse_sony_makernote_impl(
                 if main_tag(entry.tag_id).is_none() && main_extra::has(entry.tag_id) {
                     if let Some((name, printed, low)) =
                         main_extra::render(entry.tag_id, &value, byte_order, &mut cipher_ctx)
+                        && !crate::exiftool_tables::attribution::silenced(
+                            crate::exiftool_tables::attribution::Token::LegacyL2,
+                        )
                     {
                         found.push(Found::new(
                             format!("Sony:{}", name),

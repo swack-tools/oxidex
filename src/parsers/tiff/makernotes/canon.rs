@@ -4999,6 +4999,40 @@ impl MakerNoteParser for CanonParser {
         }
     }
 
+    fn parse_with_context_and_values_and_session(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut crate::exiftool_tables::session::Session,
+        cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        match parse_canon_makernote_impl_located_with_values_and_session(
+            ctx.window(),
+            ctx.payload(),
+            byte_order,
+            model,
+            ctx.payload_tiff_offset(),
+            ctx.tiff_base(),
+            Some(value_forms),
+            session,
+            cond_ctx,
+        ) {
+            Ok(parsed_tags) => {
+                tags.extend(parsed_tags);
+                crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+                    tags,
+                    ctx.tiff_base(),
+                    &["Canon:PreviewImageStart"],
+                );
+                Ok(())
+            }
+            Err(e) => Err(format!("Canon MakerNote parse error: {}", e)),
+        }
+    }
+
     fn lookup_lens(&self, lens_id: u16) -> Option<String> {
         lookup_lens_name(lens_id)
     }
@@ -5145,14 +5179,45 @@ fn parse_canon_makernote_impl_located_with_values(
     dir_tiff_offset: Option<u32>,
     value_forms: Option<&mut HashMap<String, String>>,
 ) -> Result<HashMap<String, String>> {
+    let mut session = crate::exiftool_tables::session::Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = crate::exiftool_tables::Ctx::new(&mut members);
+    parse_canon_makernote_impl_located_with_values_and_session(
+        data,
+        declared,
+        byte_order,
+        exif_model,
+        dir_tiff_offset,
+        0,
+        value_forms,
+        &mut session,
+        &mut ctx,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_canon_makernote_impl_located_with_values_and_session(
+    data: &[u8],
+    declared: &[u8],
+    byte_order: ByteOrder,
+    exif_model: Option<&str>,
+    dir_tiff_offset: Option<u32>,
+    data_domain: u64,
+    value_forms: Option<&mut HashMap<String, String>>,
+    session: &mut crate::exiftool_tables::session::Session,
+    ctx: &mut crate::exiftool_tables::Ctx<'_>,
+) -> Result<HashMap<String, String>> {
     parse_canon_makernote_directory(
         data,
         declared,
         byte_order,
         exif_model,
         dir_tiff_offset,
+        data_domain,
         value_forms,
         true,
+        session,
+        ctx,
     )
 }
 
@@ -5173,8 +5238,11 @@ fn parse_canon_makernote_directory(
     byte_order: ByteOrder,
     exif_model: Option<&str>,
     dir_tiff_offset: Option<u32>,
+    data_domain: u64,
     mut value_forms: Option<&mut HashMap<String, String>>,
     walk_main: bool,
+    session: &mut crate::exiftool_tables::session::Session,
+    ctx: &mut crate::exiftool_tables::Ctx<'_>,
 ) -> Result<HashMap<String, String>> {
     if data.is_empty() {
         return Ok(HashMap::new());
@@ -5278,7 +5346,19 @@ fn parse_canon_makernote_directory(
     let mut main_engine = walk_main
         .then(|| find_ifd_table("Canon", "Main").filter(|table| table.enabled()))
         .flatten()
-        .map(|table| main_engine::walk(table, data, byte_order, &config, base, self_model));
+        .map(|table| {
+            main_engine::walk(
+                table,
+                data,
+                data_domain,
+                byte_order,
+                &config,
+                base,
+                self_model,
+                session,
+                ctx,
+            )
+        });
     // How many entries the hand walk visited, for the one structural invariant
     // the two walks share: when the engine accepted the directory, the hand
     // walk saw every one of its entries (or, above its 200-entry bound, none).
@@ -7486,6 +7566,9 @@ pub(crate) fn parse_canon_ciff_records(
     }
     buffer.extend_from_slice(&values);
     buffer.extend(std::iter::repeat_n(0u8, FOOTER_GUARD));
+    let mut session = crate::exiftool_tables::session::Session::new();
+    let mut members = HashMap::new();
+    let mut ctx = crate::exiftool_tables::Ctx::new(&mut members);
 
     // `walk_main: false`: CanonRaw never walks `Canon::Main` (see
     // `parse_canon_makernote_directory`).
@@ -7495,8 +7578,11 @@ pub(crate) fn parse_canon_ciff_records(
         ByteOrder::LittleEndian,
         model,
         Some(0),
+        0,
         Some(value_forms),
         false,
+        &mut session,
+        &mut ctx,
     )
     .unwrap_or_default()
 }

@@ -3,10 +3,7 @@
 //! These tests verify the PDF writer's ability to modify Info dictionary metadata,
 //! recalculate xref tables correctly, and produce valid PDF files.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::core::metadata_map::MetadataMap;
 use oxidex::core::tag_value::TagValue;
 use oxidex::io::buffered_reader::BufferedReader;

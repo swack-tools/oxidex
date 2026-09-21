@@ -281,7 +281,11 @@ pub fn parse_fpf_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
         return Err(ExifToolError::parse_error("No FPF tags decoded"));
     }
 
-    if let Some(id) = crate::filetype::identify_by_extension("fpf") {
+    if let Some(id) = crate::filetype::identify_by_extension("fpf")
+        && !crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Producers,
+        )
+    {
         metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
         metadata.insert(
             "File:FileTypeExtension",

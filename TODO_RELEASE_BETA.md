@@ -30,20 +30,41 @@ The release is complete only when all of these statements are true:
 - [ ] Signed tag `v2.0.0-beta.1` points to the verified release commit on
       `main` and is not moved or recreated.
 
+Until every box above is complete, `CHANGELOG.md` remains `Unreleased`; the
+release notes are a checklist rather than a receipt; the branch/development
+installation instructions are pre-tag only; and historical benchmark or parity
+material must not be presented as v2.0.0-beta.1 evidence.
+
 ## Current snapshot
 
 Refresh this section whenever the candidate changes. Historical green runs are
 context, not evidence for a later release SHA.
 
+**2026-09-19 release-ledger refresh (instrument: local Git object inspection,
+`git show`/`git show-ref`; remote `git ls-remote origin` did not return within
+the 30-second command window).** The controller integration tip is
+`114f87cf5b5e5ea10c463e9225b925bca716ea06` on
+`staging/beta1-functional-integration`. It is not a promotion branch and has
+not been proposed to `main`. Do not treat the cached remote-tracking values
+below as a live remote refresh; re-run the named remote probe before beginning
+integration. Local `refs/tags/v2.0.0-beta.1` is absent and
+`gh release view v2.0.0-beta.1 --repo swack-tools/oxidex` reported `release not
+found`; remote tag state remains unverified because the bounded `git ls-remote`
+probe did not return.
+
 | Item | Current observation | Release implication |
 |---|---|---|
+| Controller integration tip | `114f87cf5b5e5ea10c463e9225b925bca716ea06` (`staging/beta1-functional-integration`) | Task integration continues; no promotion PR or `main` candidate exists. |
+| PR #857 policy cleanup | Merged as `ca1eb126`; [CI run 35454301888](https://github.com/swack-tools/oxidex/actions/runs/35454301888) required checks passed (Benchmarks skipped) | Historical integration evidence only; see the GitHub observation and durable receipt below. |
+| PR #858 Darwin linker flags | Merged as `f24a2130`; [CI run 35454699431](https://github.com/swack-tools/oxidex/actions/runs/35454699431) required checks passed (Benchmarks skipped), independently reviewed | Requested flags are present; release signing/notarization gates remain open. |
+| PR #859 release-ledger refresh | Merged as `114f87cf`; [CI run 35456471578](https://github.com/swack-tools/oxidex/actions/runs/35456471578) required checks passed, including generated-table fanout (Benchmarks skipped) | The ledger is refreshed through the current integration tip; no promotion PR or `main` candidate exists. |
 | `origin/main` | `4a38afde` | Refresh before integration. |
-| `origin/refactor/tag-machinery` | `67d58b95` | Current candidate, not frozen. |
+| `origin/refactor/tag-machinery` | Pre-integration historical baseline `67d58b95` | Not refreshed for `114f87cf`; rerun on the candidate before promotion. |
 | Merge base | See the divergence report | The histories genuinely diverged. |
 | Divergence | 45 main-only / 520 refactor-only commits | Requires deliberate reconciliation. |
 | Merge simulation | 32 conflicted files: 30 content, 1 add/add, 1 modify/delete | A direct merge is not release-ready. |
-| Current refactor CI | Green at `67d58b95` | Useful baseline only; rerun on the final reconciled SHA. |
-| Current benchmark workflow | Green at `67d58b95` | Indicative; committed release claims still need refresh. |
+| Current refactor CI | Pre-integration historical baseline: green at `67d58b95` | Not refreshed for `114f87cf`; rerun on the final reconciled SHA. |
+| Current benchmark workflow | Pre-integration historical baseline: green at `67d58b95` | Not refreshed for `114f87cf`; rerun on the candidate before making release claims. |
 | Beta tag/release | Neither currently exists | Do not create until the final `main` SHA is frozen. |
 
 Current green-run references:
@@ -51,6 +72,18 @@ Current green-run references:
 - CI: <https://github.com/swack-tools/oxidex/actions/runs/35423314373>
 - Indicative benchmarks:
   <https://github.com/swack-tools/oxidex/actions/runs/35423314366>
+
+Durable integration evidence:
+
+- PR #857 / `ca1eb126`: [Claude-only policy receipt](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/claude-only-policy/receipt.md).
+- PR #858 / `f24a2130`: [macOS linker final validation](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/macos-strip-linker/final-validation.txt) and [independent review](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/macos-strip-linker/independent-review.md).
+- PR #859 / `114f87cf`: release-ledger refresh; [CI run 35456471578](https://github.com/swack-tools/oxidex/actions/runs/35456471578) completed the required checks, including generated-table fanout (Benchmarks skipped).
+- GitHub observation on 2026-09-19 (instrument: `gh pr view` / `gh pr checks`):
+  [PR #857](https://github.com/swack-tools/oxidex/pull/857) merged as
+  `ca1eb126` and [PR #858](https://github.com/swack-tools/oxidex/pull/858)
+  merged as `f24a2130`; each CI run completed its required checks successfully,
+  while its optional Benchmarks check was skipped. These GitHub runs—not the
+  local receipts—are the provenance for the CI result.
 
 The earlier temporary `v2.0.0-beta.1` run at `8f05ec44` is **not** release
 evidence. The tag was deleted while Actions runners were checking it out, so
@@ -106,7 +139,49 @@ jobs finish.
 
 Notes:
 
-> Add coordination notes here.
+> **2026-09-19 — controller/oracle remains NO-GO.** Task 0 is running
+> Generation 12 corrections; the controller / oracle remains NO-GO pending the
+> Generation 12 final receipt and independent review. The current evidence is
+> retained under [Generation 12 correction evidence](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/gen12-correction/);
+> no release waiver exists.
+>
+> **2026-09-19 — legacy fleet retirement is design-only.** Read-only discovery
+> found the legacy runtime inactive on the inspected workstation, but `server`
+> and `work2.oxidex.net` were unreachable; their services, hooks, state refs,
+> schedules, and credentials are unverified. No retirement action is authorized.
+> Keep `tools/release/fleet_controller.py` out of retirement scope: it is the
+> new local durable release controller, not legacy fleet tooling. See the
+> [discovery report](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/legacy-fleet-retirement-discovery/report.md)
+> and [design](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/legacy-fleet-retirement-design/report.md).
+>
+> **2026-09-19 — promotion remains unstarted.** There is no actual promotion
+> PR, merged `main` candidate, or release tag. A real signed tag still requires
+> separate explicit maintainer authorization for the exact version, tag, and
+> frozen `main` commit.
+>
+> **2026-09-19 — legacy Claude coverage loop quarantined.**
+> `.claude/workflows/exiftool-coverage-loop.js` has no tracked executable
+> caller and must not be run for beta work: its autonomous main-branch merges,
+> shared-checkout/worktree model, ambient-oracle and ephemeral-evidence paths,
+> and missing authorization boundaries conflict with the protected-main,
+> integration, durable-oracle/evidence, worktree, and release-authorization
+> rules. Delete or archive it only after external-consumer verification and
+> explicit approval; do not fix it in place. See the [coverage-loop review](/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/claude-policy-audit/coverage-loop-review.md).
+
+> **2026-09-19 — Claude-only boundary and legacy fleet status verified.**
+> The final boundary audit records that `CLAUDE.md` is a non-duplicating
+> routing pointer to authoritative shared policy in `AGENTS.md`; it is not an
+> import surface and does not duplicate or override those rules. Its remaining
+> content is Claude-specific skills, model-routing, and fast-mode guidance, and
+> the legacy coverage loop is quarantined rather than an active beta workflow.
+> The legacy runtime remains
+> a retirement candidate only: the 102-file `tools/fleet/**` surface still has
+> direct `justfile`, service/unit, hook, and Keel consumers. Keep
+> `tools/release/fleet_controller.py` in scope as the new local durable release
+> controller, not as legacy fleet code. No destructive retirement, deletion,
+> extraction, credential revocation, or supervisor change is authorized until
+> a durable zero-consumer proof covers live hosts and external consumers and a
+> maintainer gives explicit approval.
 
 ## 2. Finish functional and ExifTool-parity work
 
@@ -473,7 +548,8 @@ rustflags = [
 ]
 ```
 
-- [ ] Commit the `.cargo/config.toml` change from its dedicated worktree.
+- [x] Commit the `.cargo/config.toml` change from its dedicated worktree
+      (PR #858, merged as `f24a2130`).
 - [ ] Reproduce the original misaligned `LINKEDIT` string-pool failure on the
       appropriate baseline or retain a durable existing reproduction receipt.
 - [ ] Prove the new configuration fixes the failing macOS release build.
@@ -494,8 +570,21 @@ rustflags = [
 
 Evidence:
 
+`f24a2130` now configures both Darwin targets with `-C strip=none` and
+`-C link-arg=-Wl,-S,-x`. GitHub's [PR #858 CI run](https://github.com/swack-tools/oxidex/actions/runs/35454699431)
+completed its required checks successfully (Benchmarks was skipped), and an
+independent review was retained. This establishes that the requested linker flags landed; it does
+**not** establish Developer ID signing, Apple notarization, stapling, or
+downloaded-artifact validation. The retained validation shows an ad-hoc ARM64
+signature and an unsigned x86_64 local artifact, not a Developer ID release
+artifact. Retain the linked receipts above and keep every remaining checkbox
+open until it is proven on the final release candidate.
+
 | Check | SHA | Command/run | Result |
 |---|---|---|---|
+| Requested Darwin flags / PR review | `f24a2130` | [PR #858 CI run](https://github.com/swack-tools/oxidex/actions/runs/35454699431) and independent review | Required checks successful; Benchmarks skipped; flags present in both Darwin target tables. |
+| Developer ID signing | | | Unverified release-finalization gate. |
+| Notarization/stapling | | | Unverified release-finalization gate. |
 | macOS ARM64 release build | | | |
 | macOS x86_64 build/config | | | |
 | Mach-O/export inspection | | | |
@@ -622,8 +711,8 @@ Notes:
       has reached a terminal state.
 - [ ] Verify all referenced Actions secret names exist. Never print secret
       values.
-- [ ] Verify Linux x86_64/ARM64, Windows x86_64, and macOS ARM64 release
-      artifacts are produced with the expected names.
+- [ ] Verify Linux x86_64/ARM64, Windows x86_64, and macOS universal
+      (arm64 and x86_64) release artifacts are produced with the expected names.
 - [ ] Verify `create-release` waits for every platform build and publishes only
       after all have succeeded.
 - [ ] Verify a SemVer prerelease becomes a GitHub prerelease with
@@ -764,7 +853,7 @@ Final candidate:
   - Linux x86_64 musl binary;
   - Linux ARM64 musl binary;
   - Windows x86_64 executable;
-  - signed macOS ARM64 binary;
+  - signed macOS universal binary containing arm64 and x86_64 slices;
   - signed, notarized, and stapled macOS DMG.
 - [ ] Run basic `--version` and metadata-reading smoke tests on applicable
       artifacts.
@@ -807,6 +896,15 @@ Published release evidence:
       means nothing was published.
 
 ## Open decisions and notes
+
+> **2026-09-19 — legacy fleet end state (design only).** OxiDex retains the
+> local release controller. After live zero-consumer proof and separate explicit
+> approval, legacy fleet source and evidence move to one separate read-only
+> archived Git repository with a signed tag and checksummed, credential-free
+> evidence. Actions, webhooks, deploy keys, runners, writable state refs, and
+> service accounts must be disabled. The archive is forensic evidence, not a
+> runnable fallback. `server` and `work2.oxidex.net` being unreachable remains
+> a hard NO-GO for retirement; this note authorizes no retirement mutation.
 
 | Date | Decision or blocker | Owner | Status/next action |
 |---|---|---|---|

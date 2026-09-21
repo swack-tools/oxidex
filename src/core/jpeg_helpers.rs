@@ -8,8 +8,12 @@ use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
 use crate::core::tag_conversion::exif_entry_to_tag_value;
-use crate::core::tiff_helpers::{parse_exif_subifd, parse_gps_subifd};
-use crate::exiftool_tables::{decode_binary_table, find_table};
+use crate::core::tiff_helpers::{
+    parse_exif_subifd_with_session_and_options, parse_gps_subifd, parse_ifd1_with_session,
+    physical_entry_indices,
+};
+use crate::exiftool_tables::session::Session;
+use crate::exiftool_tables::{Ctx, decode_binary_table, find_table};
 use crate::io::EndianReader;
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::jpeg::app_segments::app8_isothermal::INFIRAY_ISOTHERMAL_MIN_LENGTH;
@@ -173,6 +177,21 @@ pub fn process_exif_segments(
     metadata: &mut MetadataMap,
     diagnostics: &mut DiagnosticSink,
 ) {
+    let options = ReadOptions::default_full_listing();
+    process_exif_segments_with_options(segments, reader, &options, metadata, diagnostics);
+}
+
+pub(crate) fn process_exif_segments_with_options(
+    segments: &[Segment],
+    reader: &dyn FileReader,
+    options: &ReadOptions,
+    metadata: &mut MetadataMap,
+    diagnostics: &mut DiagnosticSink,
+) {
+    let mut session = Session::new();
+    let mut members = std::collections::HashMap::new();
+    let mut cond_ctx = Ctx::new(&mut members);
+
     // Find all APP1 segments (EXIF/XMP/FLIR)
     let app1_segments: Vec<_> = segments.iter().filter(|s| s.is_app1()).collect();
 
@@ -251,22 +270,33 @@ pub fn process_exif_segments(
                     )));
                 }
                 Ok(tags) => {
+                    let physical_indices =
+                        physical_entry_indices(&tiff_reader, ifd_offset, byte_order, &tags);
                     // Process IFD0 tags and get sub-IFD offsets. The
                     // generated `Exif::Main` produces every ordinary entry it
                     // reports (per-field mixed mode, slice v2-ifd0); the hand
                     // arm keeps the rest, the pointers and the order.
-                    let mut engine = crate::core::exif_dir_engine::ifd0_walk(
-                        tiff_data, ifd_offset, byte_order, metadata,
-                    );
+                    let mut engine = physical_indices.as_ref().and_then(|_| {
+                        crate::core::exif_dir_engine::ifd0_walk_with_session(
+                            tiff_data,
+                            tiff_offset,
+                            ifd_offset,
+                            byte_order,
+                            metadata,
+                            &mut session,
+                            &mut cond_ctx,
+                        )
+                    });
                     let (exif_ifd_offset, gps_ifd_offset) = process_ifd0_tags(
                         &tags,
+                        physical_indices.as_deref(),
                         byte_order,
                         engine.as_mut(),
                         metadata,
                         diagnostics,
                     );
                     if let Some(engine) = engine {
-                        engine.drain_ifd0(metadata);
+                        engine.finish_ifd0(metadata);
                     }
 
                     // Parse EXIF Sub-IFD if present. `tiff_offset` is the absolute
@@ -279,12 +309,15 @@ pub fn process_exif_segments(
                     // of the two limits and keeps a MakerNote out of the JPEG's
                     // compressed scan data.
                     if let Some(offset) = exif_ifd_offset {
-                        parse_exif_subifd(
+                        parse_exif_subifd_with_session_and_options(
                             &tiff_reader,
                             offset,
                             byte_order,
                             tiff_offset,
                             tiff_data.len() as u64,
+                            options,
+                            &mut session,
+                            &mut cond_ctx,
                             metadata,
                         );
                     }
@@ -320,7 +353,7 @@ pub fn process_exif_segments(
                     // the stored ThumbnailOffset. IFD1 is a `LOW_PRIORITY_DIR`
                     // for a JPEG (ExifTool.pm:7317), so its rows never
                     // displace IFD0's for a bare request.
-                    crate::core::tiff_helpers::parse_ifd1(
+                    parse_ifd1_with_session(
                         &tiff_reader,
                         tiff_data,
                         ifd_offset,
@@ -328,6 +361,8 @@ pub fn process_exif_segments(
                         byte_order,
                         tiff_offset,
                         true,
+                        &mut session,
+                        &mut cond_ctx,
                         metadata,
                     );
 
@@ -373,6 +408,7 @@ pub fn process_exif_segments(
 /// A tuple of (exif_ifd_offset, gps_ifd_offset) for sub-IFD parsing
 fn process_ifd0_tags(
     tags: &[(u16, u16, u32, std::borrow::Cow<[u8]>)],
+    physical_indices: Option<&[usize]>,
     byte_order: ByteOrder,
     mut engine: Option<&mut crate::core::exif_dir_engine::DirEngineRows>,
     metadata: &mut MetadataMap,
@@ -382,7 +418,11 @@ fn process_ifd0_tags(
     let mut gps_ifd_offset = None;
 
     // Convert raw tag data to MetadataMap entries
-    for (tag_id, field_type, value_count, raw_bytes) in tags {
+    for (survivor_index, (tag_id, field_type, value_count, raw_bytes)) in tags.iter().enumerate() {
+        let entry_index = physical_indices
+            .and_then(|indices| indices.get(survivor_index))
+            .copied()
+            .unwrap_or(survivor_index);
         // Convert Cow<[u8]> to &[u8] for processing
         let bytes = raw_bytes.as_ref();
 
@@ -464,10 +504,21 @@ fn process_ifd0_tags(
 
         // Slice v2-ifd0: the engine's row for this entry, at this entry's
         // position, or the hand arm below when the engine leaves it.
-        if let Some(engine) = engine.as_deref_mut()
-            && engine.take_ifd0(*tag_id, metadata)
-        {
-            continue;
+        if let Some(engine) = engine.as_deref_mut() {
+            match engine.route_entry(
+                entry_index,
+                *tag_id,
+                false,
+                false,
+                crate::core::exif_dir_engine::Owner::Silent,
+                metadata,
+                |name| format!("IFD0:{name}"),
+                |_, _| true,
+            ) {
+                crate::core::exif_dir_engine::Owner::Engine
+                | crate::core::exif_dir_engine::Owner::Silent => continue,
+                crate::core::exif_dir_engine::Owner::Hand => {}
+            }
         }
 
         // An Exif::Main RawConv that returns undef creates no tag at all
@@ -2866,6 +2917,49 @@ mod print_im_tests {
         jpeg
     }
 
+    fn push_exif_ifd0_short(jpeg: &mut Vec<u8>, tag: u16, value: u16) {
+        let mut payload = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0".to_vec();
+        payload.extend_from_slice(&tag.to_le_bytes());
+        payload.extend_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&value.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        jpeg.extend_from_slice(&[0xff, 0xe1]);
+        jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+    }
+
+    #[test]
+    fn distinct_exif_app1_payloads_with_ifd0_at_eight_are_both_walked() {
+        let mut jpeg = vec![0xff, 0xd8];
+        push_exif_ifd0_short(&mut jpeg, 0x0112, 1);
+        push_exif_ifd0_short(&mut jpeg, 0x0128, 3);
+        jpeg.extend_from_slice(&[0xff, 0xd9]);
+
+        let reader = TestReader::new(jpeg);
+        let segments = parse_segments(&reader).expect("two valid EXIF APP1 segments");
+        let exif = segments
+            .iter()
+            .filter(|segment| segment.is_app1() && segment.data.starts_with(b"Exif\0\0"))
+            .collect::<Vec<_>>();
+        assert_eq!(exif.len(), 2);
+        assert!(
+            exif.iter().all(|segment| {
+                u32::from_le_bytes(segment.data[10..14].try_into().unwrap()) == 8
+            })
+        );
+
+        let mut metadata = MetadataMap::new();
+        process_exif_segments(&segments, &reader, &mut metadata, &mut Vec::new());
+
+        assert_eq!(
+            metadata.get_string("IFD0:Orientation"),
+            Some("Horizontal (normal)")
+        );
+        assert_eq!(metadata.get_string("IFD0:ResolutionUnit"), Some("cm"));
+    }
+
     #[test]
     fn jpeg_ifd0_dispatches_tag_c4a5_to_print_im() {
         let reader = TestReader::new(jpeg_with_ifd0_print_im(b"0300"));
@@ -2898,6 +2992,7 @@ mod transfer_function_tests {
 
         process_ifd0_tags(
             &tags,
+            None,
             ByteOrder::LittleEndian,
             None,
             &mut metadata,

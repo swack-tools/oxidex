@@ -478,27 +478,52 @@ log:
 # -------------
 
 # Create and push a SIGNED release tag. Refuses anything it cannot prove:
-#   - the commit must be on origin/refactor/tag-machinery or origin/main
-#     (so it has been pushed and reviewed), and GitHub must report the
+#   - the commit must be reachable from origin/main, and GitHub must report the
 #     commit's own signature as verified;
 #   - Cargo.toml at that commit must carry exactly `version`;
 #   - the tag is created with `git tag -s` (your configured signing key)
 #     and its signature is verified locally before anything is pushed.
-# Usage: just tag 2.0.0-beta.1 [<commit-sha>]   (default: origin/refactor/tag-machinery)
+# The real push additionally requires OXIDEX_TAG_AUTHORIZATION=vTAG@FULL_SHA.
+# This is a deliberate confirmation of the separately granted, exact-tag
+# authorization; it is not needed for the local dry run, which occurs before
+# that authorization is requested.
+# Usage: just tag 2.0.0-beta.1 <full-commit-sha>
 # OXIDEX_TAG_DRY_RUN=1 runs every check and signs + verifies, then deletes the tag instead of pushing.
-tag version commit="origin/refactor/tag-machinery":
+tag version sha:
     #!/usr/bin/env bash
     set -euo pipefail
     TAG="v{{version}}"
-    git fetch -q origin --tags
-    SHA=$(git rev-parse --verify "{{commit}}^{commit}")
+    if ! [[ "{{sha}}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+      echo "refusing: tag requires an explicit frozen full 40-hex commit SHA" >&2; exit 1
+    fi
+    git fetch -q origin main --tags
+    SHA=$(git rev-parse --verify "{{sha}}^{commit}")
     echo "tag $TAG -> $SHA"
     if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
       echo "refusing: tag $TAG already exists" >&2; exit 1
+    else
+      LOCAL_REF_STATUS=$?
     fi
-    if ! git merge-base --is-ancestor "$SHA" origin/refactor/tag-machinery \
-       && ! git merge-base --is-ancestor "$SHA" origin/main; then
-      echo "refusing: $SHA is not on origin/refactor/tag-machinery or origin/main" >&2; exit 1
+    if [ "$LOCAL_REF_STATUS" -ne 1 ]; then
+      echo "refusing: could not prove local tag absence for refs/tags/$TAG (git rev-parse exited $LOCAL_REF_STATUS)" >&2
+      exit 1
+    fi
+    remote_ref_absent() {
+      local ref="$1" status
+      if git ls-remote --exit-code --tags origin "$ref" >/dev/null; then
+        echo "refusing: remote tag already exists: $ref" >&2; exit 1
+      else
+        status=$?
+      fi
+      if [ "$status" -ne 2 ]; then
+        echo "refusing: could not prove remote tag absence for $ref (git ls-remote exited $status)" >&2
+        exit 1
+      fi
+    }
+    remote_ref_absent "refs/tags/$TAG"
+    remote_ref_absent "refs/tags/$TAG^{}"
+    if ! git merge-base --is-ancestor "$SHA" origin/main; then
+      echo "refusing: $SHA is not reachable from origin/main" >&2; exit 1
     fi
     REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
     VERIFIED=$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.verification.verified')
@@ -508,6 +533,10 @@ tag version commit="origin/refactor/tag-machinery":
     CARGO_VERSION=$(git show "$SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
     if [ "$CARGO_VERSION" != "{{version}}" ]; then
       echo "refusing: Cargo.toml at $SHA says $CARGO_VERSION, not {{version}}" >&2; exit 1
+    fi
+    if [ "${OXIDEX_TAG_DRY_RUN:-0}" != 1 ] && [ "${OXIDEX_TAG_AUTHORIZATION:-}" != "$TAG@$SHA" ]; then
+      echo "refusing: set OXIDEX_TAG_AUTHORIZATION=$TAG@$SHA only after explicit authorization for this exact tag and commit" >&2
+      exit 1
     fi
     git tag -s "$TAG" -m "OxiDex $TAG" "$SHA"
     # Verify the new tag's signature before it leaves this machine.
@@ -531,20 +560,14 @@ tag version commit="origin/refactor/tag-machinery":
     echo "signature verified; pushing $TAG"
     git push origin "refs/tags/$TAG"
 
-# Delete a tag locally and remotely
-untag version:
-    @echo "Deleting tag: v{{version}}"
-    git tag -d "v{{version}}"
-    git push origin :refs/tags/v{{version}}
-
 # macOS packaging
 # ----------------
 
-# Create macOS DMG installer
-create-dmg version:
+# Create macOS DMG installer from an explicitly supplied signed binary.
+create-dmg version binary:
     @echo "Creating DMG for {{version}}..."
     mkdir -p dist/dmg-contents
-    cp target/release/oxidex dist/dmg-contents/
+    cp "{{binary}}" dist/dmg-contents/oxidex
     create-dmg \
       --volname "OxiDex {{version}}" \
       --no-internet-enable \
@@ -561,13 +584,6 @@ create-dmg version:
 release-check: ci
     @echo "Release checks passed!"
     @echo "Ready for release."
-
-# Full release workflow: check, build release, create tag
-release version: release-check
-    @echo "Creating release v{{version}}..."
-    cargo build --release
-    just tag {{version}}
-    @echo "Release v{{version}} created and tagged!"
 
 # C FFI header generation
 # -----------------------
@@ -633,8 +649,12 @@ docs-coverage:
     # (~4,200 manufacturer sample files, populated by `just compare-exiftool-full`).
     # That corpus is a local developer cache absent on CI, so the COMMITTED report
     # is never generated from it -- see docs/contributing/measuring-coverage.md.
-    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/Users/allen/oxidex-ops/cache/exiftool/13.59}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
     ET_DIR="$CACHE_DIR/exiftool"
+    RECEIPT_DIR="/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/docs-coverage"
+    mkdir -p "$RECEIPT_DIR"
+    CONFORMANCE_JSON="$RECEIPT_DIR/conformance.json"
     V=$(tr -d '[:space:]' < .exiftool-version)
 
     # ExifTool's own t/images is the format-breadth corpus (~126 formats).
@@ -698,11 +718,11 @@ docs-coverage:
         --oxidex ./target/debug/oxidex \
         --min-files "$MIN_FILES" \
         --min-tags "$MIN_TAGS" \
-        --json-out /tmp/oxidex-conformance.json
+        --json-out "$CONFORMANCE_JSON"
 
     echo "Regenerating tag coverage analysis..."
     uv run scripts/generate_tag_coverage.py \
-        --conformance /tmp/oxidex-conformance.json \
+        --conformance "$CONFORMANCE_JSON" \
         --corpus-desc "ExifTool $V \`t/images\` + \`tests/fixtures\`" \
         --output docs/reference/tag-coverage-analysis.md
     echo "Tag coverage report updated"
@@ -736,7 +756,8 @@ docs-coverage-definitions:
 duplicate-loss-scan *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/Users/allen/oxidex-ops/cache/exiftool/13.59}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
     CORPUS="$CACHE_DIR/exiftool/t/images"
     if [ ! -d "$CORPUS" ]; then
         echo "❌ $CORPUS not found -- populate the pinned ExifTool cache first" >&2
@@ -1036,7 +1057,16 @@ compare-exiftool-full:
     set -euo pipefail
 
     # Use fixed cache directory for reuse across runs
-    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
+    CANONICAL_CACHE_DIR="/Users/allen/oxidex-ops/cache/exiftool/13.59"
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$CANONICAL_CACHE_DIR}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
+    SELECTED_CACHE_DIR=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CACHE_DIR")
+    CANONICAL_CACHE_RESOLVED=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CANONICAL_CACHE_DIR")
+    [[ "$SELECTED_CACHE_DIR" == "$CANONICAL_CACHE_RESOLVED" ]] || {
+        echo "Full comparison requires canonical authenticated cache: $CANONICAL_CACHE_RESOLVED" >&2
+        exit 1
+    }
+    CACHE_DIR="$CANONICAL_CACHE_DIR"
     EXIFTOOL_DIR="$CACHE_DIR/exiftool"
     # Persistent, not ephemeral: both the exiftool-coverage-loop Workflow
     # script and find_tag_gaps.py re-run tag-comparison directly against
@@ -1045,8 +1075,7 @@ compare-exiftool-full:
     # lifetime (unlike the old `/tmp/exiftool-combined-$$` +
     # `trap cleanup EXIT`, which deleted it on exit).
     COMBINED_DIR="$CACHE_DIR/combined-samples"
-    GCS_BUCKET="https://storage.googleapis.com/oxidex-samples/exiftool"
-
+    SAMPLES_DIR="${EXIFTOOL_COMPARISON_SAMPLES:-$COMBINED_DIR}"
     mkdir -p "$CACHE_DIR"
 
     # Pinned, not "latest". This used to ask exiftool.org for the newest
@@ -1063,90 +1092,85 @@ compare-exiftool-full:
     fi
     echo "📌 Pinned ExifTool version: $VERSION"
 
-    # Check if ExifTool is already cached
-    if [[ -f "$EXIFTOOL_DIR/exiftool" && -f "$CACHE_DIR/.exiftool-version" ]]; then
-        CACHED_VERSION=$(cat "$CACHE_DIR/.exiftool-version")
-        if [[ "$CACHED_VERSION" == "$VERSION" ]]; then
-            echo "   ✓ Using cached ExifTool $VERSION"
-        else
-            echo "📦 Updating ExifTool from $CACHED_VERSION to $VERSION..."
-            rm -rf "$EXIFTOOL_DIR"
-            curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" | \
-                tar -xzf - -C "$CACHE_DIR" && \
-                mv "$CACHE_DIR/exiftool-$VERSION" "$EXIFTOOL_DIR"
-            echo "$VERSION" > "$CACHE_DIR/.exiftool-version"
-        fi
-    else
-        echo "📦 Downloading ExifTool $VERSION..."
-        # rm -rf FIRST. `mv src dest` when dest already exists as a directory
-        # moves src INSIDE it, producing exiftool/exiftool-<ver>/ instead of
-        # exiftool/. The cache probe above looks for "$EXIFTOOL_DIR/exiftool",
-        # one level too high for that layout, so it misses forever -- every
-        # run re-downloads and the mv then fails outright with "Directory not
-        # empty". Measured 2026-07-30: this crash-looped the dispatcher to
-        # restart 4/5 and the fleet made zero model calls. The update branch
-        # above already does this; the fresh-download branch did not.
-        rm -rf "$EXIFTOOL_DIR"
-        curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" | \
-            tar -xzf - -C "$CACHE_DIR" && \
-            rm -rf "$EXIFTOOL_DIR" && \
-            mv "$CACHE_DIR/exiftool-$VERSION" "$EXIFTOOL_DIR"
-        echo "$VERSION" > "$CACHE_DIR/.exiftool-version"
-    fi
-
-    # Create combined samples directory
-    mkdir -p "$COMBINED_DIR"
-
-    # Copy ExifTool test images
-    echo "📋 Copying ExifTool test images..."
-    cp -r "$EXIFTOOL_DIR/t/images"/* "$COMBINED_DIR/" 2>/dev/null || true
-
-    # Download sample database IN PARALLEL - try exiftool.org first, fall back to GCS cache
-    echo "📥 Downloading ExifTool sample database (parallel)..."
-    MANUFACTURERS="Canon Nikon Sony FujiFilm Panasonic Apple Google Samsung Olympus Pentax Leica DJI GoPro"
-
-    download_manufacturer() {
-        local mfr="$1"
-        local cache_dir="$2"
-        local combined_dir="$3"
-        local gcs_bucket="$4"
-        local cache_file="$cache_dir/samples-$mfr.tar.gz"
-
-        # Check cache first
-        if [[ -f "$cache_file" ]]; then
-            tar -xzf "$cache_file" -C "$combined_dir" 2>/dev/null || true
-            echo "   ✓ $mfr (cached)"
-            return 0
-        fi
-
-        # Try exiftool.org first
-        if curl -sLA "OxiDex/1.0" --fail --connect-timeout 10 "https://exiftool.org/$mfr.tar.gz" -o "$cache_file" 2>/dev/null; then
-            tar -xzf "$cache_file" -C "$combined_dir" 2>/dev/null || true
-            echo "   ✓ $mfr"
-            return 0
-        fi
-
-        # Fall back to GCS cache
-        if curl -sL --fail --connect-timeout 10 "$gcs_bucket/$mfr.tar.gz" -o "$cache_file" 2>/dev/null; then
-            tar -xzf "$cache_file" -C "$combined_dir" 2>/dev/null || true
-            echo "   ✓ $mfr (GCS)"
-            return 0
-        fi
-
-        echo "   ⚠️  $mfr unavailable"
-        return 0
+    # Provisioning owns this tree. Comparison recipes verify and consume it;
+    # they never delete or replace a shared release oracle in place.
+    python3 tools/release/bootstrap_oracle.py verify \
+        --root /Users/allen/oxidex-ops --pin "$VERSION" \
+        --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json \
+        >/dev/null
+    CACHED_VERSION=$(/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+        -I"$EXIFTOOL_DIR/lib" "$EXIFTOOL_DIR/exiftool" -ver)
+    [[ "$CACHED_VERSION" == "$VERSION" ]] || {
+        echo "Durable ExifTool is $CACHED_VERSION, expected $VERSION" >&2
+        exit 1
     }
-    export -f download_manufacturer
+    echo "   ✓ Using authenticated ExifTool $VERSION"
+    if [[ "$SAMPLES_DIR" != "$COMBINED_DIR" ]]; then
+        [[ "${EXIFTOOL_COMPARISON_ALLOW_BOUNDED_AUTHENTICATED:-}" == "1" ]] || {
+            echo "Bounded comparison requires EXIFTOOL_COMPARISON_ALLOW_BOUNDED_AUTHENTICATED=1" >&2
+            exit 1
+        }
+        python3 -c 'from pathlib import Path; import sys; corpus, sample = (Path(value).resolve() for value in sys.argv[1:]); sample.relative_to(corpus); assert sample.is_dir()' "$COMBINED_DIR" "$SAMPLES_DIR" || {
+            echo "Bounded comparison sample must be an authenticated corpus descendant" >&2
+            exit 1
+        }
+        if find "$SAMPLES_DIR" -type l -print -quit | grep -q .; then
+            echo "Bounded comparison sample contains a symlink" >&2
+            exit 1
+        fi
+    fi
+    # tag-comparison executes --exiftool directly.  Publish a private wrapper
+    # atomically in a per-invocation durable receipt directory; it is removed
+    # on every exit and cannot collide with another comparison.
+    RECEIPT_WORK_ROOT="${EXIFTOOL_COMPARISON_RECEIPT_ROOT:-$CACHE_DIR/comparison-receipts}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$RECEIPT_WORK_ROOT" >/dev/null
+    mkdir -p -m 700 "$RECEIPT_WORK_ROOT"
+    WORK_DIR=$(mktemp -d "$RECEIPT_WORK_ROOT/tag-comparison.XXXXXXXX")
+    chmod 700 "$WORK_DIR"
+    cleanup_comparison_wrapper() {
+        local cleanup_status=$?
+        python3 tools/release/bootstrap_oracle.py cleanup-comparison-workdir \
+            --root /Users/allen/oxidex-ops --work-directory "$WORK_DIR" \
+            --receipt-root "$RECEIPT_WORK_ROOT" >/dev/null || cleanup_status=$?
+        trap - EXIT
+        exit "$cleanup_status"
+    }
+    trap cleanup_comparison_wrapper EXIT
+    EXIFTOOL_WRAPPER="$WORK_DIR/exiftool"
+    MARKER_DIR="$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").identity"
+    python3 tools/release/bootstrap_oracle.py write-comparison-wrapper \
+        --root /Users/allen/oxidex-ops --target "$EXIFTOOL_WRAPPER" \
+        --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+        --library "$EXIFTOOL_DIR/lib" --script "$EXIFTOOL_DIR/exiftool" \
+        --marker-directory "$MARKER_DIR" >/dev/null
+    echo "   ✓ Comparison interpreter: /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
 
-    # Run downloads in parallel (up to 6 concurrent)
-    echo "$MANUFACTURERS" | tr ' ' '\n' | \
-        xargs -P 6 -I {} bash -c 'download_manufacturer "$@"' _ {} "$CACHE_DIR" "$COMBINED_DIR" "$GCS_BUCKET"
-
-    TOTAL_FILES=$(find "$COMBINED_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [[ -d "$COMBINED_DIR" ]] || {
+        echo "Authenticated combined corpus missing; run bootstrap_oracle.py provision" >&2
+        exit 1
+    }
+    MIN_FILES=4000
+    [[ "$SAMPLES_DIR" == "$COMBINED_DIR" ]] || MIN_FILES=1
+    TOTAL_FILES=$(find "$SAMPLES_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$TOTAL_FILES" -ge "$MIN_FILES" ]] || {
+        echo "Authenticated comparison sample has only $TOTAL_FILES files" >&2
+        exit 1
+    }
     echo "   Total files for comparison: $TOTAL_FILES"
 
     echo "🔨 Building tag-comparison tool..."
-    cargo build --release --bin tag-comparison --features tag-comparison-binary 2>&1 | grep -v "^   Compiling" || true
+    TARGET_DIR="${CARGO_TARGET_DIR:-/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap}"
+    BUILD_LOG="${TAG_COMPARISON_BUILD_LOG:-$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").build.log}"
+    BUILD_PARENT=$(dirname "$BUILD_LOG")
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$BUILD_PARENT" >/dev/null
+    mkdir -p "$BUILD_PARENT"
+    CARGO_TARGET_DIR="$TARGET_DIR" python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared "$BUILD_LOG" -- cargo build --release --bin tag-comparison --features tag-comparison-binary
+    TAG_COMPARISON="$TARGET_DIR/release/tag-comparison"
+    RESULT_ROOT="${EXIFTOOL_COMPARISON_RESULT_ROOT:-$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").results}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$RESULT_ROOT" >/dev/null
+    mkdir -p "$RESULT_ROOT/reports"
+    RESULT_JSON="$RESULT_ROOT/comparison.json"
+    TAG_CACHE_DIR="$RESULT_ROOT/tag-cache"
 
     OXIDEX_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
@@ -1155,11 +1179,21 @@ compare-exiftool-full:
     echo "   OxiDex:   v$OXIDEX_VERSION"
     echo ""
 
-    ./target/release/tag-comparison \
-        --exiftool "$EXIFTOOL_DIR/exiftool" \
-        --samples "$COMBINED_DIR" \
+    "$TAG_COMPARISON" \
+        --exiftool "$EXIFTOOL_WRAPPER" \
+        --samples "$SAMPLES_DIR" \
+        --output "$RESULT_JSON" \
+        --markdown-dir "$RESULT_ROOT/reports" \
+        --tag-cache-dir "$TAG_CACHE_DIR" \
         --exiftool-version "$VERSION" \
         --oxidex-version "$OXIDEX_VERSION"
+    find "$MARKER_DIR" -type f -name 'perl-*.json' -print -quit | grep -q .
+    [[ -s "$RESULT_JSON" && -s "$RESULT_ROOT/reports/index.md" ]] || {
+        echo "Comparison did not retain its JSON and reports under $RESULT_ROOT" >&2
+        exit 1
+    }
+    echo "   ✓ Comparison identity markers: $MARKER_DIR"
+    echo "   ✓ Comparison results: $RESULT_ROOT"
 
     echo ""
     echo "✅ Comprehensive comparison complete!"
@@ -1172,17 +1206,19 @@ compare-exiftool-full-update:
     set -euo pipefail
 
     # Use fixed cache directory for reuse across runs
-    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/tmp/oxidex-exiftool-cache}"
-    EXIFTOOL_DIR="$CACHE_DIR/exiftool"
-    COMBINED_DIR="/tmp/exiftool-combined-$$"
-    GCS_BUCKET="https://storage.googleapis.com/oxidex-samples/exiftool"
-
-    cleanup() {
-        echo "🧹 Cleaning up temp files..."
-        rm -rf "$COMBINED_DIR"
+    CANONICAL_CACHE_DIR="/Users/allen/oxidex-ops/cache/exiftool/13.59"
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$CANONICAL_CACHE_DIR}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
+    SELECTED_CACHE_DIR=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CACHE_DIR")
+    CANONICAL_CACHE_RESOLVED=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CANONICAL_CACHE_DIR")
+    [[ "$SELECTED_CACHE_DIR" == "$CANONICAL_CACHE_RESOLVED" ]] || {
+        echo "Full comparison requires canonical authenticated cache: $CANONICAL_CACHE_RESOLVED" >&2
+        exit 1
     }
-    trap cleanup EXIT
-
+    CACHE_DIR="$CANONICAL_CACHE_DIR"
+    EXIFTOOL_DIR="$CACHE_DIR/exiftool"
+    COMBINED_DIR="$CACHE_DIR/combined-samples"
+    SAMPLES_DIR="${EXIFTOOL_COMPARISON_SAMPLES:-$COMBINED_DIR}"
     mkdir -p "$CACHE_DIR"
 
     # Pinned, not "latest" -- see .exiftool-version. Grading against whatever
@@ -1195,81 +1231,77 @@ compare-exiftool-full-update:
     fi
     echo "📌 Pinned ExifTool version: $VERSION"
 
-    # Check if ExifTool is already cached
-    if [[ -f "$EXIFTOOL_DIR/exiftool" && -f "$CACHE_DIR/.exiftool-version" ]]; then
-        CACHED_VERSION=$(cat "$CACHE_DIR/.exiftool-version")
-        if [[ "$CACHED_VERSION" == "$VERSION" ]]; then
-            echo "   ✓ Using cached ExifTool $VERSION"
-        else
-            echo "📦 Updating ExifTool from $CACHED_VERSION to $VERSION..."
-            rm -rf "$EXIFTOOL_DIR"
-            curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" | \
-                tar -xzf - -C "$CACHE_DIR" && \
-                mv "$CACHE_DIR/exiftool-$VERSION" "$EXIFTOOL_DIR"
-            echo "$VERSION" > "$CACHE_DIR/.exiftool-version"
-        fi
-    else
-        echo "📦 Downloading ExifTool $VERSION..."
-        curl -sL "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz" | \
-            tar -xzf - -C "$CACHE_DIR" && \
-            rm -rf "$EXIFTOOL_DIR" && \
-            mv "$CACHE_DIR/exiftool-$VERSION" "$EXIFTOOL_DIR"
-        echo "$VERSION" > "$CACHE_DIR/.exiftool-version"
-    fi
-
-    # Create combined samples directory
-    mkdir -p "$COMBINED_DIR"
-
-    # Copy ExifTool test images
-    echo "📋 Copying ExifTool test images..."
-    cp -r "$EXIFTOOL_DIR/t/images"/* "$COMBINED_DIR/" 2>/dev/null || true
-
-    # Download sample database IN PARALLEL - try exiftool.org first, fall back to GCS cache
-    echo "📥 Downloading ExifTool sample database (parallel)..."
-    MANUFACTURERS="Canon Nikon Sony FujiFilm Panasonic Apple Google Samsung Olympus Pentax Leica DJI GoPro"
-
-    download_manufacturer() {
-        local mfr="$1"
-        local cache_dir="$2"
-        local combined_dir="$3"
-        local gcs_bucket="$4"
-        local cache_file="$cache_dir/samples-$mfr.tar.gz"
-
-        # Check cache first
-        if [[ -f "$cache_file" ]]; then
-            tar -xzf "$cache_file" -C "$combined_dir" 2>/dev/null || true
-            echo "   ✓ $mfr (cached)"
-            return 0
-        fi
-
-        # Try exiftool.org first
-        if curl -sLA "OxiDex/1.0" --fail --connect-timeout 10 "https://exiftool.org/$mfr.tar.gz" -o "$cache_file" 2>/dev/null; then
-            tar -xzf "$cache_file" -C "$combined_dir" 2>/dev/null || true
-            echo "   ✓ $mfr"
-            return 0
-        fi
-
-        # Fall back to GCS cache
-        if curl -sL --fail --connect-timeout 10 "$gcs_bucket/$mfr.tar.gz" -o "$cache_file" 2>/dev/null; then
-            tar -xzf "$cache_file" -C "$combined_dir" 2>/dev/null || true
-            echo "   ✓ $mfr (GCS)"
-            return 0
-        fi
-
-        echo "   ⚠️  $mfr unavailable"
-        return 0
+    # Provisioning owns this tree. Comparison recipes verify and consume it;
+    # they never delete or replace a shared release oracle in place.
+    python3 tools/release/bootstrap_oracle.py verify \
+        --root /Users/allen/oxidex-ops --pin "$VERSION" \
+        --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json \
+        >/dev/null
+    CACHED_VERSION=$(/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+        -I"$EXIFTOOL_DIR/lib" "$EXIFTOOL_DIR/exiftool" -ver)
+    [[ "$CACHED_VERSION" == "$VERSION" ]] || {
+        echo "Durable ExifTool is $CACHED_VERSION, expected $VERSION" >&2
+        exit 1
     }
-    export -f download_manufacturer
+    echo "   ✓ Using authenticated ExifTool $VERSION"
+    if [[ "$SAMPLES_DIR" != "$COMBINED_DIR" ]]; then
+        [[ "${EXIFTOOL_COMPARISON_ALLOW_BOUNDED_AUTHENTICATED:-}" == "1" ]] || {
+            echo "Bounded comparison requires EXIFTOOL_COMPARISON_ALLOW_BOUNDED_AUTHENTICATED=1" >&2
+            exit 1
+        }
+        python3 -c 'from pathlib import Path; import sys; corpus, sample = (Path(value).resolve() for value in sys.argv[1:]); sample.relative_to(corpus); assert sample.is_dir()' "$COMBINED_DIR" "$SAMPLES_DIR" || {
+            echo "Bounded comparison sample must be an authenticated corpus descendant" >&2
+            exit 1
+        }
+        if find "$SAMPLES_DIR" -type l -print -quit | grep -q .; then
+            echo "Bounded comparison sample contains a symlink" >&2
+            exit 1
+        fi
+    fi
+    RECEIPT_WORK_ROOT="${EXIFTOOL_COMPARISON_RECEIPT_ROOT:-$CACHE_DIR/comparison-receipts}"
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$RECEIPT_WORK_ROOT" >/dev/null
+    mkdir -p -m 700 "$RECEIPT_WORK_ROOT"
+    WORK_DIR=$(mktemp -d "$RECEIPT_WORK_ROOT/tag-comparison.XXXXXXXX")
+    chmod 700 "$WORK_DIR"
+    cleanup_comparison_wrapper() {
+        local cleanup_status=$?
+        python3 tools/release/bootstrap_oracle.py cleanup-comparison-workdir \
+            --root /Users/allen/oxidex-ops --work-directory "$WORK_DIR" \
+            --receipt-root "$RECEIPT_WORK_ROOT" >/dev/null || cleanup_status=$?
+        trap - EXIT
+        exit "$cleanup_status"
+    }
+    trap cleanup_comparison_wrapper EXIT
+    EXIFTOOL_WRAPPER="$WORK_DIR/exiftool"
+    MARKER_DIR="$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").identity"
+    python3 tools/release/bootstrap_oracle.py write-comparison-wrapper \
+        --root /Users/allen/oxidex-ops --target "$EXIFTOOL_WRAPPER" \
+        --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+        --library "$EXIFTOOL_DIR/lib" --script "$EXIFTOOL_DIR/exiftool" \
+        --marker-directory "$MARKER_DIR" >/dev/null
+    echo "   ✓ Comparison interpreter: /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
 
-    # Run downloads in parallel (up to 6 concurrent)
-    echo "$MANUFACTURERS" | tr ' ' '\n' | \
-        xargs -P 6 -I {} bash -c 'download_manufacturer "$@"' _ {} "$CACHE_DIR" "$COMBINED_DIR" "$GCS_BUCKET"
-
-    TOTAL_FILES=$(find "$COMBINED_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [[ -d "$COMBINED_DIR" ]] || {
+        echo "Authenticated combined corpus missing; run bootstrap_oracle.py provision" >&2
+        exit 1
+    }
+    MIN_FILES=4000
+    [[ "$SAMPLES_DIR" == "$COMBINED_DIR" ]] || MIN_FILES=1
+    TOTAL_FILES=$(find "$SAMPLES_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [[ "$TOTAL_FILES" -ge "$MIN_FILES" ]] || {
+        echo "Authenticated comparison sample has only $TOTAL_FILES files" >&2
+        exit 1
+    }
     echo "   Total files for comparison: $TOTAL_FILES"
 
     echo "🔨 Building tag-comparison tool..."
-    cargo build --release --bin tag-comparison --features tag-comparison-binary 2>&1 | grep -v "^   Compiling" || true
+    TARGET_DIR="${CARGO_TARGET_DIR:-/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap}"
+    BUILD_LOG="${TAG_COMPARISON_BUILD_LOG:-$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").build.log}"
+    BUILD_PARENT=$(dirname "$BUILD_LOG")
+    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$BUILD_PARENT" >/dev/null
+    mkdir -p "$BUILD_PARENT"
+    CARGO_TARGET_DIR="$TARGET_DIR" python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared "$BUILD_LOG" -- cargo build --release --bin tag-comparison --features tag-comparison-binary
+    TAG_COMPARISON="$TARGET_DIR/release/tag-comparison"
 
     OXIDEX_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
@@ -1281,14 +1313,16 @@ compare-exiftool-full-update:
     # Ensure output directory exists
     mkdir -p docs/reference/comparison
 
-    ./target/release/tag-comparison \
-        --exiftool "$EXIFTOOL_DIR/exiftool" \
-        --samples "$COMBINED_DIR" \
+    "$TAG_COMPARISON" \
+        --exiftool "$EXIFTOOL_WRAPPER" \
+        --samples "$SAMPLES_DIR" \
         --baseline docs/reference/comparison/baseline.json \
         --output docs/reference/comparison/comparison.json \
         --markdown-dir docs/reference/comparison \
         --exiftool-version "$VERSION" \
         --oxidex-version "$OXIDEX_VERSION"
+    find "$MARKER_DIR" -type f -name 'perl-*.json' -print -quit | grep -q .
+    echo "   ✓ Comparison identity markers: $MARKER_DIR"
 
     echo ""
     echo "✅ Comprehensive comparison complete! Docs updated in docs/reference/comparison/"
@@ -1501,6 +1535,11 @@ check-staleness version="":
 # verify-tables/ratchet, writes ~/gatelogs/gate-<tag>.{log,verdict,json}.
 gate branch tag:
     tools/fleet/gate.sh {{branch}} {{tag}}
+
+# Ownership is provenance-only: it reconciles generated declarations and
+# explicit runtime residuals; it does not claim corpus observation.
+verify-runtime-ownership:
+    uv run python tools/exiftool-tables/runtime_ownership.py verify --root .
 
 # Fleet python suite (fleetlib CAS, claims, queue, verdict admissibility,
 # drift, intent/ledger). Needs a FRESH release binary for the ledger tests --

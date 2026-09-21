@@ -248,10 +248,14 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | Path or glob | Sequential task owners | Release condition |
 |---|---:|---|
 | `justfile` | 0, then 1, then 18 | each prior owner remotely merged; no concurrent edits |
-| `tools/release/fleet_controller.py`, `tools/release/fleet-schema.json`, `tools/release/test_fleet_controller.py` | 0 | Task 0 only |
+| `tools/release/fleet_controller.py`, `tools/release/fleet-schema.json` | 0 | Task 0 only |
+| `tools/release/test_fleet_controller.py` | 0, then 8 | Task 0 remotely merges before Task 8's focused lease-contract tests |
 | `tools/exiftool-tables/runtime_ownership.py`, `runtime_ownership.json`, `test_runtime_ownership.py` | 1 | Task 1 only; vendors own distinct fragment files |
 | `src/core/tag_occurrence.rs`, `src/core/tag_sink.rs`, `src/core/metadata_map.rs` | 2 | Task 2 remote merge before consumer/runtime work |
-| `src/cli/tag_resolution.rs`, `src/cli/output_formatter.rs`, `src/cli/batch_processor.rs`, `src/ffi/**`, `src/composite/mod.rs` | 3 | Task 3 only; Task 14 may not edit `src/composite/mod.rs` |
+| `src/cli/tag_resolution.rs`, `src/cli/output_formatter.rs`, `src/cli/batch_processor.rs`, `src/ffi/**` | 3 | Task 3 only |
+| `src/composite/mod.rs` | 3, then 8 | Task 3 remotely merges before Task 8's producers-composite boundary; Task 14 may not edit it |
+| `src/composite/compute.rs` | 3, then 8, then 13 | Task 3 remotely merges before Task 8; Task 13 may later edit only its named Panasonic arm |
+| `src/core/operations.rs` | 3, then 8, then 16 | each prior owner remotely merges before the next; Task 16 retains only its trailer changes |
 | `tools/exiftool-tables/conv_codegen.py`, `conv_oracle.py`, conversion generated outputs and manifest | 4, then 10 | Task 4 remotely merges before Task 10 acquires the lease |
 | `tools/exiftool-tables/upgrade_transaction.py`, `test_upgrade_transaction.py`, version-rehearsal executor/adapter tests | 5 | Task 5 only; Task 3 may not edit them |
 | `tools/exiftool-tables/conformance.py`, `test_conformance.py` | 6 | Task 6 only; Task 8 explicitly denies these paths |
@@ -263,6 +267,8 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | `src/exiftool_tables/enabled_ifd.rs` | 9 | Task 9 only |
 | `src/exiftool_tables/engine.rs`, `keyed_engine.rs`, `serial_engine.rs` | 8, then 17, then 18 | every prior owner remotely merges before the next acquires the lease |
 | `src/exiftool_tables/mod.rs` | 8, then 17 | Task 8 remotely merges before Task 17 acquires the lease |
+| `src/main.rs` | 8 | Task 8 only; process-start attribution validation must precede CLI parsing |
+| `src/parsers/tiff/makernotes/nikon/settings.rs` | 8, then 12 | Task 8 remotely merges before Task 12's Nikon directory lease |
 | `tools/exiftool-tables/conv_exif_main_ledger.json` and its exact refusal-closure inputs/outputs | 10 | Task 10 only |
 | `src/parsers/tiff/makernotes/olympus.rs`, `src/parsers/tiff/makernotes/olympus/**`, `runtime_ownership.d/olympus.json` | 11 | Task 11 only |
 | each Task 12-16 parser/test lease and distinct `runtime_ownership.d/TASK_SLUG.json` | 12-16 respectively | no shared dispatcher, engine, composite, or generated output edits |
@@ -286,16 +292,16 @@ The materialized PRD may narrow a lease but may never widen this matrix.
 | 6 | `conformance-receipts` | CLI / Luna | 0 | any non-conformance task |
 | 7 | `file-session` | Desktop / Sol | 2, 4 | 3, 5, 6 |
 | 8 | `generated-attribution` | CLI / Terra | 1, 3, 4, 7 | 5, 6 |
-| 9 | `exif-shared-pipeline` | Desktop / Sol | 2, 4, 7, 8 | 5, 6 |
-| 10 | `refusal-closure` | Desktop / Sol | 1, 4, 9 | 5, 6 |
-| 11 | `olympus-pilot` | Desktop / Sol | 3, 8, 10 | 5, 6 |
+| 9 | `exif-shared-pipeline` | CLI / Sol | 2, 4, 7, 8 | 5, 6 |
+| 10 | `refusal-closure` | CLI / Sol | 1, 4, 9 | 5, 6 |
+| 11 | `olympus-pilot` | CLI / Sol | 3, 8, 10 | 5, 6 |
 | 12 | `nikon-port` | CLI / Terra | 11 | 13-16 |
 | 13 | `pentax-panasonic-port` | CLI / Terra | 11 | 12, 14-16 |
 | 14 | `dji-composite-xmp-port` | CLI / Terra | 11, 13 | 12, 15, 16 |
 | 15 | `legacy-camera-tail` | CLI / Terra | 11 | 12-14, 16 |
 | 16 | `trailer-tail` | CLI / Terra | 11 | 12-15 |
-| 17 | `walker-engine-consolidation` | Desktop / Sol | 9, 11, 12-16 | none; vendors are remotely merged first |
-| 18 | `proven-deletion` | Desktop / Sol | 8, 10-17 | documentation-only work |
+| 17 | `walker-engine-consolidation` | CLI / Sol | 9, 11, 12-16 | none; vendors are remotely merged first |
+| 18 | `proven-deletion` | CLI / Sol | 8, 10-17 | documentation-only work |
 | 19 | `version-transition-qualification` | CLI / Sol | 5, 6, 18 | documentation-only work |
 | 20 | `frozen-candidate-evidence` | controller + Astra review | all prior tasks | none; writers frozen |
 
@@ -662,8 +668,9 @@ selects the newest process record and refuses `--last`.
 - Create: `docs/reference/durable-release-storage.md`
 - Create: `docs/reference/beta-fleet-controller.md`
 - Modify: `scripts/exiftool_oracle.py`
-- Modify: `justfile` recipes `docs-coverage`, `duplicate-loss-scan`,
-  `compare-exiftool-full`, and `compare-exiftool-full-update`
+- Modify: `justfile`
+  Add or update the `docs-coverage`, `duplicate-loss-scan`,
+  `compare-exiftool-full`, and `compare-exiftool-full-update` recipes.
 - Modify: `.agents/skills/exiftool-parity/SKILL.md`
 - Do not commit downloaded sources, corpora, Perl installations, or secrets
 
@@ -677,7 +684,10 @@ selects the newest process record and refuses `--last`.
 - `oracle-lock.json` pins Perl 5.38.2 source SHA-256
   `a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e`,
   Archive-Zip 1.68 SHA-256
-  `65089896661884077a90a17515153a2108a6a86ba6d69b02632cc201345a277e`,
+  `984e185d785baf6129c6e75f8eb44411745ac00bf6122fb1c8e822a3861ec650`
+  (the digest published in the CPAN author
+  [`CHECKSUMS`](https://cpan.metacpan.org/authors/id/P/PH/PHRED/CHECKSUMS)
+  file for the 163,490-byte `Archive-Zip-1.68.tar.gz` artifact),
   and ExifTool tag object `2200871d9cef988051d2a99d67df3bda6cbb30a8`.
 - `fleet_controller.py init|materialize|event|checkpoint|reconcile|recover|
   launch|monitor|status|heartbeat|resume|stop` validates the task DAG and
@@ -837,7 +847,8 @@ squash-merges Task 0 before creating any other task worktree.
 
 - Create: `tools/exiftool-tables/runtime_ownership.py`
 - Create: `tools/exiftool-tables/runtime_ownership.json`
-- Create: `tools/exiftool-tables/runtime_ownership.d/` source fragments
+- Create: `tools/exiftool-tables/runtime_ownership.d/`
+  Add source fragments beneath this directory.
 - Create: `tools/exiftool-tables/test_runtime_ownership.py`
 - Modify: `justfile`
 - Do not modify: `src/exiftool_tables/conv/**`, engine files, generated tables
@@ -1070,6 +1081,9 @@ conversion still living in `exiftool_compat.rs`, commit SHA, exact tests, and
 - Modify: `src/composite/compute.rs`
 - Modify: `src/composite/mod.rs`
 - Modify: `src/core/operations.rs`
+- Modify: `include/oxidex.h`
+- Modify: `bindings/python/oxidex.py`
+- Add: `tests/ffi/c_integration_test.c`
 - Add: `tests/typed_value_projection_tests.rs`
 - Add: `tools/exiftool-tables/fixtures/typed_value_projection.json`
 - Do not modify Task 2 core files or generated/engine files
@@ -1090,7 +1104,7 @@ list, undefined/suppressed, duplicate/grouped occurrences, units, and negative
 zero. Assert normal output uses PrintConv and `-n` uses ValueConv from the same
 occurrence.
 
-- [ ] **Step 2: Prove at least one pre-migration test fails**
+- [ ] **Step 2: Prove the remaining consumer seams fail before migration**
 
 Run the focused integration test under the shared lock:
 
@@ -1101,8 +1115,24 @@ python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shar
   cargo test --test typed_value_projection_tests -- --nocapture
 ```
 
-The generated IFD case must demonstrate the current wrong-channel behavior
-rather than a fabricated unit-only failure.
+PR #867 already fixed generated-IFD production of explicit PrintConv forms.
+Do not recreate or simulate that superseded producer failure. Instead, add
+honest red tests for the remaining consumer defects identified by the
+independent review at
+`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/reviews/03-typed-consumers-supersession.md`:
+
+1. Construct one valid occurrence whose raw, ValueConv, and explicit
+   PrintConv forms differ. Normal CLI resolution must select the explicit
+   PrintConv form and `--no-print-conv` must select ValueConv from that same
+   occurrence. The current normal path incorrectly recomputes from raw.
+2. Add an additive FFI value-channel enum and channel-selecting entry point,
+   with a red compile/use test before implementation. Existing entry points
+   must remain present and retain their documented default and ABI layout.
+3. Add a source-cited allowlist and verifier for intentional composite
+   display stringify/reparse sites. The verifier must fail for an unlisted
+   site; comments alone are insufficient.
+4. Add the fixture-backed consumer projection matrix from Step 1. Fixture
+   absence is a failure, not a skip or behavior receipt.
 
 - [ ] **Step 3: Migrate consumers by intent**
 
@@ -1140,6 +1170,8 @@ and read-receipt blocks only after that commit leaves the worktree clean.
 git add src/cli/tag_resolution.rs src/cli/output_formatter.rs \
   src/cli/batch_processor.rs src/ffi src/composite/compute.rs \
   src/composite/mod.rs src/core/operations.rs \
+  include/oxidex.h bindings/python/oxidex.py \
+  tests/ffi/c_integration_test.c \
   tests/typed_value_projection_tests.rs \
   tools/exiftool-tables/fixtures/typed_value_projection.json
 git commit -S -m "refactor: project typed metadata values consistently"
@@ -1423,10 +1455,12 @@ Record schema/reconciliation totals, test output, commit SHA, and
 
 - Modify: `src/exiftool_tables/session.rs`
 - Modify: `src/exiftool_tables/ifd_engine.rs`
-- Modify: `src/exiftool_tables/cond.rs` only for required session access
+- Modify: `src/exiftool_tables/cond.rs`
+  Limit changes to required session access.
 - Modify: `src/core/exif_dir_engine.rs`
-- Modify: `src/core/tiff_helpers.rs` and `src/core/jpeg_helpers.rs` only at
-  session-construction/call boundaries
+- Modify: `src/core/tiff_helpers.rs`
+- Modify: `src/core/jpeg_helpers.rs`
+  Limit both helper changes to session-construction/call boundaries.
 - Add: `tests/generated_file_session.rs`
 - Add focused Rust unit tests in those modules
 - Do not change conversion registry generation or occurrence consumer APIs
@@ -1542,10 +1576,29 @@ Record scope semantics, call-site inventory, tests, commit SHA, and
 - Modify: `src/exiftool_tables/keyed_engine.rs`
 - Modify: `src/exiftool_tables/serial_engine.rs`
 - Modify: `src/exiftool_tables/runtime.rs`
+- Modify: `src/main.rs`
+- Modify: `src/composite/compute.rs`
+- Modify: `src/composite/mod.rs`
+- Modify: `src/core/file_metadata.rs`
+- Modify: `src/core/operations.rs`
+- Modify: `src/parsers/archive/ar.rs`
+- Modify: `src/parsers/canon_vrd/mod.rs`
+- Modify: `src/parsers/elf/metadata_extractor.rs`
+- Modify: `src/parsers/flir_fpf.rs`
+- Modify: `src/parsers/jpeg/app_segments/infiray.rs`
+- Modify: `src/parsers/macho/metadata_extractor.rs`
+- Modify: `src/parsers/specialized/fits.rs`
+- Modify: `src/parsers/tiff/geotiff_parser.rs`
+- Modify: `src/parsers/tiff/makernotes/canon/custom_functions2.rs`
+- Modify: `src/parsers/tiff/makernotes/nikon/settings.rs`
+- Modify: `src/parsers/tiff/makernotes/shared/binary_subdir.rs`
+- Modify: `src/parsers/tiff/makernotes/sony.rs`
+- Modify: `src/parsers/tiff/makernotes/sony/binary_data.rs`
+- Add: `tools/exiftool-tables/genshare/testdata/bounded-corpus-expectations.json`
 - Do not change tag conversion semantics
 - Do not modify: `tools/exiftool-tables/conformance.py`,
-  `tools/exiftool-tables/test_conformance.py`, any vendor parser, or generated
-  table output
+  `tools/exiftool-tables/test_conformance.py`, any parser path not listed
+  above, or generated table output
 
 **Interfaces:** Produces an authenticated paired control/probe receipt consumed
 by Tasks 11 and 18. Replaces positional worktree arguments with this maintained
@@ -1563,24 +1616,43 @@ tools/exiftool-tables/genshare/census.sh \
 ```
 
 The script builds one maintained binary whose unset/empty
-`OXIDEX_GENSHARE_SILENCE` hook is the control,
-then runs each explicit token as a probe. It writes `receipt.json` and exits
-nonzero on a refused token, process failure, floor miss, inertness difference,
-hash mismatch, or attribution reconciliation failure.
+`OXIDEX_GENSHARE_SILENCE` hook is the control, then runs all six explicit
+tokens individually and a separate all-six union probe
+(`engine,legacy-l1,legacy-l2,producers,serial,keyed`). The union is a real
+execution, not the arithmetic sum of individual deltas. It writes
+`receipt.json` and exits nonzero on a refused token, process failure, floor
+miss, inertness difference, hash mismatch, or attribution reconciliation
+failure in any individual or union run.
 
 `attribution::Token::{Engine,LegacyL1,LegacyL2,Producers,Serial,Keyed}` parses
 the comma-separated environment once. `silenced(token) -> bool` is false when
 the variable is absent/empty. Engine guards drop only the outward emission
 after stateful work succeeds; disabled-hook behavior must remain byte-identical
-on the bounded corpus. Unknown tokens and the unsafe `conv` token exit 2 before
-corpus traversal.
+on the bounded corpus. The `legacy-l2` boundary is limited to the six listed
+manifest-walker outputs (`infiray.rs`, `custom_functions2.rs`,
+`binary_subdir.rs`, `sony.rs`, `sony/binary_data.rs`, and
+`nikon/settings.rs`). The `producers` boundary is limited to the listed
+identity, generated-composite, DICOM/FITS, and GeoTIFF output sites; it must
+not silence hand fallback rows or every declared Composite row. Unknown and
+unsafe tokens (including `conv`) exit 2 before corpus traversal, and the
+maintained Rust validator is called from `src/main.rs` before CLI parsing or
+the first file is opened. Every advertised token must have at least one real
+late-emission guard; a corpus token with no production caller is reported as
+`unexercised`, never silently accepted as measured zero.
 
 - [ ] **Step 1: Add failing receipt-authentication tests**
 
 Require control/probe binary SHA-256, source SHA/dirty state, exact process
 return codes, raw stdout/stderr hashes, oracle/corpus identity, inertness result,
 per-occurrence deltas, and token set. Refuse historical `attr-72ea`-style data
-missing paired outputs.
+missing paired outputs. Add black-box tests that execute the maintained binary
+with `conv`, an unknown token, an empty component, and a duplicate token; each
+must exit 2 before corpus traversal and produce no receipt. `legacy-l2` and
+`producers` are valid only after their listed emission guards exist. The test
+must also prove that a
+valid probe records the child process start identity (PID plus kernel start
+time, or the platform-equivalent immutable start token) and refuses a reused
+PID whose start identity does not match.
 
 - [ ] **Step 2: Run the focused tests red**
 
@@ -1605,16 +1677,33 @@ all deterministic fields.
 - [ ] **Step 4: Harden `census.sh`**
 
 Use explicit `CARGO_TARGET_DIR` paths, pinned Perl/source probes, candidate
-hashes, corpus floors, `pipefail`, and durable per-stage status. Never infer a
-successful command from `tail` or another pipeline consumer.
+hashes, corpus floors, `pipefail`, and durable per-stage status. Invoke
+`conformance.py` with a valid corpus root plus a committed selection manifest;
+do not pass individual files where the instrument requires roots. Capture the
+exact child argv, PID/start identity, return code, stderr, and parse status for
+every selected file. Never infer a successful command from `tail` or another
+pipeline consumer. Compare unset and explicit-empty controls, require exact
+control/probe path-set equality, and emit a terminal failed receipt rather
+than leaving stale output to be mistaken for a run.
 
 - [ ] **Step 5: Run bounded controls, commit, and run a small real census**
 
 Use the exclusive lock. Prove one known generated fixture loses its generated
 occurrence, one hand-only fixture does not, and the inert control matches.
 The test invokes `census.sh` with an explicit three-file manifest committed at
-`tools/exiftool-tables/genshare/testdata/bounded-corpus.txt` and writes its
-authenticated receipt under
+`tools/exiftool-tables/genshare/testdata/bounded-corpus.txt`; the companion
+`tools/exiftool-tables/genshare/testdata/bounded-corpus-expectations.json`
+binds each relative path to its content hash, expected group-qualified
+occurrence identities, expected token loss/zero-loss result, and the sole
+volatile normalization (`System:FileAccessDate`, if present). The ledger must
+include one positive generated-loss fixture, one hand-only zero-loss fixture,
+and one duplicate/order or capability fixture. A token not reached by those
+three fixtures is `unexercised` in the bounded receipt; it cannot be described
+as a measured zero or used as deletion evidence. The full-corpus receipt (and
+Task 18's post-Task-17 rerun) must separately resolve every token used for a
+deletion claim. The census must refuse a manifest or expectation hash mismatch.
+It writes its authenticated receipt
+under
 `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/generated-attribution/`.
 Run the Python/shell tests, Rust tests for the maintained seam, formatting, and
 Clippy first. Commit the signed task candidate and require a clean worktree.
@@ -1626,7 +1715,19 @@ Then run the full command above through the exclusive lock.
 git add tools/exiftool-tables/genshare src/exiftool_tables/attribution.rs \
   src/exiftool_tables/mod.rs src/exiftool_tables/engine.rs \
   src/exiftool_tables/ifd_engine.rs src/exiftool_tables/keyed_engine.rs \
-  src/exiftool_tables/serial_engine.rs src/exiftool_tables/runtime.rs
+  src/exiftool_tables/serial_engine.rs src/exiftool_tables/runtime.rs \
+  src/main.rs src/composite/compute.rs src/composite/mod.rs \
+  src/core/file_metadata.rs src/core/operations.rs \
+  src/parsers/archive/ar.rs src/parsers/canon_vrd/mod.rs \
+  src/parsers/elf/metadata_extractor.rs src/parsers/flir_fpf.rs \
+  src/parsers/jpeg/app_segments/infiray.rs \
+  src/parsers/macho/metadata_extractor.rs src/parsers/specialized/fits.rs \
+  src/parsers/tiff/geotiff_parser.rs \
+  src/parsers/tiff/makernotes/canon/custom_functions2.rs \
+  src/parsers/tiff/makernotes/nikon/settings.rs \
+  src/parsers/tiff/makernotes/shared/binary_subdir.rs \
+  src/parsers/tiff/makernotes/sony.rs \
+  src/parsers/tiff/makernotes/sony/binary_data.rs
 git commit -S -m "test: authenticate generated route attribution"
 ```
 
@@ -1639,7 +1740,7 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/09-exif-shared-pipeline.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/exif-shared-pipeline`
 **Worktree:** `/Users/allen/git/oxidex-beta1-exif-shared-pipeline`
@@ -1653,7 +1754,11 @@ Record the control/probe receipt hashes, token reconciliation, commit SHA, and
 - Modify: `src/core/exif_dir_engine.rs`
 - Modify: `src/core/tiff_helpers.rs`
 - Modify: `src/core/jpeg_helpers.rs`
+- Modify: `src/core/format_dispatch.rs`
+- Modify: `src/core/operations.rs`
 - Modify: `src/exiftool_tables/enabled_ifd.rs`
+- Modify: `tools/exiftool-tables/conformance.py`
+- Modify: `tools/exiftool-tables/test_conformance.py`
 - Add focused tests in these modules
 - Add: `tests/exif_shared_pipeline.rs`
 - Do not edit vendor parser directories or delete compatibility branches
@@ -1678,6 +1783,17 @@ Pin:
 
 Also test duplicate order, group 1, requested edge tags, nested directories,
 and a non-UTF-8 reported scalar that currently declines at the text boundary.
+The staged-effect matrix must cover commit and discard for option mutation,
+typed Make/Model mutation, arbitrary member removal, warning order, and
+scope/processed-state preservation. Assertions must observe production
+residual output/state rather than counters detached from the residual path.
+Exercise typed Make/Model clearing as well as assignment, and directly assert
+the reported-scalar UTF-8 decline reason plus absence of every staged mutation
+before the real residual runs. The same invalid-byte attempt must traverse a
+production residual path or production seam: a test-local `match` that
+constructs `TagValue::Binary` is not a residual proof. Assert unchanged live
+state at that boundary, zero generated emissions, exactly one residual
+occurrence, and the residual's observable output.
 
 - [ ] **Step 2: Run focused engine tests red**
 
@@ -1700,12 +1816,27 @@ requires them.
 
 Replace replay/drain ownership ambiguity with one generated-first route and at
 most one named residual. Preserve structural walker ownership for offset,
-SubIFD, MakerNote, IPTC, GeoTIFF, and PrintIM edges.
+SubIFD, MakerNote, IPTC, GeoTIFF, and PrintIM edges. If ExifIFD and the next-IFD
+pointer alias the same physical directory, guard the entire repeated adapter
+before any structural handler can replay while preserving bounded next-chain
+traversal. Pin the alias with an observable structural child and add one
+four-directory owner/group/order fixture. In standalone TIFF, the
+`engine.already_processed()` decision must guard the whole IFD1 adapter before
+`process_tiff_ifd_tags_indexed` or any MakerNote/pointer/IPTC/GeoTIFF/PrintIM
+handler runs; checking inside `route_entry` is too late. The four-directory
+fixture must assert each named `Owner` outcome and that silent parent edges are
+absent, not only tag keys/count/order. The named-owner control must observe
+actual `route_entry` results from walked rows and physical occurrences for all
+four directories. Repeating `owner()` against an empty static table with the
+directory name used only in assertion text does not satisfy this requirement.
 
 - [ ] **Step 5: Make request-aware edge behavior explicit**
 
 An explicitly requested edge tag is not discarded merely because its normal
-directory behavior is silent. Add the paired default/requested test.
+directory behavior is silent. Thread the existing `ReadOptions` through the
+real operations and format-dispatch paths for JPEG and standalone TIFF; a
+helper-only seam is insufficient. Add a paired public-path test proving the
+default read omits the edge and the explicit request retains it.
 
 - [ ] **Step 6: Run tests, fmt, Clippy, commit, and measure**
 
@@ -1719,7 +1850,19 @@ task_evidence=/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/exif-sh
 ```
 
 Commit the signed task candidate after tests/formatting/Clippy and before the
-conformance/read-receipt portions of the standard commands.
+conformance/read-receipt portions of the standard commands. Rebuild the
+release binary after the commit so its candidate-bound staleness check passes.
+The conformance transcript must authenticate the same stable tag surface that
+is scored: values whose logical names are in `IGNORE` (including both tools'
+`FileAccessDate` spellings) may not invalidate replay merely because a read
+advances filesystem access time. Preserve authentication of every scored key,
+value, group-qualified occurrence, and colon-bearing OxiDex name. Pin both the
+volatile-value case and a real scored-value mutation; a corpus prewarm is not
+an acceptable substitute for deterministic receipt semantics.
+Record an explicit performance disposition for the full-session staging copy:
+cite the retained 20,000-iteration timing, state the measured per-attempt cost,
+and either accept that cost for this beta with a bounded rationale or optimize
+and remeasure it. A raw timing with no disposition is incomplete.
 
 - [ ] **Step 7: Commit, update handoff, and report**
 
@@ -1727,6 +1870,7 @@ conformance/read-receipt portions of the standard commands.
 git add src/exiftool_tables/conv/mod.rs src/exiftool_tables/ifd_engine.rs \
   src/exiftool_tables/enabled_ifd.rs src/core/exif_dir_engine.rs \
   src/core/tiff_helpers.rs src/core/jpeg_helpers.rs \
+  src/core/format_dispatch.rs src/core/operations.rs \
   tests/exif_shared_pipeline.rs
 git commit -S -m "refactor: route Exif directories through one tag pipeline"
 ```
@@ -1741,7 +1885,7 @@ path and its owner, test and receipt hashes, commit SHA, and
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/10-refusal-closure.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/refusal-closure`
 **Worktree:** `/Users/allen/git/oxidex-beta1-refusal-closure`
@@ -1851,7 +1995,7 @@ verification, commit SHA, and `RETURN_TO_CONTROLLER` in `HANDOFF.md`.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/11-olympus-pilot.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/olympus-pilot`
 **Worktree:** `/Users/allen/git/oxidex-beta1-olympus-pilot`
@@ -1968,9 +2112,10 @@ The controller freezes the shared adapter interfaces after this task integrates.
 **Files:**
 
 - Modify: `src/parsers/tiff/makernotes/nikon.rs`
-- Modify only beneath: `src/parsers/tiff/makernotes/nikon/`
+- Modify: `src/parsers/tiff/makernotes/nikon/`
 - Modify: `tests/integration/nikon_makernotes_tests.rs`
-- Modify: `tests/integration/makernote_integration.rs` only for Nikon cases
+- Modify: `tests/integration/makernote_integration.rs`
+  Limit changes to Nikon cases.
 - Add: `tests/nikon_main_forward_port.rs`
 - Modify: `tools/exiftool-tables/runtime_ownership.d/nikon.json`
 - Do not modify shared engines, helpers, central registries, or generated output
@@ -2303,7 +2448,7 @@ values. Require zero lost reads and zero new VALUE rows.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/17-walker-engine-consolidation.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/walker-engine-consolidation`
 **Worktree:** `/Users/allen/git/oxidex-beta1-walker-engine-consolidation`
@@ -2395,7 +2540,7 @@ the shared stage.
 
 **PRD:** `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/prds/18-proven-deletion.md`
 
-**Worker:** Desktop subagent, `gpt-5.6-sol`
+**Worker:** Codex CLI, `gpt-5.6-sol`
 **Reviewer:** `gpt-6-astra`
 **Branch:** `staging/beta1/proven-deletion`
 **Worktree:** `/Users/allen/git/oxidex-beta1-proven-deletion`
@@ -2416,7 +2561,8 @@ the shared stage.
 - Create: `tools/exiftool-tables/runtime_deletion_ledger.py`
 - Create: `tools/exiftool-tables/test_runtime_deletion_ledger.py`
 - Add: `tests/generated_runtime_deletion_controls.rs`
-- Modify: `justfile` to add `verify-runtime-deletions`
+- Modify: `justfile`
+  Add the `verify-runtime-deletions` recipe.
 
 **Interfaces:** Consumes Task 1 ownership rows, Task 8 generated-on/off
 receipts, Task 10 refusal closure, Task 11 deletion candidates, Tasks 12-16

@@ -237,6 +237,18 @@ class SetNewValueAddressingTests(unittest.TestCase):
         self.assertEqual(addressing.rows[0].name, "ChangedName")
         self.assertEqual(addressing.rows[0].raw_id, "raw-not-name")
 
+    def test_report_provenance_is_portable_across_equivalent_local_roots(self):
+        first = source()
+        second = source()
+        second["native_capture_context"]["selected_library"] = "/another/checkout/exiftool/lib"
+        second["native_capture_context"]["perl_path"] = "/another/toolchain/bin/perl"
+        _first_addressing, first_report = compile_addressing(first)
+        _second_addressing, second_report = compile_addressing(second)
+        self.assertEqual(first_report, second_report)
+        context = first_report["native_capture_context"]
+        self.assertEqual(context["selected_library"], "ExifTool 13.59/lib")
+        self.assertEqual(context["perl_path"], "Perl 5.038002")
+
     def test_stale_same_name_lookup_and_mutated_probe_rows_refuse_before_resolution(self):
         addressing = self.compiled()
         native = observations(addressing.rows)

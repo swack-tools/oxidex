@@ -63,10 +63,14 @@ not of distinct keys.
 """
 
 import argparse
+from contextlib import contextmanager
+import hashlib
 import json
 import math
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -88,6 +92,435 @@ IGNORE = {
     "FileModifyDate", "FileAccessDate", "FileInodeChangeDate",
     "FilePermissions", "FileSize", "Now", "ProcessingTime",
 }
+
+
+class ReceiptError(ValueError):
+    """A conformance receipt cannot be trusted as measured."""
+
+
+PERL_STARTUP_ENV = ("PERL5OPT", "PERL5LIB", "PERLLIB")
+ORACLE_SELECTOR_ENV = ("EXIFTOOL", "EXIFTOOL_CACHE_DIR", "EXIFTOOL_PERL")
+ORACLE_LOCALE_ENV = {"LC_ALL": "C", "LANG": "C"}
+
+
+def expected_exiftool_version():
+    """Read the release pin from this checkout, never from a cache path."""
+    marker = Path(__file__).resolve().parents[2] / ".exiftool-version"
+    try:
+        version = marker.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise exiftool_oracle.OracleError(
+            f"cannot read ExifTool release pin {marker}: {exc}") from exc
+    if not version or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", version):
+        raise exiftool_oracle.OracleError(
+            f"invalid ExifTool release pin in {marker}: {version!r}")
+    return version
+
+
+def _scrubbed_perl_env():
+    env = os.environ.copy()
+    for key in PERL_STARTUP_ENV:
+        env.pop(key, None)
+    for key in ORACLE_SELECTOR_ENV:
+        env.pop(key, None)
+    env.update(ORACLE_LOCALE_ENV)
+    return env
+
+
+@contextmanager
+def scrubbed_perl_environment():
+    """Prevent inherited Perl startup hooks from entering the oracle."""
+    saved = {key: os.environ[key] for key in PERL_STARTUP_ENV if key in os.environ}
+    try:
+        for key in PERL_STARTUP_ENV:
+            os.environ.pop(key, None)
+        yield
+    finally:
+        for key in PERL_STARTUP_ENV:
+            os.environ.pop(key, None)
+        os.environ.update(saved)
+
+
+def _reject_ambient_oracle_selectors():
+    present = [f"${key}" for key in ORACLE_SELECTOR_ENV if key in os.environ]
+    if present:
+        raise exiftool_oracle.OracleError(
+            "receipt oracle environment must not be set with ambient selectors: "
+            + ", ".join(present)
+        )
+
+
+def _oracle_script_path_from_argv(argv):
+    for raw in reversed(list(argv)):
+        path = Path(raw)
+        if path.name == "exiftool" and path.is_file():
+            return path.resolve()
+    raise ReceiptError("oracle command is missing its ExifTool executable")
+
+
+def _oracle_script_path(oracle):
+    return _oracle_script_path_from_argv(oracle.argv)
+
+
+def _has_empty_config(argv):
+    return any(argv[index:index + 2] == ["-config", ""]
+               for index in range(len(argv) - 1))
+
+
+def _insert_empty_config(argv):
+    argv = list(argv)
+    if _has_empty_config(argv):
+        return argv
+    script_index = None
+    for index in range(len(argv) - 1, -1, -1):
+        if Path(argv[index]).name == "exiftool":
+            script_index = index
+            break
+    if script_index is None:
+        script_index = 0
+    return [*argv[:script_index + 1], "-config", "", *argv[script_index + 1:]]
+
+
+def _oracle_probe(argv, extra):
+    return subprocess.run(
+        _insert_empty_config([*argv, *extra]),
+        capture_output=True, text=True, errors="replace", env=_scrubbed_perl_env(),
+    )
+
+
+def _resolve_executable(raw, label):
+    candidate = shutil.which(str(raw)) if not Path(str(raw)).is_absolute() else str(raw)
+    if not candidate:
+        raise exiftool_oracle.OracleError(f"{label} is not on PATH: {raw}")
+    path = Path(candidate).resolve()
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise exiftool_oracle.OracleError(f"{label} is not executable: {path}")
+    return path
+
+
+def _oracle_inputs(exiftool_dir=None, perl=None):
+    """Resolve a source tree and interpreter from explicit portable inputs."""
+    if exiftool_dir:
+        root = Path(exiftool_dir).expanduser().resolve()
+        script = root / "exiftool"
+    else:
+        selected = os.environ.get("EXIFTOOL", "").strip()
+        if selected:
+            script = _resolve_executable(selected, "$EXIFTOOL")
+            root = script.parent
+        else:
+            found = shutil.which("exiftool")
+            if not found:
+                raise exiftool_oracle.OracleError(
+                    "no ExifTool source tree supplied; pass --exiftool-dir or set $EXIFTOOL")
+            script = Path(found).resolve()
+            root = script.parent
+    lib = root / "lib"
+    if not script.is_file() or not lib.is_dir():
+        raise exiftool_oracle.OracleError(
+            f"ExifTool source root must contain executable {script} and lib/: {root}")
+    selected_perl = perl or os.environ.get("EXIFTOOL_PERL", "").strip() or "perl"
+    return root, script, lib, _resolve_executable(selected_perl, "ExifTool Perl")
+
+
+def _portable_oracle(exiftool_dir=None, perl=None):
+    expected = expected_exiftool_version()
+    root, script, lib, interpreter = _oracle_inputs(exiftool_dir, perl)
+    module_probe = subprocess.run(
+        [str(interpreter), "-MArchive::Zip", "-e", "1"],
+        capture_output=True, text=True, errors="replace", env=_scrubbed_perl_env(),
+    )
+    if module_probe.returncode != 0:
+        raise exiftool_oracle.DegradedError(
+            f"ExifTool Perl {interpreter} cannot load Archive::Zip: "
+            f"{module_probe.stderr.strip()}"
+        )
+    argv = [str(interpreter), f"-I{lib}", str(script), "-config", ""]
+    version = _oracle_probe(argv, ["-ver"])
+    if version.returncode != 0 or version.stdout.strip() != expected:
+        raise exiftool_oracle.SkewError(
+            f"ExifTool probe reported {version.stdout.strip()!r}; expected {expected} "
+            f"from .exiftool-version ({version.stderr.strip()})"
+        )
+    return exiftool_oracle.Oracle(
+        argv=argv, version=expected, pinned_version=expected,
+        source=f"pinned source tree {root}", interpreter=str(interpreter),
+        missing_modules=[],
+    )
+
+
+def resolve_oracle(exiftool_dir=None, *, perl=None, strict=False):
+    """Resolve a portable oracle; strict mode requires explicit clean authority.
+
+    Normal runs may use the CI-provided source tree and ``EXIFTOOL_PERL``.
+    Strict release verification rejects ambient selectors and requires both the
+    explicitly supplied source tree and interpreter before any subprocess can
+    run.  There is deliberately no implicit resolver fallback in this path:
+    its probes would execute inherited Perl startup/configuration controls
+    before this module could isolate them.
+    """
+    if strict:
+        _reject_ambient_oracle_selectors()
+        if not exiftool_dir or not perl:
+            raise exiftool_oracle.OracleError(
+                "strict release oracle requires explicit ExifTool source and "
+                "explicit Perl interpreter inputs"
+            )
+        return _portable_oracle(exiftool_dir, perl)
+    return _portable_oracle(exiftool_dir, perl)
+
+
+def check_oracle_capability(oracle, docx):
+    out = _oracle_probe(
+        oracle.argv,
+        ["-s", "-s", "-s", "-FileType", str(docx)],
+    )
+    if out.returncode != 0 or out.stdout.strip() != "DOCX":
+        raise exiftool_oracle.DegradedError(
+            f"{oracle.display()} reports FileType {out.stdout.strip()!r} for {docx}; "
+            "expected 'DOCX'"
+        )
+
+
+def binary_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_identity(path):
+    path = Path(path).resolve()
+    info = path.stat()
+    return {
+        "sha256": binary_sha256(path),
+        "size": info.st_size,
+        "mode": stat.S_IMODE(info.st_mode),
+    }
+
+
+def _manifest_digest(files):
+    payload = [
+        [name, identity["sha256"], identity["size"], identity["mode"]]
+        for name, identity in sorted(files.items())
+    ]
+    encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _manifest_for_paths(paths, root):
+    root = Path(root).resolve()
+    files = {}
+    for raw_path in sorted({str(Path(path).resolve()) for path in paths}):
+        path = Path(raw_path)
+        try:
+            name = str(path.relative_to(root))
+        except ValueError as exc:
+            raise ReceiptError(f"manifest path escapes root: {path}") from exc
+        files[name] = _file_identity(path)
+    return {"root": str(root), "file_count": len(files),
+            "sha256": _manifest_digest(files), "files": files}
+
+
+def corpus_manifest(paths):
+    """Hash every selected corpus input so mutable samples cannot drift."""
+    files = {}
+    for raw_path in sorted({str(Path(path).resolve()) for path in paths}):
+        files[raw_path] = _file_identity(raw_path)
+    return {"file_count": len(files), "sha256": _manifest_digest(files),
+            "files": files}
+
+
+def _canonical_digest(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _oracle_source_paths(source_root):
+    source_root = Path(source_root).resolve()
+    script = source_root / "exiftool"
+    lib_root = source_root / "lib"
+    if not script.is_file() or not lib_root.is_dir():
+        raise ReceiptError("pinned oracle source is missing its executable or lib tree")
+    return [script] + sorted(path for path in lib_root.rglob("*") if path.is_file())
+
+
+def extension_set(spec):
+    if not spec:
+        return None
+    return {e.strip().lower().lstrip(".") for e in spec.split(",") if e.strip()}
+
+
+def select_corpus_files(corpus_paths, recursive, only, exts, excluded):
+    """Re-enumerate the exact deterministic selection used by a receipt."""
+    missing_roots = [path for path in corpus_paths if not os.path.isdir(path)]
+    if missing_roots:
+        raise ReceiptError("corpus root(s) not found: " + ", ".join(missing_roots))
+
+    def walk(root):
+        if recursive:
+            return (os.path.join(directory, name)
+                    for directory, _dirs, names in os.walk(root) for name in names)
+        return (os.path.join(root, name) for name in os.listdir(root))
+
+    def keep(path):
+        if not os.path.isfile(path):
+            return False
+        base = os.path.basename(path)
+        if only and only.lower() not in base.lower():
+            return False
+        ext = os.path.splitext(base)[1].lstrip(".").lower()
+        if exts is not None and ext not in exts:
+            return False
+        return ext not in excluded
+
+    seen_real = set()
+    files = []
+    for path in sorted(path for root in corpus_paths for path in walk(root) if keep(path)):
+        real = os.path.realpath(path)
+        if real in seen_real:
+            continue
+        seen_real.add(real)
+        files.append(path)
+    if not files:
+        raise ReceiptError("corpus selection is empty")
+    return files
+
+
+def corpus_selection(corpus_paths, recursive, only, exts, excluded):
+    return {
+        "roots": [str(Path(path).resolve()) for path in corpus_paths],
+        "recursive": bool(recursive),
+        "only": only,
+        "extensions": sorted(exts) if exts is not None else None,
+        "excluded_extensions": sorted(excluded),
+    }
+
+
+def measurement_contract(corpus_paths, recursive, only, exts, excluded,
+                         min_files, min_tags):
+    """Return the invocation contract kept outside the JSON receipt."""
+    return {
+        "selection": corpus_selection(corpus_paths, recursive, only, exts, excluded),
+        "floors": {"min_files": min_files, "min_tags": min_tags},
+    }
+
+
+def transcript_tags(tags, split):
+    """Return exactly the stable tag surface authenticated by scoring."""
+    return {
+        key: value
+        for key, value in tags.items()
+        if split(key)[1] not in IGNORE
+    }
+
+
+def transcript_row(path, oracle_tags, candidate_tags=None, result=None):
+    scored_oracle = transcript_tags(oracle_tags, split_oracle_key)
+    row = {
+        "path": str(Path(path).resolve()),
+        "scored": bool(oracle_tags),
+        "oracle_sha256": _canonical_digest(scored_oracle),
+        "oracle_occurrences": occurrence_count(oracle_tags, split_oracle_key),
+    }
+    if not oracle_tags:
+        row.update({
+            "candidate_sha256": None,
+            "candidate_occurrences": 0,
+            "matched_occurrences": 0,
+            "missing_occurrences": 0,
+            "extra_occurrences": 0,
+            "value_occurrences": 0,
+            "rename_source_occurrences": 0,
+            "rename_target_occurrences": 0,
+        })
+        return row
+    scored_candidate = transcript_tags(candidate_tags, split_oxidex_key)
+    row.update({
+        "candidate_sha256": _canonical_digest(scored_candidate),
+        "candidate_occurrences": occurrence_count(candidate_tags, split_oxidex_key),
+        "matched_occurrences": len(result["matched"]),
+        "missing_occurrences": len(result["missing"]),
+        "extra_occurrences": len(result["extra"]),
+        "value_occurrences": len(result["value_diff"]),
+        "rename_source_occurrences": len(result["renames"]),
+        "rename_target_occurrences": len(result["renames"]),
+    })
+    return row
+
+
+def measurement_transcript(rows):
+    return {
+        "schema": 1,
+        "row_count": len(rows),
+        "sha256": _canonical_digest(rows),
+        "rows": rows,
+    }
+
+
+def _git_tree(repo_root):
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD^{tree}"],
+        capture_output=True, text=True, errors="replace",
+    )
+    if result.returncode != 0:
+        raise ReceiptError(f"cannot resolve source tree: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def repo_identity(git, dirty_overridden=False):
+    """Capture the source commit, tree, and clean-state identity."""
+    return {
+        "root": str(Path(git.repo_root).resolve()),
+        "commit": git.commit,
+        "tree": _git_tree(git.repo_root),
+        "dirty": bool(git.dirty),
+        "dirty_files": sorted(git.dirty_files),
+        "dirty_overridden": bool(dirty_overridden),
+    }
+
+
+def oracle_identity(oracle):
+    """Capture and hash every mutable input used by the pinned oracle."""
+    if not oracle.interpreter or not oracle.argv:
+        raise ReceiptError("oracle provenance is incomplete")
+    script = _oracle_script_path(oracle)
+    if not _has_empty_config(oracle.argv):
+        raise ReceiptError("oracle command is missing the canonical empty ExifTool config")
+    source_root = script.parent
+    source_paths = _oracle_source_paths(source_root)
+    capability_path = source_root / "t" / "images" / "OOXML.docx"
+    runtime = Path(oracle.interpreter).resolve()
+    return {
+        "version": oracle.version,
+        "pinned_version": oracle.pinned_version,
+        "source": oracle.source,
+        "source_root": str(source_root),
+        "source_manifest": _manifest_for_paths(source_paths, source_root),
+        "runtime": str(runtime),
+        "runtime_sha256": binary_sha256(runtime),
+        "argv": list(oracle.argv),
+        "missing_modules": list(oracle.missing_modules),
+        "verified": oracle.verified,
+        "command": oracle.display(),
+        "provenance": oracle.provenance(),
+        "locale": dict(ORACLE_LOCALE_ENV),
+        "capability": {
+            "path": str(capability_path),
+            "file_type": "DOCX",
+            "sha256": binary_sha256(capability_path),
+        },
+    }
+
+
+def _oracle_command(oracle, extra):
+    if isinstance(oracle, dict):
+        return _insert_empty_config([*oracle["argv"], *extra])
+    return _insert_empty_config(
+        oracle.command(extra) if hasattr(oracle, "command") else [*oracle.argv, *extra]
+    )
 
 
 def run_exiftool(oracle, path):
@@ -122,8 +555,9 @@ def run_exiftool(oracle, path):
         # last segments only, so neither the family-1 nor the 'Copy N'
         # segment reaches a report or a --json-out consumer -- they see the
         # family-0 group strings they always saw.
-        oracle.command(["-G0:1:4", "-s", "-j", "-a", path]),
+        _oracle_command(oracle, ["-G0:1:4", "-s", "-j", "-a", path]),
         capture_output=True, text=True, errors="replace",
+        env=_scrubbed_perl_env(),
     ).stdout
     try:
         # parse_float=str: the default turns ExifTool's "1.80" into 1.8, and
@@ -303,6 +737,398 @@ def tags_by_name(tags, split):
             continue
         by_name[n].append((g, v))
     return by_name
+
+
+def occurrence_count(tags, split):
+    """Count comparable tag occurrences without collapsing duplicate names."""
+    return sum(len(rows) for rows in tags_by_name(tags, split).values())
+
+
+def receipt_instrument(repo, binary, oracle, corpus_paths, file_count,
+                       scored_file_count, min_files, min_tags, binary_digest,
+                       corpus, selection, transcript):
+    """Return the complete identity needed to reproduce a receipt."""
+    binary_path = Path(binary.path).resolve()
+    binary_info = _file_identity(binary_path)
+    return {
+        "tool": "conformance.py",
+        "repo": repo,
+        "binary": {
+            "kind": binary.kind,
+            "requested": binary.requested,
+            "path": str(binary_path),
+            "sha256": binary_digest,
+            "size": binary_info["size"],
+            "mode": binary_info["mode"],
+            "mtime": binary.mtime,
+        },
+        "oracle": oracle,
+        "corpus_roots": [str(Path(path).resolve()) for path in corpus_paths],
+        "file_count": file_count,
+        "selected_file_count": file_count,
+        "scored_file_count": scored_file_count,
+        "corpus_manifest": corpus,
+        "selection": selection,
+        "measurement_transcript": transcript,
+        "floors": {"min_files": min_files, "min_tags": min_tags},
+    }
+
+
+def _require_hex(value, length, label):
+    if not isinstance(value, str) or len(value) != length \
+            or any(ch not in "0123456789abcdef" for ch in value.lower()):
+        raise ReceiptError(f"receipt {label} is not a valid hexadecimal identity")
+
+
+def _validate_repo_identity(receipt_repo, current_git=None):
+    required = {"root", "commit", "tree", "dirty", "dirty_files", "dirty_overridden"}
+    if not isinstance(receipt_repo, dict) or not required <= receipt_repo.keys():
+        raise ReceiptError("receipt provenance is missing repository identity")
+    _require_hex(receipt_repo["commit"], 40, "repository commit")
+    _require_hex(receipt_repo["tree"], 40, "repository tree")
+    if not Path(receipt_repo["root"]).is_absolute() \
+            or receipt_repo["dirty"] is not False \
+            or receipt_repo["dirty_files"] != [] \
+            or receipt_repo["dirty_overridden"] is not False:
+        raise ReceiptError("receipt provenance is not a clean source identity")
+    if current_git is None:
+        current_git = instrument.git_state()
+    current = repo_identity(current_git, False)
+    if receipt_repo != current:
+        raise ReceiptError("receipt provenance does not match the current source identity")
+
+
+def _validate_binary_identity(binary, verify_binary):
+    required = {"kind", "requested", "path", "sha256", "size", "mode", "mtime"}
+    if not isinstance(binary, dict) or not required <= binary.keys():
+        raise ReceiptError("receipt is missing full binary identity")
+    if not Path(binary["path"]).is_absolute():
+        raise ReceiptError("receipt binary identity must use an absolute path")
+    _require_hex(binary["sha256"], 64, "binary SHA-256")
+    if not isinstance(binary["size"], int) or binary["size"] <= 0 \
+            or not isinstance(binary["mode"], int):
+        raise ReceiptError("receipt binary identity has invalid size or mode")
+    try:
+        current = _file_identity(binary["path"])
+    except OSError as exc:
+        raise ReceiptError(f"candidate binary is unreadable: {exc}") from exc
+    if verify_binary and (
+        current["sha256"] != binary["sha256"]
+        or current["size"] != binary["size"]
+        or current["mode"] != binary["mode"]
+    ):
+        raise ReceiptError("candidate binary changed after measurement")
+
+
+def _validate_corpus_identity(instrument_data, expected_selection):
+    roots = instrument_data.get("corpus_roots")
+    selected = instrument_data.get("selected_file_count")
+    scored = instrument_data.get("scored_file_count")
+    manifest = instrument_data.get("corpus_manifest")
+    if not isinstance(roots, list) or not roots or any(
+            not isinstance(root, str) or not Path(root).is_absolute() or not Path(root).is_dir()
+            for root in roots):
+        raise ReceiptError("receipt provenance is missing corpus roots")
+    selection = instrument_data.get("selection")
+    required_selection = {"roots", "recursive", "only", "extensions", "excluded_extensions"}
+    if not isinstance(selection, dict) or not required_selection <= selection.keys():
+        raise ReceiptError("receipt provenance is missing the corpus selection specification")
+    if selection != expected_selection or selection["roots"] != roots \
+            or not isinstance(selection["recursive"], bool) \
+            or (selection["only"] is not None and not isinstance(selection["only"], str)):
+        raise ReceiptError("receipt corpus selection does not match the external contract")
+    for key in ("extensions", "excluded_extensions"):
+        values = selection[key]
+        if values is not None and (
+                not isinstance(values, list)
+                or values != sorted(set(values))
+                or any(not isinstance(value, str) or not value for value in values)):
+            raise ReceiptError("receipt corpus selection has invalid extension filters")
+    if not isinstance(selected, int) or selected <= 0 \
+            or not isinstance(scored, int) or scored <= 0 or scored > selected:
+        raise ReceiptError("receipt provenance has invalid selected/scored file counts")
+    if instrument_data.get("file_count") != selected:
+        raise ReceiptError("receipt provenance has inconsistent selected file counts")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
+        raise ReceiptError("receipt provenance is missing the corpus input manifest")
+    if manifest.get("file_count") != selected or len(manifest["files"]) != selected:
+        raise ReceiptError("receipt corpus manifest count does not match selection")
+    paths = list(manifest["files"])
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.is_absolute() or not any(
+                _is_below(path, Path(root)) for root in roots):
+            raise ReceiptError("receipt corpus manifest contains an out-of-root path")
+    try:
+        selected_paths = select_corpus_files(
+            roots, selection["recursive"], selection["only"],
+            set(selection["extensions"]) if selection["extensions"] is not None else None,
+            set(selection["excluded_extensions"]),
+        )
+    except ReceiptError as exc:
+        raise ReceiptError(f"cannot re-enumerate corpus selection: {exc}") from exc
+    selected_paths = sorted(str(Path(path).resolve()) for path in selected_paths)
+    if selected_paths != sorted(paths):
+        raise ReceiptError("receipt corpus manifest is not the deterministic selection")
+    current = corpus_manifest(paths)
+    if current != manifest:
+        raise ReceiptError("corpus input changed after measurement")
+
+
+def _is_below(path, root):
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_oracle_identity(oracle, expected_oracle=None):
+    required = {
+        "version", "pinned_version", "source", "source_root", "source_manifest",
+        "runtime", "runtime_sha256", "argv", "missing_modules", "verified",
+        "command", "provenance", "locale", "capability",
+    }
+    if not isinstance(oracle, dict) or not required <= oracle.keys():
+        raise ReceiptError("receipt provenance is missing complete oracle identity")
+    try:
+        trusted = expected_oracle or resolve_oracle(strict=True)
+        trusted_identity = (trusted if isinstance(trusted, dict)
+                            else oracle_identity(trusted))
+    except (OSError, ReceiptError, exiftool_oracle.OracleError) as exc:
+        raise ReceiptError(f"external oracle contract cannot be resolved: {exc}") from exc
+    for key in required:
+        if oracle.get(key) != trusted_identity.get(key):
+            raise ReceiptError(f"receipt oracle identity does not match external {key}")
+    expected_version = expected_exiftool_version()
+    if oracle["version"] != expected_version \
+            or oracle["pinned_version"] != expected_version \
+            or oracle["verified"] is not True or oracle["missing_modules"] != []:
+        raise ReceiptError("receipt provenance has an unverified oracle")
+    if not all(isinstance(value, str) and value for value in (
+            oracle["source"], oracle["command"], oracle["provenance"])):
+        raise ReceiptError("receipt provenance has incomplete oracle source identity")
+    source_root = Path(oracle["source_root"])
+    runtime = Path(oracle["runtime"])
+    argv = oracle["argv"]
+    if not source_root.is_absolute() or not runtime.is_absolute() \
+            or not isinstance(argv, list) or len(argv) < 2 \
+            or not all(
+                isinstance(arg, str) and (arg or (index > 0 and argv[index - 1] == "-config"))
+                for index, arg in enumerate(argv)
+            ):
+        raise ReceiptError("receipt provenance has invalid oracle paths")
+    _require_hex(oracle["runtime_sha256"], 64, "oracle runtime SHA-256")
+    if Path(argv[0]).resolve() != runtime.resolve() \
+            or _oracle_script_path_from_argv(argv) != (source_root / "exiftool").resolve():
+        raise ReceiptError("receipt provenance has inconsistent oracle command identity")
+    if not _has_empty_config(argv):
+        raise ReceiptError("receipt provenance is missing the canonical empty ExifTool config")
+    if oracle["locale"] != ORACLE_LOCALE_ENV:
+        raise ReceiptError("receipt provenance has a non-deterministic oracle locale")
+    source_manifest = oracle["source_manifest"]
+    if not isinstance(source_manifest, dict) or source_manifest.get("root") != str(source_root):
+        raise ReceiptError("receipt provenance is missing the oracle source manifest")
+    expected_source_manifest = _manifest_for_paths(
+        _oracle_source_paths(source_root), source_root)
+    if source_manifest != expected_source_manifest:
+        raise ReceiptError("oracle source manifest is incomplete or changed")
+    if binary_sha256(runtime) != oracle["runtime_sha256"]:
+        raise ReceiptError("oracle runtime changed after measurement")
+    capability = oracle["capability"]
+    if not isinstance(capability, dict) or set(("path", "file_type", "sha256")) - capability.keys():
+        raise ReceiptError("receipt provenance is missing the oracle capability identity")
+    capability_path = Path(capability["path"])
+    if capability["file_type"] != "DOCX" or not capability_path.is_absolute() \
+            or capability_path != source_root / "t" / "images" / "OOXML.docx":
+        raise ReceiptError("receipt provenance has invalid oracle capability identity")
+    _require_hex(capability["sha256"], 64, "oracle capability SHA-256")
+    if binary_sha256(capability_path) != capability["sha256"]:
+        raise ReceiptError("oracle capability input changed after measurement")
+    version = subprocess.run(
+        argv + ["-ver"], capture_output=True, text=True, errors="replace",
+        env=_scrubbed_perl_env(),
+    )
+    docx = subprocess.run(
+        argv + ["-s3", "-FileType", str(capability_path)],
+        capture_output=True, text=True, errors="replace",
+        env=_scrubbed_perl_env(),
+    )
+    if version.returncode != 0 or version.stdout.strip() != expected_version \
+            or docx.returncode != 0 or docx.stdout.strip() != "DOCX":
+        raise ReceiptError("oracle capability or version boundary no longer verifies")
+
+
+def _validate_measurement_transcript(receipt):
+    instrument_data = receipt["instrument"]
+    transcript = instrument_data.get("measurement_transcript")
+    if not isinstance(transcript, dict) \
+            or transcript.get("schema") != 1 \
+            or not isinstance(transcript.get("rows"), list) \
+            or transcript.get("row_count") != len(transcript["rows"]):
+        raise ReceiptError("receipt is missing a complete measurement transcript")
+    if transcript.get("sha256") != _canonical_digest(transcript["rows"]):
+        raise ReceiptError("measurement transcript commitment does not verify")
+
+    manifest = instrument_data["corpus_manifest"]
+    expected_paths = sorted(manifest["files"])
+    rows = transcript["rows"]
+    row_paths = [row.get("path") if isinstance(row, dict) else None for row in rows]
+    if row_paths != expected_paths:
+        raise ReceiptError("measurement transcript does not cover the exact corpus selection")
+
+    binary_path = instrument_data["binary"]["path"]
+    oracle = instrument_data["oracle"]
+    totals = Counter()
+    per_ext = defaultdict(Counter)
+    rename_votes = defaultdict(Counter)
+    missing_votes = Counter()
+    extra_votes = Counter()
+    severity_votes = Counter()
+    per_file = {}
+    for path, recorded in zip(expected_paths, rows):
+        oracle_tags = run_exiftool(oracle, path)
+        if oracle_tags:
+            candidate_tags = run_oxidex(binary_path, path)
+            result = compare(oracle_tags, candidate_tags)
+            expected = transcript_row(path, oracle_tags, candidate_tags, result)
+            ext = (file_type(oracle_tags) or os.path.splitext(path)[1].lstrip(".")).upper()
+            counts = per_ext[ext]
+            counts["files"] += 1
+            counts["matched"] += len(result["matched"])
+            counts["value_diff"] += len(result["value_diff"])
+            counts["missing"] += len(result["missing"])
+            counts["renames"] += len(result["renames"])
+            counts["extra"] += len(result["extra"])
+            for on, en, _value in result["renames"]:
+                rename_votes[ext][f"{on}->{en}"] += 1
+            for name in result["missing"]:
+                missing_votes[f"{ext}:{name}"] += 1
+            for name in result["extra"]:
+                extra_votes[f"{ext}:{name}"] += 1
+            for _name, _expected, _actual, severity in result["value_diff"]:
+                severity_votes[severity] += 1
+            per_file[path] = {
+                "format": ext,
+                "value_diff": [[n, ev, ov, severity]
+                               for n, ev, ov, severity in result["value_diff"]],
+                "extra": {key: list(value) for key, value in result["extra"].items()},
+                "missing": {key: list(value) for key, value in result["missing"].items()},
+                "parser_status": parser_status(path, candidate_tags),
+                "family_views": family_views(oracle_tags, candidate_tags),
+            }
+        else:
+            expected = transcript_row(path, oracle_tags)
+        if recorded != expected:
+            raise ReceiptError(f"measurement transcript does not verify for {path}")
+        for key in (
+                "oracle_occurrences", "candidate_occurrences", "matched_occurrences",
+                "missing_occurrences", "extra_occurrences", "value_occurrences",
+                "rename_source_occurrences", "rename_target_occurrences"):
+            totals[key] += expected[key]
+    if sum(row["scored"] for row in rows) != instrument_data["scored_file_count"]:
+        raise ReceiptError("measurement transcript scored-file count does not verify")
+    if any(receipt[key] != totals[key] for key in totals):
+        raise ReceiptError("measurement transcript counters do not verify")
+    if receipt["oracle_tag_count"] != totals["oracle_occurrences"]:
+        raise ReceiptError("measurement transcript oracle floor does not verify")
+    return {
+        "per_format": {key: dict(value) for key, value in per_ext.items()},
+        "renames": {key: dict(value) for key, value in rename_votes.items()},
+        "missing": dict(missing_votes),
+        "extra": dict(extra_votes),
+        "severity": dict(severity_votes),
+        "per_file": per_file,
+        "parser_status": {},
+        "family_views": {},
+    }
+
+
+def validate_receipt(receipt, verify_binary=True, current_git=None,
+                     expected_contract=None, expected_oracle=None):
+    """Reject incomplete, vacuous, tampered, or inconsistent receipts."""
+    required = (
+        "schema", "oracle_occurrences", "candidate_occurrences",
+        "matched_occurrences", "missing_occurrences", "extra_occurrences",
+        "value_occurrences", "rename_source_occurrences",
+        "rename_target_occurrences", "oracle_tag_count", "instrument",
+    )
+    missing = [key for key in required if key not in receipt]
+    if missing:
+        raise ReceiptError("receipt missing required fields: " + ", ".join(missing))
+    if receipt["schema"] != 1:
+        raise ReceiptError(f"unsupported receipt schema: {receipt['schema']!r}")
+
+    counters = (
+        "oracle_occurrences", "candidate_occurrences", "matched_occurrences",
+        "missing_occurrences", "extra_occurrences", "value_occurrences",
+        "rename_source_occurrences", "rename_target_occurrences",
+        "oracle_tag_count",
+    )
+    if any(not isinstance(receipt[key], int) or receipt[key] < 0 for key in counters):
+        raise ReceiptError("receipt occurrence totals must be non-negative integers")
+
+    instrument = receipt["instrument"]
+    if not isinstance(instrument, dict):
+        raise ReceiptError("receipt instrument identity must be an object")
+    floors = instrument.get("floors")
+    if not isinstance(floors, dict) or not isinstance(floors.get("min_files"), int) \
+            or not isinstance(floors.get("min_tags"), int) \
+            or floors["min_files"] <= 0 or floors["min_tags"] <= 0:
+        raise ReceiptError("receipt is missing positive integer measurement floors")
+    scored_file_count = instrument.get("scored_file_count", instrument.get("file_count", 0))
+    if not isinstance(scored_file_count, int) or scored_file_count < floors["min_files"]:
+        raise ReceiptError(
+            f"receipt file count {scored_file_count} is below floor "
+            f"{floors['min_files']}"
+        )
+    if receipt["oracle_tag_count"] != receipt["oracle_occurrences"]:
+        raise ReceiptError("oracle tag floor is not bound to the occurrence denominator")
+    if receipt["oracle_occurrences"] <= 0:
+        raise ReceiptError("vacuous receipt has zero oracle occurrences")
+    if receipt["oracle_occurrences"] < floors["min_tags"]:
+        raise ReceiptError(
+            f"receipt oracle occurrence count {receipt['oracle_occurrences']} is below floor "
+            f"{floors['min_tags']}"
+        )
+
+    oracle_total = receipt["matched_occurrences"] + receipt["missing_occurrences"] \
+        + receipt["value_occurrences"] + receipt["rename_source_occurrences"]
+    candidate_total = receipt["matched_occurrences"] + receipt["extra_occurrences"] \
+        + receipt["value_occurrences"] + receipt["rename_target_occurrences"]
+    if receipt["oracle_occurrences"] != oracle_total:
+        raise ReceiptError("oracle occurrence totals do not reconcile")
+    if receipt["candidate_occurrences"] != candidate_total:
+        raise ReceiptError("candidate occurrence totals do not reconcile")
+
+    if not isinstance(expected_contract, dict) \
+            or set(("selection", "floors")) - expected_contract.keys():
+        raise ReceiptError("external measurement provenance contract is required")
+    expected_floors = expected_contract["floors"]
+    if floors != expected_floors:
+        raise ReceiptError("receipt floors do not match the external contract")
+    expected_selection = expected_contract["selection"]
+    if not isinstance(expected_selection, dict):
+        raise ReceiptError("external measurement selection contract is invalid")
+
+    _validate_repo_identity(instrument.get("repo"), current_git)
+    _validate_binary_identity(instrument.get("binary"), verify_binary)
+    _validate_corpus_identity(instrument, expected_selection)
+    _validate_oracle_identity(instrument.get("oracle"), expected_oracle)
+    claims = _validate_measurement_transcript(receipt)
+    for key, expected in claims.items():
+        if receipt.get(key) != expected:
+            raise ReceiptError(f"receipt {key} claims do not match replay")
+
+    # Replay is another potentially long read of every input. Re-authenticate
+    # all mutable identities after it, immediately before accepting the receipt.
+    # The first checks protect the replay itself; these checks protect the
+    # publication boundary from a persistent mid-validation mutation.
+    _validate_repo_identity(instrument.get("repo"), current_git=None)
+    _validate_binary_identity(instrument.get("binary"), verify_binary)
+    _validate_corpus_identity(instrument, expected_selection)
+    _validate_oracle_identity(instrument.get("oracle"), expected_oracle)
+    return receipt
 
 
 def occurrence_name(group, name, duplicate):
@@ -540,6 +1366,13 @@ def family_views(_et, _ox):
     return None
 
 
+def positive_int(value):
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("corpus", nargs="+",
@@ -551,8 +1384,12 @@ def main():
                          "OxiDex-specific samples. Duplicate paths across "
                          "roots are scored once.")
     ap.add_argument("--exiftool-dir",
-                    help="ExifTool checkout root; defaults to the pinned tree "
-                         "resolved by scripts/exiftool_oracle.py")
+                    help="ExifTool checkout root; its version must match "
+                         ".exiftool-version")
+    ap.add_argument("--oracle-perl",
+                    help="Perl executable for the selected ExifTool source tree")
+    ap.add_argument("--strict-release", action="store_true",
+                    help="require an explicit external release oracle contract")
     ap.add_argument("--oxidex", default="./target/debug/oxidex")
     ap.add_argument("--only", help="substring filter on filename")
     ap.add_argument("--ext",
@@ -577,9 +1414,9 @@ def main():
     ap.add_argument("--recursive", action="store_true",
                     help="walk the corpus recursively (most sample corpora are "
                          "nested one directory per manufacturer)")
-    ap.add_argument("--min-files", type=int, default=1,
+    ap.add_argument("--min-files", type=positive_int, default=1,
                     help="fail if fewer files than this were scored")
-    ap.add_argument("--min-tags", type=int, default=1,
+    ap.add_argument("--min-tags", type=positive_int, default=1,
                     help="fail if fewer ExifTool tags than this were seen")
     ap.add_argument("--show", type=int, default=0,
                     help="print per-file detail for the N worst files")
@@ -590,71 +1427,66 @@ def main():
     # cannot say which ExifTool, which oxidex, and from what commit it
     # graded should not go on to report a number.
     try:
-        oracle = (exiftool_oracle.resolve_tree(args.exiftool_dir)
-                  if args.exiftool_dir else exiftool_oracle.shared())
+        oracle = resolve_oracle(args.exiftool_dir, perl=args.oracle_perl,
+                                strict=args.strict_release)
     except exiftool_oracle.OracleError as exc:
         sys.exit(f"❌ {exc}")
+    expected_version = expected_exiftool_version()
+    if oracle.version != expected_version:
+        sys.exit(
+            f"❌ conformance.py requires ExifTool {expected_version} from "
+            ".exiftool-version, "
+            f"got {oracle.version}"
+        )
+    try:
+        check_oracle_capability(
+            oracle, _oracle_script_path(oracle).parent / "t" / "images" / "OOXML.docx")
+    except (AttributeError, OSError, exiftool_oracle.OracleError) as exc:
+        sys.exit(f"❌ ExifTool capability probe failed: {exc}")
 
     git = instrument.git_state()
     dirty_overridden = instrument.refuse_if_dirty(git, "conformance.py")
+    if dirty_overridden:
+        sys.exit("❌ conformance receipts require a clean source tree")
+    try:
+        repo_before = repo_identity(git)
+        oracle_record = oracle_identity(oracle)
+    except (OSError, ReceiptError) as exc:
+        sys.exit(f"❌ cannot authenticate measurement inputs: {exc}")
     binary = instrument.resolve_binary(args.oxidex, kind="oxidex")
+    try:
+        measured_binary_sha256 = binary_sha256(binary.path)
+    except OSError as exc:
+        sys.exit(f"❌ cannot hash candidate binary {binary.path}: {exc}")
 
     # A missing root is fatal rather than skipped. Corpora are optional by
     # configuration, not by accident: silently dropping one that was asked for
     # would shrink the denominator and report a score for a corpus nobody
     # chose -- the same class of quiet wrongness the floors below exist to catch.
-    missing_roots = [c for c in args.corpus if not os.path.isdir(c)]
-    if missing_roots:
-        sys.exit(
-            "❌ corpus root(s) not found: " + ", ".join(missing_roots) + "\n"
-            "   Refusing to score a partial corpus. Drop the root from the "
-            "command line if it is genuinely not expected to be present."
-        )
-
-    def walk(root):
-        if args.recursive:
-            return (os.path.join(d, f)
-                    for d, _dirs, fs in os.walk(root) for f in fs)
-        return (os.path.join(root, f) for f in os.listdir(root))
-
-    walked = (p for root in args.corpus for p in walk(root))
-
-    def ext_set(spec):
-        if not spec:
-            return None
-        return {e.strip().lower().lstrip(".") for e in spec.split(",") if e.strip()}
-
-    exts = ext_set(args.ext)
-    excluded = ext_set(args.exclude_ext) or set()
-
-    def keep(p):
-        if not os.path.isfile(p):
-            return False
-        base = os.path.basename(p)
-        if args.only and args.only.lower() not in base.lower():
-            return False
-        ext = os.path.splitext(base)[1].lstrip(".").lower()
-        if exts is not None and ext not in exts:
-            return False
-        if ext in excluded:
-            return False
-        return True
-
-    # realpath-dedup: overlapping roots (or a symlink farm pointing into one)
-    # would otherwise score the same file twice and weight it double.
-    seen_real = set()
-    files = []
-    for p in sorted(p for p in walked if keep(p)):
-        rp = os.path.realpath(p)
-        if rp in seen_real:
-            continue
-        seen_real.add(rp)
-        files.append(p)
-    if not files:
+    exts = extension_set(args.ext)
+    excluded = extension_set(args.exclude_ext) or set()
+    try:
+        files = select_corpus_files(args.corpus, args.recursive, args.only,
+                                    exts, excluded)
+    except ReceiptError as exc:
+        if "root(s) not found" in str(exc):
+            sys.exit(
+                "❌ " + str(exc) + "\n"
+                "   Refusing to score a partial corpus. Drop the root from the "
+                "command line if it is genuinely not expected to be present."
+            )
         sys.exit(
             f"no files in {', '.join(args.corpus)}"
             + (f" matching --ext {args.ext}" if exts else "")
         )
+    selection = corpus_selection(args.corpus, args.recursive, args.only,
+                                 exts, excluded)
+    contract = measurement_contract(args.corpus, args.recursive, args.only,
+                                    exts, excluded, args.min_files, args.min_tags)
+    try:
+        corpus_before = corpus_manifest(files)
+    except OSError as exc:
+        sys.exit(f"❌ cannot authenticate corpus inputs: {exc}")
 
     instrument.print_header(
         tool="conformance.py",
@@ -676,14 +1508,34 @@ def main():
 
     scored_files = 0
     et_tags_seen = 0
+    oracle_occurrences = 0
+    candidate_occurrences = 0
+    matched_occurrences = 0
+    missing_occurrences = 0
+    extra_occurrences = 0
+    value_occurrences = 0
+    rename_source_occurrences = 0
+    rename_target_occurrences = 0
+    transcript_rows = []
     for path in files:
         et = run_exiftool(oracle, path)
         if not et:
+            transcript_rows.append(transcript_row(path, et))
             continue
         scored_files += 1
-        et_tags_seen += len(et)
+        et_occurrences = occurrence_count(et, split_oracle_key)
+        et_tags_seen += et_occurrences
         ox = run_oxidex(str(binary.path), path)
         r = compare(et, ox)
+        transcript_rows.append(transcript_row(path, et, ox, r))
+        oracle_occurrences += et_occurrences
+        candidate_occurrences += occurrence_count(ox, split_oxidex_key)
+        matched_occurrences += len(r["matched"])
+        missing_occurrences += len(r["missing"])
+        extra_occurrences += len(r["extra"])
+        value_occurrences += len(r["value_diff"])
+        rename_source_occurrences += len(r["renames"])
+        rename_target_occurrences += len(r["renames"])
         ext = (file_type(et) or os.path.splitext(path)[1].lstrip(".")).upper()
 
         c = per_ext[ext]
@@ -709,7 +1561,7 @@ def main():
         # a later stage's CI gate) can see exactly which tags disagreed on
         # which file without re-running the corpus. parser_status/
         # family_views are Step 13 / Stage 4 seams -- always None today.
-        per_file[path] = {
+        per_file[str(Path(path).resolve())] = {
             "format": ext,
             "value_diff": [[n, ev, ov, sev] for n, ev, ov, sev in r["value_diff"]],
             "extra": {k: list(v) for k, v in r["extra"].items()},
@@ -732,6 +1584,23 @@ def main():
             f"   oracle: {oracle.provenance()}\n"
             "   Check the oracle can actually read this corpus before trusting any score."
         )
+
+    try:
+        final_binary_sha256 = binary_sha256(binary.path)
+    except OSError as exc:
+        sys.exit(f"❌ candidate binary disappeared after measurement: {exc}")
+    if final_binary_sha256 != measured_binary_sha256:
+        sys.exit("❌ candidate binary changed after measurement")
+    try:
+        git_after = instrument.git_state()
+        repo_after = repo_identity(git_after)
+        corpus_after = corpus_manifest(files)
+    except (OSError, ReceiptError) as exc:
+        sys.exit(f"❌ cannot recheck measurement inputs: {exc}")
+    if repo_after != repo_before:
+        sys.exit("❌ source repository changed during measurement")
+    if corpus_after != corpus_before:
+        sys.exit("❌ corpus input changed during measurement")
 
     # score/ceiling (recall) are computed over matched+value_diff+missing+
     # renames only -- extra never enters that denominator, by design (see
@@ -805,9 +1674,23 @@ def main():
                     f"{n} [{sev}]" for n, _ev, _ov, sev in r["value_diff"]))
 
     if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"per_format": {k: dict(v) for k, v in per_ext.items()},
+        receipt = {
+                 "schema": 1,
+                 "oracle_occurrences": oracle_occurrences,
+                 "candidate_occurrences": candidate_occurrences,
+                 "matched_occurrences": matched_occurrences,
+                 "missing_occurrences": missing_occurrences,
+                 "extra_occurrences": extra_occurrences,
+                 "value_occurrences": value_occurrences,
+                 "rename_source_occurrences": rename_source_occurrences,
+                 "rename_target_occurrences": rename_target_occurrences,
+                 "oracle_tag_count": et_tags_seen,
+                 "instrument": receipt_instrument(
+                     repo_before, binary, oracle_record, args.corpus, len(files),
+                     scored_files, args.min_files, args.min_tags,
+                     measured_binary_sha256, corpus_before, selection,
+                     measurement_transcript(transcript_rows)),
+                 "per_format": {k: dict(v) for k, v in per_ext.items()},
                  "renames": {k: {f"{a}->{b}": n for (a, b), n in v.items()}
                              for k, v in rename_votes.items()},
                  "missing": {f"{e}:{n}": c for (e, n), c in missing_votes.items()},
@@ -819,8 +1702,14 @@ def main():
                  "per_file": per_file,
                  # (e)/(f) seams -- always empty until Step 13 / Stage 4 land.
                  "parser_status": {},
-                 "family_views": {}},
-                fh, indent=2, sort_keys=True)
+                 "family_views": {}}
+        try:
+            validate_receipt(receipt, current_git=git_after,
+                             expected_contract=contract, expected_oracle=oracle)
+        except (ReceiptError, OSError) as exc:
+            sys.exit(f"❌ invalid conformance receipt: {exc}")
+        with open(args.json_out, "w", encoding="utf-8") as fh:
+            json.dump(receipt, fh, indent=2, sort_keys=True)
         print(f"\nwrote {args.json_out}")
 
 

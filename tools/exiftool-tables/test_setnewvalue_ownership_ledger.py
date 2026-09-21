@@ -29,6 +29,15 @@ class SetNewValueOwnershipLedgerTests(unittest.TestCase):
         first = self.bootstrap()
         self.assertEqual(build_ledger(source(), first, bootstrap=False), first)
 
+    def test_equivalent_capture_at_different_local_paths_has_same_identity(self):
+        first_document = source()
+        second_document = source()
+        second_document["native_capture_context"]["selected_library"] = "/other/cache/exiftool/lib"
+        second_document["native_capture_context"]["perl_path"] = "/other/perl/bin/perl"
+        first = build_ledger(first_document, None, bootstrap=True)
+        second = build_ledger(second_document, None, bootstrap=True)
+        self.assertEqual(second, first)
+
     def test_upgrade_preserves_authenticated_prior_chain(self):
         first = self.bootstrap()
         upgraded = source()

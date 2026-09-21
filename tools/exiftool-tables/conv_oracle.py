@@ -39,12 +39,20 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import helper_oracle as HO  # noqa: E402  (instrument(), oracle_env())
+import conv_codegen as CG  # noqa: E402
 
 HARNESS = HERE / "conv_oracle.pl"
-TABLES = {
-    "Exif::Main": (HERE / "conv_exif_main_ledger.json",
-                   HERE / "testdata" / "conv_exif_main_outputs.json"),
-}
+def discover_tables(root=REPO):
+    return {
+        entry.identity: (
+            Path(root) / "tools/exiftool-tables" / f"conv_{entry.stem}_ledger.json",
+            Path(root) / "tools/exiftool-tables/testdata" / f"conv_{entry.stem}_outputs.json",
+        )
+        for entry in CG.verify_emitted_registry(root)
+    }
+
+
+TABLES = discover_tables()
 
 
 def S(b):
@@ -295,32 +303,48 @@ def render(capture):
     return text
 
 
+def capture_matches(expected, actual):
+    """Semantic oracle equality. The interpreter's install path is
+    provenance, not conversion output, and may move between pinned toolchain
+    installations; every other header and every field case remains exact."""
+    expected = {**expected, "capture": {**expected["capture"]}}
+    actual = {**actual, "capture": {**actual["capture"]}}
+    expected["capture"].pop("perl", None)
+    actual["capture"].pop("perl", None)
+    return expected == actual
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
-    ap.add_argument("--table", default="Exif::Main", choices=sorted(TABLES))
+    selection = ap.add_mutually_exclusive_group()
+    selection.add_argument("--table", choices=sorted(TABLES))
+    selection.add_argument("--all", action="store_true")
     ap.add_argument("--perl", default=os.environ.get("EXIFTOOL_PERL"))
     ap.add_argument("--exiftool-dir", default=os.environ.get("OXIDEX_PINNED_EXIFTOOL"))
     args = ap.parse_args()
     if not args.perl or not args.exiftool_dir:
         sys.exit("need --perl/--exiftool-dir (or EXIFTOOL_PERL/OXIDEX_PINNED_EXIFTOOL)")
-    capture = build(args.perl, args.exiftool_dir, args.table)
-    text = render(capture)
-    path = TABLES[args.table][1]
-    n = sum(len(f["cases"]) for f in capture["fields"].values())
-    if args.write:
-        path.write_text(text, encoding="utf-8")
-        print(f"wrote {path.relative_to(REPO)}: {len(capture['fields'])} fields, {n} cases")
-        return 0
-    if path.read_text(encoding="utf-8") != text:
-        print(f"MISMATCH: re-running the pinned Perl does not reproduce {path.relative_to(REPO)}",
-              file=sys.stderr)
-        return 1
-    print(f"PASS: pinned Perl reproduces {path.relative_to(REPO)} byte for byte "
-          f"({len(capture['fields'])} fields, {n} cases)")
-    return 0
+    tables = sorted(TABLES) if args.all else [args.table or CG.DEFAULT_TABLE]
+    status = 0
+    for table in tables:
+        capture = build(args.perl, args.exiftool_dir, table)
+        text = render(capture)
+        path = TABLES[table][1]
+        n = sum(len(f["cases"]) for f in capture["fields"].values())
+        if args.write:
+            path.write_text(text, encoding="utf-8")
+            print(f"wrote {path.relative_to(REPO)}: {len(capture['fields'])} fields, {n} cases")
+        elif not capture_matches(json.loads(path.read_text(encoding="utf-8")), capture):
+            print(f"MISMATCH: pinned Perl does not reproduce {path.relative_to(REPO)}",
+                  file=sys.stderr)
+            status = 1
+        else:
+            print(f"PASS: pinned Perl reproduces {path.relative_to(REPO)} conversion outputs "
+                  f"({len(capture['fields'])} fields, {n} cases)")
+    return status
 
 
 if __name__ == "__main__":

@@ -22,6 +22,18 @@ cargo clippy                   # Lint
 just build-bin-release         # Build release binary
 ```
 
+## Release test-profile collision
+
+Because this crate exposes `lib`, `staticlib`, and `cdylib`, release test
+targets (which require `panic=unwind`) and release binaries (which use
+`panic=abort`) can race to write the same un-hashed `liboxidex.rlib`. Thus a
+bare `cargo test --workspace --release` may report bogus `panic strategy` or
+duplicate-`chrono` errors, especially after another release-profile command has
+shared the target directory. This is an output filename collision, not proof of
+a source regression. Prefer `just test`, which supplies the scoped unwind
+override; if reproducing the bare command is necessary, clear the colliding
+artifacts first with `cargo clean --release -p chrono -p oxidex`.
+
 ## Structure
 - `src/` - Core library and CLI
 - `src/exiftool_tables/` - Binary tag layouts transcribed from ExifTool's Perl tables (generated)

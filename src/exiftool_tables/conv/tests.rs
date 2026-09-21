@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::{Arm, Out, exif_main};
+use super::{Arm, Entry, Out, claims_in, decoder_in, exif_main};
+use crate::exiftool_tables::ifd_schema::{IfdFlags, IfdTable, IfdTag};
 use crate::exiftool_tables::session::{ByteOrder, MemberVal, Session};
+use crate::exiftool_tables::{GateA, Omitted, PrintConv, TagGroups};
 
 const CAPTURE: &str =
     include_str!("../../../tools/exiftool-tables/testdata/conv_exif_main_outputs.json");
@@ -275,4 +277,75 @@ fn claimed_and_refused_are_disjoint_and_sorted() {
         );
         assert!(!why.is_empty());
     }
+}
+
+fn first_decode(_s: &mut Session, _id: u16, _val: &MemberVal) -> Arm {
+    Arm::Decline("first")
+}
+
+fn second_decode(_s: &mut Session, _id: u16, _val: &MemberVal) -> Arm {
+    Arm::Decline("second")
+}
+
+fn first_claims(id: u16) -> bool {
+    id == 1
+}
+
+fn second_claims(id: u16) -> bool {
+    id == 2
+}
+
+static SYNTHETIC_ENTRIES: &[Entry] = &[
+    Entry {
+        module: "First",
+        table: "Main",
+        decode: first_decode,
+        claims: first_claims,
+    },
+    Entry {
+        module: "Second",
+        table: "Main",
+        decode: second_decode,
+        claims: second_claims,
+    },
+];
+
+static SECOND_TAG: IfdTag = IfdTag {
+    id: 2,
+    name: "SecondTag",
+    format: None,
+    count: Some(1),
+    writable: Some("int16u"),
+    groups: TagGroups::NONE,
+    flags: IfdFlags::NONE,
+    condition: None,
+    omitted: Omitted::NONE,
+    raw_conv: None,
+    value_conv: None,
+    print_conv: PrintConv::None,
+    subdir: None,
+};
+
+static SECOND_TABLE: IfdTable = IfdTable {
+    module: "Second",
+    table: "Main",
+    group0: "Second",
+    group1: "Second",
+    group2: "Image",
+    set_group1: None,
+    priority: None,
+    gate_a: GateA { blocked_by: &[] },
+    tags: &[SECOND_TAG],
+    variants: &[],
+};
+
+#[test]
+fn multi_table_registry_dispatches_decoder_and_claims_together() {
+    let decode = decoder_in(SYNTHETIC_ENTRIES, &SECOND_TABLE).expect("second decoder");
+    let mut session = Session::new();
+    assert_eq!(
+        decode(&mut session, 2, &MemberVal::Int(0)),
+        Arm::Decline("second")
+    );
+    assert!(claims_in(SYNTHETIC_ENTRIES, &SECOND_TABLE, &SECOND_TAG));
 }

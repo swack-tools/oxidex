@@ -2,17 +2,17 @@ name: CI
 
 on:
   # Push runs on main and on refactor/tag-machinery. Every change reaches the
-  # tip through a PR, but PRs are not required to be up to date with the tip
-  # before merging, so each PR run tests its head merged onto the tip AS IT
-  # WAS; two PRs that merge minutes apart each pass, and the combination that
-  # actually lands was never built. The push run is that missing test: one
-  # full run on the tip after every merge. It cannot race a PR run for a check
-  # name, because a squash merge lands a new SHA that no PR run reported on.
+  # tip through a PR. A merge queue schedules a synthetic merge result using
+  # merge_group, which is the check evidence needed before that candidate can
+  # land on main. The push run remains separate evidence for the exact main
+  # SHA after a merge; it must complete successfully before release work.
   # Other branches stay PR-only, since running both there duplicated every run.
   push:
     branches: [main, refactor/tag-machinery]
   pull_request:
     branches: ['**']
+  merge_group:
+    branches: [main]
   # Manual trigger. Now that "Lint & Audit"/"Build & Test" are required status
   # checks, a PR whose event GitHub failed to schedule has no required check to
   # report and cannot be merged at all. This is the escape hatch that re-runs
@@ -22,6 +22,9 @@ on:
   # required check that is filtered out never reports at all — a docs-only PR
   # would sit "Expected — waiting for status" forever with no way to merge.
   # Skipping cheaply is not worth a class of permanently unmergeable PRs.
+
+permissions:
+  contents: read
 
 concurrency:
   # Pull request runs are keyed by branch, so pushing a new commit cancels the
@@ -104,6 +107,14 @@ jobs:
           cache-on-failure: true
           shared-key: lint
       - run: cargo fmt --all -- --check
+      # Release recipe tests render the real justfile and execute the rendered
+      # shell against controlled fake git/gh commands. Keep that behavioral
+      # coverage active on Linux instead of silently depending on a developer's
+      # locally installed `just` binary.
+      - name: Install just for release recipe tests
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: just
       # Pure-Python, no build: catches a test reading the pinned sample corpus
       # without gating on its presence. Such a test passes locally (the corpus
       # is a developer cache) and panics on NotFound in CI, and because nextest

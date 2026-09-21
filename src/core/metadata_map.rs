@@ -15,11 +15,12 @@
 
 #![allow(dead_code)]
 
-use super::tag_occurrence::TagOccurrence;
+use super::tag_occurrence::{TagOccurrence, ValueChannel};
 use super::tag_sink::TagSink;
 use super::tag_value::TagValue;
 use serde::de::{Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Uninterpreted metadata retained without inventing a public tag name or value.
@@ -61,7 +62,7 @@ pub struct MetadataMap {
     /// until Step 22, which consumes the occurrence winner view anyway").
     /// This is Step 22: [`MetadataMap::set_value_form`]/[`MetadataMap::
     /// value_form`] below now read and write `TagOccurrence.value` via
-    /// [`TagSink::set_winner_value`] instead of a second map, so serde
+    /// [`TagSink::set_winner_display_value`] instead of a second map, so serde
     /// skipping it is automatic (occurrences were never serialized to begin
     /// with -- only the winner projection's `raw` form is, via
     /// `Serialize for MetadataMap` below) rather than a field the old
@@ -218,6 +219,12 @@ impl MetadataMap {
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, display_value, order);
         occurrence.group1 = super::tag_occurrence::intern(group1);
+        // This route receives a display string and its late ValueConv form
+        // together. Keep the display explicitly so PrintConv cannot fall
+        // back to the newly attached ValueConv.
+        if occurrence.print.is_none() {
+            occurrence.print = Some(occurrence.raw.clone());
+        }
         occurrence.value = Some(no_print_conv_value);
         self.sink.record(key, occurrence);
         previous
@@ -338,6 +345,7 @@ impl MetadataMap {
         occurrence.group1 = super::tag_occurrence::intern(group1);
         occurrence.instance = instance;
         occurrence.value = Some(no_print_conv_value);
+        occurrence.print = Some(occurrence.raw.clone());
         occurrence.stored = stored;
         self.sink.record(key, occurrence);
         previous
@@ -379,7 +387,8 @@ impl MetadataMap {
     /// [`insert()`](Self::insert) of `source`'s value under `key` -- the
     /// shim's priority, group1 and instance, a fresh file-order slot -- that
     /// keeps `source`'s `--no-print-conv` form ([`TagOccurrence::value`])
-    /// and stored form ([`TagOccurrence::stored`]).
+    /// and print/stored forms ([`TagOccurrence::print`],
+    /// [`TagOccurrence::stored`]).
     /// For a parser that used to flatten another walk's winners through
     /// `iter()` + `insert()` (the PDF resource and DCT-image merges, MIFF's
     /// APP1 profile): exactly that copy, minus the loss of the form, which
@@ -397,6 +406,7 @@ impl MetadataMap {
         let order = self.sink.next_order();
         let mut occurrence = TagOccurrence::from_insert_shim(&key, source.raw.clone(), order);
         occurrence.value = source.value.clone();
+        occurrence.print = source.print.clone();
         occurrence.stored = source.stored.clone();
         self.sink.record(key, occurrence);
         previous
@@ -479,6 +489,23 @@ impl MetadataMap {
         self.sink.occurrences()
     }
 
+    /// Every active occurrence in file order, paired with its lookup key and
+    /// the value projected through `channel`. Duplicate instances remain
+    /// distinct; tombstoned occurrences remain absent. Each value is borrowed
+    /// unless projection must compute the legacy APEX compatibility form.
+    pub fn project_occurrences(
+        &self,
+        channel: ValueChannel,
+    ) -> impl Iterator<Item = (&str, &TagOccurrence, Cow<'_, TagValue>)> {
+        self.sink.occurrences().map(move |occurrence| {
+            let key = match &occurrence.id {
+                oxidex_tags::TagId::Named(key) => key.as_str(),
+                oxidex_tags::TagId::Numeric(_) => occurrence.name.as_ref(),
+            };
+            (key, occurrence, occurrence.project(channel))
+        })
+    }
+
     /// How many occurrences this map has ever recorded, retired ones
     /// included. Positions `0..recorded_len()` are what
     /// [`active_occurrence`](Self::active_occurrence) accepts, and a later
@@ -509,7 +536,7 @@ impl MetadataMap {
     pub(crate) fn set_value_form<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         let key = key.into();
         self.sink
-            .set_winner_value(&key, TagValue::new_string(value.into()));
+            .set_winner_display_value(&key, TagValue::new_string(value.into()));
     }
 
     /// Returns the full-precision value form attached to `key`, if any.
@@ -746,6 +773,247 @@ impl IntoIterator for MetadataMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_producer_records_the_known_display_as_explicit_print() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+
+        let mut map = MetadataMap::new();
+        map.insert_occurrence_with_raw(
+            "File:FileSize",
+            TagValue::new_string("26 kB"),
+            TagValue::Integer(26_106),
+            SHIM_DEFAULT_PRIORITY,
+            "System",
+            Instance::default(),
+        );
+
+        let occurrence = map.occurrences_for("File:FileSize")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("26 kB"))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("26 kB")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(26_106)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_string("26 kB")
+        );
+    }
+
+    #[test]
+    fn late_value_form_snapshots_the_existing_display_as_print() {
+        let mut map = MetadataMap::new();
+        map.insert("QuickTime:Duration", TagValue::new_string("1.00 s"));
+
+        map.set_value_form("QuickTime:Duration", "1");
+
+        let occurrence = map.occurrences_for("QuickTime:Duration")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("1.00 s"))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("1.00 s")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::new_string("1")
+        );
+    }
+
+    #[test]
+    fn late_value_form_preserves_an_explicit_print() {
+        let mut map = MetadataMap::new();
+        let mut occurrence = TagOccurrence::from_insert_shim(
+            "QuickTime:Duration",
+            TagValue::new_string("raw duration"),
+            map.sink.next_order(),
+        );
+        occurrence.print = Some(TagValue::new_string("1.00 s"));
+        map.sink
+            .record("QuickTime:Duration".to_string(), occurrence);
+
+        map.set_value_form("QuickTime:Duration", "1");
+
+        assert_eq!(
+            map.occurrences_for("QuickTime:Duration")[0]
+                .project(ValueChannel::PrintConv)
+                .as_ref(),
+            &TagValue::new_string("1.00 s")
+        );
+    }
+
+    #[test]
+    fn group1_value_insert_snapshots_the_display_as_print() {
+        let mut map = MetadataMap::new();
+        map.insert_with_group1_and_value(
+            "GPS:GPSLatitude",
+            TagValue::new_string("37 deg 46' 33.24\""),
+            TagValue::Float(37.7759),
+            "GPS",
+        );
+
+        let occurrence = map.occurrences_for("GPS:GPSLatitude")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("37 deg 46' 33.24\""))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("37 deg 46' 33.24\"")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(37.7759)
+        );
+    }
+
+    #[test]
+    fn forms_producer_keeps_print_value_and_stored_channels_distinct() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+
+        let mut map = MetadataMap::new();
+        map.insert_occurrence_with_forms(
+            "ExifIFD:ExposureTime",
+            TagValue::new_string("1/80"),
+            TagValue::Float(0.0125),
+            Some(TagValue::new_rational(1, 80)),
+            SHIM_DEFAULT_PRIORITY,
+            "",
+            Instance::default(),
+        );
+
+        let occurrence = map.occurrences_for("ExifIFD:ExposureTime")[0];
+        assert_eq!(
+            occurrence.print.as_ref(),
+            Some(&TagValue::new_string("1/80"))
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("1/80")
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(0.0125)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_rational(1, 80)
+        );
+    }
+
+    #[test]
+    fn copied_and_renamed_producer_occurrences_keep_their_print_form() {
+        use super::super::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+
+        let mut source = MetadataMap::new();
+        source.insert_occurrence_with_raw(
+            "ExifIFD:ColorSpace",
+            TagValue::new_string("sRGB"),
+            TagValue::Integer(1),
+            SHIM_DEFAULT_PRIORITY,
+            "",
+            Instance::default(),
+        );
+        let source_occurrence = source.occurrences_for("ExifIFD:ColorSpace")[0];
+
+        let mut copied = MetadataMap::new();
+        copied.insert_carrying_forms("ExifIFD:ColorSpace", source_occurrence);
+        let copied_occurrence = copied.occurrences_for("ExifIFD:ColorSpace")[0];
+        assert_eq!(
+            copied_occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("sRGB")
+        );
+        assert_eq!(
+            copied_occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(1)
+        );
+
+        let mut renamed = MetadataMap::new();
+        renamed.insert_renamed_occurrence("EXIF:ColorSpace".to_string(), source_occurrence);
+        let renamed_occurrence = renamed.occurrences_for("EXIF:ColorSpace")[0];
+        assert_eq!(
+            renamed_occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("sRGB")
+        );
+        assert_eq!(
+            renamed_occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(1)
+        );
+    }
+
+    #[test]
+    fn project_occurrences_keeps_duplicate_order() {
+        use super::super::tag_occurrence::{Instance, ValueChannel};
+
+        let mut map = MetadataMap::new();
+        for (order, label) in [(0, "first"), (1, "second")] {
+            let mut occurrence = TagOccurrence::from_insert_shim(
+                "File:Comment",
+                TagValue::new_string(format!("{label} raw")),
+                order,
+            );
+            occurrence.value = Some(TagValue::new_string(format!("{label} typed")));
+            occurrence.print = Some(TagValue::new_string(format!("{label} printed")));
+            occurrence.priority = 0;
+            occurrence.instance = Instance::default();
+            map.sink.record("File:Comment".to_string(), occurrence);
+        }
+        map.insert("File:Retired", TagValue::new_string("gone"));
+        map.remove("File:Retired");
+
+        let projected: Vec<_> = map
+            .project_occurrences(ValueChannel::PrintConv)
+            .map(|(key, occurrence, value)| (key.to_string(), occurrence.order, value.into_owned()))
+            .collect();
+        assert_eq!(
+            projected,
+            vec![
+                (
+                    "File:Comment".to_string(),
+                    0,
+                    TagValue::new_string("first printed")
+                ),
+                (
+                    "File:Comment".to_string(),
+                    1,
+                    TagValue::new_string("second printed")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn warmed_renamed_occurrence_projection_uses_its_new_name() {
+        let mut source = MetadataMap::new();
+        source.insert("ExifIFD:ApertureValue", TagValue::Float(2.0));
+        let occurrence = source
+            .sink
+            .winner_occurrence("ExifIFD:ApertureValue")
+            .unwrap();
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(2.0)
+        );
+
+        let mut target = MetadataMap::new();
+        target.insert_renamed_occurrence("ExifIFD:ShutterSpeedValue".to_string(), occurrence);
+        assert_eq!(
+            target
+                .sink
+                .winner_projected("ExifIFD:ShutterSpeedValue", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Float(0.25))
+        );
+    }
 
     /// The two ways parsers copy a sub-map into the file's map -- `iter()`
     /// with clones, and consuming `for (k, v) in sub` -- both hand the tags

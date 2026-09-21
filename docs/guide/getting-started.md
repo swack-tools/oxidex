@@ -1,9 +1,10 @@
 # Installation
 
 ::: warning Beta: v2.0.0-beta.1
-These docs describe the 2.0 line. Until its binaries are published on the
-[releases page](https://github.com/swack-tools/oxidex/releases), build it
-from source as shown below. The previous stable release is
+These docs describe the pre-tag 2.0 development line, not a published beta.
+The signed v2.0.0-beta.1 tag and binary assets are pending; until they are
+published on the [releases page](https://github.com/swack-tools/oxidex/releases),
+build this development line from source as shown below. The previous stable release is
 [v1.2.1](https://github.com/swack-tools/oxidex/releases/tag/v1.2.1). It
 behaves differently in several ways; see
 [Migrating from 1.x to 2.0](/guide/migrating-from-1x).
@@ -14,7 +15,7 @@ behaves differently in several ways; see
 ```bash
 git clone https://github.com/swack-tools/oxidex.git
 cd oxidex
-git switch refactor/tag-machinery   # the 2.0 line (or check out the v2.0.0-beta.1 tag once it exists)
+git switch refactor/tag-machinery   # pre-tag 2.0 development line; signed beta.1 tag pending
 cargo build --release
 ./target/release/oxidex --version
 
@@ -42,13 +43,15 @@ or from a GitHub release.
 
 ## Prebuilt binaries
 
-Releases on GitHub carry prebuilt binaries. v1.2.1 has these:
+Published GitHub releases carry prebuilt binaries. v1.2.1 has these; do not
+assume a v2.0.0-beta.1 asset exists until its signed tag and release receipt
+are recorded:
 
 | Platform | Asset |
 | --- | --- |
 | Linux x86_64 (static, musl) | `oxidex-x86_64-unknown-linux-musl` |
 | Linux ARM64 (static, musl) | `oxidex-aarch64-unknown-linux-musl` |
-| macOS Apple Silicon | `oxidex-aarch64-apple-darwin`, or the `.dmg` |
+| macOS universal (Apple Silicon and Intel) | `oxidex-universal-apple-darwin`, or the `.dmg` |
 | Windows x86_64 | `oxidex-x86_64-pc-windows-gnu.exe` |
 
 Download the asset for your platform, make it executable (`chmod +x`) and

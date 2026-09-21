@@ -7,10 +7,7 @@
 // Allow unused constants - these provide reference values for Mach-O testing
 #![allow(dead_code)]
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::FormatParser;
 use oxidex::parsers::macho::MachOParser;
 

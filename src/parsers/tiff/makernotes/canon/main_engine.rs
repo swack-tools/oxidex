@@ -77,6 +77,7 @@
 
 use std::collections::HashMap;
 
+use crate::exiftool_tables::session::{MemberVal, Session};
 use crate::exiftool_tables::{
     Ctx, Emitted, IfdDir, IfdTable, MemberValue, SerialSubdirRead, declares, engine_reports,
     process_exif_decoded,
@@ -311,10 +312,13 @@ fn insert_row(
 pub(super) fn walk(
     table: &'static IfdTable,
     data: &[u8],
+    data_domain: u64,
     order: ByteOrder,
     config: &IfdParserConfig,
     base: u32,
     model: &str,
+    session: &mut Session,
+    ctx: &mut Ctx<'_>,
 ) -> MainEngineRows {
     let start = match config.signature {
         Some(sig) if data.starts_with(sig) => config.signature_offset,
@@ -324,22 +328,26 @@ pub(super) fn walk(
     let Some(ifd_data) = data.get(start..) else {
         return rows;
     };
-    let mut members: HashMap<&'static str, MemberValue> = HashMap::new();
     if !model.is_empty() {
-        members.insert("Model", MemberValue::Str(model.to_string()));
+        ctx.members
+            .insert("Model", MemberValue::Str(model.to_string()));
+        session
+            .set_member("Model", MemberVal::Str(model.to_string()))
+            .expect("Canon model is a UTF-8 string");
     }
-    let mut ctx = Ctx::new(&mut members);
     let mut emitted = Vec::new();
     let Some(reads) = process_exif_decoded(
         table,
         IfdDir {
             data: ifd_data,
+            data_domain,
             ifd_start: 0,
             base: Some(-i64::from(base)),
             byte_order: order.to_io_byte_order(),
             group1: Some("Canon"),
         },
-        &mut ctx,
+        session,
+        ctx,
         &mut emitted,
     ) else {
         return rows;

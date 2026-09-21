@@ -37,7 +37,7 @@ RELEASE_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-release-run.json")
 DOCKER_RUN_ID=$(jq -er '.databaseId' "$EVIDENCE_DIR/selected-docker-run.json")
 gh run watch "$RELEASE_RUN_ID" --exit-status
 gh run view "$RELEASE_RUN_ID" --json \
-  databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
+  databaseId,attempt,url,headSha,headBranch,event,status,conclusion,workflowName \
   > "$EVIDENCE_DIR/final-release-run.json"
 jq -e --argjson id "$RELEASE_RUN_ID" --arg tag "$TAG" \
   --arg sha "$MAIN_SHA" --arg workflow "Release" '
@@ -47,6 +47,7 @@ jq -e --argjson id "$RELEASE_RUN_ID" --arg tag "$TAG" \
     .status == "completed" and .conclusion == "success"
   )
 ' "$EVIDENCE_DIR/final-release-run.json" > /dev/null
+RELEASE_RUN_ATTEMPT=$(jq -er '.attempt' "$EVIDENCE_DIR/final-release-run.json")
 gh run watch "$DOCKER_RUN_ID" --exit-status
 gh run view "$DOCKER_RUN_ID" --json \
   databaseId,url,headSha,headBranch,event,status,conclusion,workflowName \
@@ -97,8 +98,10 @@ matrix if that workflow intentionally changes. With the release version in
 | `oxidex-x86_64-unknown-linux-musl` | Linux x86_64 static binary |
 | `oxidex-aarch64-unknown-linux-musl` | Linux arm64 static binary |
 | `oxidex-x86_64-pc-windows-gnu.exe` | Windows x86_64 binary |
-| `oxidex-aarch64-apple-darwin` | Signed macOS arm64 binary |
+| `oxidex-universal-apple-darwin` | Signed macOS universal binary (Apple Silicon and Intel) |
 | `oxidex-v${VERSION}.dmg` | Notarized and stapled macOS DMG containing the signed executable |
+| `oxidex-v${VERSION}.sbom.cdx.json` | Deterministic CycloneDX source/payload inventory |
+| `SHA256SUMS` | SHA-256 checksums for all other release assets |
 
 Require no missing, zero-byte, or unexpected assets. If checksums are
 advertised or emitted, verify them; current absence of a checksum asset must be
@@ -127,7 +130,8 @@ docker buildx imagetools inspect "swackhamer/oxidex:$VERSION" \
 Run these on macOS against the actual GitHub release downloads, not the CI
 workspace artifact and not a locally rebuilt binary. First bind the downloads
 to the selected release run. The current workflow uploads the signed binary
-as `oxidex-aarch64-apple-darwin` and the stapled image as `oxidex-dmg`, then
+as `oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}` and
+the stapled image as `oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}`, then
 copies those same files into the release. Preserve the API artifact manifest
 (IDs, names, digests, expiry and workflow SHA), the run downloads, and their
 file hashes. The API `digest`, when present, describes the artifact archive,
@@ -135,11 +139,18 @@ not the extracted executable; do not compare those unlike hashes.
 
 ```bash
 set -euo pipefail
+RELEASE_RUN_ATTEMPT=$(jq -er '.attempt' "$EVIDENCE_DIR/final-release-run.json")
+test "$RELEASE_RUN_ATTEMPT" -gt 0
+API_RELEASE_RUN_ATTEMPT=$(gh api "repos/$REPO/actions/runs/$RELEASE_RUN_ID" --jq .run_attempt)
+test "$RELEASE_RUN_ATTEMPT" = "$API_RELEASE_RUN_ATTEMPT"
+MAC_RUN_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
+DMG_RUN_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
 gh api --paginate --slurp "repos/$REPO/actions/runs/$RELEASE_RUN_ID/artifacts" \
   > "$EVIDENCE_DIR/release-run-artifact-pages.json"
-jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" '
+jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" \
+  --arg mac "$MAC_RUN_ARTIFACT" --arg dmg "$DMG_RUN_ARTIFACT" '
   [.[] | .artifacts[] | select(
-    .name == "oxidex-aarch64-apple-darwin" or .name == "oxidex-dmg"
+    .name == $mac or .name == $dmg
   )] | select(length == 2)
   | select((map(.name) | unique | length) == 2)
   | select(all(.[]; .expired == false and
@@ -149,12 +160,19 @@ jq -e --argjson run "$RELEASE_RUN_ID" --arg sha "$MAIN_SHA" '
 RUN_ARTIFACT_DIR="$EVIDENCE_DIR/release-run-$RELEASE_RUN_ID-artifacts"
 test ! -e "$RUN_ARTIFACT_DIR"
 mkdir "$RUN_ARTIFACT_DIR"
+RUN_MACOS_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
+RUN_DMG_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"
+test "$MAC_RUN_ARTIFACT" = "$RUN_MACOS_ARTIFACT"
+test "$DMG_RUN_ARTIFACT" = "$RUN_DMG_ARTIFACT"
+MAC_RUN_ARTIFACT_ARGS=(--name "$MAC_RUN_ARTIFACT" --name "$DMG_RUN_ARTIFACT")
+RUN_MACOS_ARTIFACT_ARGS=(--name "$RUN_MACOS_ARTIFACT" --name "$RUN_DMG_ARTIFACT")
+test "${MAC_RUN_ARTIFACT_ARGS[*]}" = "${RUN_MACOS_ARTIFACT_ARGS[*]}"
 gh run download "$RELEASE_RUN_ID" --repo "$REPO" \
-  --name oxidex-aarch64-apple-darwin --name oxidex-dmg --dir "$RUN_ARTIFACT_DIR"
-MAC_BIN="$EVIDENCE_DIR/assets/oxidex-aarch64-apple-darwin"
+  "${RUN_MACOS_ARTIFACT_ARGS[@]}" --dir "$RUN_ARTIFACT_DIR"
+MAC_BIN="$EVIDENCE_DIR/assets/oxidex-universal-apple-darwin"
 DMG="$EVIDENCE_DIR/assets/oxidex-v${VERSION}.dmg"
-RUN_MAC_BIN="$RUN_ARTIFACT_DIR/oxidex-aarch64-apple-darwin/oxidex-aarch64-apple-darwin"
-RUN_DMG="$RUN_ARTIFACT_DIR/oxidex-dmg/oxidex-v${VERSION}.dmg"
+RUN_MAC_BIN="$RUN_ARTIFACT_DIR/$RUN_MACOS_ARTIFACT/oxidex-universal-apple-darwin"
+RUN_DMG="$RUN_ARTIFACT_DIR/$RUN_DMG_ARTIFACT/oxidex-v${VERSION}.dmg"
 test -s "$MAC_BIN" && test -s "$DMG" && test -s "$RUN_MAC_BIN" && test -s "$RUN_DMG"
 shasum -a 256 "$MAC_BIN" "$RUN_MAC_BIN" "$DMG" "$RUN_DMG" \
   | tee "$EVIDENCE_DIR/macos-run-and-release.sha256"
@@ -215,6 +233,8 @@ shasum -a 256 "$MAC_BIN" "$MAC_DMG_PAYLOAD" \
 test "$MAC_BIN_SHA256" = "$DMG_PAYLOAD_SHA256"
 chmod u+x "$MAC_BIN"
 file "$MAC_BIN" "$DMG" | tee "$EVIDENCE_DIR/macos-file.txt"
+lipo -verify_arch arm64 x86_64 "$MAC_BIN"
+lipo -verify_arch arm64 x86_64 "$MAC_DMG_PAYLOAD"
 codesign --verify --strict --verbose=4 "$MAC_BIN" \
   2>&1 | tee "$EVIDENCE_DIR/macos-codesign-verify.txt"
 codesign --display --verbose=4 "$MAC_BIN" \

@@ -331,6 +331,9 @@ pub struct Dir<'a> {
     /// `SubDirectory` `Start` expressions are absolute offsets into *this*,
     /// so a caller that passes only the sub-slice cannot walk an edge.
     pub data: &'a [u8],
+    /// Stable identity of the enclosing file/data domain.
+    /// This is independent of `base`/`data_pos`, which correct stored offsets.
+    pub data_domain: u64,
     /// `$$dirInfo{DirStart}`.
     pub dir_start: usize,
     /// `$$dirInfo{DirLen}`; `None` is ExifTool's undef, which
@@ -349,6 +352,7 @@ impl<'a> Dir<'a> {
     pub const fn whole(data: &'a [u8], byte_order: ByteOrder) -> Self {
         Self {
             data,
+            data_domain: 0,
             dir_start: 0,
             dir_len: None,
             base: 0,
@@ -387,8 +391,9 @@ impl<'a> Dir<'a> {
 /// an IFD walk that descends into a `ProcessBinaryData` table hands its
 /// guard down rather than starting a fresh one -- otherwise the depth cap
 /// would restart at every engine boundary.
+#[derive(Clone, Debug)]
 pub(super) struct Guard {
-    processed: Vec<(usize, i64)>,
+    processed: Vec<(usize, u64, i64)>,
     pub(super) depth: u32,
 }
 
@@ -406,15 +411,21 @@ impl Guard {
     }
 
     /// ExifTool.pm:9067 -- `if ($$self{PROCESSED}{$addr} and not $$dirInfo{NotDup})`.
-    pub(super) fn admit(&mut self, addr: i64, table: usize, not_dup: bool) -> bool {
+    pub(super) fn admit(
+        &mut self,
+        data_domain: u64,
+        addr: i64,
+        table: usize,
+        not_dup: bool,
+    ) -> bool {
         if self.depth >= MAX_SUBDIR_DEPTH {
             return false;
         }
-        if !not_dup && self.processed.contains(&(table, addr)) {
+        if !not_dup && self.processed.contains(&(table, data_domain, addr)) {
             return false;
         }
         // ExifTool.pm:9072 records the address either way.
-        self.processed.push((table, addr));
+        self.processed.push((table, data_domain, addr));
         true
     }
 }
@@ -687,24 +698,26 @@ fn walk_with_policy(
             ),
             None => (super::runtime::to_exiftool_value(&converted), None),
         };
-        out.push(Emitted {
-            module: table.module,
-            table: table.table,
-            group0: table.group0,
-            // The field's own `Groups{1}` else the table's (ExifTool.pm:
-            // 9236-9244 via `effective_groups`).
-            group1: table.effective_groups(field).1,
-            group2: table.group2,
-            name: field.name,
-            value,
-            value_conv,
-            low_priority: table.priority == Some(0),
-            // `Avoid` is not part of the binary-table schema (`Field` has no
-            // flags); no ProcessBinaryData field in the pinned tree declares
-            // it.
-            avoid: false,
-            rational: None,
-        });
+        if !super::attribution::silenced(super::attribution::Token::Engine) {
+            out.push(Emitted {
+                module: table.module,
+                table: table.table,
+                group0: table.group0,
+                // The field's own `Groups{1}` else the table's (ExifTool.pm:
+                // 9236-9244 via `effective_groups`).
+                group1: table.effective_groups(field).1,
+                group2: table.group2,
+                name: field.name,
+                value,
+                value_conv,
+                low_priority: table.priority == Some(0),
+                // `Avoid` is not part of the binary-table schema (`Field` has no
+                // flags); no ProcessBinaryData field in the pinned tree declares
+                // it.
+                avoid: false,
+                rational: None,
+            });
+        }
     }
     BinaryWalkOutcome::Complete
 }
@@ -897,7 +910,12 @@ fn descend(
 
     // ExifTool.pm:9066 -- `$addr = DirStart + DataPos + Base`.
     let addr = i64::try_from(start).unwrap_or(i64::MAX) + dir.data_pos + subdir_base;
-    if !guard.admit(addr, std::ptr::from_ref(target) as usize, not_dup) {
+    if !guard.admit(
+        dir.data_domain,
+        addr,
+        std::ptr::from_ref(target) as usize,
+        not_dup,
+    ) {
         return BinaryWalkOutcome::Complete;
     }
     guard.depth += 1;
@@ -905,6 +923,7 @@ fn descend(
         target,
         Dir {
             data: dir.data,
+            data_domain: dir.data_domain,
             dir_start: start,
             dir_len: Some(len),
             base: subdir_base,

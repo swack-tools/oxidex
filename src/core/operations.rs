@@ -11,10 +11,10 @@ use crate::core::jpeg_helpers::{
     extract_direct_preview_image, process_app3_segments, process_app6_segments,
     process_app10_segments, process_app11_segments, process_app12_segments, process_app14_segments,
     process_app15_segments, process_com_segments, process_dji_dbg_segments,
-    process_dji_thermal_segments, process_dqt_segments_with_options, process_exif_segments,
-    process_icc_segments, process_infiray_segments, process_iptc_segments, process_jfif_segments,
-    process_mpf_segments, process_photoshop_segments, process_qualcomm_segments,
-    process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
+    process_dji_thermal_segments, process_dqt_segments_with_options,
+    process_exif_segments_with_options, process_icc_segments, process_infiray_segments,
+    process_iptc_segments, process_jfif_segments, process_mpf_segments, process_photoshop_segments,
+    process_qualcomm_segments, process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
     process_sof_segments_with_options, process_spiff_segments,
     process_uniform_resource_name_segments, process_xmp_segments,
 };
@@ -25,7 +25,8 @@ use crate::core::read_report::{
 };
 #[cfg(test)]
 use crate::core::tag_conversion::raw_bytes_to_tag_value;
-use crate::core::tiff_helpers::parse_ifd_chain;
+use crate::core::tag_occurrence::ValueChannel;
+use crate::core::tiff_helpers::parse_ifd_chain_with_options;
 use crate::core::validation::{validate_tag_value_intrinsics, validate_tag_value_with_name};
 use crate::error::{ExifToolError, Result};
 use crate::io::MMapReader;
@@ -197,14 +198,17 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
 
     let reported = metadata.get_string("File:FileType");
     let ours_is_authoritative = is_placeholder(reported) || reported == Some(id.file_type.as_ref());
-    if is_placeholder(reported) {
+    let suppress_producer = crate::exiftool_tables::attribution::silenced(
+        crate::exiftool_tables::attribution::Token::Producers,
+    );
+    if is_placeholder(reported) && !suppress_producer {
         metadata.insert("File:FileType", TagValue::new_string(id.file_type.as_ref()));
     }
 
     // The on-disk extension is a placeholder whenever it disagrees with
     // ExifTool's canonical one (`aif` where ExifTool says `aiff`), which is
     // exactly when it should be corrected.
-    if ours_is_authoritative {
+    if ours_is_authoritative && !suppress_producer {
         let current = metadata.get_string("File:FileTypeExtension");
         if is_placeholder(current) || current != Some(id.extension.as_ref()) {
             metadata.insert(
@@ -216,6 +220,7 @@ fn add_identity_tags(metadata: &mut MetadataMap, reader: &dyn FileReader, path: 
 
     if let Some(mime) = id.mime_type
         && ours_is_authoritative
+        && !suppress_producer
         && is_placeholder(metadata.get_string("File:MIMEType"))
     {
         metadata.insert("File:MIMEType", TagValue::new_string(mime));
@@ -1317,10 +1322,7 @@ pub fn copy_metadata(src: &Path, dest: &Path, tags: Option<&[String]>) -> Result
             // SHORT behind `ColorSpace` `sRGB`, the bytes behind `Padding`'s
             // placeholder, `TagOccurrence::stored`); the writer serializes
             // stored forms, never printed ones.
-            let value = occurrence
-                .stored
-                .clone()
-                .unwrap_or_else(|| occurrence.raw.clone());
+            let value = occurrence.project(ValueChannel::Stored).into_owned();
             // Insert tag into destination (merges with existing, preserving others)
             dest_metadata.insert(tag_name.clone(), value);
         }
@@ -1374,7 +1376,7 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
 
     // Process different segment types
     process_jfif_segments(&segments, &mut metadata, diagnostics);
-    process_exif_segments(&segments, reader, &mut metadata, diagnostics);
+    process_exif_segments_with_options(&segments, reader, options, &mut metadata, diagnostics);
     // `Composite:OriginalDecisionData` reads the file at the Canon maker
     // note's `OriginalDecisionDataOffset`, so it needs both.
     crate::parsers::tiff::makernotes::canon::original_decision_data::process_original_decision_data(
@@ -1559,6 +1561,13 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
 /// * `Ok(MetadataMap)` - Successfully parsed metadata from all IFDs
 /// * `Err(ExifToolError)` - Parse error or invalid TIFF structure
 pub(crate) fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap> {
+    parse_tiff_metadata_with_options(reader, &ReadOptions::default_full_listing())
+}
+
+pub(crate) fn parse_tiff_metadata_with_options(
+    reader: &dyn FileReader,
+    options: &ReadOptions,
+) -> Result<MetadataMap> {
     // Read TIFF header (first 8 bytes)
     let header = reader.read(0, 8)?;
 
@@ -1593,7 +1602,7 @@ pub(crate) fn parse_tiff_metadata(reader: &dyn FileReader) -> Result<MetadataMap
         "File:ExifByteOrder",
         TagValue::new_string(byte_order.exif_byte_order_tag()),
     );
-    parse_ifd_chain(reader, first_ifd_offset, byte_order, &mut metadata)?;
+    parse_ifd_chain_with_options(reader, first_ifd_offset, byte_order, options, &mut metadata)?;
 
     // Add TIFF: prefixed format-specific tags from standard EXIF tags
     // These map standard EXIF tag names to TIFF-specific format tags

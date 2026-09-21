@@ -4,11 +4,8 @@
 //! suspicious characteristics in PE files including packing, obfuscation,
 //! and malicious patterns.
 
-#[path = "../common/mod.rs"]
-mod common;
-
 #[allow(unused_imports)]
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::TagValue;
 use oxidex::parsers::pe::anomaly_detector::AnomalyDetector;
 use oxidex::parsers::pe::structures::SectionHeader;

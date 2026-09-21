@@ -14,6 +14,7 @@ Example:
 
 import ctypes
 import ctypes.util
+from enum import IntEnum
 import os
 import sys
 from typing import Optional
@@ -28,6 +29,14 @@ OXIDEX_ERR_INVALID_TAG_VALUE = 4
 OXIDEX_ERR_UNSUPPORTED_FORMAT = 5
 OXIDEX_ERR_NULL_POINTER = 6
 OXIDEX_ERR_INTERNAL = 99
+
+
+class ValueChannel(IntEnum):
+    """The stored, ValueConv, and PrintConv stages of a tag occurrence."""
+
+    STORED = 0
+    VALUE_CONV = 1
+    PRINT_CONV = 2
 
 
 class OxidexError(Exception):
@@ -125,6 +134,13 @@ _lib.exiftool_has_tag.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 # Tag access
 _lib.exiftool_get_tag_string.restype = ctypes.c_char_p
 _lib.exiftool_get_tag_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+_lib.exiftool_get_tag_string_in_channel.restype = ctypes.c_char_p
+_lib.exiftool_get_tag_string_in_channel.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.c_int,
+]
 
 _lib.exiftool_get_tag_integer.restype = ctypes.c_int
 _lib.exiftool_get_tag_integer.argtypes = [
@@ -281,6 +297,20 @@ class Oxidex:
         c_str = _lib.exiftool_get_tag_string(self._handle, tag_bytes)
         if c_str:
             # IMPORTANT: Copy the string immediately before next API call
+            return c_str.decode('utf-8', errors='replace')
+        return None
+
+    def get_tag_in_channel(self, tag_name: str, channel: ValueChannel) -> Optional[str]:
+        """Get a string tag from an explicit stored, ValueConv, or PrintConv stage."""
+        if not self._handle:
+            return None
+
+        c_str = _lib.exiftool_get_tag_string_in_channel(
+            self._handle,
+            tag_name.encode('utf-8'),
+            int(channel),
+        )
+        if c_str:
             return c_str.decode('utf-8', errors='replace')
         return None
 

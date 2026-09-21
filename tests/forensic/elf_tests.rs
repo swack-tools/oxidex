@@ -14,10 +14,7 @@
 //!
 //! Uses TestReader pattern with synthetic ELF data to ensure reproducible tests.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::{FormatParser, TagValue};
 use oxidex::parsers::elf::ELFParser;
 

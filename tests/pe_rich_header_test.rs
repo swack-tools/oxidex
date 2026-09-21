@@ -26,9 +26,9 @@ fn test_parse_rich_header_with_sample_data() {
     // Build encrypted Rich Header data
     let mut rich_data = Vec::new();
     rich_data.extend_from_slice(&dans_encrypted.to_le_bytes()); // "DanS" encrypted
-    rich_data.extend_from_slice(&(0u32 ^ xor_key).to_le_bytes()); // Padding 1
-    rich_data.extend_from_slice(&(0u32 ^ xor_key).to_le_bytes()); // Padding 2
-    rich_data.extend_from_slice(&(0u32 ^ xor_key).to_le_bytes()); // Padding 3
+    rich_data.extend_from_slice(&xor_key.to_le_bytes()); // Padding 1
+    rich_data.extend_from_slice(&xor_key.to_le_bytes()); // Padding 2
+    rich_data.extend_from_slice(&xor_key.to_le_bytes()); // Padding 3
     rich_data.extend_from_slice(&compid1.to_le_bytes()); // Entry 1 compid
     rich_data.extend_from_slice(&count1.to_le_bytes()); // Entry 1 count
     rich_data.extend_from_slice(&compid2.to_le_bytes()); // Entry 2 compid

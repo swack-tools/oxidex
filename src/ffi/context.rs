@@ -5,6 +5,7 @@
 
 use std::ffi::CString;
 use std::os::raw::c_char;
+use std::sync::Mutex;
 
 use crate::core::MetadataMap;
 
@@ -17,9 +18,10 @@ use crate::core::MetadataMap;
 pub struct ExifToolContext {
     /// The metadata map containing all loaded tags
     pub metadata: MetadataMap,
-    /// Cache of CString instances for string returns
-    /// This ensures strings remain valid until the next API call
-    pub string_cache: Vec<CString>,
+    /// Cache of CString instances for string returns.
+    ///
+    /// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
+    pub string_cache: Mutex<Vec<CString>>,
     /// Iterator cache: stores tag names for iteration
     pub tag_names_cache: Vec<String>,
 }
@@ -29,20 +31,33 @@ impl ExifToolContext {
     pub fn new() -> Self {
         Self {
             metadata: MetadataMap::new(),
-            string_cache: Vec::new(),
+            string_cache: Mutex::new(Vec::new()),
             tag_names_cache: Vec::new(),
         }
     }
 
-    /// Clears the string cache to free memory
-    pub fn clear_string_cache(&mut self) {
-        self.string_cache.clear();
+    /// Clears the string cache to free memory.
+    ///
+    /// The mutex synchronizes cache access itself, but callers must still hold
+    /// the FFI contract's exclusive same-handle access for this mutating
+    /// operation: clearing invalidates every previously returned pointer.
+    pub fn clear_string_cache(&self) {
+        self.string_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
     }
 
-    /// Caches a CString and returns a pointer to it
-    pub fn cache_string(&mut self, s: CString) -> *const c_char {
+    /// Caches a CString and returns a pointer to its owned allocation.
+    ///
+    /// Moving the `CString` within the backing `Vec` does not move its heap
+    /// allocation, so returned pointers survive later cache reallocations.
+    pub fn cache_string(&self, s: CString) -> *const c_char {
         let ptr = s.as_ptr();
-        self.string_cache.push(s);
+        self.string_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(s);
         ptr
     }
 
@@ -98,5 +113,67 @@ pub unsafe fn handle_to_context_mut<'a>(
     } else {
         // SAFETY: Caller guarantees handle is a valid pointer from Box::into_raw()
         Some(unsafe { &mut *(handle as *mut ExifToolContext) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn string_cache_supports_concurrent_shared_handle_getters() {
+        let context = ExifToolContext::new();
+
+        thread::scope(|scope| {
+            for worker in 0..8 {
+                let context = &context;
+                scope.spawn(move || {
+                    for iteration in 0..128 {
+                        let expected = format!("worker-{worker}-{iteration}");
+                        let pointer =
+                            context.cache_string(CString::new(expected.as_str()).unwrap());
+
+                        let actual = unsafe { CStr::from_ptr(pointer) };
+                        assert_eq!(actual.to_str().unwrap(), expected);
+                    }
+                });
+            }
+        });
+
+        assert_eq!(context.string_cache.lock().unwrap().len(), 8 * 128);
+    }
+
+    #[test]
+    fn shared_context_caches_strings_concurrently_without_invalidating_pointers() {
+        let context = Arc::new(ExifToolContext::new());
+        let first = context.cache_string(CString::new("first").unwrap()) as usize;
+
+        let threads = (0..8)
+            .map(|thread_index| {
+                let context = Arc::clone(&context);
+                thread::spawn(move || {
+                    for value_index in 0..256 {
+                        let value = CString::new(format!("{thread_index}:{value_index}"))
+                            .expect("generated value has no NUL");
+                        assert!(!context.cache_string(value).is_null());
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread
+                .join()
+                .expect("concurrent cache writer must not panic");
+        }
+
+        let first = first as *const c_char;
+        assert_eq!(
+            unsafe { CStr::from_ptr(first) }.to_str().unwrap(),
+            "first",
+            "a returned CString pointer must survive cache Vec reallocations"
+        );
     }
 }

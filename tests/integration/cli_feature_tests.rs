@@ -33,10 +33,10 @@ fn read_metadata_json(file: &Path) -> serde_json::Value {
         serde_json::from_str(&stdout).expect("Failed to parse JSON output");
 
     // oxidex -j returns an array of objects [{...}]
-    if let Some(array) = json.as_array() {
-        if let Some(first) = array.first() {
-            return first.clone();
-        }
+    if let Some(array) = json.as_array()
+        && let Some(first) = array.first()
+    {
+        return first.clone();
     }
 
     // Fallback (should not happen if output format is correct)
@@ -63,7 +63,7 @@ fn test_cli_remove_all_metadata() {
     assert!(metadata.get("IFD0:Model").is_none());
     assert!(metadata.get("EXIF:DateTimeOriginal").is_none());
     // There might be some very basic file system info or similar, but the core EXIF/XMP/IPTC should be gone
-    assert!(metadata.as_object().map_or(true, |obj| obj.len() < 15)); // Expect few tags (mostly File:* system tags)
+    assert!(metadata.as_object().is_none_or(|obj| obj.len() < 15)); // Expect few tags (mostly File:* system tags)
 }
 
 #[test]

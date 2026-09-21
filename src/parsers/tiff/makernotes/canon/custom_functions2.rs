@@ -495,7 +495,11 @@ pub(super) fn parse_custom_functions2(
                 if values.len() == count
                     && let Some((name, rendered)) = render_entry(entry, model, &values)
                 {
-                    tags.insert(format!("CanonCustom:{}", name), rendered);
+                    if !crate::exiftool_tables::attribution::silenced(
+                        crate::exiftool_tables::attribution::Token::LegacyL2,
+                    ) {
+                        tags.insert(format!("CanonCustom:{}", name), rendered);
+                    }
                 }
             }
 

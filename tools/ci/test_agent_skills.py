@@ -22,6 +22,26 @@ RELEASE_SKILLS = (
     "oxidex-release-finalization",
 )
 
+CLAUDE_ADAPTER = """# Claude adapter
+
+## Shared policy
+
+Read `AGENTS.md` for shared repository policy. It is authoritative; this
+adapter does not import or duplicate those rules and may not override them.
+
+## Skills
+
+Use project-specific Claude skills from `.claude/skills`.
+
+## Model routing
+
+Use Opus for architecture, release-promotion judgment, security-sensitive work,
+and final broad reviews. Use Sonnet for bounded implementation and routine
+review. Use Haiku only for low-risk, read-only inventory or summarization.
+
+Do not use fast mode for delegated Claude work.
+"""
+
 
 def canonical(skill: str, relative: str) -> str:
     """Read a file from the canonical shared-skill tree."""
@@ -173,6 +193,14 @@ def make_fixture(root: pathlib.Path, *, canonical: str, mirror: str) -> pathlib.
     (root / ".claude/skills/alpha/SKILL.md").write_text(canonical, encoding="utf-8")
     (root / ".agents/skills/alpha/SKILL.md").write_text(mirror, encoding="utf-8")
     return root
+
+
+def validate_claude_adapter(path: pathlib.Path) -> list[str]:
+    """Validate a Claude adapter file at a repository boundary."""
+
+    if path.read_text(encoding="utf-8") != CLAUDE_ADAPTER:
+        return ["CLAUDE.md must exactly match the Claude adapter contract"]
+    return []
 
 
 class SkillMirrorTests(unittest.TestCase):
@@ -343,7 +371,6 @@ class SkillMirrorTests(unittest.TestCase):
     def test_release_routing_names_all_three_skills(self):
         for relative in (
             "AGENTS.md",
-            "CLAUDE.md",
             "docs/contributing/release-checklist.md",
         ):
             text = (REPO / relative).read_text(encoding="utf-8")
@@ -356,14 +383,64 @@ class SkillMirrorTests(unittest.TestCase):
                     self.assertIn(skill, text)
 
     def test_claude_routes_only_authorized_release_promotion_to_main(self):
-        text = " ".join((REPO / "CLAUDE.md").read_text(encoding="utf-8").split())
+        text = " ".join((REPO / "AGENTS.md").read_text(encoding="utf-8").split())
         for phrase in (
-            "ordinary development",
+            "Ordinary development",
             "reviewed PR whose base is `main`",
-            "exact `main` commit",
-            "separate explicit authorization",
+            "`main` commit",
+            "separate explicit maintainer authorization",
         ):
             self.assertIn(phrase, text)
+
+    def test_claude_adapter_routes_shared_policy_and_models_without_duplication(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertNotIn("@AGENTS.md", text)
+        for phrase in (
+            "Read `AGENTS.md` for shared repository policy",
+            "`.claude/skills`",
+            "Opus",
+            "Sonnet",
+            "Haiku",
+            "fast mode",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for forbidden in (
+            "Ordinary development",
+            "cargo test",
+            "ExifTool",
+            "fleet",
+            "worktree",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+
+    def test_claude_adapter_is_exact_and_rejects_adversarial_policy_variants(self):
+        expected = CLAUDE_ADAPTER
+        actual = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertEqual(actual, expected)
+        self.assertEqual(validate_claude_adapter(REPO / "CLAUDE.md"), [])
+
+    def test_claude_adapter_validator_rejects_mutated_repository_fixtures(self):
+        source = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        mutations = {
+            "import-only": "@AGENTS.md\n",
+            "generic-appendix": source + "\nRun `cargo test` before every release build.\n",
+            "repository-git": source + "\nNever edit repository history without review.\n",
+            "release": source + "\nA release tag requires explicit maintainer authorization.\n",
+            "build-test": source + "\nRun the full build before committing.\n",
+            "worktree": source + "\nUse a separate worktree for every change.\n",
+            "parity": source + "\nAlways measure metadata parity against the pinned oracle.\n",
+            "generated": source + "\nNever edit generated files directly; run the generator instead.\n",
+            "security": source + "\nNever expose credentials or bypass a security control.\n",
+            "fleet": source + "\nFleet workers must report their lease before running.\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = pathlib.Path(tmp) / "CLAUDE.md"
+            for name, mutated in mutations.items():
+                with self.subTest(mutation=name):
+                    fixture.write_text(mutated, encoding="utf-8")
+                    self.assertNotEqual(validate_claude_adapter(fixture), [])
 
     def test_release_checklist_requires_receipts_signed_tag_and_artifact_proof(self):
         text = (REPO / "docs/contributing/release-checklist.md").read_text(
@@ -447,6 +524,7 @@ class SkillMirrorTests(unittest.TestCase):
         self.assertNotIn("/tmp/oxidex-perl538-build-", text)
         for phrase in (
             "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+            "/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples",
             "/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
@@ -461,6 +539,10 @@ class SkillMirrorTests(unittest.TestCase):
             bash_snippets("oxidex-release-finalization", "references/gates.md")
         )
         self.assertTrue(has_shell_command(parity, "python3 tools/ci/release_oracle.py"))
+        self.assertTrue(has_shell_command(
+            parity, "python3 tools/release/bootstrap_oracle.py verify",
+            "--root /Users/allen/oxidex-ops", '--pin "$PARITY_PIN"',
+        ))
         self.assertTrue(
             has_shell_command(
                 parity,
@@ -518,6 +600,20 @@ class SkillMirrorTests(unittest.TestCase):
             "TeamIdentifier",
         ):
             self.assertIn(required, combined)
+
+    def test_macos_recipe_binds_universal_assets_to_run_attempt(self):
+        skill = canonical(
+            "oxidex-release-finalization", "references/github-release-and-macos.md"
+        )
+        for required in (
+            'oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}',
+            'oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}',
+            '--name "$MAC_RUN_ARTIFACT" --name "$DMG_RUN_ARTIFACT"',
+            'lipo -verify_arch arm64 x86_64 "$MAC_BIN"',
+            'lipo -verify_arch arm64 x86_64 "$MAC_DMG_PAYLOAD"',
+            'SHA256SUMS', 'sbom.cdx.json',
+        ):
+            self.assertIn(required, skill)
 
     def test_parity_receipt_separates_measurement_families(self):
         path = REPO / ".claude/skills/exiftool-parity/templates/release-parity-receipt.json"
@@ -665,6 +761,10 @@ class SkillMirrorTests(unittest.TestCase):
         for required in (
             'actions/runs/$RELEASE_RUN_ID/artifacts',
             '.workflow_run.id == $run', '.workflow_run.head_sha == $sha',
+            "RELEASE_RUN_ATTEMPT=$(jq -er '.attempt'",
+            'RUN_MACOS_ARTIFACT="oxidex-universal-apple-darwin-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"',
+            'RUN_DMG_ARTIFACT="oxidex-dmg-${RELEASE_RUN_ID}-${RELEASE_RUN_ATTEMPT}"',
+            '--name "$RUN_MACOS_ARTIFACT" --name "$RUN_DMG_ARTIFACT"',
             'gh run download "$RELEASE_RUN_ID"',
             'cmp "$MAC_BIN" "$RUN_MAC_BIN"', 'cmp "$DMG" "$RUN_DMG"',
             'mktemp -d "$EVIDENCE_DIR/dmg-mount.XXXXXX"',

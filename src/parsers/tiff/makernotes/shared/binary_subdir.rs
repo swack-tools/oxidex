@@ -537,6 +537,13 @@ pub(crate) fn decode_binary_subdir_with(
         }
         let key = format!("{prefix}:{}", field.name);
         let value = parts.join(" ");
+        // SetMember above remains visible to later fields even when the row is
+        // attributed away.
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::LegacyL2,
+        ) {
+            continue;
+        }
         if field.low_priority {
             // ExifTool's `Priority => 0`: a sub-directory copy of a tag the
             // `Main` table also reports must not overwrite it.

@@ -24,17 +24,17 @@ features:
     linkText: Architecture
   - icon: 🎯
     title: 16,684 Tag Definitions
-    details: 77.5% measured extraction conformance against pinned ExifTool, across 126 file types, in the last published coverage report. A definition only says a tag exists; the conformance score says what OxiDex extracts.
+    details: 77.5% measured extraction conformance against pinned ExifTool, across 126 file types, in the last published coverage report. It is historical evidence, not a v2.0.0-beta.1 parity receipt; a definition says a tag exists, not that OxiDex extracts it.
     link: /guide/exiftool-parity
     linkText: How parity is measured
   - icon: 🛡️
     title: Proven reads cannot regress
-    details: 2,378 ExifTool catalog entries are proven read on ExifTool's own test corpus. A CI gate fails any change that loses one, and a ratchet lets 25 parity counts move only in the good direction.
+    details: Release parity evidence remains pending. The regression gate and its ratchets are safeguards, not a v2.0.0-beta.1 parity receipt.
     link: /guide/exiftool-parity#guarantees-that-stop-regressions
     linkText: The guarantees
   - icon: ⚡
-    title: Measured speed
-    details: 3.0x ExifTool 13.59 on a single JPEG and 1.83x per core on a 194-file corpus. Measured locally with pinned tools; more with parallel batch reads.
+    title: Historical benchmark record
+    details: The linked figures were measured at commit 8f04e288 for OxiDex 1.2.1. They are historical context, explicitly not v2.0.0-beta.1 performance evidence.
     link: /performance/
     linkText: The measurements
   - icon: ✍️
@@ -50,8 +50,10 @@ features:
 ---
 
 ::: warning v2.0.0-beta.1: a pre-release
-This site documents the 2.0 line, built on the `refactor/tag-machinery`
-branch. It is a **beta**: output and API may still change before 2.0.0.
+This site documents the pre-tag 2.0 development line on
+`refactor/tag-machinery`; it is not a published beta release. The final
+reviewed `main` SHA, signed tag, release date, assets, and release receipts are
+pending. Output and API may still change before 2.0.0.
 2.0 changes tag keys, value formatting and parts of the API compared with
 1.x. Read [Migrating from 1.x to 2.0](/guide/migrating-from-1x) before
 upgrading. The previous stable release is
@@ -80,10 +82,11 @@ oxidex -r -j /path/to/photos/
 
 ## What OxiDex is today
 
-- **A reader first.** Of the 131 formats that detection can map, 129 have
-  a parser. That includes camera RAW, which covers 36 RAW sub-formats. Many
-  more file types are *identified*, from ExifTool's own type tables, but not
-  parsed. [Supported formats](/reference/formats/) lists which is which.
+- **A reader first.** Development-state source inspection maps 131 formats in
+  detection and 129 to a parser, including camera RAW with 36 RAW sub-formats.
+  This is not a v2.0.0-beta.1 parity receipt. Many more file types are
+  *identified*, from ExifTool's own type tables, but not parsed.
+  [Supported formats](/reference/formats/) lists which is which.
 - **Parity is measured, not claimed.** Every number on this site names the
   instrument and commit that produced it. The pinned ExifTool is always
   checked for both its version and its capabilities first.

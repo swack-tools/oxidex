@@ -3,10 +3,7 @@
 //! These tests verify the end-to-end functionality of writing modified EXIF
 //! metadata back to JPEG files.
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::core::metadata_map::MetadataMap;
 use oxidex::core::tag_value::TagValue;
 use oxidex::io::buffered_reader::BufferedReader;

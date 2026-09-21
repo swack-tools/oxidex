@@ -27,7 +27,8 @@ Resolution order:
 
 1. ``$EXIFTOOL`` -- an explicit binary path, for callers who mean it.
 2. ``$EXIFTOOL_CACHE_DIR/exiftool/exiftool`` (cache dir defaults to
-   ``/tmp/oxidex-exiftool-cache``) run under an explicitly chosen perl.
+   ``/Users/allen/oxidex-ops/cache/exiftool/13.59``) run under the durable
+   pinned Perl installation.
 3. ``exiftool`` off ``PATH`` -- last resort, reported as unverified.
 
 Because the pinned form needs an interpreter and an ``-I`` flag, an oracle is an
@@ -48,13 +49,15 @@ from typing import Any, NamedTuple
 BINARY_ENV = "EXIFTOOL"
 CACHE_DIR_ENV = "EXIFTOOL_CACHE_DIR"
 PERL_ENV = "EXIFTOOL_PERL"
+TABLE_PERL_ENV = "OXIDEX_TABLES_PERL"
 ALLOW_SKEW_ENV = "OXIDEX_ALLOW_EXIFTOOL_SKEW"
-DEFAULT_CACHE_DIR = "/tmp/oxidex-exiftool-cache"
+DEFAULT_CACHE_DIR = "/Users/allen/oxidex-ops/cache/exiftool/13.59"
+DURABLE_ROOT = Path("/Users/allen/oxidex-ops").resolve()
 
 # Ordering is a preference, not the decision: choose_perl() picks the first that
 # actually loads REQUIRED_MODULES. Bare "perl" is last precisely because
 # `#!/usr/bin/env perl` finding a module-less Homebrew perl is the bug being fixed.
-PERL_CANDIDATES = ("/usr/bin/perl5.34", "/usr/bin/perl", "perl")
+PERL_CANDIDATES = ("/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",)
 
 # Archive::Zip gates every OOXML/ZIP-container format. Without it ExifTool
 # reports FileType: ZIP for a .docx and says so only in a Warning nothing reads.
@@ -144,8 +147,28 @@ class Oracle(NamedTuple):
 
 
 def cache_dir() -> Path:
-    """Root of the cached ExifTool checkout."""
-    return Path(os.environ.get(CACHE_DIR_ENV) or DEFAULT_CACHE_DIR)
+    """Versioned cache directory whose ``exiftool/`` child is the checkout."""
+    return durable_environment_path(CACHE_DIR_ENV, DEFAULT_CACHE_DIR)
+
+
+def durable_environment_path(name: str, default: str | None = None) -> Path:
+    """Fence a lexical durable environment path without accepting symlinks."""
+    raw = os.environ.get(name, "").strip() or default
+    if not raw:
+        raise OracleError(f"${name} is not set")
+    value = Path(os.path.abspath(Path(raw).expanduser()))
+    try:
+        value.relative_to(DURABLE_ROOT)
+    except ValueError as exc:
+        raise OracleError(
+            f"${name} must be below durable root {DURABLE_ROOT}, got {value}"
+        ) from exc
+    cursor = Path(value.anchor)
+    for component in value.parts[1:]:
+        cursor /= component
+        if cursor.is_symlink():
+            raise OracleError(f"${name} must not contain a symlink: {cursor}")
+    return value
 
 
 def pinned_binary(cache: Path | None = None) -> Path:
@@ -219,7 +242,7 @@ def choose_perl() -> str | None:
     """
     override = os.environ.get(PERL_ENV, "").strip()
     if override:
-        return override
+        return str(durable_environment_path(PERL_ENV))
     fallback = None
     for cand in PERL_CANDIDATES:
         if not _runs([cand, "-e", "1"]):
@@ -228,6 +251,32 @@ def choose_perl() -> str | None:
             return cand
         fallback = fallback or cand
     return fallback
+
+
+def choose_table_perl(explicit: str | None = None) -> str | None:
+    """Resolve the table verifier's explicit, capability-checked interpreter.
+
+    CI builds its pinned source tree under an ephemeral runner and therefore
+    cannot use the workstation release root.  This separate channel is used
+    only by the source-table verifier; ordinary parity/release resolution keeps
+    the durable-root fence in :func:`choose_perl`.
+    """
+    raw = (explicit or os.environ.get(TABLE_PERL_ENV, "")).strip()
+    if not raw:
+        return choose_perl()
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    perl = str(resolved)
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        return None
+    if not _runs([perl, "-e", "1"]) or missing_modules(perl):
+        return None
+    return perl
 
 
 def shebang_interpreter(binary: str | Path) -> str | None:
@@ -301,7 +350,7 @@ def resolve(explicit: str | None = None) -> Oracle:
     if explicit and explicit.strip():
         named = (explicit.strip(), "explicit argument")
     elif os.environ.get(BINARY_ENV, "").strip():
-        named = (os.environ[BINARY_ENV].strip(), f"${BINARY_ENV}")
+        named = (str(durable_environment_path(BINARY_ENV)), f"${BINARY_ENV}")
 
     # A named binary is invoked as-is, so its own shebang picks the interpreter
     # and that is what we probe. The pinned tree instead gets an interpreter we

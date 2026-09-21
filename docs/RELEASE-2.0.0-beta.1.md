@@ -1,9 +1,11 @@
 # Release readiness: v2.0.0-beta.1
 
-The first pre-release of the `refactor/tag-machinery` line. This page lists
-what must be true **before** the tag is pushed, and then exactly what the
-maintainer runs and what the workflows do in response. Nothing here has been
-tagged or published; publishing is the maintainer's decision.
+The intended first pre-release of the `refactor/tag-machinery` line. This page
+lists what must be true **before** the tag is pushed, and then exactly what the
+maintainer runs and what the workflows do in response. It is a checklist, not
+a release receipt: no final `main` SHA, date, tag, assets, parity receipt, or
+benchmark receipt has been recorded here. Nothing here has been tagged or
+published; publishing is the maintainer's decision.
 
 `2.0.0-beta.1` is a SemVer pre-release: the dot before the number is what
 makes `beta.10` sort after `beta.2`. Python tooling would spell it `2.0.0b1`
@@ -22,15 +24,17 @@ recollection.
       `Unreleased` with the release date.
 - [x] **Migration guide present.** `docs/guide/migrating-from-1x.md` (from
       #839).
-- [ ] **crates.io decision recorded.** One of options (a), (b) or (c) under
-      "crates.io" below is chosen, and the install instructions match it.
-- [ ] **Tag SHA chosen and frozen.** Record it: `SHA=$(git rev-parse origin/refactor/tag-machinery)`
+- [x] **crates.io decision recorded.** Option (c) is selected for this beta:
+      no crates.io package is published, and the install instructions match
+      that policy.
+- [ ] **Tag SHA chosen and frozen.** After the reviewed promotion PR is merged,
+      record it from the protected release branch: `SHA=$(git rev-parse origin/main)`
       after the last merge you intend to ship. Every box below is about
       *this* SHA, not "the tip" at some other moment.
 - [ ] **Push CI green on that SHA.** The `CI` workflow's `push` run for `$SHA`
       concluded `success` (not `cancelled`; a newer push cancels the older
       run, so a cancelled run is no evidence either way):
-      `gh run list --workflow CI --branch refactor/tag-machinery --event push --commit "$SHA" --json conclusion,url`
+      `gh run list --workflow CI --branch main --event push --commit "$SHA" --json conclusion,url`
 - [ ] **Corpus read regression gate passing on that SHA.** Within that same
       run, the `Corpus Read Regression Gate` job concluded `success` with a
       `verdict: PASS` line in its log. Exit 1 is a code regression (read the
@@ -55,25 +59,33 @@ recollection.
 
 ## Tag and publish
 
-Run from a checkout with the swackhamer key (the tag must be signed):
+Run from a clean checkout of the exact reviewed `main` commit. First perform
+the local dry run. It exercises every guard and creates and verifies the signed
+tag locally, then removes it without pushing:
 
 ```bash
 SSH='ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer'
-GIT_SSH_COMMAND="$SSH" git fetch origin --tags
-SHA=<the frozen SHA from the checklist>
-git show -s --format='%H %s' "$SHA"
-git show "$SHA":Cargo.toml | grep -m1 '^version = "2.0.0-beta.1"$'   # must print the line
-git tag -s v2.0.0-beta.1 -m "OxiDex v2.0.0-beta.1" "$SHA"
-git tag -v v2.0.0-beta.1
-GIT_SSH_COMMAND="$SSH" git push origin "refs/tags/v2.0.0-beta.1"
+GIT_SSH_COMMAND="$SSH" git fetch origin main --tags
+SHA=$(git rev-parse origin/main)
+test "$(git rev-parse HEAD)" = "$SHA"
+OXIDEX_TAG_DRY_RUN=1 just tag 2.0.0-beta.1 "$SHA"
 ```
 
-Or, equivalently, `just tag 2.0.0-beta.1 "$SHA"`. It refuses a commit that is
-not on `origin/refactor/tag-machinery` or `origin/main`, a commit GitHub does
-not report as signed and verified, an existing tag, or a `Cargo.toml` version
-that differs; it then signs with `git tag -s`, verifies the signature locally,
-and only then pushes. `OXIDEX_TAG_DRY_RUN=1 just tag 2.0.0-beta.1` runs every
-check and the sign-and-verify step, then deletes the tag without pushing.
+Stop after the dry run and obtain separate maintainer authorization for the
+exact tuple `v2.0.0-beta.1@$SHA`. Authorization to prepare or merge the
+promotion PR is not tag authorization. Only after that exact authorization is
+recorded may the maintainer run the real recipe:
+
+```bash
+export OXIDEX_TAG_AUTHORIZATION="v2.0.0-beta.1@$SHA"
+GIT_SSH_COMMAND="$SSH" just tag 2.0.0-beta.1 "$SHA"
+```
+
+`just tag` refuses anything not reachable from `origin/main`, a commit GitHub
+does not report as signed and verified, an existing local or remote tag, a
+`Cargo.toml` version mismatch, or an authorization value that is not the exact
+tag and full commit SHA. It creates and verifies the signed tag before its
+single non-forcing push. Do not replace this recipe with manual tag commands.
 
 ### What the push triggers
 
@@ -82,22 +94,27 @@ check and the sign-and-verify step, then deletes the tag without pushing.
 1. `verify-version` runs `tools/ci/release_version.py`. It fails the whole
    run if the tag and `Cargo.toml` disagree, and emits `prerelease=true`
    because the tag contains `-`.
-2. Builds Linux x86_64/arm64 (musl), Windows x86_64, and a signed, notarized
-   macOS arm64 binary and DMG (`oxidex-v2.0.0-beta.1.dmg`).
-3. `create-release` publishes GitHub release "Release v2.0.0-beta.1" as a
-   **pre-release** with `make_latest: false`, so `/releases/latest` stays on
-   v1.2.1.
-4. `update-docs` is **skipped** for a pre-release: the stable gh-pages
+2. Builds Linux x86_64/arm64 (musl), Windows x86_64, and a signed universal
+   macOS binary plus notarized DMG (`oxidex-v2.0.0-beta.1.dmg`).
+3. `create-release` creates a fail-closed draft **pre-release** with
+   `make_latest: false`, uploads the exact asset set, and records an independent
+   run/attempt provenance artifact before any release asset is uploaded.
+4. `verify-release-assets` downloads that exact run's provenance and the draft
+   release, binds them to the tag commit and release ID, checks the exact asset
+   set and digests, and exercises Gatekeeper on both downloaded executables.
+5. `publish-release` independently repeats the provenance, release-ID, draft,
+   and asset checks before publishing. `/releases/latest` stays on v1.2.1.
+6. `update-docs` is **skipped** for a pre-release: the stable gh-pages
    changelog and version dropdown are left alone.
 
+If a failed run leaves a draft release, stop and inspect it manually. Do not
+delete, reuse, overwrite, or rerun against that draft; resolve the incident and
+obtain explicit authorization for a new immutable tag.
+
 **`docker.yml` (Docker Hub `swackhamer/oxidex`).** Its first job only
-publishes a tag reachable from `origin/main`. `refactor/tag-machinery` is
-not merged into `main`, so for this tag it logs *"not reachable from
-origin/main; Docker image publication is skipped"* and publishes **no image**.
-That is the existing policy and this release doesn't change it. If a beta
-image is wanted, that is a separate maintainer decision about the gate.
-When a pre-release tag is on `main`, it now publishes only
-`:v2.0.0-beta.1` and `:2.0.0-beta.1` and never moves `:latest`.
+publishes a tag reachable from `origin/main`; the guarded recipe above and the
+release workflow enforce the same ancestry. For this pre-release it publishes
+only `:v2.0.0-beta.1` and `:2.0.0-beta.1` and never moves `:latest`.
 
 **crates.io: not published by this release, and blocked for the root crate.**
 No workflow publishes to crates.io, and a tag push doesn't publish crates.
@@ -144,15 +161,15 @@ The name is the maintainer's decision. The options:
       crates.io badge in `README.md`; and the snippet in the
       `src/parsers/magika_detector.rs` docs. The tag crates keep their
       names.
-- [ ] **(c) No crates.io for the beta.** Ship the GitHub pre-release
+- [x] **(c) No crates.io for the beta.** Ship the GitHub pre-release
       binaries only. Rust users take a git dependency on the signed tag:
       `oxidex = { git = "https://github.com/swack-tools/oxidex", tag = "v2.0.0-beta.1" }`.
       This needs nothing else from this PR, and it is what happens by
       default if no box above is ticked.
 
-The docs already tell users not to run `cargo install oxidex` and to depend
-on Git, which matches (c). One leftover: the `README.md` crates.io badge
-points at `crates.io/crates/oxidex`, which is the other account's stub.
+The docs tell users not to run `cargo install oxidex` and to depend on Git,
+which matches the selected policy. The README no longer advertises a crates.io
+package or docs.rs API page for this beta.
 
 If the tag crates are published (under (a) or (b)), do it by hand. Cargo
 orders the crates by dependency, and `publish = false` keeps the root crate
@@ -169,8 +186,10 @@ A published pre-release is only selected by a requirement that names a
 pre-release (`=2.0.0-beta.1` or `^2.0.0-beta.1`). `^2` will not pick it,
 and that is intended.
 
-**Homebrew.** `packaging/homebrew/oxidex.rb` is a template that doesn't
-track releases. A tag doesn't change it.
+**Homebrew.** Homebrew is disabled for this beta. There is no active formula;
+the placeholder is retained as `packaging/homebrew/oxidex.rb.disabled` and
+must remain quarantined until a real release asset, checksum, tests, workflow,
+and approved policy exist. A tag does not enable it.
 
 ## Versions
 

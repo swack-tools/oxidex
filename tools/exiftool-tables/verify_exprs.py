@@ -857,10 +857,15 @@ def main():
         type=Path,
         help="write the oracle-approved expression inventory for codegen; only written on PASS",
     )
+    ap.add_argument(
+        "--allow-dirty-path", action="append", type=Path, default=[],
+        help="regeneration-owned path permitted to be dirty; any other dirty path still refuses",
+    )
     args = ap.parse_args()
 
     git = instrument.git_state()
-    dirty_overridden = instrument.refuse_if_dirty(git, "verify_exprs.py")
+    dirty_overridden = instrument.refuse_if_dirty(
+        git, "verify_exprs.py", allowed_dirty_paths=args.allow_dirty_path)
     instrument.print_header(
         tool="verify_exprs.py",
         git=git,

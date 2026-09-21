@@ -1,0 +1,5 @@
+# This file is intentionally disabled for OxiDex 2.0.0-beta.1.
+#
+# The beta release workflow does not publish a Homebrew formula or bottles.
+# Keep this placeholder out of Homebrew's formula paths until a maintainer
+# enables that distribution and supplies a real release URL and checksum.

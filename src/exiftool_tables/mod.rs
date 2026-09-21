@@ -41,6 +41,7 @@
 // mounted here under the module names every consumer already uses, so
 // `binary_tables::CANON_CAMERASETTINGS` and `ifd_tables::IFD_EXIF_MAIN` are
 // unchanged paths. `tools/exiftool-tables/table_modules.py` owns the layout.
+pub mod attribution;
 #[path = "binary/mod.rs"]
 pub mod binary_tables;
 pub mod charset;

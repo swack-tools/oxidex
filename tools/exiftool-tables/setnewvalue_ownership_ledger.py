@@ -15,7 +15,7 @@ from typing import Any, Mapping
 
 from checkexif_recipes import RecipeMalformed, RecipeRefused
 from setnewvalue_addressing import (_NAME, _capture_context, _fact, _mapping,
-                                    compile_addressing)
+                                    compile_addressing, portable_capture_context)
 
 
 SCHEMA = "setnewvalue_ownership_ledger_v1"
@@ -38,7 +38,7 @@ def _identity(source: Mapping[str, Any]) -> str:
 def _current_source(document: Mapping[str, Any]) -> tuple[dict[str, Any], dict[tuple[str, str, str], str]]:
     """Authenticate the release then derive qualified ownership from its rows."""
     addressing, report = compile_addressing(document)
-    capture = _capture_context(document)
+    capture = portable_capture_context(_capture_context(document))
     version = document.get("exiftool_version", capture["exiftool_version"])
     if not isinstance(version, str) or not version or version != capture["exiftool_version"]:
         raise RecipeRefused("ownership ledger ExifTool version disagrees with capture context")

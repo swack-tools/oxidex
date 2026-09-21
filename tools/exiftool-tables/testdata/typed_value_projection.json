@@ -1,0 +1,36 @@
+{
+  "cases": [
+    {"kind":"integer","key":"Fixture:Integer","raw":{"type":"Integer","value":7},"value":{"type":"Integer","value":7},"print":{"type":"String","value":"seven"}},
+    {"kind":"float","key":"Fixture:Float","raw":{"type":"Float","value":1.5},"value":{"type":"Float","value":1.5},"print":{"type":"String","value":"1.50"}},
+    {"kind":"rational","key":"Fixture:Rational","raw":{"type":"Rational","value":{"numerator":1,"denominator":80}},"value":{"type":"Float","value":0.0125},"print":{"type":"String","value":"1/80 s"}},
+    {"kind":"enum","key":"Fixture:Enum","raw":{"type":"Integer","value":6},"value":{"type":"Integer","value":6},"print":{"type":"String","value":"Rotate 90 CW"}},
+    {"kind":"date_time","key":"Fixture:DateTime","raw":{"type":"DateTime","value":"2024-01-02T03:04:05Z"},"value":{"type":"DateTime","value":"2024-01-02T03:04:05Z"},"print":{"type":"String","value":"2024:01:02 03:04:05 UTC"}},
+    {"kind":"bytes","key":"Fixture:Bytes","raw":{"type":"Binary","value":[82,57,56]},"value":{"type":"Binary","value":[82,57,56]},"print":{"type":"String","value":"R98 bytes"}},
+    {"kind":"binary_placeholder","key":"Fixture:BinaryPlaceholder","raw":{"type":"Binary","value":[1,2,3,4]},"value":{"type":"Binary","value":[1,2,3,4]},"print":{"type":"String","value":"(Binary data 4 bytes, use -b option to extract)"}},
+    {"kind":"list","key":"Fixture:List","raw":{"type":"Array","value":[{"type":"String","value":"raw"}]},"value":{"type":"Array","value":[{"type":"String","value":"value"}]},"print":{"type":"String","value":"one, two"}},
+    {"kind":"undefined_suppressed","key":"Fixture:Suppressed","raw":{"type":"String","value":"undef"},"value":{"type":"String","value":"undef"},"print":{"type":"String","value":""}},
+    {"kind":"units","key":"Fixture:Units","raw":{"type":"Float","value":50.0},"value":{"type":"Float","value":50.0},"print":{"type":"String","value":"50 mm"}},
+    {"kind":"negative_zero","key":"Fixture:NegativeZero","raw":{"type":"Float","value":-0.0},"value":{"type":"Float","value":-0.0},"print":{"type":"String","value":"-0.0 EV"}}
+  ],
+  "composite_parse_classifications": [
+    {"id":"perl_join","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool.pm:3697 (converted list scalar rejoin)"},
+    {"id":"rational_parts","parse_count":2,"input_channel":"ValueConv","source":"Image/ExifTool.pm:5969-5978 (ToFloat adapter boundary)"},
+    {"id":"to_float_prefix","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool.pm:5969-5978 (ToFloat numeric prefix)"},
+    {"id":"printed_integer_direct","parse_count":1,"input_channel":"PrintConv","source":"Image/ExifTool.pm:3627-3634 (PrintConv integer input)"},
+    {"id":"printed_integer_unknown","parse_count":1,"input_channel":"PrintConv","source":"Image/ExifTool.pm:3627-3634 (PrintConv Unknown (N) fallback)"},
+    {"id":"perl_is_float","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool.pm:5943-5952 (IsFloat)"},
+    {"id":"olympus_lens_aperture","parse_count":1,"input_channel":"PrintConv","source":"Image/ExifTool/Olympus.pm:4283-4294,4337-4350 ($prt[1] lens aperture)"},
+    {"id":"cfa_rows","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5756-5772 (PrintCFAPattern dimensions)"},
+    {"id":"cfa_columns","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5756-5772 (PrintCFAPattern dimensions)"},
+    {"id":"cfa_color","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5756-5772 (PrintCFAPattern colors)"},
+    {"id":"timezone_hours","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:4735-4737 (subsecond timezone merge)"},
+    {"id":"timezone_minutes","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:4735-4737 (subsecond timezone merge)"},
+    {"id":"resolution_parts","parse_count":2,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:2762-2770 (FocalPlane rational fields)"},
+    {"id":"megapixels_dimensions","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:4767-4770 (Megapixels digit extraction)"},
+    {"id":"sensor_size_trailing_dimension","parse_count":1,"input_channel":"PrintConv","source":"Image/ExifTool/Exif.pm:5451-5474 (SensorSize display suffix)"},
+    {"id":"canon_camera_iso","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Canon.pm:10054-10067 (numeric CameraISO)"},
+    {"id":"cfa_pattern_rows","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5221-5233 (CFAPattern dimensions)"},
+    {"id":"cfa_pattern_columns","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5221-5233 (CFAPattern dimensions)"},
+    {"id":"gps_position_degrees","parse_count":1,"input_channel":"ValueConv","source":"Image/ExifTool/Exif.pm:5271-5289 (GPSPosition decimal degrees)"}
+  ]
+}

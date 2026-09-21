@@ -15,7 +15,19 @@
 
 use super::tag_value::TagValue;
 use oxidex_tags::TagId;
+use std::borrow::Cow;
 use std::sync::Arc;
+
+/// Which of ExifTool's value stages a consumer wants to observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueChannel {
+    /// The typed value as stored in the source, before ValueConv.
+    Stored,
+    /// The value after ValueConv and before PrintConv.
+    ValueConv,
+    /// The final display value after PrintConv.
+    PrintConv,
+}
 
 /// An interned group/tag-name string.
 ///
@@ -90,6 +102,36 @@ pub(crate) fn shim_group_priority(group0: &str) -> u8 {
 /// actually tracks: a value in up to three forms, a priority, a file-order
 /// position, and group/instance identity -- rather than the one `TagValue`
 /// today's `MetadataMap` keeps per key.
+///
+/// Every field remains public so downstream code can use complete literals
+/// and struct-update syntax, as it could before value channels were added.
+///
+/// ```
+/// use oxidex::core::{Instance, Provenance, TagId, TagOccurrence, TagValue};
+/// use std::sync::Arc;
+///
+/// let occurrence = TagOccurrence {
+///     id: TagId::Named("EXIF:Make".to_string()),
+///     name: Arc::from("Make"),
+///     group0: Arc::from("EXIF"),
+///     group1: Arc::from("IFD0"),
+///     group2: None,
+///     instance: Instance::default(),
+///     raw: TagValue::new_string("Canon"),
+///     value: None,
+///     print: None,
+///     stored: None,
+///     priority: 1,
+///     is_list: false,
+///     order: 0,
+///     origin: Provenance::default(),
+/// };
+/// let updated = TagOccurrence {
+///     raw: TagValue::new_string("Nikon"),
+///     ..occurrence
+/// };
+/// assert_eq!(updated.raw, TagValue::new_string("Nikon"));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagOccurrence {
     /// Canonical numeric/table identity where one exists. Shim-minted
@@ -153,15 +195,41 @@ pub struct TagOccurrence {
 }
 
 impl TagOccurrence {
+    /// Projects this occurrence through one canonical value channel.
+    ///
+    /// `Stored` falls back to `raw`; `ValueConv` prefers an explicit typed
+    /// form, then the existing legacy APEX conversion, then `raw`; and
+    /// `PrintConv` prefers an explicit print form before using the complete
+    /// `ValueConv` projection. No projection parses a display string.
+    /// Borrowed source/explicit forms produce `Cow::Borrowed`; the legacy
+    /// APEX conversion produces `Cow::Owned` because public `raw` and `name`
+    /// mutation makes hidden per-occurrence caching unsound.
+    pub fn project(&self, channel: ValueChannel) -> Cow<'_, TagValue> {
+        match channel {
+            ValueChannel::Stored => Cow::Borrowed(self.stored.as_ref().unwrap_or(&self.raw)),
+            ValueChannel::ValueConv => {
+                if let Some(value) = &self.value {
+                    Cow::Borrowed(value)
+                } else {
+                    crate::core::exiftool_compat::apex_value_conv(&self.name, &self.raw)
+                        .map(Cow::Owned)
+                        .unwrap_or(Cow::Borrowed(&self.raw))
+                }
+            }
+            ValueChannel::PrintConv => self
+                .print
+                .as_ref()
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| self.project(ValueChannel::ValueConv)),
+        }
+    }
+
     /// The value after ValueConv and before PrintConv for this exact occurrence.
     /// Explicit parser/composite forms take precedence. Legacy APEX rational
     /// storage needs its existing ValueConv; other stored values stay unchanged.
     /// Keep numeric precision here: only an output writer stringifies a float.
     pub(crate) fn value_conv(&self) -> TagValue {
-        self.value
-            .clone()
-            .or_else(|| crate::core::exiftool_compat::apex_value_conv(&self.name, &self.raw))
-            .unwrap_or_else(|| self.raw.clone())
+        self.project(ValueChannel::ValueConv).into_owned()
     }
 
     /// Mints an occurrence from a `MetadataMap::insert()` call site.
@@ -257,6 +325,107 @@ mod tests {
     use super::*;
 
     #[test]
+    fn value_channel_projection_matrix() {
+        let raw = TagValue::Binary(vec![0x00, 0xff, b'A']);
+        let stored = TagValue::Binary(vec![0x00, 0xff]);
+        let typed = TagValue::Array(vec![TagValue::Float(-0.0), TagValue::new_string("undef")]);
+        let printed = TagValue::new_string("(Binary data 3 bytes)");
+        let occurrence = TagOccurrence {
+            stored: Some(stored.clone()),
+            value: Some(typed.clone()),
+            print: Some(printed.clone()),
+            ..TagOccurrence::from_insert_shim("EXIF:Payload", raw.clone(), 0)
+        };
+
+        assert_eq!(occurrence.project(ValueChannel::Stored).as_ref(), &stored);
+        assert_eq!(occurrence.project(ValueChannel::ValueConv).as_ref(), &typed);
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &printed
+        );
+        let projection = occurrence.project(ValueChannel::ValueConv);
+        let TagValue::Array(items) = projection.as_ref() else {
+            panic!("typed list must stay a list");
+        };
+        assert!(matches!(&items[0], TagValue::Float(value) if value.is_sign_negative()));
+
+        let value_fallback = TagOccurrence {
+            print: None,
+            ..occurrence.clone()
+        };
+        assert_eq!(
+            value_fallback.project(ValueChannel::PrintConv).as_ref(),
+            &typed
+        );
+
+        let raw_fallback = TagOccurrence::from_insert_shim("EXIF:Payload", raw.clone(), 1);
+        for channel in [
+            ValueChannel::Stored,
+            ValueChannel::ValueConv,
+            ValueChannel::PrintConv,
+        ] {
+            assert_eq!(raw_fallback.project(channel).as_ref(), &raw);
+        }
+
+        let apex = TagOccurrence::from_insert_shim(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 36,
+                denominator: 10,
+            },
+            2,
+        );
+        assert!(matches!(
+            *apex.project(ValueChannel::ValueConv),
+            TagValue::Float(_)
+        ));
+    }
+
+    #[test]
+    fn warmed_projection_tracks_public_raw_and_name_mutation() {
+        let mut occurrence =
+            TagOccurrence::from_insert_shim("ExifIFD:ApertureValue", TagValue::Float(2.0), 0);
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(2.0)
+        );
+
+        occurrence.raw = TagValue::Float(4.0);
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(4.0)
+        );
+
+        occurrence.raw = TagValue::Float(2.0);
+        occurrence.name = intern("ShutterSpeedValue");
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(0.25)
+        );
+    }
+
+    #[test]
+    fn clone_projection_is_independent_and_equality_consistent() {
+        let occurrence =
+            TagOccurrence::from_insert_shim("ExifIFD:ApertureValue", TagValue::Float(2.0), 0);
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(2.0)
+        );
+        let mut cloned = occurrence.clone();
+        assert_eq!(cloned, occurrence);
+        cloned.name = intern("ShutterSpeedValue");
+        assert_eq!(
+            cloned.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(0.25)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Float(2.0)
+        );
+    }
+
+    #[test]
     fn interning_the_same_text_twice_yields_the_same_allocation() {
         let a = intern("EXIF:Make");
         let b = intern("EXIF:Make");
@@ -302,6 +471,25 @@ mod value_conv_projection_tests {
     use crate::core::formatters::numeric_precision::perl_number;
 
     #[test]
+    fn normal_projection_does_not_reapply_apex_conversion_to_native_value() {
+        let occurrence = TagOccurrence::from_insert_shim(
+            "ExifIFD:ApertureValue",
+            TagValue::Rational {
+                numerator: 249519,
+                denominator: 32768,
+            },
+            0,
+        );
+        let native_value = occurrence.value_conv();
+
+        assert_eq!(
+            resolved_display_value(&occurrence, false),
+            native_value,
+            "a missing explicit PrintConv must leave the native ValueConv untouched"
+        );
+    }
+
+    #[test]
     fn raw_projections_share_native_apex_readvalue_and_preserve_occurrence_winner() {
         let mut map = MetadataMap::new();
         // Actual pinned Canon.jpg EXIF value, plus ExifTool.jpg's different
@@ -343,7 +531,12 @@ mod value_conv_projection_tests {
         );
         assert_eq!(
             resolved_display_value(requested[0].occurrence, false),
-            TagValue::new_string("14.0")
+            // This synthetic occurrence has no explicit PrintConv. Canonical
+            // PrintConv projection therefore falls back to its ValueConv;
+            // reconstructing a display string from raw belongs to neither
+            // channel and would discard an explicit producer form when one
+            // exists.
+            TagValue::Float(default)
         );
         let all = resolve_requested_tags(&map, &["ApertureValue".to_string()], true);
         let values: Vec<String> = all

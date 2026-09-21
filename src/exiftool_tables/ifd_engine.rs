@@ -151,7 +151,7 @@ use crate::io::ByteOrder;
 use super::cond::{self, MemberValue};
 use super::conv::{self, Arm};
 use super::enabled_serial;
-use super::engine::{self, Dir, Emitted, Guard};
+use super::engine::{self, Dir, Emitted};
 use super::exprs;
 use super::ifd_schema::{
     IfdByteOrder, IfdStart, IfdSubdirEdge, IfdSubdirProcessor, IfdTable, IfdTag, RawConvEffect,
@@ -160,7 +160,7 @@ use super::runtime::{self, DecodedValue, decode_value_of};
 use super::session::{ByteOrder as SessionByteOrder, MemberVal, Session};
 use super::subdir::BaseExpr;
 use super::{
-    Fmt, SerialDir, SerialEmissionSink, SerialTable, SerialWalkResult, find_ifd_table,
+    Fmt, Omitted, SerialDir, SerialEmissionSink, SerialTable, SerialWalkResult, find_ifd_table,
     find_serial_table, find_table, process_serial_directory,
 };
 
@@ -179,6 +179,10 @@ pub struct IfdDir<'a> {
     /// entry's out-of-line value and every `SubDirectory` start are offsets
     /// into *this*.
     pub data: &'a [u8],
+    /// Stable identity of the enclosing file/data domain.
+    /// Separate from [`Self::base`]: it identifies buffers for the processed
+    /// directory guard but never participates in stored-offset correction.
+    pub data_domain: u64,
     /// `$$dirInfo{DirStart}`: where the 2-byte entry count sits in `data`.
     pub ifd_start: usize,
     /// The signed correction added to an entry's stored `value_offset` to
@@ -743,10 +747,11 @@ fn resolve(
 pub fn process_exif(
     table: &'static IfdTable,
     dir: IfdDir<'_>,
+    session: &mut Session,
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) {
-    process_exif_decoded(table, dir, ctx, out);
+    process_exif_decoded(table, dir, session, ctx, out);
 }
 
 /// What the walk did with one entry of the ROOT directory
@@ -817,25 +822,62 @@ pub struct RootReads {
     pub serial_rows: Vec<(usize, usize)>,
 }
 
+/// Why a decoded root walk did or did not produce per-entry reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessExifDecoded {
+    /// The root was admitted and walked.
+    Read(RootReads),
+    /// This session already processed the same table at the same address.
+    AlreadyProcessed,
+    /// The root was admitted, but its directory could not be read or walked.
+    Refused,
+}
+
+/// [`process_exif_decoded`] with the root guard outcome kept distinct from a
+/// directory refusal. Adapters that have a legacy residual producer need the
+/// distinction: an already-processed directory must suppress that producer,
+/// while a genuinely unreadable directory may fall back to it.
+pub fn process_exif_decoded_outcome(
+    table: &'static IfdTable,
+    dir: IfdDir<'_>,
+    session: &mut Session,
+    ctx: &mut cond::Ctx,
+    out: &mut Vec<Emitted>,
+) -> ProcessExifDecoded {
+    // ExifTool.pm:9065-9072: `ProcessDirectory` records the root directory's
+    // address too, which is what stops a table that points at itself.
+    if !session.processed().admit(
+        dir.data_domain,
+        ifd_addr(dir.ifd_start),
+        table_key(table),
+        false,
+    ) {
+        return ProcessExifDecoded::AlreadyProcessed;
+    }
+    let mut decoded = RootReads::default();
+    if walk(table, dir, session, ctx, out, Some(&mut decoded)).is_none() {
+        ProcessExifDecoded::Refused
+    } else {
+        ProcessExifDecoded::Read(decoded)
+    }
+}
+
 /// [`process_exif`], also reporting what the walk did with each entry of
 /// the ROOT directory and which entry each of its rows came from
-/// ([`RootReads`]). `None` when the directory itself was refused
-/// ([`read_ifd`], or the root guard).
+/// ([`RootReads`]). `None` when the directory itself was refused or the root
+/// guard had already processed it. Call [`process_exif_decoded_outcome`] when
+/// those cases must be distinguished.
 pub fn process_exif_decoded(
     table: &'static IfdTable,
     dir: IfdDir<'_>,
+    session: &mut Session,
     ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
 ) -> Option<RootReads> {
-    let mut guard = Guard::new();
-    // ExifTool.pm:9065-9072: `ProcessDirectory` records the root directory's
-    // address too, which is what stops a table that points at itself.
-    if !guard.admit(ifd_addr(dir.ifd_start), table_key(table), false) {
-        return None;
+    match process_exif_decoded_outcome(table, dir, session, ctx, out) {
+        ProcessExifDecoded::Read(decoded) => Some(decoded),
+        ProcessExifDecoded::AlreadyProcessed | ProcessExifDecoded::Refused => None,
     }
-    let mut decoded = RootReads::default();
-    walk(table, dir, ctx, &mut guard, out, Some(&mut decoded))?;
-    Some(decoded)
 }
 
 /// The `$$self{PROCESSED}` key for an IFD walked at `start`.
@@ -869,8 +911,59 @@ fn table_key<T>(table: &'static T) -> usize {
 fn walk(
     table: &'static IfdTable,
     dir: IfdDir<'_>,
+    session: &mut Session,
     ctx: &mut cond::Ctx,
-    guard: &mut Guard,
+    out: &mut Vec<Emitted>,
+    decoded: Option<&mut RootReads>,
+) -> Option<()> {
+    let order = match dir.byte_order {
+        ByteOrder::Little => SessionByteOrder::LittleEndian,
+        ByteOrder::Big => SessionByteOrder::BigEndian,
+    };
+    let saved_dir_name = ctx.members.get("DIR_NAME").cloned();
+    let saved_compression = ctx.members.get("Compression").cloned();
+    let saved_subfile_type = ctx.members.get("SubfileType").cloned();
+    match dir.group1 {
+        Some(name) => {
+            ctx.members
+                .insert("DIR_NAME", MemberValue::Str(name.to_string()));
+        }
+        None => {
+            ctx.members.remove("DIR_NAME");
+        }
+    }
+    ctx.members
+        .insert("Compression", MemberValue::Str(String::new()));
+    ctx.members
+        .insert("SubfileType", MemberValue::Str(String::new()));
+
+    let result = {
+        let mut scope = session.enter_directory(order, dir.group1);
+        walk_scoped(table, dir, &mut scope, ctx, out, decoded)
+    };
+
+    restore_ctx_member(ctx, "DIR_NAME", saved_dir_name);
+    restore_ctx_member(ctx, "Compression", saved_compression);
+    restore_ctx_member(ctx, "SubfileType", saved_subfile_type);
+    result
+}
+
+fn restore_ctx_member(ctx: &mut cond::Ctx<'_>, key: &'static str, saved: Option<MemberValue>) {
+    match saved {
+        Some(value) => {
+            ctx.members.insert(key, value);
+        }
+        None => {
+            ctx.members.remove(key);
+        }
+    }
+}
+
+fn walk_scoped(
+    table: &'static IfdTable,
+    dir: IfdDir<'_>,
+    session: &mut Session,
+    ctx: &mut cond::Ctx,
     out: &mut Vec<Emitted>,
     mut decoded: Option<&mut RootReads>,
 ) -> Option<()> {
@@ -895,18 +988,10 @@ fn walk(
     let rule = DirectoryRule::for_table(table, dir.ifd_start, entries.len());
     // Exif.pm:6294.
     let in_maker_notes = table.group0 == "MakerNotes";
-    // Exif.pm:6446-6447: "make sure that Compression and SubfileType are
-    // defined for this IFD (for Condition's)".
-    ctx.members
-        .insert("Compression", MemberValue::Str(String::new()));
-    ctx.members
-        .insert("SubfileType", MemberValue::Str(String::new()));
-
     // Autogeneration v2: the table's generated conversion arms, run first
-    // for every field they claim (mixed mode, `conv` module doc), over this
-    // directory's session (`directory_session`).
+    // for every field they claim (mixed mode, `conv` module doc), over the
+    // file's Session under the current directory scope.
     let generated = conv::decoder(table);
-    let mut session = directory_session(&dir);
 
     let mut warn_count = 0u32;
     for (index, entry) in entries.iter().enumerate() {
@@ -945,13 +1030,19 @@ fn walk(
             }
             Err(Refusal::Silent) => continue,
         };
+        session.count = Some(i64::from(entry.count));
+        session.format = Some(located.ty.name.to_string());
         // Exif.pm:6485, 6717-6720. A `$bad` entry never gets this far, which
         // is also ExifTool's order (Exif.pm:6713-6714 drops the tag before
         // the value-scoped `GetTagInfo`).
+        let resolved = resolve(table, entry, &located, ctx);
+        // Condition assignments mutate ExifTool's file object even when an
+        // alternative loses or no alternative ultimately matches.
+        sync_ctx_members(session, ctx);
         let Some(Resolved {
             tag,
             condition_resolved,
-        }) = resolve(table, entry, &located, ctx)
+        }) = resolved
         else {
             if direct_serial_no_match(table, entry.tag_id) {
                 if let Some(reads) = decoded.as_deref_mut() {
@@ -982,7 +1073,7 @@ fn walk(
         // option is off), so the edge is the whole of the tag.
         if let Some(edge) = &tag.subdir {
             let out_before = out.len();
-            let outcome = descend(table, tag, edge, &located, &dir, ctx, guard, out);
+            let outcome = descend(table, tag, edge, &located, &dir, session, ctx, out);
             if let DescendOutcome::Serial(outcome) = outcome
                 && let Some(reads) = decoded.as_deref_mut()
             {
@@ -1022,103 +1113,132 @@ fn walk(
         // first; on a decline the existing path below runs for this entry.
         let mut declined = false;
         if let Some(decode) = generated.filter(|_| conv::claims(table, tag)) {
-            sync_ctx_members(&mut session, ctx);
-            match generated_arm(decode, &mut session, tag, &raw) {
-                Arm::Decline(_) => declined = true,
+            let attempt = generated_arm(decode, session, tag, &raw);
+            match resolve_generated_attempt(attempt, session, ctx) {
+                Arm::Decline(_) => {
+                    declined = true;
+                }
                 Arm::Suppress => continue,
                 Arm::Report(report) => {
-                    for (key, value) in &report.writes {
-                        match member_of(value) {
-                            Some(member) => {
-                                ctx.members.insert(key, member);
-                            }
-                            None => {
-                                ctx.members.remove(key);
-                            }
-                        }
-                        let _ = session.set_member(key, value.clone());
-                    }
                     let Some(group1) = group1_of(table, tag, &dir) else {
                         continue;
                     };
-                    out.push(generated_row(table, tag, group1, &raw, fraction, report));
-                    if let Some(reads) = decoded.as_deref_mut() {
-                        reads.rows.push((out.len() - 1, index));
+                    if !super::attribution::silenced(super::attribution::Token::Engine) {
+                        out.push(generated_row(table, tag, group1, &raw, fraction, report));
+                        if let Some(reads) = decoded.as_deref_mut() {
+                            reads.rows.push((out.len() - 1, index));
+                        }
                     }
                     continue;
                 }
             }
         }
-        // ExifTool.pm:6107-6120: the rational `ReadValue` hands on is already
-        // `RoundFloat($n / $d, 10)`, so everything below -- the `RawConv`
-        // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
-        // that number, not the exact quotient. See `round_rationals`.
-        let raw = round_rationals(raw);
-        // ExifTool.pm:9484-9505: `FoundTag` runs `RawConv` before any
-        // conversion; the one shape carried as data stores the raw value
-        // and returns it unchanged (the assignment's value).
-        if let Some(RawConvEffect::SetMember { member }) = tag.raw_conv {
-            let Some(value) = member_value(&raw) else {
-                continue;
-            };
-            ctx.members.insert(member, value);
+        process_residual_entry(
+            table,
+            tag,
+            &dir,
+            raw,
+            fraction,
+            omitted,
+            declined,
+            session,
+            ctx,
+            out,
+            &mut decoded,
+            index,
+        );
+    }
+    Some(())
+}
+
+/// The existing per-entry producer, invoked only when no generated arm owns
+/// the entry or after a generated decline has discarded its staged effects.
+/// Keeping this as one named residual is the production seam used by the
+/// exactness tests: a declined byte run cannot bypass the same conversion,
+/// emission, and decoded-row bookkeeping used by a real directory walk.
+#[allow(clippy::too_many_arguments)]
+fn process_residual_entry(
+    table: &'static IfdTable,
+    tag: &IfdTag,
+    dir: &IfdDir<'_>,
+    raw: DecodedValue,
+    fraction: Option<(i64, i64)>,
+    omitted: Omitted,
+    generated_declined: bool,
+    session: &mut Session,
+    ctx: &mut cond::Ctx<'_>,
+    out: &mut Vec<Emitted>,
+    decoded: &mut Option<&mut RootReads>,
+    index: usize,
+) {
+    // ExifTool.pm:6107-6120: the rational `ReadValue` hands on is already
+    // `RoundFloat($n / $d, 10)`, so everything below -- the `RawConv`
+    // member, `ValueConv`, `PrintConv`, the unconverted report -- sees
+    // that number, not the exact quotient. See `round_rationals`.
+    let raw = round_rationals(raw);
+    // ExifTool.pm:9484-9505: `FoundTag` runs `RawConv` before any
+    // conversion; the one shape carried as data stores the raw value
+    // and returns it unchanged (the assignment's value).
+    if let Some(RawConvEffect::SetMember { member }) = tag.raw_conv {
+        let Some(value) = member_value(&raw) else {
+            return;
+        };
+        ctx.members.insert(member, value.clone());
+        let session_value = match value {
+            MemberValue::Str(s) => MemberVal::Str(s),
+            MemberValue::Bytes(bytes) => MemberVal::from_bytes(bytes),
+            MemberValue::Num(n) => MemberVal::Int(n),
+        };
+        let _ = session.set_member(member, session_value);
+    }
+    // A `Binary` tag with a refused `PrintConv` is withheld here too,
+    // although ExifTool never runs a PrintConv on a scalar-ref value
+    // (ExifTool.pm:3533): over-refusing is the safe direction.
+    if omitted.any() {
+        // A field whose generated arm declined this entry and whose static
+        // conversion is withheld: the engine cannot vouch for the absence,
+        // so the caller's hand arm runs (`EntryRead::Unread`).
+        if generated_declined && let Some(reads) = decoded.as_deref_mut() {
+            reads.entries[index] = EntryRead::Unread;
         }
-        // A `Binary` tag with a refused `PrintConv` is withheld here too,
-        // although ExifTool never runs a PrintConv on a scalar-ref value
-        // (ExifTool.pm:3533): over-refusing is the safe direction.
-        if omitted.any() {
-            // A field whose generated arm declined this entry and whose
-            // static conversion is withheld: the engine cannot vouch for the
-            // absence, so the caller's hand arm runs (`EntryRead::Unread`).
-            if declined {
-                if let Some(reads) = decoded.as_deref_mut() {
-                    reads.entries[index] = EntryRead::Unread;
-                }
-            }
-            continue;
-        }
-        let binary = tag.flags.binary && tag.value_conv.is_none();
-        let (value, value_conv) = if binary {
-            // ExifTool.pm:3535-3539: a `Binary` tag with no `ValueConv` gets
-            // `\$val`, and the CLI prints the placeholder with `length($$val)`
-            // (exiftool:3983-3988). A `ValueConv`, when present, runs
-            // normally and the result is an ordinary scalar. The placeholder
-            // is the same under `-n`.
-            let Some(len) = perl_length(&raw) else {
-                continue;
-            };
-            let placeholder = TagValue::String(format!(
+        return;
+    }
+    let binary = tag.flags.binary && tag.value_conv.is_none();
+    let (value, value_conv) = if binary {
+        // ExifTool.pm:3535-3539: `Binary` with no `ValueConv` gets `\$val`.
+        let Some(len) = perl_length(&raw) else {
+            return;
+        };
+        (
+            TagValue::String(format!(
                 "(Binary data {len} bytes, use -b option to extract)"
-            ));
-            (placeholder, None)
-        } else {
-            let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
-                // A verified ValueConv may faithfully return Perl undef:
-                // tag suppression, not permission to emit the raw value.
-                continue;
-            };
-            // ExifTool.pm:6330: the entry's value is ONE space-joined
-            // scalar unless the tag is a `List`.
-            let unconverted = || {
-                if tag.flags.list {
-                    runtime::to_tag_value(&converted)
-                } else {
-                    ifd_exiftool_value(&converted)
-                }
-            };
-            match runtime::render(tag.print_conv, &converted) {
-                Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
-                None => (unconverted(), None),
+            )),
+            None,
+        )
+    } else {
+        let Some(converted) = runtime::apply_value_conv(tag.value_conv, &raw) else {
+            return;
+        };
+        let unconverted = || {
+            if tag.flags.list {
+                runtime::to_tag_value(&converted)
+            } else {
+                ifd_exiftool_value(&converted)
             }
         };
-        let Some(group1) = group1_of(table, tag, &dir) else {
-            continue;
-        };
+        match runtime::render(tag.print_conv, &converted) {
+            Some(rendered) => (TagValue::String(rendered), Some(unconverted())),
+            None => (unconverted(), None),
+        }
+    };
+    let Some(group1) = group1_of(table, tag, dir) else {
+        return;
+    };
+    let emitted_at = out.len();
+    if !super::attribution::silenced(super::attribution::Token::Engine) {
         out.push(Emitted {
             module: table.module,
             table: table.table,
-            // ExifTool.pm:9236-9244 (`AddTagToTable`) / 3832-3835: the tag's
-            // own family else the table's.
             group0: tag.groups.g0.unwrap_or(table.group0),
             group1,
             group2: tag.groups.g2.unwrap_or(table.group2),
@@ -1126,59 +1246,110 @@ fn walk(
             value,
             low_priority: effective_priority(table, tag) == Some(0),
             avoid: tag.flags.avoid,
-            // Only where `value` is the rational's number unconverted.
             rational: fraction
                 .filter(|_| !binary && tag.value_conv.is_none() && value_conv.is_none()),
             value_conv,
         });
-        if let Some(reads) = decoded.as_deref_mut() {
-            reads.rows.push((out.len() - 1, index));
+    }
+    if out.len() > emitted_at
+        && let Some(reads) = decoded.as_deref_mut()
+    {
+        reads.rows.push((out.len() - 1, index));
+    }
+}
+
+/// Every member the existing condition walk tracks in `ctx` is copied into
+/// the file-scoped session after condition evaluation. This keeps arbitrary
+/// assignment side effects visible across directories, including a losing
+/// alternative's write, not only the historically hand-picked Make/Model and
+/// file-type keys.
+fn sync_ctx_members(session: &mut Session, ctx: &cond::Ctx) {
+    for (&key, member) in ctx.members.iter() {
+        let value = match member {
+            MemberValue::Str(s) => MemberVal::Str(s.clone()),
+            MemberValue::Bytes(b) => MemberVal::from_bytes(b.clone()),
+            MemberValue::Num(n) => MemberVal::Int(*n),
+        };
+        // A non-UTF-8 Make/Model leaves the typed slot unsupplied.
+        let _ = session.set_member(key, value);
+    }
+}
+
+/// A generated conversion attempt's mutations, isolated from the live
+/// file-scoped [`Session`] until its [`Arm`] establishes ownership.
+///
+/// Generated helpers are allowed to mutate `$self` (warnings, options,
+/// data-members and other file state) while deciding whether to report,
+/// suppress or decline an entry. Running them against the live session lets
+/// a declined attempt contaminate the one residual that follows it. A clone
+/// is the transaction boundary: Report and Suppress commit source-required
+/// effects, while Decline drops every attempted mutation before residual
+/// dispatch.
+#[derive(Debug)]
+pub(crate) struct StagedEffects {
+    staged_session: Session,
+}
+
+impl StagedEffects {
+    #[must_use]
+    fn begin(session: &Session) -> Self {
+        Self {
+            staged_session: session.clone(),
         }
     }
-    Some(())
+
+    fn session_mut(&mut self) -> &mut Session {
+        &mut self.staged_session
+    }
+
+    /// Publish the staged file state atomically after ownership resolves.
+    fn commit(self, session: &mut Session) {
+        *session = self.staged_session;
+    }
+
+    /// Explicitly abandon a generated attempt before its residual runs.
+    fn discard(self) {}
 }
 
-/// The session one directory's generated conversions run in
-/// ([`Session::for_ifd`]): the directory's byte order (`GetByteOrder()`)
-/// and its name as `DIR_NAME` (`$$dirInfo{DirName}`, ExifTool.pm:9078 --
-/// the name [`IfdDir::group1`] carries). The per-file members come from
-/// `ctx` before each arm ([`sync_ctx_members`]).
-fn directory_session(dir: &IfdDir<'_>) -> Session {
-    let order = match dir.byte_order {
-        ByteOrder::Little => SessionByteOrder::LittleEndian,
-        ByteOrder::Big => SessionByteOrder::BigEndian,
-    };
-    Session::for_ifd(order, dir.group1, [])
+struct GeneratedAttempt {
+    arm: Arm,
+    effects: StagedEffects,
 }
 
-/// The members the walk's Conditions already track in `ctx` -- `Make`,
-/// `Model`, `Compression`/`SubfileType` (reset to `''` per IFD,
-/// Exif.pm:6446-6447, then set by those tags' `DataMember`), and
-/// `TIFF_TYPE`/`FILE_TYPE` when a caller seeds them -- copied into the
-/// session before each arm, so both read one source of truth and a value
-/// the existing path set since the last arm is never stale. A key `ctx`
-/// does not hold is removed: the arm then declines rather than read `Init`'s
-/// placeholder.
-fn sync_ctx_members(session: &mut Session, ctx: &cond::Ctx) {
-    for key in [
-        "Make",
-        "Model",
-        "Compression",
-        "SubfileType",
-        "TIFF_TYPE",
-        "FILE_TYPE",
-    ] {
-        match ctx.members.get(key) {
-            Some(member) => {
-                let value = match member {
-                    MemberValue::Str(s) => MemberVal::Str(s.clone()),
-                    MemberValue::Bytes(b) => MemberVal::from_bytes(b.clone()),
-                    MemberValue::Num(n) => MemberVal::Int(*n),
-                };
-                // A non-UTF-8 Make/Model leaves the typed slot unsupplied.
-                let _ = session.set_member(key, value);
+/// Resolve a generated attempt at the production ownership boundary.
+///
+/// A returned [`Arm::Decline`] means the staged copy has already been
+/// discarded, so the caller may immediately enter its one residual path.
+/// Report writes are part of the same transaction as decoder-side effects.
+fn resolve_generated_attempt(
+    attempt: GeneratedAttempt,
+    session: &mut Session,
+    ctx: &mut cond::Ctx<'_>,
+) -> Arm {
+    let GeneratedAttempt { arm, mut effects } = attempt;
+    match arm {
+        Arm::Decline(reason) => {
+            effects.discard();
+            Arm::Decline(reason)
+        }
+        Arm::Suppress => {
+            effects.commit(session);
+            Arm::Suppress
+        }
+        Arm::Report(report) => {
+            for (key, value) in &report.writes {
+                let _ = effects.session_mut().set_member(key, value.clone());
+                match member_of(value) {
+                    Some(member) => {
+                        ctx.members.insert(key, member);
+                    }
+                    None => {
+                        ctx.members.remove(key);
+                    }
+                }
             }
-            None => session.remove_member(key),
+            effects.commit(session);
+            Arm::Report(report)
         }
     }
 }
@@ -1220,14 +1391,18 @@ fn perl_scalar(raw: &DecodedValue) -> Option<MemberVal> {
 /// path runs, as before.
 fn generated_arm(
     decode: conv::Decode,
-    session: &mut Session,
+    session: &Session,
     tag: &IfdTag,
     raw: &DecodedValue,
-) -> Arm {
+) -> GeneratedAttempt {
+    let mut effects = StagedEffects::begin(session);
     let Some(val) = perl_scalar(raw) else {
-        return Arm::Decline("value has no Perl scalar form here");
+        return GeneratedAttempt {
+            arm: Arm::Decline("value has no Perl scalar form here"),
+            effects,
+        };
     };
-    let arm = decode(session, tag.id, &val);
+    let arm = decode(effects.session_mut(), tag.id, &val);
     if let Arm::Report(report) = &arm {
         let text = |out: &conv::Out| match out {
             conv::Out::Scalar(v) => !matches!(v, MemberVal::Bytes(_)),
@@ -1239,10 +1414,13 @@ fn generated_arm(
             .map_or(!matches!(val, MemberVal::Bytes(_)), text)
             && report.print.as_ref().is_none_or(text);
         if !exact {
-            return Arm::Decline("a reported value is not UTF-8 text");
+            return GeneratedAttempt {
+                arm: Arm::Decline("a reported value is not UTF-8 text"),
+                effects,
+            };
         }
     }
-    arm
+    GeneratedAttempt { arm, effects }
 }
 
 /// `$$self{X} = v` as the `Cond` grammar's member: an IV as `Num`, a byte
@@ -1764,18 +1942,18 @@ fn descend(
     edge: &IfdSubdirEdge,
     located: &Located<'_>,
     dir: &IfdDir<'_>,
+    session: &mut Session,
     ctx: &mut cond::Ctx,
-    guard: &mut Guard,
     out: &mut Vec<Emitted>,
 ) -> DescendOutcome {
     if edge.processor != IfdSubdirProcessor::Serial {
-        return descend_inner(table, tag, edge, located, dir, ctx, guard, out);
+        return descend_inner(table, tag, edge, located, dir, session, ctx, out);
     }
     if !enabled_serial::owns(edge.module, edge.table) {
         return DescendOutcome::Serial(SerialSubdirRead::Fallback);
     }
     owned_serial_attempt(ctx, out, |ctx, out| {
-        descend_inner(table, tag, edge, located, dir, ctx, guard, out)
+        descend_inner(table, tag, edge, located, dir, session, ctx, out)
     })
 }
 
@@ -1786,8 +1964,8 @@ fn descend_inner(
     edge: &IfdSubdirEdge,
     located: &Located<'_>,
     dir: &IfdDir<'_>,
+    session: &mut Session,
     ctx: &mut cond::Ctx,
-    guard: &mut Guard,
     out: &mut Vec<Emitted>,
 ) -> DescendOutcome {
     // Legacy IFD/binary Validate remains unwalked. A serial edge may proceed
@@ -1978,26 +2156,32 @@ fn descend_inner(
             Target::Ifd(target) => {
                 // ExifTool.pm:9065-9072: a repeat is `return 0` for THIS
                 // directory; the loop moves on to the next value.
-                if !guard.admit(ifd_addr(start_pos), table_key(target), false) {
+                if !session.processed().admit(
+                    dir.data_domain,
+                    ifd_addr(start_pos),
+                    table_key(target),
+                    false,
+                ) {
                     continue;
                 }
-                guard.depth += 1;
+                session.processed().depth += 1;
                 // A refused sub-directory is simply not walked (`None`).
                 let _ = walk(
                     target,
                     IfdDir {
                         data,
+                        data_domain: dir.data_domain,
                         ifd_start: start_pos,
                         base,
                         byte_order,
                         group1: dir_name,
                     },
+                    session,
                     ctx,
-                    guard,
                     out,
                     None,
                 );
-                guard.depth -= 1;
+                session.processed().depth -= 1;
             }
             Target::Binary(target) => {
                 // ProcessBinaryData with `$size <= 0` reads nothing
@@ -2008,14 +2192,20 @@ fn descend_inner(
                 if dir_len == 0 {
                     continue;
                 }
-                if !guard.admit(binary_addr(base, start_pos), table_key(target), false) {
+                if !session.processed().admit(
+                    dir.data_domain,
+                    binary_addr(base, start_pos),
+                    table_key(target),
+                    false,
+                ) {
                     continue;
                 }
-                guard.depth += 1;
+                session.processed().depth += 1;
                 engine::walk(
                     target,
                     Dir {
                         data,
+                        data_domain: dir.data_domain,
                         dir_start: start_pos,
                         dir_len: Some(dir_len),
                         // The binary engine reads at data-relative offsets;
@@ -2028,10 +2218,10 @@ fn descend_inner(
                         byte_order,
                     },
                     ctx,
-                    guard,
+                    session.processed(),
                     out,
                 );
-                guard.depth -= 1;
+                session.processed().depth -= 1;
             }
             Target::Serial(target) => {
                 let Ok(dir_len) = usize::try_from(dir_len) else {
@@ -2054,7 +2244,12 @@ fn descend_inner(
                         continue;
                     }
                 }
-                if !guard.admit(binary_addr(base, start_pos), table_key(target), false) {
+                if !session.processed().admit(
+                    dir.data_domain,
+                    binary_addr(base, start_pos),
+                    table_key(target),
+                    false,
+                ) {
                     serial_outcome = SerialSubdirRead::Handled;
                     continue;
                 }
@@ -2062,7 +2257,7 @@ fn descend_inner(
                 // is proved. The outer edge transaction also owns state
                 // rollback, including earlier child iterations.
                 let mut serial_rows = Vec::new();
-                guard.depth += 1;
+                session.processed().depth += 1;
                 let mut sink = IfdSerialSink {
                     out: &mut serial_rows,
                 };
@@ -2079,7 +2274,7 @@ fn descend_inner(
                     ctx,
                     &mut sink,
                 );
-                guard.depth -= 1;
+                session.processed().depth -= 1;
                 serial_outcome = finish_serial_child(out, serial_rows, &result);
                 if serial_outcome == SerialSubdirRead::Fallback {
                     // Refuse the whole edge, including prior child iterations;
@@ -2106,6 +2301,26 @@ mod tests {
     use crate::exiftool_tables::{
         ExprId, GateA, IfdFlags, Omitted, PrintConv, SizeExpectation, TagGroups, U16SizeCheck,
     };
+
+    fn process_exif(
+        table: &'static IfdTable,
+        dir: IfdDir<'_>,
+        ctx: &mut cond::Ctx<'_>,
+        out: &mut Vec<Emitted>,
+    ) {
+        let mut session = Session::new();
+        super::process_exif(table, dir, &mut session, ctx, out);
+    }
+
+    fn process_exif_decoded(
+        table: &'static IfdTable,
+        dir: IfdDir<'_>,
+        ctx: &mut cond::Ctx<'_>,
+        out: &mut Vec<Emitted>,
+    ) -> Option<RootReads> {
+        let mut session = Session::new();
+        super::process_exif_decoded(table, dir, &mut session, ctx, out)
+    }
 
     // -- Test-only enablement/lookup registry ----------------------------------
     //
@@ -2187,6 +2402,264 @@ mod tests {
         }
     }
 
+    fn suppress_after_member_write(session: &mut Session, _: u16, _: &MemberVal) -> Arm {
+        session
+            .set_member("SuppressWrite", MemberVal::Int(41))
+            .expect("test member write");
+        Arm::Suppress
+    }
+
+    #[test]
+    fn generated_suppress_commits_its_staged_session_effects() {
+        static TAG: IfdTag = plain(1, "Suppressed");
+        let mut session = Session::new();
+        let GeneratedAttempt { arm, effects } = generated_arm(
+            suppress_after_member_write,
+            &session,
+            &TAG,
+            &DecodedValue::Integer(1),
+        );
+        assert_eq!(arm, Arm::Suppress);
+        effects.commit(&mut session);
+        assert_eq!(session.member("SuppressWrite"), MemberVal::Int(41));
+    }
+
+    fn staged_matrix_seed() -> Session {
+        let mut session = Session::new();
+        session
+            .set_member("Make", MemberVal::Str("BeforeMake".into()))
+            .unwrap();
+        session
+            .set_member("Model", MemberVal::Str("BeforeModel".into()))
+            .unwrap();
+        session.set_member("RemoveMe", MemberVal::Int(7)).unwrap();
+        session.set_option("Verbose", MemberVal::Int(0));
+        session.warn(MemberVal::Str("before".into()));
+        session.byte_order = Some(crate::exiftool_tables::session::ByteOrder::LittleEndian);
+        session.count = Some(9);
+        session.format = Some("outer".into());
+        session
+            .set_member("DIR_NAME", MemberVal::Str("Outer".into()))
+            .unwrap();
+        assert!(session.processed().admit(1, 2, 3, false));
+        session
+    }
+
+    fn mutate_staged_matrix(session: &mut Session) {
+        session
+            .set_member("Make", MemberVal::Str("AfterMake".into()))
+            .unwrap();
+        session
+            .set_member("Model", MemberVal::Str("AfterModel".into()))
+            .unwrap();
+        session.remove_member("RemoveMe");
+        session.set_option("Verbose", MemberVal::Int(4));
+        session.warn(MemberVal::Str("after-1".into()));
+        session.warn(MemberVal::Str("after-2".into()));
+        assert!(session.processed().admit(4, 5, 6, false));
+
+        // A nested directory scope must restore the staged copy before the
+        // transaction resolves, just as it would on the live Session.
+        {
+            let mut scope = session.enter_directory(
+                crate::exiftool_tables::session::ByteOrder::BigEndian,
+                Some("Inner"),
+            );
+            scope.count = Some(99);
+            scope.format = Some("inner".into());
+        }
+    }
+
+    fn clear_typed_make_model(session: &mut Session) {
+        session.set_member("Make", MemberVal::Undef).unwrap();
+        session.set_member("Model", MemberVal::Undef).unwrap();
+    }
+
+    fn assert_outer_scope(session: &Session) {
+        assert_eq!(
+            session.byte_order,
+            Some(crate::exiftool_tables::session::ByteOrder::LittleEndian)
+        );
+        assert_eq!(session.count, Some(9));
+        assert_eq!(session.format.as_deref(), Some("outer"));
+        assert_eq!(session.member("DIR_NAME"), MemberVal::Str("Outer".into()));
+    }
+
+    #[test]
+    fn staged_effects_commit_the_complete_session_matrix_in_order() {
+        let mut session = staged_matrix_seed();
+        let mut effects = StagedEffects::begin(&session);
+        mutate_staged_matrix(effects.session_mut());
+        effects.commit(&mut session);
+
+        assert_eq!(session.member("Make"), MemberVal::Str("AfterMake".into()));
+        assert_eq!(session.member("Model"), MemberVal::Str("AfterModel".into()));
+        assert!(!session.has_member("RemoveMe"));
+        assert_eq!(session.option("Verbose"), MemberVal::Int(4));
+        assert_eq!(
+            session
+                .warnings()
+                .iter()
+                .map(|warning| warning.message.clone())
+                .collect::<Vec<_>>(),
+            [
+                MemberVal::Str("before".into()),
+                MemberVal::Str("after-1".into()),
+                MemberVal::Str("after-2".into())
+            ]
+        );
+        assert_outer_scope(&session);
+        assert!(!session.processed().admit(1, 2, 3, false));
+        assert!(!session.processed().admit(4, 5, 6, false));
+    }
+
+    #[test]
+    fn staged_effects_discard_the_complete_session_matrix() {
+        let mut session = staged_matrix_seed();
+        let mut effects = StagedEffects::begin(&session);
+        mutate_staged_matrix(effects.session_mut());
+        effects.discard();
+
+        assert_eq!(session.member("Make"), MemberVal::Str("BeforeMake".into()));
+        assert_eq!(
+            session.member("Model"),
+            MemberVal::Str("BeforeModel".into())
+        );
+        assert_eq!(session.member("RemoveMe"), MemberVal::Int(7));
+        assert_eq!(session.option("Verbose"), MemberVal::Int(0));
+        assert_eq!(session.warnings().len(), 1);
+        assert_outer_scope(&session);
+        assert!(!session.processed().admit(1, 2, 3, false));
+        assert!(session.processed().admit(4, 5, 6, false));
+    }
+
+    #[test]
+    fn staged_effects_commit_and_discard_typed_make_model_clearing() {
+        let mut committed = staged_matrix_seed();
+        let mut effects = StagedEffects::begin(&committed);
+        clear_typed_make_model(effects.session_mut());
+        effects.commit(&mut committed);
+        assert!(!committed.has_member("Make"));
+        assert!(!committed.has_member("Model"));
+
+        let discarded = staged_matrix_seed();
+        let mut effects = StagedEffects::begin(&discarded);
+        clear_typed_make_model(effects.session_mut());
+        effects.discard();
+        assert_eq!(
+            discarded.member("Make"),
+            MemberVal::Str("BeforeMake".into())
+        );
+        assert_eq!(
+            discarded.member("Model"),
+            MemberVal::Str("BeforeModel".into())
+        );
+    }
+
+    fn report_non_utf8_after_complete_matrix_mutation(
+        session: &mut Session,
+        _: u16,
+        _: &MemberVal,
+    ) -> Arm {
+        mutate_staged_matrix(session);
+        clear_typed_make_model(session);
+        Arm::Report(conv::Report {
+            value: None,
+            print: None,
+            writes: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn reported_non_utf8_decline_discards_every_effect_before_residual() {
+        static TAGS: [IfdTag; 1] = [plain(1, "NonUtf8")];
+        static TABLE: IfdTable = table("Residual", &TAGS);
+        let tag = &TAGS[0];
+        let mut session = staged_matrix_seed();
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let raw = DecodedValue::Undefined(vec![0xff]);
+        let attempt = generated_arm(
+            report_non_utf8_after_complete_matrix_mutation,
+            &session,
+            tag,
+            &raw,
+        );
+
+        let arm = resolve_generated_attempt(attempt, &mut session, &mut ctx);
+        assert_eq!(arm, Arm::Decline("a reported value is not UTF-8 text"));
+
+        // These are live-session assertions at the production boundary:
+        // resolve_generated_attempt has discarded before returning Decline,
+        // and only now may the real residual observe or emit anything.
+        assert_eq!(session.member("Make"), MemberVal::Str("BeforeMake".into()));
+        assert_eq!(
+            session.member("Model"),
+            MemberVal::Str("BeforeModel".into())
+        );
+        assert_eq!(session.member("RemoveMe"), MemberVal::Int(7));
+        assert_eq!(session.option("Verbose"), MemberVal::Int(0));
+        assert_eq!(session.warnings().len(), 1);
+        assert_outer_scope(&session);
+        assert!(session.processed().admit(4, 5, 6, false));
+
+        let dir = IfdDir {
+            data: &[],
+            data_domain: 0,
+            ifd_start: 0,
+            base: Some(0),
+            byte_order: ByteOrder::Little,
+            group1: Some("Test"),
+        };
+        let mut reads = RootReads {
+            entries: vec![EntryRead::Decoded],
+            ..Default::default()
+        };
+        let mut decoded = Some(&mut reads);
+        let mut out = Vec::new();
+        assert!(out.is_empty(), "the declined generated arm emitted no row");
+        process_residual_entry(
+            &TABLE,
+            tag,
+            &dir,
+            raw,
+            None,
+            tag.omitted,
+            true,
+            &mut session,
+            &mut ctx,
+            &mut out,
+            &mut decoded,
+            0,
+        );
+        assert_eq!(out.len(), 1, "exactly one production residual row");
+        assert_eq!(reads.rows, [(0, 0)], "the residual owns one occurrence");
+        assert_eq!(out[0].value, TagValue::Binary(vec![0xff]));
+    }
+
+    #[test]
+    fn staged_effects_clone_cost_measurement() {
+        let mut session = staged_matrix_seed();
+        for index in 0..32 {
+            session
+                .set_member(&format!("Member{index}"), MemberVal::Int(index))
+                .unwrap();
+            session.set_option(&format!("Option{index}"), MemberVal::Int(index));
+        }
+        let iterations = 20_000u32;
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(StagedEffects::begin(&session));
+        }
+        let elapsed = started.elapsed();
+        eprintln!(
+            "staged-effects-clone: iterations={iterations} elapsed_ns={} ns_per_clone={}",
+            elapsed.as_nanos(),
+            elapsed.as_nanos() / u128::from(iterations)
+        );
+        assert_eq!(session.member("Make"), MemberVal::Str("BeforeMake".into()));
+    }
+
     const fn edge(table: &'static str) -> IfdSubdirEdge {
         IfdSubdirEdge {
             module: "Test",
@@ -2265,16 +2738,19 @@ mod tests {
         members: &mut HashMap<&'static str, MemberValue>,
     ) -> Vec<Emitted> {
         let mut ctx = cond::Ctx::new(members);
+        let mut session = Session::new();
         let mut out = Vec::new();
-        process_exif(
+        super::process_exif(
             table,
             IfdDir {
                 data,
+                data_domain: 0,
                 ifd_start: 0,
                 base,
                 byte_order: order,
                 group1: None,
             },
+            &mut session,
             &mut ctx,
             &mut out,
         );
@@ -2623,6 +3099,7 @@ mod tests {
             table,
             IfdDir {
                 data,
+                data_domain: 0,
                 ifd_start,
                 base: Some(0),
                 byte_order: ByteOrder::Big,
@@ -2746,6 +3223,7 @@ mod tests {
                 &EXIF_STRINGS,
                 IfdDir {
                     data: &data,
+                    data_domain: 0,
                     ifd_start: 0,
                     base: Some(0),
                     byte_order: order,
@@ -2786,6 +3264,7 @@ mod tests {
             &EXIF_STRINGS,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: order,
@@ -2850,6 +3329,7 @@ mod tests {
                 &EXIF_STRINGS,
                 IfdDir {
                     data: &data,
+                    data_domain: 0,
                     ifd_start: 8,
                     base: Some(0),
                     byte_order: order,
@@ -2911,6 +3391,7 @@ mod tests {
         let mut out = Vec::new();
         let dir = IfdDir {
             data: &data,
+            data_domain: 0,
             ifd_start: 0,
             base: Some(0),
             byte_order: order,
@@ -2941,6 +3422,51 @@ mod tests {
             &mut Vec::new(),
         );
         assert_eq!(refused, None);
+    }
+
+    #[test]
+    fn one_session_refuses_a_repeated_root_but_allows_a_distinct_address() {
+        let order = ByteOrder::Big;
+        let one = ifd(order, &[int16u_entry(order, 0x0001, 7)], &[]);
+        let mut data = one.clone();
+        let second_start = data.len();
+        data.extend_from_slice(&one);
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut out = Vec::new();
+
+        let first = IfdDir {
+            data: &data,
+            data_domain: 0,
+            ifd_start: 0,
+            base: Some(0),
+            byte_order: order,
+            group1: Some("First"),
+        };
+        assert!(
+            super::process_exif_decoded(&NUMERIC, first, &mut session, &mut ctx, &mut out)
+                .is_some()
+        );
+        assert_eq!(out.len(), 1);
+
+        assert_eq!(
+            super::process_exif_decoded(&NUMERIC, first, &mut session, &mut ctx, &mut out),
+            None,
+            "the file-scoped processed set must reject the same table/address"
+        );
+
+        let distinct = IfdDir {
+            ifd_start: second_start,
+            group1: Some("Second"),
+            ..first
+        };
+        assert!(
+            super::process_exif_decoded(&NUMERIC, distinct, &mut session, &mut ctx, &mut out)
+                .is_some(),
+            "the same table at a distinct address is a legitimate duplicate"
+        );
+        assert_eq!(out.len(), 2);
     }
 
     #[test]
@@ -3477,6 +4003,165 @@ mod tests {
         );
     }
 
+    const TEST_VERSION_IS_TWO: Cond = Cond::MemberCmp {
+        member: "TestVersion",
+        op: CmpOp::Eq,
+        value: 2,
+    };
+    const COMPRESSION_IS_CLEAR: Cond = Cond::MemberStrEq {
+        member: "Compression",
+        value: "",
+        negate: false,
+    };
+    static FILE_SESSION_CHILD_GROUPS: &[IfdVariantGroup] = &[IfdVariantGroup {
+        id: 0x0001,
+        alternatives: &[
+            (TEST_VERSION_IS_TWO, plain(0x0001, "ChildSawParent")),
+            (Cond::Always, plain(0x0001, "ChildMissedParent")),
+        ],
+    }];
+    static FILE_SESSION_CHILD_TAGS: &[IfdTag] = &[IfdTag {
+        raw_conv: Some(RawConvEffect::SetMember {
+            member: "Compression",
+        }),
+        ..plain(0x0002, "TemporaryCompression")
+    }];
+    static FILE_SESSION_CHILD: IfdTable = IfdTable {
+        variants: FILE_SESSION_CHILD_GROUPS,
+        ..table("FileSessionChild", FILE_SESSION_CHILD_TAGS)
+    };
+    static FILE_SESSION_PARENT_GROUPS: &[IfdVariantGroup] = &[IfdVariantGroup {
+        id: 0x0003,
+        alternatives: &[
+            (COMPRESSION_IS_CLEAR, plain(0x0003, "SiblingIsClean")),
+            (Cond::Always, plain(0x0003, "SiblingSawChildState")),
+        ],
+    }];
+    static FILE_SESSION_PARENT_TAGS: &[IfdTag] = &[
+        IfdTag {
+            raw_conv: Some(RawConvEffect::SetMember {
+                member: "TestVersion",
+            }),
+            ..plain(0x0001, "Version")
+        },
+        IfdTag {
+            subdir: Some(edge("FileSessionChild")),
+            ..plain(0x0002, "ToChild")
+        },
+    ];
+    static FILE_SESSION_PARENT: IfdTable = IfdTable {
+        variants: FILE_SESSION_PARENT_GROUPS,
+        ..table("FileSessionParent", FILE_SESSION_PARENT_TAGS)
+    };
+
+    #[test]
+    fn child_and_sibling_share_file_members_but_not_child_directory_state() {
+        let order = ByteOrder::Little;
+        let child = ifd(
+            order,
+            &[
+                int16u_entry(order, 0x0001, 7),
+                int16u_entry(order, 0x0002, 9),
+            ],
+            &[],
+        );
+        let child_at = trailer_at(3) as u32;
+        let data = ifd(
+            order,
+            &[
+                int16u_entry(order, 0x0001, 2),
+                entry(
+                    order,
+                    0x0002,
+                    7,
+                    child.len() as u32,
+                    bytes32(order, child_at),
+                ),
+                int16u_entry(order, 0x0003, 8),
+            ],
+            &child,
+        );
+        let _registered = Registered::new(&[&FILE_SESSION_CHILD]);
+        let mut members = HashMap::new();
+
+        assert_eq!(
+            values(&run_with(
+                &FILE_SESSION_PARENT,
+                &data,
+                order,
+                Some(0),
+                &mut members,
+            )),
+            vec![
+                ("Version", TagValue::Integer(2)),
+                ("ChildSawParent", TagValue::Integer(7)),
+                ("TemporaryCompression", TagValue::Integer(9)),
+                ("SiblingIsClean", TagValue::Integer(8)),
+            ]
+        );
+        assert_eq!(members.get("TestVersion"), Some(&MemberValue::Num(2)));
+        assert!(
+            !members.contains_key("Compression"),
+            "the child's directory-local Compression must be restored"
+        );
+    }
+
+    const MISSING_MEMBER_IS_ONE: Cond = Cond::MemberCmp {
+        member: "NeverSet",
+        op: CmpOp::Eq,
+        value: 1,
+    };
+    const LOSING_ASSIGNMENT: Cond = Cond::SetMember {
+        member: "LosingWrite",
+        source: EffectSource::Const(5),
+        then: Some(&MISSING_MEMBER_IS_ONE),
+    };
+    const LOSING_WRITE_IS_FIVE: Cond = Cond::MemberCmp {
+        member: "LosingWrite",
+        op: CmpOp::Eq,
+        value: 5,
+    };
+    static LOSING_ASSIGNMENT_GROUPS: &[IfdVariantGroup] = &[IfdVariantGroup {
+        id: 0x0001,
+        alternatives: &[
+            (LOSING_ASSIGNMENT, plain(0x0001, "MustLose")),
+            (LOSING_WRITE_IS_FIVE, plain(0x0001, "LaterSeesWrite")),
+        ],
+    }];
+    static LOSING_ASSIGNMENT_TABLE: IfdTable = IfdTable {
+        variants: LOSING_ASSIGNMENT_GROUPS,
+        ..table("LosingAssignment", &[])
+    };
+
+    #[test]
+    fn losing_condition_assignment_reaches_later_condition_and_file_session() {
+        let order = ByteOrder::Little;
+        let data = ifd(order, &[int16u_entry(order, 0x0001, 7)], &[]);
+        let mut members = HashMap::new();
+        let mut ctx = cond::Ctx::new(&mut members);
+        let mut session = Session::new();
+        let mut out = Vec::new();
+
+        super::process_exif(
+            &LOSING_ASSIGNMENT_TABLE,
+            IfdDir {
+                data: &data,
+                data_domain: 0,
+                ifd_start: 0,
+                base: Some(0),
+                byte_order: order,
+                group1: None,
+            },
+            &mut session,
+            &mut ctx,
+            &mut out,
+        );
+
+        assert_eq!(values(&out), vec![("LaterSeesWrite", TagValue::Integer(7))]);
+        assert_eq!(members.get("LosingWrite"), Some(&MemberValue::Num(5)));
+        assert_eq!(session.member("LosingWrite"), MemberVal::Int(5));
+    }
+
     // A standalone IFD condition is not a variant: Sony::Main's 0x202a
     // parent edge has this exact shape. It must be evaluated before the
     // adapter follows SubDirectory, with this entry's bytes rather than a
@@ -3570,6 +4255,7 @@ mod tests {
                 &SERIAL_EDGE,
                 IfdDir {
                     data: &data,
+                    data_domain: 0,
                     ifd_start: 0,
                     base: Some(0),
                     byte_order: order,
@@ -3618,6 +4304,7 @@ mod tests {
             &SERIAL_EDGE,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: ByteOrder::Little,
@@ -3730,6 +4417,7 @@ mod tests {
             parent,
             IfdDir {
                 data: &data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: ByteOrder::Little,
@@ -4112,6 +4800,7 @@ mod tests {
             table,
             IfdDir {
                 data,
+                data_domain: 0,
                 ifd_start: 0,
                 base: Some(0),
                 byte_order: ByteOrder::Big,

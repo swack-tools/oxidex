@@ -3,10 +3,7 @@
 //! These tests verify comprehensive metadata extraction from Prefetch files
 //! across different Windows versions (XP, Vista, Win8, Win10/11).
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::super::common::TestReader;
 use oxidex::core::{FormatParser, TagValue};
 use oxidex::parsers::specialized::prefetch::PrefetchParser;
 
@@ -233,10 +230,9 @@ fn test_prefetch_run_count() {
         let reader = TestReader::new(prefetch_data);
         let parser = PrefetchParser;
 
-        let metadata = parser.parse(&reader).expect(&format!(
-            "Should parse prefetch with run count {}",
-            run_count
-        ));
+        let metadata = parser
+            .parse(&reader)
+            .unwrap_or_else(|_| panic!("Should parse prefetch with run count {}", run_count));
 
         assert_eq!(
             metadata.get("Prefetch:RunCount"),
@@ -306,7 +302,7 @@ fn test_prefetch_version_compatibility() {
 
         let metadata = parser
             .parse(&reader)
-            .expect(&format!("Should parse version {} prefetch", version));
+            .unwrap_or_else(|_| panic!("Should parse version {} prefetch", version));
 
         assert_eq!(
             metadata.get("Prefetch:ExecutableName"),
@@ -422,7 +418,7 @@ fn test_prefetch_utf16_names() {
 
         let metadata = parser
             .parse(&reader)
-            .expect(&format!("Should parse file with name '{}'", exe_name));
+            .unwrap_or_else(|_| panic!("Should parse file with name '{}'", exe_name));
 
         assert_eq!(
             metadata.get("Prefetch:ExecutableName"),

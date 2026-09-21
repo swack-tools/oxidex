@@ -10,7 +10,7 @@ use std::ptr;
 
 use crate::core::operations::read_metadata;
 
-use super::context::{ExifToolContext, ExifToolHandle, handle_to_context, handle_to_context_mut};
+use super::context::{ExifToolHandle, handle_to_context, handle_to_context_mut};
 use super::error::{
     EXIFTOOL_ERR_INTERNAL, EXIFTOOL_ERR_INVALID_TAG_VALUE, EXIFTOOL_ERR_NULL_POINTER,
     EXIFTOOL_ERR_TAG_NOT_FOUND, EXIFTOOL_OK, error_to_code, set_last_error,
@@ -133,9 +133,7 @@ pub extern "C" fn exiftool_get_tag_count(handle: *const ExifToolHandle) -> usize
 /// - NULL if index is out of bounds or handle is NULL
 ///
 /// # String Lifetime
-/// Returned string is valid until:
-/// - Next API call on same handle
-/// - Handle destruction
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access.
@@ -163,12 +161,7 @@ pub extern "C" fn exiftool_get_tag_name_at(
 
         // Convert to CString and cache it
         match CString::new(tag_name.as_str()) {
-            Ok(cstr) => {
-                // SAFETY: We need to cast away the const to cache the string
-                // This is safe because we only return a const pointer to C
-                let ctx_mut = &mut *(handle as *mut ExifToolContext);
-                ctx_mut.cache_string(cstr)
-            }
+            Ok(cstr) => context.cache_string(cstr),
             Err(_) => ptr::null(),
         }
     }));
@@ -233,9 +226,7 @@ pub extern "C" fn exiftool_has_tag(
 /// - NULL if tag doesn't exist or is not a String type
 ///
 /// # String Lifetime
-/// Returned string is valid until:
-/// - Next API call on same handle
-/// - Handle destruction
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
 ///
 /// # Thread Safety
 /// Thread-safe for read-only access.
@@ -267,13 +258,67 @@ pub extern "C" fn exiftool_get_tag_string(
 
         // Convert to CString and cache it
         match CString::new(value_str) {
-            Ok(cstr) => {
-                // SAFETY: Cast away const to cache string
-                let ctx_mut = &mut *(handle as *mut ExifToolContext);
-                ctx_mut.cache_string(cstr)
-            }
+            Ok(cstr) => context.cache_string(cstr),
             Err(_) => ptr::null(),
         }
+    }));
+
+    result.unwrap_or(ptr::null())
+}
+
+/// Retrieves a tag's UTF-8 string from an explicitly selected value channel.
+///
+/// This additive entry point leaves [`exiftool_get_tag_string`] unchanged:
+/// callers of the old ABI still observe its PrintConv-default map view.
+/// `channel` is an `ExifToolValueChannel` value; an unknown integer returns
+/// NULL and records `EXIFTOOL_ERR_INVALID_TAG_VALUE`.
+///
+/// # String Lifetime
+/// The returned pointer is owned by the handle. It remains valid across subsequent read-only getter calls, including concurrent getters, until the next successful `exiftool_read_file` on that handle or handle destruction. Copy the string before either event if it is needed afterward. File reads, tag mutations, file writes, and destruction must not overlap any operation on the same handle or use of its borrowed strings; callers must provide synchronization.
+///
+/// # Thread Safety
+/// Thread-safe for read-only access. Mutating operations and handle
+/// destruction remain non-concurrent on the same handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn exiftool_get_tag_string_in_channel(
+    handle: *const ExifToolHandle,
+    tag_name: *const c_char,
+    channel: super::ExifToolValueChannel,
+) -> *const c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| unsafe {
+        if handle.is_null() || tag_name.is_null() {
+            set_last_error("NULL pointer provided".to_string());
+            return ptr::null();
+        }
+        let Some(channel) = super::parse_value_channel(channel) else {
+            set_last_error(format!("Unknown value channel: {channel}"));
+            return ptr::null();
+        };
+        let context = match handle_to_context(handle) {
+            Some(ctx) => ctx,
+            None => return ptr::null(),
+        };
+        let name = match CStr::from_ptr(tag_name).to_str() {
+            Ok(name) => name,
+            Err(_) => return ptr::null(),
+        };
+        let value = match context
+            .metadata
+            .winner_occurrences()
+            .find(|(key, _)| key.as_str() == name)
+            .map(|(_, occurrence)| occurrence.project(channel))
+        {
+            Some(value) => value,
+            None => {
+                set_last_error(format!("Tag not found: {name}"));
+                return ptr::null();
+            }
+        };
+        let Some(value) = value.as_string() else {
+            set_last_error(format!("Tag '{name}' is not a String type"));
+            return ptr::null();
+        };
+        CString::new(value).map_or_else(|_| ptr::null(), |value| context.cache_string(value))
     }));
 
     result.unwrap_or(ptr::null())
@@ -424,5 +469,55 @@ pub extern "C" fn exiftool_get_tag_float(
             set_last_error("Internal error: unexpected panic".to_string());
             EXIFTOOL_ERR_INTERNAL
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{CStr, CString};
+    use std::thread;
+
+    use super::{ExifToolHandle, exiftool_get_tag_name_at, exiftool_get_tag_string};
+    use crate::ffi::error::EXIFTOOL_OK;
+    use crate::ffi::lifecycle::{exiftool_create, exiftool_destroy};
+    use crate::ffi::write_tags::exiftool_set_tag_string;
+
+    #[test]
+    fn const_string_getters_are_safe_for_concurrent_calls() {
+        let handle = exiftool_create();
+        assert!(!handle.is_null());
+
+        let tag_name = CString::new("EXIF:Make").unwrap();
+        let tag_value = CString::new("Test Camera").unwrap();
+        assert_eq!(
+            exiftool_set_tag_string(handle, tag_name.as_ptr(), tag_value.as_ptr()),
+            EXIFTOOL_OK
+        );
+
+        let shared_handle = handle as usize;
+        thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    let handle = shared_handle as *const ExifToolHandle;
+                    for _ in 0..128 {
+                        let value = exiftool_get_tag_string(handle, tag_name.as_ptr());
+                        assert!(!value.is_null());
+                        assert_eq!(
+                            unsafe { CStr::from_ptr(value) }.to_str().unwrap(),
+                            "Test Camera"
+                        );
+
+                        let name = exiftool_get_tag_name_at(handle, 0);
+                        assert!(!name.is_null());
+                        assert_eq!(
+                            unsafe { CStr::from_ptr(name) }.to_str().unwrap(),
+                            "EXIF:Make"
+                        );
+                    }
+                });
+            }
+        });
+
+        exiftool_destroy(handle);
     }
 }

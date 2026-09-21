@@ -32,8 +32,9 @@
 //! `Vec<(&String, &TagValue)>` explicitly. If a benchmark later shows this
 //! is a hot path, D1 explicitly leaves room to revisit the choice.
 
-use super::tag_occurrence::{Instance, TagOccurrence};
+use super::tag_occurrence::{Instance, TagOccurrence, ValueChannel};
 use super::tag_value::TagValue;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -154,6 +155,13 @@ impl TagSink {
         self.winners.get(key).map(|&idx| &self.occurrences[idx].raw)
     }
 
+    /// Projects the current winner for `key` through `channel`, borrowing
+    /// stored forms and owning only a computed legacy APEX conversion.
+    pub fn winner_projected(&self, key: &str, channel: ValueChannel) -> Option<Cow<'_, TagValue>> {
+        self.winner_occurrence(key)
+            .map(|occurrence| occurrence.project(channel))
+    }
+
     /// The current winner occurrence for `key`, not just its `raw` value.
     ///
     /// Step 20's output-projection work (`-a`/`-G*`/`--no-print-conv`) needs
@@ -199,7 +207,8 @@ impl TagSink {
         // invalidation now happens here, at the one place a occurrence's
         // `raw` can change without going through `record`.
         self.occurrences[idx].value = None;
-        // The stored form likewise stands for the old `raw`.
+        // The print and stored forms likewise stand for the old `raw`.
+        self.occurrences[idx].print = None;
         self.occurrences[idx].stored = None;
         Some(&mut self.occurrences[idx].raw)
     }
@@ -221,6 +230,26 @@ impl TagSink {
     pub fn set_winner_value(&mut self, key: &str, value: TagValue) -> bool {
         match self.winners.get(key) {
             Some(&idx) => {
+                self.occurrences[idx].value = Some(value);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Attaches a late `ValueConv` form when the current `raw` value is known
+    /// to be the producer's already-formatted display.
+    ///
+    /// This deliberately narrow crate-private seam exists for legacy
+    /// `MetadataMap::set_value_form` producers. Generic callers must use
+    /// [`TagSink::set_winner_value`], which cannot assume stored raw data is an
+    /// explicit PrintConv form.
+    pub(crate) fn set_winner_display_value(&mut self, key: &str, value: TagValue) -> bool {
+        match self.winners.get(key) {
+            Some(&idx) => {
+                if self.occurrences[idx].print.is_none() {
+                    self.occurrences[idx].print = Some(self.occurrences[idx].raw.clone());
+                }
                 self.occurrences[idx].value = Some(value);
                 true
             }
@@ -427,7 +456,7 @@ impl TagSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::tag_occurrence::TagOccurrence;
+    use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
 
     fn occ(value: &str, priority: u8, order: u32) -> TagOccurrence {
         TagOccurrence {
@@ -447,6 +476,119 @@ mod tests {
             instance,
             ..occ(value, priority, order)
         }
+    }
+
+    #[test]
+    fn winner_projection_preserves_instances() {
+        let mut sink = TagSink::new();
+        let mut track1 = occ_with_instance("track 1 raw", 1, 0, Instance(1));
+        track1.value = Some(TagValue::Integer(1));
+        track1.print = Some(TagValue::new_string("Track One"));
+        sink.record("QuickTime:TrackID".to_string(), track1);
+
+        let mut track2 = occ_with_instance("track 2 raw", 9, 1, Instance(2));
+        track2.value = Some(TagValue::Integer(2));
+        track2.print = Some(TagValue::new_string("Track Two"));
+        sink.record("QuickTime:TrackID".to_string(), track2);
+
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::Stored)
+                .as_deref(),
+            Some(&TagValue::new_string("track 1 raw"))
+        );
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Integer(1))
+        );
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::PrintConv)
+                .as_deref(),
+            Some(&TagValue::new_string("Track One"))
+        );
+        assert_eq!(sink.occurrences().count(), 2);
+
+        sink.remove("QuickTime:TrackID");
+        assert_eq!(
+            sink.winner_projected("QuickTime:TrackID", ValueChannel::PrintConv),
+            None
+        );
+        assert_eq!(
+            sink.occurrences().count(),
+            1,
+            "only the loser remains active"
+        );
+    }
+
+    #[test]
+    fn get_mut_recomputes_compatibility_projection_after_warming() {
+        let mut sink = TagSink::new();
+        let occurrence =
+            TagOccurrence::from_insert_shim("ExifIFD:ApertureValue", TagValue::Float(2.0), 0);
+        sink.record("ExifIFD:ApertureValue".to_string(), occurrence);
+        assert_eq!(
+            sink.winner_projected("ExifIFD:ApertureValue", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Float(2.0))
+        );
+        *sink.get_mut("ExifIFD:ApertureValue").unwrap() = TagValue::Float(4.0);
+        assert_eq!(
+            sink.winner_projected("ExifIFD:ApertureValue", ValueChannel::ValueConv)
+                .as_deref(),
+            Some(&TagValue::Float(4.0))
+        );
+    }
+
+    #[test]
+    fn get_mut_invalidates_every_form_derived_from_the_old_raw_value() {
+        let mut sink = TagSink::new();
+        let mut occurrence =
+            TagOccurrence::from_insert_shim("File:FileSize", TagValue::new_string("26 kB"), 0);
+        occurrence.value = Some(TagValue::Integer(26_106));
+        occurrence.print = Some(TagValue::new_string("26 kB"));
+        occurrence.stored = Some(TagValue::Integer(26_106));
+        sink.record("File:FileSize".to_string(), occurrence);
+
+        *sink.get_mut("File:FileSize").unwrap() = TagValue::new_string("replacement display");
+
+        let occurrence = sink.winner_occurrence("File:FileSize").unwrap();
+        assert_eq!(occurrence.value, None);
+        assert_eq!(occurrence.print, None);
+        assert_eq!(occurrence.stored, None);
+        for channel in [
+            ValueChannel::Stored,
+            ValueChannel::ValueConv,
+            ValueChannel::PrintConv,
+        ] {
+            assert_eq!(
+                occurrence.project(channel).as_ref(),
+                &TagValue::new_string("replacement display"),
+                "{channel:?} must project the replacement after mutation"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_winner_value_does_not_invent_a_print_form_from_stored_raw() {
+        let mut sink = TagSink::new();
+        let raw = TagValue::Rational {
+            numerator: 1,
+            denominator: 80,
+        };
+        let occurrence = TagOccurrence::from_insert_shim("ExifIFD:ExposureTime", raw.clone(), 0);
+        sink.record("ExifIFD:ExposureTime".to_string(), occurrence);
+
+        assert!(sink.set_winner_value("ExifIFD:ExposureTime", TagValue::Float(0.0125)));
+
+        let occurrence = sink.winner_occurrence("ExifIFD:ExposureTime").unwrap();
+        assert_eq!(occurrence.raw, raw);
+        assert_eq!(occurrence.value, Some(TagValue::Float(0.0125)));
+        assert_eq!(occurrence.print, None);
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::Float(0.0125),
+            "without an explicit print form, PrintConv must fall back to ValueConv"
+        );
     }
 
     /// Every winner projection yields keys in the file order of the

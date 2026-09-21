@@ -14,10 +14,7 @@
 //! - EXIF sub-IFD extraction
 //! - Error handling (invalid headers, truncated files)
 
-#[path = "../common/mod.rs"]
-mod common;
-
-use common::TestReader;
+use super::common::TestReader;
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::tiff::file_parser::{parse_tiff_file, parse_tiff_header};
 use oxidex::parsers::tiff::ifd_parser::ByteOrder;
