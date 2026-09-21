@@ -109,18 +109,10 @@ mod phase3_integration_tests {
         );
     }
 
-    /// Test 6: Verify ExifTool comparison is run
-    #[test]
-    fn test_exiftool_comparison_step() {
-        let workflow_path = Path::new(".github/workflows/deploy-docs.yml");
-        let content = fs::read_to_string(workflow_path).expect("should read workflow file");
-
-        // Comparison is handled by just recipe
-        assert!(
-            content.contains("compare-exiftool-full-update"),
-            "workflow should run compare-exiftool-full-update recipe"
-        );
-    }
+    // The hosted comparison caller and binary/report arguments are exercised
+    // by tools/ci/test_docs_comparison.py. Do not require the maintainer-only
+    // recipe here: hosted runners deliberately use a separate pinned oracle
+    // path, and matching a recipe name in a comment cannot prove it executes.
 
     /// Test 7: Verify cache configuration for Rust dependencies
     ///
@@ -140,23 +132,6 @@ mod phase3_integration_tests {
         assert!(
             !content.contains("cache-provider: warpbuild"),
             "rust-cache must not target the WarpBuild backend on a GitHub-hosted runner"
-        );
-    }
-
-    /// Test 8: Verify just recipe is used for comparison
-    #[test]
-    fn test_comparison_binary_usage() {
-        let workflow_path = Path::new(".github/workflows/deploy-docs.yml");
-        let content = fs::read_to_string(workflow_path).expect("should read workflow file");
-
-        // Workflow now uses just recipe which handles building and running
-        assert!(
-            content.contains("compare-exiftool-full-update"),
-            "workflow should use just compare-exiftool-full-update recipe"
-        );
-        assert!(
-            content.contains("setup-just"),
-            "workflow should install just"
         );
     }
 

@@ -27,14 +27,19 @@ class DocsComparisonRecipeTests(unittest.TestCase):
         ).group(1)
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory) / "runner-cache"
+            environment = {**os.environ, "EXIFTOOL_CACHE_DIR": str(cache)}
+            # Exercise the missing-source precondition even when the developer
+            # or CI parent has already configured a different oracle.
+            environment.pop("EXIFTOOL_SOURCE", None)
             result = subprocess.run(
                 ["bash", "-c", command], cwd=REPO,
-                env={**os.environ, "EXIFTOOL_CACHE_DIR": str(cache)},
+                env=environment,
                 text=True, capture_output=True, timeout=30,
             )
             # An empty cache is intentionally not populated here: the portable
             # caller must request its pinned CI source before any network/build.
-            self.assertIn("EXIFTOOL_SOURCE", result.stderr)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("EXIFTOOL_SOURCE is required", result.stderr)
             self.assertNotIn("outside durable root", result.stderr)
 
     def test_generator_builds_with_exact_oracle_and_retains_reports(self):
