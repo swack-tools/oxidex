@@ -29,7 +29,7 @@ run loudly instead of silently leaving a stale number behind -- which is the
 whole failure mode being fixed, so it must not be reintroduced by the fix.
 
 Usage:
-    uv run scripts/sync_tag_stats.py --conformance /tmp/conformance.json
+    uv run scripts/sync_tag_stats.py --conformance "$OXIDEX_OPS_DIR/evidence/run-id/conformance.json"
     uv run scripts/sync_tag_stats.py --check      # non-zero if anything stale
 """
 

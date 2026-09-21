@@ -34,11 +34,14 @@ cargo build --release          # rust-toolchain.toml pins the toolchain (1.97.1)
 
 To measure anything against ExifTool you also need:
 
-- **The pinned ExifTool.** `.exiftool-version` names it (13.59). Recipes
-  that need it fetch that exact release into `$EXIFTOOL_CACHE_DIR` (default
-  `/tmp/oxidex-exiftool-cache`). Never use an `exiftool` found on `PATH`.
-- **A perl that can load `Archive::Zip`.** Set `EXIFTOOL_PERL` if the
-  default perl cannot. `scripts/exiftool_oracle.py` explains why this matters.
+- **The pinned ExifTool.** `.exiftool-version` names it. The durable local
+  cache is `$OXIDEX_OPS_DIR/cache/exiftool/<pin>`, with `OXIDEX_OPS_DIR`
+  defaulting to `~/oxidex-ops`. Follow the
+  [storage and bootstrap guide](/reference/durable-release-storage).
+  Never use an `exiftool` found on `PATH`.
+- **The capability-checked Perl 5.38.2 installation.** Set `EXIFTOOL_PERL`
+  to the interpreter selected by that guide; require `Archive::Zip` and the
+  DOCX probe. A matching version alone is insufficient.
 - **`just` and `uv`.** Most instruments are `just` recipes or `uv run`
   Python scripts.
 

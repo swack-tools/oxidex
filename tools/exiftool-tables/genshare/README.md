@@ -40,16 +40,19 @@ Run only through the exclusive measurement lock and use a new durable output
 directory every time:
 
 ```bash
+export OXIDEX_OPS_DIR="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}"
+GENSHARE_PIN=$(tr -d '\r\n' < .exiftool-version)
+GENSHARE_CACHE="$OXIDEX_OPS_DIR/cache/exiftool/$GENSHARE_PIN"
 tools/exiftool-tables/genshare/census.sh \
   --repository /absolute/clean/oxidex-worktree \
   --target-dir /absolute/durable/cargo-target \
   --output /absolute/durable/evidence/run-id \
-  --corpus /Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples \
+  --corpus "$GENSHARE_CACHE/combined-samples" \
   --manifest tools/exiftool-tables/genshare/testdata/bounded-corpus.txt \
   --min-files 3 \
   --min-tags 30 \
   --perl /absolute/perl-with-Archive-Zip \
-  --exiftool-dir /Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool \
+  --exiftool-dir "$GENSHARE_CACHE/exiftool" \
   --tokens engine,legacy-l1,legacy-l2,producers,serial,keyed
 ```
 
