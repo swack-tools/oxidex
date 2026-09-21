@@ -2,6 +2,14 @@
 
 Status: approved design direction, 2026-09-19
 
+> **Current integration protocol (post-#916):** After PR #916 merges, create
+> new task branches from verified `origin/refactor/tag-machinery` and target
+> their PRs at `refactor/tag-machinery`. The staging-controller workflow
+> retained in this design and its execution plan is historical and paused.
+> Resuming it requires a journaled reconciliation of task/PR/merge state,
+> processes, leases, base SHAs, and plan/spec/PRD/receipt hashes. This edit
+> neither resumes that controller nor changes its ledger.
+
 ## 1. Goal
 
 Complete the functional work in `TODO_RELEASE_BETA.md` section 2 so the
@@ -45,9 +53,9 @@ The functional program is complete when all of the following are true:
     command, and measurement floors.
 13. Every implementation task is preserved as local signed checkpoint commits
     and a remote draft PR, then lands through reviewed, green, squash-merged CI
-    into the controller-owned `staging/beta1-functional-integration` branch.
-    One final whole-branch PR lands that branch into `refactor/tag-machinery`
-    only through a verified strict up-to-date or merge-queue guard.
+    into `refactor/tag-machinery` after #916, through a verified strict
+    up-to-date or merge-queue guard. The former staging integration sequence
+    is historical and subject to the pause and reconciliation rule above.
 14. No release worktree, target, source cache, corpus, toolchain, receipt, log,
     ledger, or recovery artifact depends on an ephemeral temporary directory.
 
@@ -68,12 +76,20 @@ The functional program is complete when all of the following are true:
 
 ## 4. Binding operating constraints
 
+Use the shell definitions in the execution plan's **Global Constraints** in
+every materialized PRD. `OXIDEX_OPS_DIR` defaults to `$HOME/oxidex-ops`,
+`OXIDEX_WORKTREE_ROOT` to `$HOME/git`, and `OXIDEX_TARGET_ROOT` to
+`$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`. Read the active pin from
+`.exiftool-version`; derive `EXIFTOOL_CACHE_DIR` from that pin unless explicitly
+configured. Resolve path templates to absolute paths before serializing JSON,
+receipts, or controller state. Repository-relative file leases remain literal.
+
 ### 4.1 Oracle and evidence
 
 - `.exiftool-version` is the source of truth for the active release.
-- ExifTool 13.59 is invoked from
-  `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool` with Perl 5.38.2 at
-  `/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2`.
+- The current pinned ExifTool is invoked from
+  `$EXIFTOOL_CACHE_DIR/exiftool` with Perl 5.38.2 at
+  `$EXIFTOOL_PERL`.
   A bare `exiftool` invocation invalidates the result.
 - Every oracle run must pass both the version probe and
   `OOXML.docx -> FileType: DOCX` capability probe.
@@ -81,8 +97,9 @@ The functional program is complete when all of the following are true:
   they are never approximated.
 - Measurements state their instrument and preserve machine-readable receipts.
 - Worktrees, targets, source caches, corpora, toolchains, logs, receipts,
-  ledgers, and recovery state live only under `/Users/allen/git` or
-  `/Users/allen/oxidex-ops`; ephemeral temporary-directory storage is refused.
+  ledgers, and recovery state live only under `$OXIDEX_WORKTREE_ROOT`,
+  `$OXIDEX_TARGET_ROOT`, or `$OXIDEX_OPS_DIR`; ephemeral temporary-directory
+  storage is refused.
 - Shared build/test jobs use the shared lock. Corpus, read-regression,
   transition, and other heavyweight evidence jobs use the exclusive lock.
 
@@ -90,13 +107,13 @@ The functional program is complete when all of the following are true:
 
 - One implementation task owns one branch, one worktree, and one absolute
   `CARGO_TARGET_DIR`.
-- The integration worktree is:
-  `/Users/allen/git/oxidex-beta1-functional-integration` on branch
+- The historical paused integration worktree is:
+  `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-functional-integration` on branch
   `staging/beta1-functional-integration`.
-- Task worktrees use `/Users/allen/git/oxidex-beta1-<task-slug>` and branches
+- Task worktrees use `$OXIDEX_WORKTREE_ROOT/oxidex-beta1-<task-slug>` and branches
   `staging/beta1/<task-slug>`.
 - Task target directories use
-  `/Users/allen/git/oxidex-beta1-targets/<task-slug>`; the controller ledger
+  `$OXIDEX_TARGET_ROOT/<task-slug>`; the controller ledger
   binds that stable path to the task's resolved base SHA and refuses reuse by
   another live task.
 - The implementation plan assigns every task a literal slug and all three
@@ -390,7 +407,7 @@ covering tests are rerun, and its review package is regenerated.
 
 Task branches may contain several signed checkpoint commits. After the first
 meaningful clean checkpoint, the controller pushes the branch and opens a
-draft PR against `staging/beta1-functional-integration`. It pushes later checkpoints and
+draft PR against `refactor/tag-machinery` after #916. It pushes later checkpoints and
 updates the PR evidence summary so local and remote recovery state advance
 together.
 
@@ -401,7 +418,9 @@ its integration worktree to the resulting remote target before releasing
 dependent tasks. The task worktree remains available until the remote merge
 SHA and post-merge target SHA are recorded.
 
-Before final qualification, the controller rebases its single-writer
+The following staging-specific sequence is historical and paused pending the
+journaled reconciliation described above. Before final qualification, the
+controller rebases its single-writer
 integration branch onto the exact current `refactor/tag-machinery` SHA. Task 20
 authenticates that combined tree. If the target moves before the final merge,
 the integration branch is rebased again and every Task 20 gate, receipt,
@@ -453,7 +472,7 @@ The integration worktree contains:
 
 The authoritative controller snapshot, append-only event stream, canonical
 PRDs, process records, reports, reviews, and receipt index live below
-`/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller/`.
+`$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller/`.
 The ignored Superpowers workspace and root `HANDOFF.md` are working views, not
 the only recovery copy.
 
