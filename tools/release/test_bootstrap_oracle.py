@@ -740,14 +740,16 @@ class DurablePathTests(unittest.TestCase):
                 "durable payload\n",
             )
 
-    def test_materialize_corpus_normalizes_modes_across_umasks_and_keeps_executables(self) -> None:
-        """The locked corpus tree is host-umask independent without losing executability."""
+    def test_materialize_corpus_split_normalizes_base_and_archive_modes(self) -> None:
+        """Base modes normalize while archive files retain their locked modes."""
         with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             base = oracle.exiftool_root(root) / "t/images"
             base.mkdir(parents=True)
             (base / "base.txt").write_bytes(b"base\n")
             (base / "base.txt").chmod(0o664)
+            (base / "base-run").write_bytes(b"#!/bin/sh\n")
+            (base / "base-run").chmod(0o775)
             archive = root / "samples_fixture.tar"
             with tarfile.open(archive, "w") as source:
                 nested = tarfile.TarInfo("nested")
@@ -758,19 +760,20 @@ class DurablePathTests(unittest.TestCase):
                 ordinary.mode = 0o664
                 ordinary.size = len(b"archive\n")
                 source.addfile(ordinary, io.BytesIO(b"archive\n"))
-                executable = tarfile.TarInfo("run-fixture")
-                executable.mode = 0o775
-                executable.size = len(b"#!/bin/sh\n")
-                source.addfile(executable, io.BytesIO(b"#!/bin/sh\n"))
+                private = tarfile.TarInfo("archive-private")
+                private.mode = 0o700
+                private.size = len(b"private\n")
+                source.addfile(private, io.BytesIO(b"private\n"))
 
             expected_tree = root / "expected"
             shutil.copytree(base, expected_tree)
+            for item in expected_tree.rglob("*"):
+                item.chmod(0o755 if item.is_dir() or item.name == "base-run" else 0o644)
             with tarfile.open(archive) as source:
                 source.extractall(expected_tree)
             for item in expected_tree.rglob("*"):
-                item.chmod(
-                    0o755 if item.is_dir() or item.name == "run-fixture" else 0o644
-                )
+                if item.is_dir():
+                    item.chmod(0o755)
             expected = oracle.sha256_tree(expected_tree)
             test_lock = {**oracle.LOCK, "corpus_tree_sha256": expected}
 
@@ -778,7 +781,7 @@ class DurablePathTests(unittest.TestCase):
                 with self.subTest(umask=oct(mask)), mock.patch.object(
                     oracle, "DURABLE_ROOT", root
                 ), mock.patch.object(oracle, "LOCK", test_lock), mock.patch.object(
-                    oracle, "MIN_CORPUS_FILES", 3
+                    oracle, "MIN_CORPUS_FILES", 4
                 ):
                     old_umask = os.umask(mask)
                     try:
@@ -789,8 +792,9 @@ class DurablePathTests(unittest.TestCase):
                     self.assertEqual(oracle.sha256_tree(corpus), expected)
                     self.assertEqual((corpus / "nested").stat().st_mode & 0o777, 0o755)
                     self.assertEqual((corpus / "base.txt").stat().st_mode & 0o777, 0o644)
+                    self.assertEqual((corpus / "base-run").stat().st_mode & 0o777, 0o755)
                     self.assertEqual((corpus / "archive.txt").stat().st_mode & 0o777, 0o644)
-                    self.assertEqual((corpus / "run-fixture").stat().st_mode & 0o777, 0o755)
+                    self.assertEqual((corpus / "archive-private").stat().st_mode & 0o777, 0o700)
                     shutil.rmtree(corpus)
 
     def test_named_release_recipes_have_no_system_temporary_defaults(self) -> None:
