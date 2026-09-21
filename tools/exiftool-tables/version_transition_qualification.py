@@ -332,6 +332,26 @@ def _file_binding(file_path: Path, label: str) -> dict[str, Any]:
     return {"path": str(resolved), "sha256": _sha_file(resolved), "bytes": resolved.stat().st_size}
 
 
+def _native_fixture_bindings(cases: list[Any]) -> list[dict[str, Any]]:
+    bindings: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for case in cases:
+        try:
+            parsed = native_oracle._case(case)
+        except native_oracle.Refused as exc:
+            raise Refused(f"native case is invalid: {exc}") from exc
+        if parsed["name"] in names:
+            raise Refused("native case names must be unique")
+        names.add(parsed["name"])
+        bindings.append({
+            "name": parsed["name"],
+            **_file_binding(parsed["fixture"], f"{parsed['name']} native fixture"),
+        })
+    if not bindings:
+        raise Refused("at least one native case fixture is required")
+    return bindings
+
+
 def _freeze_side_inputs(row: Mapping[str, Any], side: str) -> dict[str, Any]:
     identity_config = row["immutable_source_identities"][side]
     bundle = Path(identity_config["input_bundle"])
@@ -354,6 +374,7 @@ def _freeze_side_inputs(row: Mapping[str, Any], side: str) -> dict[str, Any]:
         "native_cases_path": str(cases_path),
         "native_cases_binding": _file_binding(cases_path, "native cases"),
         "native_cases": copy.deepcopy(cases),
+        "native_fixture_bindings": _native_fixture_bindings(cases),
     }
 
 
@@ -373,6 +394,12 @@ def _verify_frozen_side(frozen: Mapping[str, Any]) -> None:
         if (_file_binding(cases_path, "native cases") != frozen["native_cases_binding"]
                 or _read_array(cases_path, "native cases") != frozen["native_cases"]):
             raise Refused("native-case input changed after qualification preflight")
+        try:
+            native_fixture_bindings = _native_fixture_bindings(frozen["native_cases"])
+        except Refused as exc:
+            raise Refused("native fixture input changed after qualification preflight") from exc
+        if native_fixture_bindings != frozen["native_fixture_bindings"]:
+            raise Refused("native fixture input changed after qualification preflight")
     except executor.Refused as exc:
         raise Refused(f"selected input changed after qualification preflight: {exc}") from exc
 

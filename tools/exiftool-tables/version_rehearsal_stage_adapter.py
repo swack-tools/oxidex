@@ -296,6 +296,7 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
     env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
     command = ["bash", str(checkout / "tools" / "exiftool-tables" / "regen-all.sh")]
     first = _run(command, cwd=checkout, env=env, run=run)
+    _raw(report, "generate", {"first": first})
     if first["state"] != "ok":
         raise Refused("sanctioned regen-all.sh failed")
     if pin.read_text(encoding="utf-8") != args.release + "\n":

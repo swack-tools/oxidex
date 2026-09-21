@@ -386,7 +386,13 @@ class WrapperCallTests(unittest.TestCase):
         (self.root / "write.json").write_text(json.dumps({
             "schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [fixture_row],
         }))
-        (self.root / "cases.json").write_text('[{"name":"case"}]')
+        self.native_fixture = self.root / "native-only.dat"
+        self.native_fixture.write_bytes(b"native fixture")
+        (self.root / "cases.json").write_text(json.dumps([{
+            "name": "case", "fixture": str(self.native_fixture),
+            "read": {"query": "Comment", "expectation": "native_unsupported"},
+            "write": {"tag": "Comment", "operation": "delete", "readback": None},
+        }]))
         self.caller = {"pin_version": "13.59", "head": "a" * 40}
         self.identity = {
             "release": "13.59", "tag_object": "b" * 40, "peeled_commit": "c" * 40,
@@ -476,6 +482,29 @@ class WrapperCallTests(unittest.TestCase):
         with self.assertRaisesRegex(qualification.Refused, "native-case input changed"):
             self.invoke(mutates_after_before)
         self.assertEqual(calls, 1)
+
+    def test_native_only_fixture_bytes_are_frozen_before_first_side_and_rechecked(self) -> None:
+        calls = 0
+        def mutates_after_before(_run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.native_fixture.write_bytes(b"replacement fixture")
+            return {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}}
+        with self.assertRaisesRegex(qualification.Refused, "native fixture input changed"):
+            self.invoke(mutates_after_before)
+        self.assertEqual(calls, 1)
+
+    def test_native_fixture_binding_refuses_absent_or_symlink_input(self) -> None:
+        cases = json.loads((self.root / "cases.json").read_text())
+        self.native_fixture.unlink()
+        with self.assertRaisesRegex(qualification.Refused, "existing regular file"):
+            qualification._native_fixture_bindings(cases)
+        target = self.root / "native-target.dat"
+        target.write_bytes(b"native fixture")
+        self.native_fixture.symlink_to(target)
+        with self.assertRaisesRegex(qualification.Refused, "existing regular file"):
+            qualification._native_fixture_bindings(cases)
 
     def test_fixture_manifest_is_frozen_before_first_side_and_rechecked(self) -> None:
         calls = 0

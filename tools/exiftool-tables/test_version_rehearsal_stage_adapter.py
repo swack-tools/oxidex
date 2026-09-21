@@ -195,10 +195,41 @@ class AdapterTests(unittest.TestCase):
                          result["second_regeneration"]["second_pin"])
         self.assertEqual(result["second_regeneration"]["first_artifacts"],
                          result["second_regeneration"]["second_artifacts"])
+        raw = json.loads((self.reports / "raw/generate-command.json").read_text())
+        self.assertEqual(set(raw), {"first", "second"})
         self.assertEqual(
             [row["path"] for row in result["generated_artifacts"]],
             [item.path for item in artifacts.inventory(self.checkout)],
         )
+
+    def test_first_generation_failure_persists_raw_command_receipt(self):
+        def fails_first_generation(argv, **kwargs):
+            if argv[0] == "bash":
+                self.seen.append((argv, kwargs["env"]))
+                return subprocess.CompletedProcess(argv, 17, "first stdout", "first stderr")
+            return self.fake_run(argv, **kwargs)
+        with self.assertRaisesRegex(adapter.Refused, "sanctioned regen-all.sh failed"):
+            adapter.generate(self.args("generate"), run=fails_first_generation)
+        self.assertEqual(len([row for row in self.seen if row[0][0] == "bash"]), 1)
+        raw = json.loads((self.reports / "raw/generate-command.json").read_text())
+        self.assertEqual(raw["first"]["exit"], 17)
+        self.assertEqual(raw["first"]["stdout"], "first stdout")
+        self.assertEqual(raw["first"]["stderr"], "first stderr")
+
+    def test_second_generation_interruption_preserves_first_command_receipt(self):
+        calls = 0
+        def interrupts_second_generation(argv, **kwargs):
+            nonlocal calls
+            if argv[0] == "bash":
+                calls += 1
+                if calls == 2:
+                    raise KeyboardInterrupt("second generation interrupted")
+            return self.fake_run(argv, **kwargs)
+        with self.assertRaisesRegex(KeyboardInterrupt, "second generation interrupted"):
+            adapter.generate(self.args("generate"), run=interrupts_second_generation)
+        raw = json.loads((self.reports / "raw/generate-command.json").read_text())
+        self.assertEqual(set(raw), {"first"})
+        self.assertEqual(raw["first"]["state"], "ok")
 
     def test_second_in_place_regeneration_must_be_clean(self):
         calls = 0
