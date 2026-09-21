@@ -770,7 +770,7 @@ def instrument(perl, et_dir):
     print(f"=== instrument: helper_oracle ===\n"
           f"perl      {perl} ({pv})\nexiftool  {exiftool} -ver {ver} (pinned {pinned}); "
           f"OOXML.docx -> {ft}\nTZ        UTC")
-    return pv, ver, ft
+    return pv, ver
 
 
 def oracle_env():
@@ -810,7 +810,7 @@ def pinned_residual_sources(perl, et_lib):
 
 
 def build(perl, et_dir):
-    pv, ver, ft = instrument(perl, et_dir)
+    pv, ver = instrument(perl, et_dir)
     et_lib = Path(et_dir) / "lib"
     sources = pinned_sources(et_lib)
     missing = [h["perl"] for h in HELPERS if sources[h["perl"]][0] is None]
@@ -857,7 +857,10 @@ def build(perl, et_dir):
             "perl_sha256": hashlib.sha256(Path(perl).read_bytes()).hexdigest(),
             "perl_version": pv,
             "exiftool_version": ver,
-            "capability_probe": {"OOXML.docx": ft},
+            # `instrument` refuses before returning unless this exact probe
+            # succeeded. Keep the portable result in the tracked identity;
+            # the external instrument log retains the probed file and paths.
+            "capability_probe": {"OOXML.docx": "DOCX"},
             "tz": "UTC",
             "note": "each case is the pinned sub called directly on `args` (prototypes "
                     "bypassed), `options` set in $$et{OPTIONS} and mirrored into "
