@@ -15,6 +15,7 @@ The config supplied to `init` is JSON with this shape:
   "execution_source_commit": "full OxiDex commit object id",
   "perls": { "11.78": "/absolute/perl", "12.64": "/absolute/perl" },
   "native_cases": { "11.78": [{ "name": "case", "fixture": "/fixture.jpg", "read": { "query": "FileType", "expectation": "value", "value": "JPEG" }, "write": { "operation": "set", "tag": "Comment", "value": "probe", "readback": "probe" } }], "12.64": [{ "name": "case", "fixture": "/fixture.jpg", "read": { "query": "FileType", "expectation": "value", "value": "JPEG" }, "write": { "operation": "set", "tag": "Comment", "value": "probe", "readback": "probe" } }] },
+  "read_fixture_manifests": { "11.78": "/absolute/read-fixtures.json", "12.64": "/absolute/read-fixtures.json" },
   "write_fixture_manifests": { "11.78": "/absolute/write-fixtures.json", "12.64": "/absolute/write-fixtures.json" },
   "commands": {
     "generate": { "argv": ["python3", "generator.py", "{native_source}", "{report}"] },

@@ -125,7 +125,7 @@ def _write_fixture_binding(value: Any) -> dict[str, Any]:
     return _fixture_binding(value, kind=_WRITE_FIXTURE_KIND, jpeg_only=True)
 
 
-def _config(value: Any, releases: list[str]) -> dict[str, Any]:
+def _config(value: Any, releases: list[str], *, allow_legacy_recovery: bool = False) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("schema") != SCHEMA:
         raise Refused("execution config schema is unsupported")
     commands = value.get("commands")
@@ -173,17 +173,21 @@ def _config(value: Any, releases: list[str]) -> dict[str, Any]:
                 or len({str(Path(targets[release]).resolve()) for release in execution_releases}) != len(execution_releases)):
             raise Refused("target directories must uniquely bind every execution release")
     read_manifests = value.get("read_fixture_manifests")
-    if not isinstance(read_manifests, dict) or set(read_manifests) != set(execution_releases):
-        raise Refused("read command requires one immutable fixture manifest per execution release")
-    current_reads = {
-        release: _fixture_binding(read_manifests[release], kind=_READ_FIXTURE_KIND, jpeg_only=False)
-        for release in execution_releases
-    }
     saved_reads = value.get("read_fixture_bindings")
-    if saved_reads is not None and saved_reads != current_reads:
-        raise Refused("read fixture manifest or requested scope changed after initialization")
     normalized = dict(value)
-    normalized["read_fixture_bindings"] = current_reads
+    legacy_reads_absent = read_manifests is None and saved_reads is None
+    if legacy_reads_absent and allow_legacy_recovery:
+        pass
+    else:
+        if not isinstance(read_manifests, dict) or set(read_manifests) != set(execution_releases):
+            raise Refused("read command requires one immutable fixture manifest per execution release")
+        current_reads = {
+            release: _fixture_binding(read_manifests[release], kind=_READ_FIXTURE_KIND, jpeg_only=False)
+            for release in execution_releases
+        }
+        if saved_reads is not None and saved_reads != current_reads:
+            raise Refused("read fixture manifest or requested scope changed after initialization")
+        normalized["read_fixture_bindings"] = current_reads
     has_write = "write" in commands
     manifests, bindings = value.get("write_fixture_manifests"), value.get("write_fixture_bindings")
     if not has_write:
@@ -275,12 +279,13 @@ def initialize_run(run_dir: Path, capture: dict[str, Any], catalog: dict[str, An
     return journal
 
 
-def _load_journal(run_dir: Path, archive_cache: Path, source_root: Path) -> tuple[dict[str, Any], tuple[dict[str, Any], ...], dict[str, Any]]:
+def _load_journal(run_dir: Path, archive_cache: Path, source_root: Path, *,
+                  allow_legacy_recovery: bool = False) -> tuple[dict[str, Any], tuple[dict[str, Any], ...], dict[str, Any]]:
     docs = _verify_inputs(run_dir, archive_cache, source_root)
     config = _read(run_dir / "inputs" / "config.json")
     plan, materialization = docs[2], docs[4]
     selected_releases = _selected(plan)
-    _config(config, selected_releases)
+    _config(config, selected_releases, allow_legacy_recovery=allow_legacy_recovery)
     releases = config.get("execution_releases", selected_releases)
     journal = _read(run_dir / "execution-status.json")
     if (journal.get("schema") != SCHEMA or journal.get("kind") != KIND
@@ -406,7 +411,7 @@ def _require_binary_proof(result: Mapping[str, Any], target: Path, field: str = 
     return row
 
 
-def _require_fixture_proof(result: Mapping[str, Any]) -> None:
+def _require_fixture_proof(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     row = result.get("fixtures")
     if (not isinstance(row, dict) or not isinstance(row.get("manifest"), str) or not isinstance(row.get("manifest_sha256"), str)
             or __import__("re").fullmatch(r"[0-9a-f]{64}", row["manifest_sha256"]) is None or not isinstance(row.get("entries"), list) or not row["entries"]):
@@ -414,6 +419,7 @@ def _require_fixture_proof(result: Mapping[str, Any]) -> None:
     manifest = _regular(Path(row["manifest"]), "fixture manifest")
     if hashlib.sha256(manifest.read_bytes()).hexdigest() != row["manifest_sha256"]:
         raise Refused("fixture manifest changed after comparison")
+    scope: list[dict[str, Any]] = []
     for item in row["entries"]:
         if (not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("sha256"), str)
                 or __import__("re").fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None
@@ -430,6 +436,8 @@ def _require_fixture_proof(result: Mapping[str, Any]) -> None:
                 or staged.stat().st_size != item["corpus_bytes"]
                 or item["corpus_sha256"] != item["sha256"] or item["corpus_bytes"] != item["bytes"]):
             raise Refused("staged fixture changed after comparison")
+        scope.append({"path": str(fixture), "sha256": item["sha256"], "bytes": item["bytes"]})
+    return scope
 
 
 def _require_native_identity(result: Mapping[str, Any], release: str, native: tuple[Path, Path, Path], perl: str) -> None:
@@ -817,8 +825,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
             fixture_report = result.get("fixtures", {})
             if (not isinstance(fixture_report, dict)
                     or fixture_report.get("manifest") != fixture_binding["path"]
-                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]):
-                raise Refused("read result did not use the immutable selected fixture manifest")
+                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]
+                    or _require_fixture_proof(result) != fixture_binding["fixtures"]):
+                raise Refused("read result did not cover the exact immutable selected fixture scope")
         if stage == "write":
             build_report = _read(run_dir / journal["releases"][release]["reports"]["build"]["path"])
             if result.get("writer_binary") != build_report.get("writer_binary"):
@@ -827,8 +836,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
             fixture_report = result.get("fixtures", {})
             if (not isinstance(fixture_report, dict)
                     or fixture_report.get("manifest") != fixture_binding["path"]
-                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]):
-                raise Refused("write result did not use the immutable selected JPEG fixture manifest")
+                    or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]
+                    or _require_fixture_proof(result) != fixture_binding["fixtures"]):
+                raise Refused("write result did not cover the exact immutable selected JPEG fixture scope")
         if stage_guard is not None:
             stage_guard(release, stage, "after")
     except (Refused, OSError) as exc:
@@ -1020,7 +1030,9 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
 def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
             host_lock_fd: int | None = None) -> dict[str, Any]:
     """Record interruption without guessing whether an active command completed."""
-    journal, _, config = _load_journal(run_dir, archive_cache, source_root)
+    journal, _, config = _load_journal(
+        run_dir, archive_cache, source_root, allow_legacy_recovery=True,
+    )
     with _external_host_lock(config, host_lock_fd):
         if journal.get("phase") != "running" or not isinstance(journal.get("active"), dict):
             raise Refused("only a running execution can be recovered as interrupted")

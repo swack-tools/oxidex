@@ -641,17 +641,20 @@ class LiveInventoryProofTests(unittest.TestCase):
             checkout = Path(temporary)
             ledger = checkout / "generated-ledger.json"
             ledger.write_text(json.dumps({
-                "stats": {"refused": 2, "omitted_rows": [1, 2, 3]},
+                "stats": {"refused": 2, "by_kind": {"refused": 2},
+                          "omitted_rows": [1, 2, 3], "rows_omitted": 3,
+                          "top_refused_expressions": ["summary"]},
                 "rows": [{"withheld": ["reason"]}, {"withheld": []}],
+                "source_report": {"source_row_report": {"omitted_rows": [1, 2, 3],
+                                                          "rows_omitted": 3}},
             }))
             with patch.object(adapter.artifacts, "inventory",
                               return_value=[SimpleNamespace(path="generated-ledger.json")]):
                 result = adapter.generated_refusal_counts(checkout)
-            self.assertEqual(result["total"], 6)
+            self.assertEqual(result["total"], 5)
             self.assertEqual(
                 {(row["json_path"], row["count"]) for row in result["counters"]},
-                {("stats.refused", 2), ("stats.omitted_rows", 3),
-                 ("rows[0].withheld", 1), ("rows[1].withheld", 0)},
+                {("stats.refused", 2), ("stats.rows_omitted", 3)},
             )
 
 

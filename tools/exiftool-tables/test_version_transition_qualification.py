@@ -248,6 +248,21 @@ class SideAndRecoveryTests(unittest.TestCase):
             qualification._recover_if_running(run_dir, cache, sources, host_lock_fd=held.fileno)
         self.assertEqual(json.loads(journal_path.read_text())["phase"], "interrupted")
 
+    def test_report_for_requires_the_execution_journal_digest(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            report_path = run_dir / "stage-results/release-11-78/read.json"
+            report_path.parent.mkdir(parents=True)
+            original = {"state": "passed", "classification_counts": {"extra": 0}}
+            report_path.write_text(json.dumps(original))
+            journal = {"releases": {"11.78": {"reports": {"read": {
+                "path": str(report_path.relative_to(run_dir)),
+                "sha256": qualification.rehearsal.sha256_json(original),
+            }}}}}
+            report_path.write_text(json.dumps({"state": "passed", "classification_counts": {"extra": 99}}))
+            with self.assertRaisesRegex(qualification.Refused, "journal digest"):
+                qualification._report_for(run_dir, journal, "11.78", "read")
+
 
 class LeaseTests(unittest.TestCase):
     def test_nonblocking_lease_emits_all_receipts(self) -> None:
@@ -444,6 +459,25 @@ class WrapperCallTests(unittest.TestCase):
         self.assertTrue(all("write" in config["commands"] for config in configs))
         self.assertEqual(configs[0]["target_directories"]["13.59"], str(self.row_target / "before"))
         self.assertEqual(configs[1]["target_directories"]["13.59"], str(self.row_target / "after"))
+
+    def test_success_receipt_is_published_only_after_lease_cleanup(self) -> None:
+        original = qualification._atomic_json
+        def fails_expiry_receipt(target, value):
+            if target == self.receipts["expiry_receipt"]:
+                raise OSError("expiry receipt failed")
+            return original(target, value)
+        with patch.object(qualification, "_atomic_json", side_effect=fails_expiry_receipt):
+            with self.assertRaisesRegex(qualification.Refused, "lease cleanup failed"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
+
+    def test_contending_invocation_writes_no_handoff_before_lease(self) -> None:
+        with qualification.executor._HostLock(self.lease):
+            with self.assertRaisesRegex(qualification.Refused, "transition lease is held"):
+                self.invoke(unittest.mock.Mock())
+        self.assertFalse(self.receipts["handoff_receipt"].exists())
 
     def test_interruption_recovers_active_executor_journal(self) -> None:
         def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):

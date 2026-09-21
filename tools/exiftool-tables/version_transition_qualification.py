@@ -457,9 +457,17 @@ def _side_config(*, release: str, source_commit: str, perl: Path, read_manifest:
 
 def _report_for(run_dir: Path, journal: Mapping[str, Any], release: str, stage: str) -> dict[str, Any]:
     report = journal["releases"][release]["reports"].get(stage)
-    if not isinstance(report, dict) or not isinstance(report.get("path"), str):
+    if (not isinstance(report, dict) or not isinstance(report.get("path"), str)
+            or not isinstance(report.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", report["sha256"]) is None):
         raise Refused(f"{release} lacks a durable {stage} report")
-    return _read_object(run_dir / report["path"], f"{release} {stage} report")
+    relative = Path(report["path"])
+    if relative.is_absolute() or ".." in relative.parts:
+        raise Refused(f"{release} {stage} report path escapes its durable run")
+    value = _read_object(run_dir / relative, f"{release} {stage} report")
+    if rehearsal.sha256_json(value) != report["sha256"]:
+        raise Refused(f"{release} {stage} report differs from its execution journal digest")
+    return value
 
 
 def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
@@ -763,12 +771,14 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
             frozen_inputs[row["id"]][side] = frozen
     perl = _perl(ops_paths.ops_root())
     results: list[dict[str, Any]] = []
-    _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
-                                    "state": "preflight", "rows": [row["id"] for row in rows],
-                                    "lease": str(lease_path)})
+    final: dict[str, Any] | None = None
+    final_path = output_root / run_id / "qualification-result.json"
     with TransitionLease(lease=lease_path, run_id=run_id, owner_receipt=owner_receipt,
                          heartbeat_receipt=heartbeat_receipt, expiry_receipt=expiry_receipt,
                          release_receipt=release_receipt) as host_lease:
+        _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
+                                        "state": "preflight", "rows": [row["id"] for row in rows],
+                                        "lease": str(lease_path)})
         cadence = ReceiptCadence(host_lease, handoff_receipt)
         cadence.__enter__()
         try:
@@ -856,21 +866,22 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                 "promotion": "forbidden", "status": "tooling-executed-nonpromoting",
                 "caller": caller, "rows": results, "caller_restored": True,
             }
-            final_path = output_root / run_id / "qualification-result.json"
-            _atomic_json(final_path, final)
             _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
-                                            "state": "final-journal-written",
-                                            "receipt": str(final_path), "lease": str(lease_path)})
-            host_lease.heartbeat("final-journal-written", None, "final")
+                                            "state": "final-validation-complete",
+                                            "lease": str(lease_path)})
+            host_lease.heartbeat("final-validation-complete", None, "final")
             verify_caller(caller)
             host_lease.finish("complete")
-            return final
         finally:
             active_exception = sys.exc_info()
             try:
                 verify_caller(caller)
             finally:
                 cadence.__exit__(*active_exception)
+    if final is None:
+        raise Refused("qualification ended without a validated final result")
+    _atomic_json(final_path, final)
+    return final
 
 
 def _parser() -> argparse.ArgumentParser:

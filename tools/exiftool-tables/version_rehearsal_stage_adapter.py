@@ -202,32 +202,38 @@ def _validate_artifacts(checkout: Path, rows: Any) -> list[dict[str, Any]]:
 
 
 def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
-    """Count explicit refusal/omission fields in the live generated ledgers.
+    """Count one canonical refusal/omission population per ledger and family.
 
     This is evidence that a historical generation refused source behavior
     explicitly; it is not permission to reinterpret a refusal as coverage.
-    JSON paths are retained so a total can never hide which generated ledger
-    and field contributed to it.
+    The shallowest population is canonical; an integer summary wins over its
+    equal-length detail array. Deeper breakdowns, embedded source ledgers, and
+    ``top_*`` samples are evidence views, not additional populations. JSON
+    paths are retained so the selection remains auditable.
     """
-    counters: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     key_pattern = re.compile(r"(?:refus|omitt|withheld)", re.IGNORECASE)
 
-    def walk(value: Any, location: str, artifact_path: str) -> None:
+    def walk(value: Any, location: str, artifact_path: str, depth: int = 0) -> None:
         if isinstance(value, dict):
             for key in sorted(value):
                 child = value[key]
                 child_location = f"{location}.{key}" if location else key
-                if key_pattern.search(key):
+                lowered = key.casefold()
+                if key_pattern.search(key) and not lowered.startswith("top_"):
+                    family = "omitted" if "omitt" in lowered else "refused"
                     if type(child) is int and child >= 0:
-                        counters.append({"artifact": artifact_path, "json_path": child_location,
-                                         "kind": "integer", "count": child})
+                        candidates.append({"artifact": artifact_path, "json_path": child_location,
+                                           "kind": "integer", "count": child,
+                                           "family": family, "depth": depth + 1})
                     elif isinstance(child, list):
-                        counters.append({"artifact": artifact_path, "json_path": child_location,
-                                         "kind": "array-length", "count": len(child)})
-                walk(child, child_location, artifact_path)
+                        candidates.append({"artifact": artifact_path, "json_path": child_location,
+                                           "kind": "array-length", "count": len(child),
+                                           "family": family, "depth": depth + 1})
+                walk(child, child_location, artifact_path, depth + 1)
         elif isinstance(value, list):
             for index, child in enumerate(value):
-                walk(child, f"{location}[{index}]", artifact_path)
+                walk(child, f"{location}[{index}]", artifact_path, depth + 1)
 
     for item in artifacts.inventory(checkout):
         if not item.path.endswith(".json"):
@@ -238,6 +244,22 @@ def generated_refusal_counts(checkout: Path) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError) as exc:
             raise Refused(f"generated refusal ledger is unreadable: {item.path}") from exc
         walk(document, "", item.path)
+    counters: list[dict[str, Any]] = []
+    populations = sorted({(row["artifact"], row["family"]) for row in candidates})
+    for artifact_path, family in populations:
+        family_rows = [row for row in candidates
+                       if row["artifact"] == artifact_path and row["family"] == family]
+        shallowest = min(row["depth"] for row in family_rows)
+        canonical = [row for row in family_rows if row["depth"] == shallowest]
+        summaries = [row for row in canonical if row["kind"] == "integer"]
+        details = [row for row in canonical if row["kind"] == "array-length"]
+        if summaries and details and any(
+                detail["count"] not in {summary["count"] for summary in summaries}
+                for detail in details):
+            raise Refused(f"generated refusal ledger has conflicting canonical counts: {artifact_path}")
+        selected = summaries or details
+        counters.extend({key: row[key] for key in ("artifact", "json_path", "kind", "count")}
+                        for row in selected)
     counters.sort(key=lambda row: (row["artifact"], row["json_path"], row["kind"]))
     return {"kind": "explicit-generated-refusal-counts", "counters": counters,
             "total": sum(row["count"] for row in counters)}

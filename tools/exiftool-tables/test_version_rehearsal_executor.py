@@ -340,6 +340,27 @@ class ExecutorTests(unittest.TestCase):
         with executor._HostLock(self.lock) as held, self.assertRaisesRegex(executor.Refused, "still live"):
             executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno())
 
+    def test_recovery_accepts_legacy_schema_one_config_without_read_bindings(self):
+        self.initialize(self.config())
+        config_path = self.run_dir / "inputs/config.json"
+        config = json.loads(config_path.read_text())
+        config.pop("read_fixture_manifests")
+        config.pop("read_fixture_bindings")
+        config_path.write_text(json.dumps(config))
+        journal_path = self.run_dir / "execution-status.json"
+        journal = json.loads(journal_path.read_text())
+        release = self.releases[0]
+        journal["config_sha256"] = executor._sha_json(config)
+        journal["phase"] = "running"
+        journal["active"] = {"release": release, "stage": "generate"}
+        journal["releases"][release]["stages"]["generate"] = "running"
+        journal_path.write_text(json.dumps(journal))
+        with self.assertRaisesRegex(executor.Refused, "read command requires"):
+            executor._load_journal(self.run_dir, self.cache, self.sources)
+        recovered = executor.recover(self.run_dir, self.cache, self.sources)
+        self.assertEqual(recovered["phase"], "interrupted")
+        self.assertEqual(recovered["releases"][release]["stages"]["generate"], "interrupted")
+
     def test_stage_guard_failure_after_generate_stops_later_stages(self):
         self.initialize(self.config())
         boundaries = []
@@ -455,6 +476,23 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(journal["phase"], "planned")
         self.assertEqual(self.checkouts, [])
         self.assertEqual(self.calls, [])
+
+    def test_read_report_must_cover_exact_bound_fixture_scope(self):
+        second = self.root / "second.jpg"
+        second.write_bytes(b"second fixture")
+        manifest = json.loads(self.fixture_manifest.read_text())
+        manifest["fixtures"].append({
+            "path": str(second),
+            "sha256": __import__("hashlib").sha256(second.read_bytes()).hexdigest(),
+            "bytes": second.stat().st_size,
+        })
+        self.fixture_manifest.write_text(json.dumps(manifest))
+        self.initialize(self.config())
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "failed")
+        failure = next(row["failure"] for row in journal["releases"].values() if row["failure"])
+        self.assertEqual(failure["stage"], "read")
+        self.assertIn("exact immutable selected fixture scope", failure["detail"])
 
     def test_write_stage_refuses_replaced_writer_binary_or_read_fixture_substitution(self):
         self.initialize(self.config())
