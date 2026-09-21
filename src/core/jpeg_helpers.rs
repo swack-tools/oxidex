@@ -7,7 +7,7 @@ use super::{FileReader, MetadataMap, TagValue};
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::read_report::{Diagnostic, DiagnosticSink};
-use crate::core::tag_conversion::exif_entry_to_tag_value;
+use crate::core::tag_conversion::{exif_entry_to_tag_value, time_codes_forms};
 use crate::core::tiff_helpers::{
     parse_exif_subifd_with_session_and_options, parse_gps_subifd, parse_ifd1_with_session,
     physical_entry_indices,
@@ -535,7 +535,18 @@ fn process_ifd0_tags(
         // Convert tag ID to tag name (IFD0 for main JPEG EXIF)
         let tag_name = lookup_tag_name(*tag_id, "IFD0");
 
-        if opcode_residual {
+        if *tag_id == 0xC763 {
+            let forms = time_codes_forms(bytes);
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                forms.print,
+                forms.value,
+                Some(forms.stored),
+                crate::core::tag_occurrence::SHIM_DEFAULT_PRIORITY,
+                "",
+                crate::core::tag_occurrence::Instance::default(),
+            );
+        } else if opcode_residual {
             let binary = TagValue::Binary(bytes.to_vec());
             metadata.insert_occurrence_with_forms(
                 tag_name,
