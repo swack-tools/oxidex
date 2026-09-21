@@ -5015,7 +5015,9 @@ impl MakerNoteParser for CanonParser {
             byte_order,
             model,
             ctx.payload_tiff_offset(),
-            ctx.tiff_base(),
+            // The engine walks a payload-relative slice. Its guard domain
+            // must distinguish other MakerNotes in the same TIFF.
+            ctx.payload_base(),
             Some(value_forms),
             session,
             cond_ctx,

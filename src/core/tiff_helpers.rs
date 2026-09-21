@@ -22,7 +22,7 @@ use crate::exiftool_tables::{Ctx, IfdTable, MemberValue, find_ifd_table};
 use crate::parsers::common::print_im::{PRINT_IM_VERSION_TAG, decode_print_im_version};
 use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
-    ByteOrder, find_entry_position, ifd_entry_count, parse_ifd,
+    ByteOrder, find_entry_position_at, ifd_entry_count, parse_ifd,
 };
 use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session;
 use crate::parsers::tiff::makernotes::makernote_context::{
@@ -511,6 +511,7 @@ fn parse_ifd_chain_with_optional_options(
                 0,
                 reader.size(),
                 makernote_bytes,
+                None,
             );
             parse_makernote_with_session(&ctx, byte_order, &mut session, &mut cond_ctx, metadata);
         }
@@ -1255,7 +1256,7 @@ fn parse_exif_directory_with_session(
         // meant `Apple_iPhone6.jpg`, whose second 0x927C is a UTF-16 JSON blob
         // written by an editing app, reached the Apple parser with the wrong
         // 142 bytes and reported nothing at all.
-        let mut exif_makernote_data: Vec<&[u8]> = Vec::new();
+        let mut exif_makernote_data: Vec<(&[u8], Option<usize>)> = Vec::new();
         let mut interop_ifd_offset: Option<u64> = None;
 
         // ExifTool's MakerNote Condition list reads `$$self{Make}` and
@@ -1327,7 +1328,13 @@ fn parse_exif_directory_with_session(
 
             // Check for MakerNote in EXIF IFD (tag 0x927C)
             if *tag_id == MAKERNOTE {
-                exif_makernote_data.push(bytes);
+                exif_makernote_data.push((
+                    bytes,
+                    physical_indices
+                        .as_ref()
+                        .and_then(|indices| indices.get(survivor_index))
+                        .copied(),
+                ));
             }
 
             // Check for InteroperabilityIFDPointer (tag 0xA005)
@@ -1438,7 +1445,7 @@ fn parse_exif_directory_with_session(
         // is given the enclosing TIFF block as well as the payload, because a
         // MakerNote's value offsets are measured from the TIFF header and
         // routinely address bytes past the payload's declared end.
-        for makernote_bytes in exif_makernote_data {
+        for (makernote_bytes, entry_index) in exif_makernote_data {
             let maker_ctx = makernote_context(
                 reader,
                 offset,
@@ -1446,6 +1453,7 @@ fn parse_exif_directory_with_session(
                 tiff_base,
                 tiff_len,
                 makernote_bytes,
+                entry_index,
             );
             parse_makernote_with_session(&maker_ctx, byte_order, session, ctx, metadata);
         }
@@ -4031,6 +4039,9 @@ fn read_or_placeholder(reader: &dyn FileReader, offset: u64, length: u64) -> Tag
 /// offset addresses the TIFF header outright. `parse_ifd` hands back a copy of
 /// the declared block, which loses both the position those offsets count from
 /// and the bytes past the end, so the entry is re-read here for its position.
+/// `entry_index` preserves the physical occurrence when an ExifIFD carries
+/// multiple MakerNotes; looking up only the first id would detach later notes
+/// and discard the location their shared processed-directory guard needs.
 ///
 /// The context is bounded three ways over. `tiff_len` (ExifTool's `$dataLen`,
 /// and never more than the reader holds) caps how far it can reach. The
@@ -4051,10 +4062,13 @@ fn makernote_context<'a>(
     tiff_base: u64,
     tiff_len: u64,
     payload: &'a [u8],
+    entry_index: Option<usize>,
 ) -> MakerNoteContext<'a> {
     let detached = MakerNoteContext::detached(payload);
 
-    let Some(entry) = find_entry_position(reader, ifd_offset, byte_order, MAKERNOTE) else {
+    let Some(entry) =
+        find_entry_position_at(reader, ifd_offset, byte_order, MAKERNOTE, entry_index)
+    else {
         return detached;
     };
     // A value of four bytes or fewer is stored in the entry's offset field
@@ -7406,6 +7420,7 @@ mod makernote_window_tests {
             0,
             data.len() as u64,
             &payload,
+            None,
         );
 
         assert_eq!(ctx.payload(), &payload[..], "declared block is unchanged");
@@ -7424,7 +7439,7 @@ mod makernote_window_tests {
         let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 32, 32, &payload, 4096);
         let reader = TestReader::new(data);
 
-        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload);
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload, None);
 
         assert_eq!(ctx.window().len(), 64 - 32);
     }
@@ -7439,7 +7454,15 @@ mod makernote_window_tests {
         let reader = TestReader::new(data);
 
         let someone_elses = vec![0xFFu8; 16];
-        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &someone_elses);
+        let ctx = makernote_context(
+            &reader,
+            8,
+            ByteOrder::LittleEndian,
+            0,
+            64,
+            &someone_elses,
+            None,
+        );
 
         assert!(!ctx.is_widened());
         assert_eq!(ctx.payload(), &someone_elses[..]);
@@ -7453,7 +7476,7 @@ mod makernote_window_tests {
         let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 4, 0x04030201, 32, &payload, 24);
         let reader = TestReader::new(data);
 
-        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload);
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload, None);
 
         assert!(!ctx.is_widened());
         assert_eq!(ctx.payload(), &payload[..]);
@@ -7473,7 +7496,7 @@ mod makernote_window_tests {
         data.resize(data.len(), 0);
         let reader = TestReader::new(data);
 
-        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &claimed);
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &claimed, None);
 
         assert!(!ctx.is_widened());
         assert_eq!(ctx.payload(), &claimed[..]);
@@ -7485,7 +7508,7 @@ mod makernote_window_tests {
         let data = tiff_with_entry(0x0100, LONG, 1, 32, 32, &payload, 24);
         let reader = TestReader::new(data);
 
-        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload);
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 0, 64, &payload, None);
 
         assert!(!ctx.is_widened());
     }
@@ -7498,7 +7521,7 @@ mod makernote_window_tests {
         let data = tiff_with_entry(MAKERNOTE, UNDEFINED, 16, 32, 32, &payload, 24);
         let reader = TestReader::new(data);
 
-        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 292, 64, &payload);
+        let ctx = makernote_context(&reader, 8, ByteOrder::LittleEndian, 292, 64, &payload, None);
 
         assert_eq!(ctx.tiff_base(), 292);
         assert_eq!(ctx.tiff()[0..2], *b"II", "index 0 is the TIFF header");
