@@ -321,6 +321,30 @@ fn time_codes_match_value_and_print_conversions() {
         metadata.get_string("ExifIFD:TimeCodes"),
         Some("1858-11-27T00:00:00.00+00:00")
     );
+
+    // The source numeric domain is floating point. A finite exponent beyond
+    // gmtime's range must reach ExifTool's overflow rendering without integer
+    // multiplication overflow or wrapping to a plausible date.
+    let jpeg = jpeg_with_exif_entries(&[(0xC763, BYTE, vec![0, 0, 0, 0x80, 0x15, 0, 0x1e, 0x80])]);
+    let file = NamedTempFile::new().expect("creates finite-overflow MJD fixture");
+    std::fs::write(file.path(), jpeg).expect("writes finite-overflow MJD fixture");
+    let metadata = read_metadata(file.path()).expect("reads finite-overflow MJD fixture");
+    assert_eq!(
+        metadata.get_string("ExifIFD:TimeCodes"),
+        Some("1900-01-00T00:00:00.00+00:00")
+    );
+
+    // 9e9999 becomes infinity in native Perl; its failed gmtime rendering
+    // retains the NaN fractional marker produced by ConvertUnixTime.
+    let jpeg =
+        jpeg_with_exif_entries(&[(0xC763, BYTE, vec![0, 0, 0, 0x80, 0x99, 0x99, 0x9e, 0x80])]);
+    let file = NamedTempFile::new().expect("creates infinite MJD fixture");
+    std::fs::write(file.path(), jpeg).expect("writes infinite MJD fixture");
+    let metadata = read_metadata(file.path()).expect("reads infinite MJD fixture");
+    assert_eq!(
+        metadata.get_string("ExifIFD:TimeCodes"),
+        Some("1900-01-00T00:00:00NaN.00+00:00")
+    );
 }
 
 #[test]

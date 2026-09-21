@@ -948,8 +948,7 @@ fn process_tiff_ifd_tags_indexed<'a>(
             (_, value) => value,
         };
         let tag_value = apply_tile_offsets_value_conv(*tag_id, tag_value);
-        if tag_name.rsplit(':').next() == Some("TimeCodes") {
-            let forms = time_codes_forms(bytes);
+        if let Some(forms) = time_codes_forms(*tag_id, bytes) {
             metadata.insert_occurrence_with_forms(
                 tag_name,
                 forms.print,
@@ -1469,8 +1468,7 @@ fn parse_exif_directory_with_session(
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
             };
-            if base_name == "TimeCodes" {
-                let forms = time_codes_forms(bytes);
+            if let Some(forms) = time_codes_forms(*tag_id, bytes) {
                 metadata.insert_occurrence_with_forms(
                     tag_name,
                     forms.print,

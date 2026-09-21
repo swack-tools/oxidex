@@ -123,6 +123,24 @@ class RefusalWorklist(unittest.TestCase):
             bytes.fromhex(inputs[b"0 0 0 128 1 0 30 128"]["print"]["hex"]),
             b"1858-11-27T00:00:00.00+00:00",
         )
+        self.assertEqual(
+            bytes.fromhex(inputs[b"0 0 0 128 21 0 30 128"]["print"]["hex"]),
+            b"1900-01-00T00:00:00.00+00:00",
+        )
+        self.assertEqual(
+            bytes.fromhex(inputs[b"0 0 0 128 153 153 158 128"]["print"]["hex"]),
+            b"1900-01-00T00:00:00NaN.00+00:00",
+        )
+
+    def test_helper_capture_uses_portable_verified_interpreter_identity(self):
+        capture = json.loads(HELPER_CAPTURE.read_text(encoding="utf-8"))
+        identity = capture["capture"]
+        self.assertEqual(identity["perl"], "perl5.38.2")
+        self.assertRegex(identity["perl_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(identity["perl_version"], "v5.38.2")
+        self.assertEqual(identity["exiftool_version"], "13.59")
+        self.assertEqual(identity["capability_probe"], {"OOXML.docx": "DOCX"})
+        self.assertNotIn(str(Path.home()), HELPER_CAPTURE.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
