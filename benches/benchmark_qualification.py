@@ -547,11 +547,13 @@ def main(argv: list[str] | None = None) -> int:
             cargo = cargo_identity(repository)
             manifest = (load_json_rejecting_duplicates(Path(args.corpus_manifest))
                         if args.corpus_manifest else build_corpus_manifest(Path(args.corpus), expected_count=EXPECTED_CORPUS_COUNT))
+            if Path(manifest.get("root", "")).resolve() != Path(args.corpus).resolve():
+                raise Refused("corpus manifest root does not match --corpus")
             validated = validate_result_artifact(
                 Path(args.result_artifact), candidate_sha=git["sha"], binary_path=Path(binary["path"]),
                 binary_sha256=binary["sha256"], cargo_version=cargo["package_version"],
                 exiftool_version=EXPECTED_EXIFTOOL_VERSION, corpus_manifest=manifest,
-                warmups=args.warmups, runs=args.runs, expected_corpus_count=manifest["file_count"])
+                warmups=args.warmups, runs=args.runs, expected_corpus_count=EXPECTED_CORPUS_COUNT)
             receipt = {"schema": "oxidex.frozen-candidate-benchmark-qualification/v2",
                        "status": "validated", "candidate": git, "result_artifact": str(Path(args.result_artifact).resolve()),
                        **validated}

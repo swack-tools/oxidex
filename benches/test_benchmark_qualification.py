@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 from datetime import datetime, timezone
+from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("benchmark_qualification.py")
@@ -358,6 +361,71 @@ class ReceiptTests(unittest.TestCase):
 
 
 class QualificationWorkflowTests(unittest.TestCase):
+    def test_result_validation_keeps_the_release_corpus_floor_with_a_manifest(self) -> None:
+        """A supplied manifest authenticates inputs; it cannot choose the floor."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "corpus"
+            corpus.mkdir()
+            (corpus / "a").write_bytes(b"a")
+            (corpus / "b").write_bytes(b"b")
+            binary = "/fresh-target/release/oxidex"
+            document = result_document(binary, corpus)
+            artifact = Path(document["identity"]["result_artifact_path"])
+            document["identity"]["result_artifact_path"] = str(artifact.resolve())
+            document["identity"]["result_artifact_sha256"] = qualification.canonical_result_sha256(document)
+            artifact.write_bytes(qualification._canonical_json(document))
+            manifest = root / "corpus-manifest.json"
+            manifest.write_text(json.dumps(qualification.build_corpus_manifest(corpus, expected_count=2)), encoding="utf-8")
+            args = [
+                "--repository", str(root), "--candidate-sha", SHA,
+                "--binary", binary, "--binary-sha256", BINARY_SHA,
+                "--target-dir", str(root / "target"), "--perl", str(root / "perl"),
+                "--exiftool-dir", str(root / "exiftool"), "--docx", str(root / "OOXML.docx"),
+                "--corpus", str(root / "corpus"), "--evidence-dir", str(root / "evidence"),
+                "--run-id", "run-916", "--result-artifact", str(artifact),
+                "--corpus-manifest", str(manifest),
+            ]
+            stderr, stdout = io.StringIO(), io.StringIO()
+            with mock.patch.object(qualification, "git_identity", return_value={"sha": SHA}), \
+                    mock.patch.object(qualification, "validate_binary_identity", return_value={
+                        "path": binary, "sha256": BINARY_SHA}), \
+                    mock.patch.object(qualification, "cargo_identity", return_value={
+                        "package_version": "2.0.0-beta.1"}), \
+                    redirect_stderr(stderr), redirect_stdout(stdout):
+                self.assertEqual(qualification.main(args), 2)
+            self.assertIn("exact 194-file corpus", stderr.getvalue())
+            self.assertEqual(stdout.getvalue(), "")
+
+    def test_result_manifest_must_describe_the_requested_corpus(self) -> None:
+        """An authenticated result cannot be rebound to a different corpus root."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / "requested-corpus"
+            other = root / "other-corpus"
+            manifest = root / "corpus-manifest.json"
+            manifest.write_text(
+                json.dumps({"root": str(other), "file_count": qualification.EXPECTED_CORPUS_COUNT, "files": []}),
+                encoding="utf-8",
+            )
+            args = [
+                "--repository", str(root), "--candidate-sha", SHA,
+                "--binary", str(root / "oxidex"), "--binary-sha256", BINARY_SHA,
+                "--target-dir", str(root / "target"), "--perl", str(root / "perl"),
+                "--exiftool-dir", str(root / "exiftool"), "--docx", str(root / "OOXML.docx"),
+                "--corpus", str(corpus), "--evidence-dir", str(root / "evidence"),
+                "--run-id", "run-916", "--result-artifact", str(root / "result.json"),
+                "--corpus-manifest", str(manifest),
+            ]
+            with mock.patch.object(qualification, "git_identity", return_value={"sha": SHA}), \
+                    mock.patch.object(qualification, "validate_binary_identity", return_value={
+                        "path": str(root / "oxidex"), "sha256": BINARY_SHA}), \
+                    mock.patch.object(qualification, "cargo_identity", return_value={
+                        "package_version": "2.0.0-beta.1"}), \
+                    mock.patch.object(qualification, "validate_result_artifact") as validate:
+                self.assertEqual(qualification.main(args), 2)
+            validate.assert_not_called()
+
     def test_action_pin_guard_rejects_named_and_truncated_external_refs_but_accepts_local(self) -> None:
         workflow = """\
 steps:

@@ -378,12 +378,16 @@ def select_corpus_files(corpus_paths, recursive, only, exts, excluded):
 
     seen_real = set()
     files = []
-    for path in sorted(path for root in corpus_paths for path in walk(root) if keep(path)):
-        real = os.path.realpath(path)
+    for real in sorted(
+        os.path.realpath(path)
+        for root in corpus_paths
+        for path in walk(root)
+        if keep(path)
+    ):
         if real in seen_real:
             continue
         seen_real.add(real)
-        files.append(path)
+        files.append(real)
     if not files:
         raise ReceiptError("corpus selection is empty")
     return files
