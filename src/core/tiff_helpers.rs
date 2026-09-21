@@ -11,8 +11,8 @@ use crate::core::formatters::composite_image_exposure_times::format_composite_im
 use crate::core::operations_helpers::read_u32;
 use crate::core::read_options::ReadOptions;
 use crate::core::tag_conversion::{
-    apply_tile_offsets_value_conv, exif_raw_conv_drops_entry, gps_coordinate_degrees,
-    raw_bytes_to_tag_value,
+    ExifMainResidualPort, apply_tile_offsets_value_conv, exif_main_residual_port,
+    exif_raw_conv_drops_entry, gps_coordinate_degrees, raw_bytes_to_tag_value, time_codes_forms,
 };
 use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
 #[cfg(test)]
@@ -914,7 +914,10 @@ fn process_tiff_ifd_tags_indexed<'a>(
         // MakerNote tables whose values are not ColorMap payloads.
         let tag_value = if tag_name.rsplit(':').next() == Some("ColorMap") {
             TagValue::Binary(bytes.to_vec())
-        } else if tag_name.rsplit(':').next() == Some("CompositeImageExposureTimes") {
+        } else if tag_name.rsplit(':').next() == Some("CompositeImageExposureTimes")
+            && exif_main_residual_port(*tag_id)
+                == Some(ExifMainResidualPort::CompositeImageExposureTimes)
+        {
             // Exif.pm 0xa462 has no static byte layout for `find_table` to
             // carry: its RawConv (Exif.pm:3079-3095) is a Perl closure that
             // switches field type mid-buffer -- seven rational64u fields,
@@ -945,7 +948,18 @@ fn process_tiff_ifd_tags_indexed<'a>(
             (_, value) => value,
         };
         let tag_value = apply_tile_offsets_value_conv(*tag_id, tag_value);
-        if matches!(
+        if tag_name.rsplit(':').next() == Some("TimeCodes") {
+            let forms = time_codes_forms(bytes);
+            metadata.insert_occurrence_with_forms(
+                tag_name,
+                forms.print,
+                forms.value,
+                Some(forms.stored),
+                SHIM_DEFAULT_PRIORITY,
+                "",
+                Instance::default(),
+            );
+        } else if matches!(
             tag_name.rsplit(':').next(),
             Some("OpcodeList1" | "OpcodeList2" | "OpcodeList3")
         ) {
@@ -1447,12 +1461,26 @@ fn parse_exif_directory_with_session(
             // decode it.
             let tag_value = if let Some(value) = special_value {
                 value
-            } else if base_name == "CompositeImageExposureTimes" {
+            } else if base_name == "CompositeImageExposureTimes"
+                && exif_main_residual_port(*tag_id)
+                    == Some(ExifMainResidualPort::CompositeImageExposureTimes)
+            {
                 TagValue::String(format_composite_image_exposure_times(bytes, byte_order))
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
             };
-            if matches!(base_name, "OpcodeList1" | "OpcodeList2" | "OpcodeList3") {
+            if base_name == "TimeCodes" {
+                let forms = time_codes_forms(bytes);
+                metadata.insert_occurrence_with_forms(
+                    tag_name,
+                    forms.print,
+                    forms.value,
+                    Some(forms.stored),
+                    priority,
+                    "",
+                    Instance::default(),
+                );
+            } else if matches!(base_name, "OpcodeList1" | "OpcodeList2" | "OpcodeList3") {
                 // Exif.pm 13.59's `%opcodeInfo` declares `ConvertBinary => 1`:
                 // the UNDEFINED payload remains the ValueConv/stored form,
                 // while `PrintOpcode` supplies the display string. Keep both
@@ -6482,6 +6510,24 @@ mod ifd1_tests {
         assert_eq!(metadata.get_string("IFD1:Artist"), Some("Me"));
         assert_eq!(metadata.get_string("IFD1:Copyright"), Some("(c) Me"));
         assert_eq!(metadata.occurrences_for("IFD1:Make").len(), 1);
+        assert_eq!(metadata.occurrences_for("IFD1:Copyright").len(), 1);
+
+        let mut metadata = MetadataMap::new();
+        run_two(
+            &[],
+            &[(
+                TAG_COPYRIGHT,
+                ASCII,
+                22,
+                b"Photographer \0Editor \0".to_vec(),
+            )],
+            &mut metadata,
+        );
+        assert_eq!(
+            metadata.get_string("IFD1:Copyright"),
+            Some("Photographer\nEditor")
+        );
+        assert_eq!(metadata.occurrences_for("IFD1:Copyright").len(), 1);
 
         let mut metadata = MetadataMap::new();
         run_two(

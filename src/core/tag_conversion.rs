@@ -19,6 +19,84 @@ use crate::core::operations_helpers::{
 use crate::parsers::common::exif_types::ExifType;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 
+/// Exact ExifTool 13.59 source projections admitted for hand-owned
+/// `Exif::Main` conversion residuals. The helper oracle independently dumps
+/// the pinned table, checks these hashes, executes the native entries, and
+/// commits their channel outputs for the Rust replay below.
+pub(crate) const EXIF_MAIN_RESIDUAL_PORTS: &[(u16, &str)] = &[
+    (
+        0x8298,
+        "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd",
+    ),
+    (
+        0x9287,
+        "e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c",
+    ),
+    (
+        0xA462,
+        "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953",
+    ),
+    (
+        0xC740,
+        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    ),
+    (
+        0xC741,
+        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    ),
+    (
+        0xC74E,
+        "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    ),
+    (
+        0xC763,
+        "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5",
+    ),
+];
+
+#[must_use]
+pub(crate) fn exif_main_residual_source(tag_id: u16) -> Option<&'static str> {
+    EXIF_MAIN_RESIDUAL_PORTS
+        .binary_search_by_key(&tag_id, |(id, _)| *id)
+        .ok()
+        .map(|index| EXIF_MAIN_RESIDUAL_PORTS[index].1)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExifMainResidualPort {
+    Copyright,
+    LearningOptOutIn,
+    CompositeImageExposureTimes,
+    OpcodeList,
+    TimeCodes,
+}
+
+/// Select an implementation only for the source hash it was written and
+/// natively replayed against. Updating a registry digest alone therefore
+/// disables the old implementation instead of silently blessing it.
+#[must_use]
+pub(crate) fn exif_main_residual_port(tag_id: u16) -> Option<ExifMainResidualPort> {
+    match (tag_id, exif_main_residual_source(tag_id)) {
+        (0x8298, Some("038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd")) => {
+            Some(ExifMainResidualPort::Copyright)
+        }
+        (0x9287, Some("e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c")) => {
+            Some(ExifMainResidualPort::LearningOptOutIn)
+        }
+        (0xA462, Some("c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953")) => {
+            Some(ExifMainResidualPort::CompositeImageExposureTimes)
+        }
+        (
+            0xC740 | 0xC741 | 0xC74E,
+            Some("45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f"),
+        ) => Some(ExifMainResidualPort::OpcodeList),
+        (0xC763, Some("0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5")) => {
+            Some(ExifMainResidualPort::TimeCodes)
+        }
+        _ => None,
+    }
+}
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================
@@ -125,7 +203,7 @@ pub fn raw_bytes_to_tag_value(
     // dispatching on the on-disk field type: translate the first NUL to a
     // newline, trim spaces immediately before each of the first two NULs,
     // and discard everything from the second NUL onward.
-    if tag_id == 0x8298 {
+    if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::Copyright) {
         return TagValue::new_string(format_copyright(bytes));
     }
 
@@ -134,15 +212,15 @@ pub fn raw_bytes_to_tag_value(
     // reference. Keep this on the residual path: the generated conversion
     // backend intentionally refuses ConvertBinary, while this reader still
     // has the exact bytes and can enforce every bounds check in the source.
-    if matches!(tag_id, 0xC740 | 0xC741 | 0xC74E) {
+    if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::OpcodeList) {
         return TagValue::new_string(format_opcode_list(bytes));
     }
 
     // Exif.pm 13.59 0xc763: ValueConv groups eight int8u values as lowercase
     // two-digit hex, then PrintConv reverses the first four BCD fields into a
     // time and optionally appends the date/timezone carried by BGF2.
-    if tag_id == 0xC763 {
-        return TagValue::new_string(format_time_codes(bytes));
+    if exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::TimeCodes) {
+        return time_codes_forms(bytes).print;
     }
 
     // Exif.pm 13.59 tag 0xA20C applies `PrintSFR` to its opaque payload.
@@ -199,7 +277,10 @@ pub fn raw_bytes_to_tag_value(
     // Exif.pm 0x9287 (`LearningOptOutIn`) is a variable-length int16u
     // sequence. The first value is a pair count; each following usage/choice
     // value alternates between the two exact PrintConv maps.
-    if tag_id == 0x9287 && matches!(field_type, 3 | 4) {
+    if tag_id == 0x9287
+        && exif_main_residual_port(tag_id) == Some(ExifMainResidualPort::LearningOptOutIn)
+        && matches!(field_type, 3 | 4)
+    {
         if let Some(value) = format_learning_opt_out_in(bytes, byte_order) {
             return TagValue::new_string(value);
         }
@@ -463,9 +544,8 @@ fn time_code_zone(value: u8) -> Option<f64> {
     }
 }
 
-fn decimal_prefix(text: &str) -> i64 {
-    let digits = text.bytes().take_while(u8::is_ascii_digit).count();
-    text[..digits].parse().unwrap_or(0)
+fn perl_numeric_i64(text: &str) -> i64 {
+    crate::exiftool_tables::session::numify_str(text).as_f64() as i64
 }
 
 fn format_time_codes(bytes: &[u8]) -> String {
@@ -485,11 +565,11 @@ fn format_time_codes(bytes: &[u8]) -> String {
 
             let zone = time_code_zone(group[7]);
             if group[7] & 0x80 != 0 {
-                let hour = decimal_prefix(&bcd_text(group[3] & 0x3f));
-                let minute = decimal_prefix(&bcd_text(group[2] & 0x7f));
-                let second = decimal_prefix(&bcd_text(group[1] & 0x7f));
+                let hour = perl_numeric_i64(&bcd_text(group[3] & 0x3f));
+                let minute = perl_numeric_i64(&bcd_text(group[2] & 0x7f));
+                let second = perl_numeric_i64(&bcd_text(group[1] & 0x7f));
                 let fraction = bcd_text(group[0] & 0x3f);
-                let julian = decimal_prefix(&format!(
+                let julian = perl_numeric_i64(&format!(
                     "{}{}{}",
                     format!("{:x}", group[6]),
                     bcd_text(group[5]),
@@ -507,7 +587,7 @@ fn format_time_codes(bytes: &[u8]) -> String {
                 rendered.push('.');
                 rendered.push_str(&fraction);
             } else {
-                let mut year = bcd_number(group[6]).unwrap_or(0) + 1900;
+                let mut year = perl_numeric_i64(&bcd_text(group[6])) + 1900;
                 if year < 1970 {
                     year += 100;
                 }
@@ -526,6 +606,42 @@ fn format_time_codes(bytes: &[u8]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The three meanings ExifTool carries for TimeCodes: the decoded on-disk
+/// BYTE list, the hexadecimal ValueConv text exposed by `-n`, and the final
+/// PrintConv display. Keeping them together prevents an adapter from
+/// accidentally publishing presentation text into copy/write channels.
+pub(crate) struct TimeCodesForms {
+    pub(crate) stored: TagValue,
+    pub(crate) value: TagValue,
+    pub(crate) print: TagValue,
+}
+
+#[must_use]
+pub(crate) fn time_codes_forms(bytes: &[u8]) -> TimeCodesForms {
+    let complete = bytes.len() / 8 * 8;
+    let stored = bytes
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let value = bytes[..complete]
+        .chunks_exact(8)
+        .map(|group| {
+            group
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    TimeCodesForms {
+        stored: TagValue::new_string(stored),
+        value: TagValue::new_string(value),
+        print: TagValue::new_string(format_time_codes(bytes)),
+    }
 }
 
 /// The existing Exif::Main RawConv trims implemented by this converter.
@@ -2122,6 +2238,105 @@ mod tests {
             let value =
                 raw_bytes_to_tag_value(raw, 7, raw.len() as u32, 0x8298, ByteOrder::LittleEndian);
             assert_eq!(value.as_string(), Some(expected), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn pinned_residual_capture_replays_every_characterized_helper() {
+        fn unhex(text: &str) -> Vec<u8> {
+            text.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| {
+                    u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
+                        .expect("valid capture hex")
+                })
+                .collect()
+        }
+        fn channel(case: &serde_json::Value, name: &str) -> Vec<u8> {
+            unhex(case[name]["hex"].as_str().expect("captured channel bytes"))
+        }
+
+        let capture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tools/exiftool-tables/testdata/helper_oracle_outputs.json"
+        )))
+        .expect("valid helper capture");
+        let residuals = capture["residuals"].as_object().expect("residual capture");
+        assert_eq!(residuals.len(), EXIF_MAIN_RESIDUAL_PORTS.len());
+
+        for &(tag_id, source_sha256) in EXIF_MAIN_RESIDUAL_PORTS {
+            let key = format!("0x{tag_id:04x}");
+            let proof = &residuals[&key];
+            assert_eq!(proof["source_sha256"].as_str(), Some(source_sha256));
+            for case in proof["cases"].as_array().expect("native cases") {
+                let input = channel(case, "input");
+                let (stored, value, print) = match tag_id {
+                    0x8298 => {
+                        let rendered = format_copyright(&input).into_bytes();
+                        (input.clone(), rendered.clone(), rendered)
+                    }
+                    0x9287 => {
+                        let text = std::str::from_utf8(&input).expect("numeric list");
+                        let numbers = text
+                            .split_ascii_whitespace()
+                            .map(|part| part.parse::<u16>().expect("u16"))
+                            .collect::<Vec<_>>();
+                        let bytes = numbers
+                            .iter()
+                            .flat_map(|number| number.to_be_bytes())
+                            .collect::<Vec<_>>();
+                        let rendered = format_learning_opt_out_in(&bytes, ByteOrder::BigEndian)
+                            .expect("valid learning value")
+                            .into_bytes();
+                        (input.clone(), input.clone(), rendered)
+                    }
+                    0xA462 => {
+                        let rendered = crate::core::formatters::composite_image_exposure_times::format_composite_image_exposure_times(
+                            &input,
+                            ByteOrder::BigEndian,
+                        )
+                        .into_bytes();
+                        (input.clone(), rendered.clone(), rendered)
+                    }
+                    0xC740 | 0xC741 | 0xC74E => (
+                        input.clone(),
+                        input.clone(),
+                        format_opcode_list(&input).into_bytes(),
+                    ),
+                    0xC763 => {
+                        let bytes = std::str::from_utf8(&input)
+                            .expect("BYTE list")
+                            .split_ascii_whitespace()
+                            .map(|part| part.parse::<u8>().expect("u8"))
+                            .collect::<Vec<_>>();
+                        let forms = time_codes_forms(&bytes);
+                        (
+                            forms
+                                .stored
+                                .as_string()
+                                .expect("stored string")
+                                .as_bytes()
+                                .to_vec(),
+                            forms
+                                .value
+                                .as_string()
+                                .expect("value string")
+                                .as_bytes()
+                                .to_vec(),
+                            forms
+                                .print
+                                .as_string()
+                                .expect("print string")
+                                .as_bytes()
+                                .to_vec(),
+                        )
+                    }
+                    _ => unreachable!("registry limits residual ids"),
+                };
+                assert_eq!(stored, channel(case, "stored"), "{key} stored");
+                assert_eq!(value, channel(case, "value"), "{key} ValueConv");
+                assert_eq!(print, channel(case, "print"), "{key} PrintConv");
+            }
         }
     }
 

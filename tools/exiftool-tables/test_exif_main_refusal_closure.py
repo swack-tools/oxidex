@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "tools" / "exiftool-tables"
 LEDGER = TOOLS / "conv_exif_main_ledger.json"
 WORKLIST = TOOLS / "exif_main_refusal_worklist.json"
+HELPER_CAPTURE = TOOLS / "testdata" / "helper_oracle_outputs.json"
 
 
 class RefusalWorklist(unittest.TestCase):
@@ -86,6 +87,42 @@ class RefusalWorklist(unittest.TestCase):
                     row["named_test"],
                     "walker_owned_structural_refusals_are_classified_not_characterized",
                 )
+
+    def test_characterized_residuals_have_source_selected_native_capture(self):
+        capture = json.loads(HELPER_CAPTURE.read_text(encoding="utf-8"))
+        residuals = capture["residuals"]
+        characterized = {
+            row["id"]: row
+            for row in self.worklist["rows"]
+            if row["verification_status"] == "characterized_behavior"
+        }
+        self.assertEqual(set(residuals), set(characterized))
+        for tag_id, row in characterized.items():
+            with self.subTest(id=tag_id, name=row["name"]):
+                proof = residuals[tag_id]
+                self.assertEqual(proof["source_body"], row["source_body"])
+                self.assertEqual(proof["source_sha256"], row["source_sha256"])
+                self.assertTrue(proof["cases"])
+                for case in proof["cases"]:
+                    self.assertIn("stored", case)
+                    self.assertIn("raw", case)
+                    self.assertIn("value", case)
+                    self.assertIn("print", case)
+
+        time_codes = residuals["0xc763"]["cases"]
+        inputs = {bytes.fromhex(case["input"]["hex"]): case for case in time_codes}
+        self.assertEqual(
+            bytes.fromhex(inputs[b"1 2 3 4 0 0 0 0"]["value"]["hex"]),
+            b"01.02.03.04.00.00.00.00",
+        )
+        self.assertEqual(
+            bytes.fromhex(inputs[b"0 0 0 128 1 1 122 0"]["print"]["hex"]),
+            b"2007-01-01T00:00:00.00+00:00",
+        )
+        self.assertEqual(
+            bytes.fromhex(inputs[b"0 0 0 128 1 0 30 128"]["print"]["hex"]),
+            b"1858-11-27T00:00:00.00+00:00",
+        )
 
 
 if __name__ == "__main__":

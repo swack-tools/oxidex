@@ -125,6 +125,26 @@ fn assert_single_opcode_list1(path: &std::path::Path) {
     );
 }
 
+fn assert_time_codes_cli_n(path: &std::path::Path, expected: &str) {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"))
+        // OxiDex reserves `-n` for dry-run; its ExifTool-compatible value
+        // channel is deliberately spelled `--no-print-conv`.
+        .args(["--no-print-conv", "-s", "-TimeCodes"])
+        .arg(path)
+        .output()
+        .expect("runs oxidex ValueConv projection");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim().split_once(": ").map(|(_, value)| value),
+        Some(expected)
+    );
+}
+
 #[test]
 fn opcode_lists_match_print_opcode() {
     let mut two_records = 2u32.to_be_bytes().to_vec();
@@ -199,7 +219,8 @@ fn ifd0_opcode_list_preserves_convert_binary_bytes() {
 
 #[test]
 fn time_codes_match_value_and_print_conversions() {
-    let jpeg = jpeg_with_exif_entries(&[(0xC763, BYTE, vec![0x01, 0x02, 0x03, 0x04, 0, 0, 0, 0])]);
+    let raw = vec![0x01, 0x02, 0x03, 0x04, 0, 0, 0, 0];
+    let jpeg = jpeg_with_exif_entries(&[(0xC763, BYTE, raw.clone())]);
     let file = NamedTempFile::new().expect("creates JPEG fixture");
     std::fs::write(file.path(), jpeg).expect("writes JPEG fixture");
     let metadata = read_metadata(file.path()).expect("reads JPEG fixture");
@@ -207,6 +228,28 @@ fn time_codes_match_value_and_print_conversions() {
         metadata.get_string("ExifIFD:TimeCodes"),
         Some("04:03:02.01")
     );
+    assert_eq!(
+        metadata
+            .without_print_conv()
+            .get_string("ExifIFD:TimeCodes"),
+        Some("01.02.03.04.00.00.00.00")
+    );
+    assert_time_codes_cli_n(file.path(), "01.02.03.04.00.00.00.00");
+
+    for bytes in [
+        jpeg_with_ifd0_entries(&[(0xC763, BYTE, raw.clone())]),
+        tiff_with_ifd0_entries(&[(0xC763, BYTE, raw.clone())]),
+    ] {
+        let file = NamedTempFile::new().expect("creates IFD0 fixture");
+        std::fs::write(file.path(), bytes).expect("writes IFD0 fixture");
+        let metadata = read_metadata(file.path()).expect("reads IFD0 fixture");
+        assert_eq!(metadata.get_string("IFD0:TimeCodes"), Some("04:03:02.01"));
+        assert_eq!(
+            metadata.without_print_conv().get_string("IFD0:TimeCodes"),
+            Some("01.02.03.04.00.00.00.00")
+        );
+        assert_time_codes_cli_n(file.path(), "01.02.03.04.00.00.00.00");
+    }
 
     // Incomplete groups are ignored by both ValueConv and PrintConv.
     let jpeg = jpeg_with_exif_entries(&[(0xC763, BYTE, vec![1, 2, 3, 4, 5, 6, 7])]);
@@ -256,6 +299,27 @@ fn time_codes_match_value_and_print_conversions() {
     assert_eq!(
         metadata.get_string("ExifIFD:TimeCodes"),
         Some("1969-12-31T23:30:00.00-01:30")
+    );
+
+    // Perl numifies the malformed YY byte text "7a" as 7, not zero.
+    let jpeg = jpeg_with_exif_entries(&[(0xC763, BYTE, vec![0, 0, 0, 0x80, 1, 1, 0x7a, 0])]);
+    let file = NamedTempFile::new().expect("creates non-BCD year fixture");
+    std::fs::write(file.path(), jpeg).expect("writes non-BCD year fixture");
+    let metadata = read_metadata(file.path()).expect("reads non-BCD year fixture");
+    assert_eq!(
+        metadata.get_string("ExifIFD:TimeCodes"),
+        Some("2007-01-01T00:00:00.00+00:00")
+    );
+
+    // Reverse date bytes form "1e0001", which Perl treats as exponent syntax.
+    let jpeg =
+        jpeg_with_exif_entries(&[(0xC763, BYTE, vec![0, 0, 0, 0x80, 0x01, 0x00, 0x1e, 0x80])]);
+    let file = NamedTempFile::new().expect("creates exponent MJD fixture");
+    std::fs::write(file.path(), jpeg).expect("writes exponent MJD fixture");
+    let metadata = read_metadata(file.path()).expect("reads exponent MJD fixture");
+    assert_eq!(
+        metadata.get_string("ExifIFD:TimeCodes"),
+        Some("1858-11-27T00:00:00.00+00:00")
     );
 }
 
