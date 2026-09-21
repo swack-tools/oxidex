@@ -3496,11 +3496,12 @@ mod tests {
         fn exercise(
             table: &'static IfdTable,
             string_id: u16,
+            utf8_id: u16,
             rational_id: u16,
             expected_display: &str,
         ) {
             let order = ByteOrder::Big;
-            let floor = trailer_at(2) as u32;
+            let floor = trailer_at(3) as u32;
             let string_bytes = [b'A', 0xff, b'B', 0, 0];
             let mut trailer = string_bytes.to_vec();
             trailer.extend_from_slice(&1u32.to_be_bytes());
@@ -3509,6 +3510,7 @@ mod tests {
                 order,
                 &[
                     entry(order, string_id, 2, 5, bytes32(order, floor)),
+                    entry(order, utf8_id, 129, 3, [b'A', 0xff, b'B', 0]),
                     entry(
                         order,
                         rational_id,
@@ -3553,6 +3555,21 @@ mod tests {
                 "the existing display conversion must not change"
             );
 
+            let utf8 = rows
+                .iter()
+                .find(|row| row.source_id == oxidex_tags::TagId::Numeric(utf8_id))
+                .expect("malformed TIFF type 129 row from the real table walk");
+            assert_eq!(
+                utf8.stored,
+                TagValue::Binary(vec![b'A', 0xff, b'B']),
+                "type 129 storage must retain the exact bytes before FixUTF8"
+            );
+            assert_eq!(
+                utf8.value,
+                TagValue::String("A?B".to_owned()),
+                "the existing typed/display FixUTF8 behavior must not change"
+            );
+
             let rational = rows
                 .iter()
                 .find(|row| row.source_id == oxidex_tags::TagId::Numeric(rational_id))
@@ -3570,7 +3587,7 @@ mod tests {
 
         let olympus = find_ifd_table("Olympus", "Equipment").expect("Olympus::Equipment");
         assert!(conv::decoder(olympus).is_none(), "static residual control");
-        exercise(olympus, 0x0100, 0x0103, "Unknown (A?B)");
+        exercise(olympus, 0x0100, 0x0102, 0x0103, "Unknown (A?B)");
 
         let exif = find_ifd_table("Exif", "Main").expect("Exif::Main");
         let image_description = exif
@@ -3583,9 +3600,15 @@ mod tests {
             .iter()
             .find(|tag| tag.id == 0x011a)
             .expect("XResolution");
+        let document_name = exif
+            .tags
+            .iter()
+            .find(|tag| tag.id == 0x010d)
+            .expect("DocumentName");
         assert!(conv::claims(exif, image_description));
+        assert!(conv::claims(exif, document_name));
         assert!(conv::claims(exif, x_resolution));
-        exercise(exif, 0x010e, 0x011a, "A?B");
+        exercise(exif, 0x010e, 0x010d, 0x011a, "A?B");
     }
 
     #[test]

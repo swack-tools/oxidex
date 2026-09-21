@@ -911,6 +911,29 @@ mod tests {
             Some("track-one")
         );
 
+        for qualified in ["MakerNotes:ChannelReplay", "Olympus:ChannelReplay"] {
+            let qualified_output = output_map(
+                &metadata,
+                &canonical_cli_args(&[qualified], false, false, None),
+            );
+            assert_eq!(
+                qualified_output.get_string("Olympus:ChannelReplay"),
+                Some("101.3 kPa"),
+                "family-0 and family-1 qualifiers must reach the real output entry point: {qualified}"
+            );
+        }
+        for wrong_family in ["EXIF:ChannelReplay", "Canon:ChannelReplay"] {
+            let rejected = output_map(
+                &metadata,
+                &canonical_cli_args(&[wrong_family], false, false, None),
+            );
+            assert_eq!(
+                rejected.len(),
+                0,
+                "a non-matching true-family qualifier must not fall back to the bare tag: {wrong_family}"
+            );
+        }
+
         let all = output_map(
             &metadata,
             &canonical_cli_args(&["PriorityZero"], true, false, None),
@@ -937,6 +960,21 @@ mod tests {
         assert_eq!(
             grouped.get_string("MakerNotes:Olympus:Camera:ChannelReplay"),
             Some("101.3 kPa")
+        );
+
+        let qualified_group_014 = output_map(
+            &metadata,
+            &canonical_cli_args(
+                &["MakerNotes:ChannelReplay"],
+                false,
+                false,
+                Some(vec![0, 1, 4]),
+            ),
+        );
+        assert_eq!(
+            qualified_group_014.get_string("MakerNotes:Olympus::ChannelReplay"),
+            Some("101.3 kPa"),
+            "-G0:1:4 retains the requested empty family-4 slot"
         );
 
         let replay = metadata
