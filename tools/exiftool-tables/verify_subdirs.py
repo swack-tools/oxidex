@@ -55,6 +55,7 @@ Instruments, per AGENTS.md:
 
 import argparse
 import itertools
+import os
 import re
 import subprocess
 import sys
@@ -71,11 +72,23 @@ import verify
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import instrument  # noqa: E402 -- git/instrument identity header
+import ops_paths  # noqa: E402 -- portable durable oracle defaults
 
 HARNESS_PATH = REPO_ROOT / "src" / "bin" / "subdir_oracle_harness.rs"
 ORACLE_PL = REPO_ROOT / "tools" / "exiftool-tables" / "oracle.pl"
-DEFAULT_EXIFTOOL = "/tmp/oxidex-exiftool-cache/exiftool-pinned.sh"
-DEFAULT_ET_LIB = "/tmp/oxidex-exiftool-cache/exiftool/lib"
+DEFAULT_CACHE = Path(
+    os.environ.get("EXIFTOOL_CACHE_DIR", str(ops_paths.oracle_cache_root()))
+).expanduser()
+DEFAULT_EXIFTOOL = str(DEFAULT_CACHE / "exiftool/exiftool")
+DEFAULT_ET_LIB = str(DEFAULT_CACHE / "exiftool/lib")
+DEFAULT_PERL = str(
+    Path(
+        os.environ.get(
+            "EXIFTOOL_PERL",
+            str(ops_paths.ops_root() / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"),
+        )
+    ).expanduser()
+)
 # The capability probe's carrier, relative to the pinned tree (``<tree>/lib``
 # is this script's ``et_lib``).  It must be a REAL container-format file, and
 # it must come from the pinned tree itself: ``t/images/OOXML.docx`` is in
@@ -125,6 +138,17 @@ def _cartesian(**channels):
     return [dict(zip(names, values)) for values in itertools.product(*(channels[n] for n in names))]
 
 
+def _native_env():
+    """Environment shared by native probes, excluding ambient Perl/config."""
+    return {
+        **os.environ,
+        "EXIFTOOL_HOME": os.devnull,
+        "PERL5LIB": "",
+        "PERLLIB": "",
+        "PERL5OPT": "",
+    }
+
+
 def capability_probe(exiftool, perl, et_lib, expect_version, probe_file):
     """Prove both named instruments work, not merely ``-ver``.
 
@@ -140,13 +164,8 @@ def capability_probe(exiftool, perl, et_lib, expect_version, probe_file):
     tree's own ``t/images/OOXML.docx`` -- measured to report ``DOCX`` under a
     working perl and ``ZIP`` under one where ``Archive::Zip`` fails to load.
     """
-    version = subprocess.run([exiftool, "-ver"], capture_output=True, text=True, timeout=30)
-    parsed = subprocess.run(
-        [exiftool, "-j", "-FileType", str(probe_file)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    oracle = [str(perl), f"-I{et_lib}", str(exiftool), "-config", ""]
+    environment = _native_env()
     eval_probe = (
         f'use lib "{_perl_quote(str(et_lib))}"; use Image::ExifTool; '
         'package Image::ExifTool; '
@@ -156,7 +175,26 @@ def capability_probe(exiftool, perl, et_lib, expect_version, probe_file):
         'print "VERSION\\t$Image::ExifTool::VERSION\\nEVAL\\t", '
         '(defined $r ? $r : "UNDEF"), "\\n";'
     )
-    eval_run = subprocess.run([perl, "-e", eval_probe], capture_output=True, text=True, timeout=30)
+    try:
+        version = subprocess.run(
+            [*oracle, "-ver"], capture_output=True, text=True, timeout=30, env=environment
+        )
+        parsed = subprocess.run(
+            [*oracle, "-j", "-FileType", str(probe_file)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=environment,
+        )
+        eval_run = subprocess.run(
+            [str(perl), f"-I{et_lib}", "-e", eval_probe],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"oracle capability probe failed -- could not execute explicit oracle: {exc}") from exc
     eval_lines = dict(line.split("\t", 1) for line in eval_run.stdout.splitlines() if "\t" in line)
     ok = (
         version.returncode == 0
@@ -193,6 +231,7 @@ def load_perl_subdirs(perl, et_lib):
         text=True,
         encoding="utf-8",
         timeout=90,
+        env=_native_env(),
     )
     if run.returncode:
         print("oracle.pl stderr:", run.stderr[-4000:], file=sys.stderr)
@@ -328,7 +367,13 @@ def run_perl(perl, script, timeout):
         handle.write(script)
         script_path = Path(handle.name)
     try:
-        run = subprocess.run([perl, str(script_path)], capture_output=True, text=True, timeout=timeout)
+        run = subprocess.run(
+            [perl, str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_native_env(),
+        )
     finally:
         script_path.unlink(missing_ok=True)
     if run.returncode:
@@ -396,7 +441,7 @@ def main():
     parser.add_argument("generated_rs", nargs="?", type=Path, default=REPO_ROOT / "src/exiftool_tables/binary/mod.rs")
     parser.add_argument("et_lib", nargs="?", type=Path, default=Path(DEFAULT_ET_LIB))
     parser.add_argument("--exiftool", default=DEFAULT_EXIFTOOL, help="explicit pinned executable; never defaults to PATH exiftool")
-    parser.add_argument("--perl", default="/usr/bin/perl", help="interpreter used with --et-lib for eval harnesses")
+    parser.add_argument("--perl", default=DEFAULT_PERL, help="interpreter used with --et-lib for eval harnesses")
     parser.add_argument(
         "--probe-file",
         type=Path,

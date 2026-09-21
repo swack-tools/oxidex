@@ -1384,43 +1384,84 @@ verify-tables version="":
     set -euo pipefail
 
     GENERATED="src/exiftool_tables/binary/mod.rs"
+    PIN=$(tr -d '[:space:]' < .exiftool-version)
+    [[ "$PIN" =~ ^[0-9]+\.[0-9]+$ ]] || {
+        echo "❌ .exiftool-version does not hold a numeric release: '$PIN'" >&2
+        exit 1
+    }
     VERSION="{{version}}"
     if [[ -z "$VERSION" ]]; then
-        VERSION=$(tr -d '[:space:]' < .exiftool-version)
-        [[ -n "$VERSION" ]] || {
-            echo "❌ .exiftool-version is empty; it must name one ExifTool release" >&2
-            exit 1
-        }
+        VERSION="$PIN"
+    fi
+    if [[ "$VERSION" != "$PIN" ]]; then
+        echo "❌ requested ExifTool $VERSION does not match repository pin $PIN" >&2
+        exit 1
     fi
 
-    CACHE="${OXIDEX_ET_CACHE:-target/exiftool-src}"
-    LIB="$CACHE/exiftool-$VERSION/lib"
-    if [[ ! -d "$LIB" ]]; then
-        echo "📦 Fetching ExifTool $VERSION (not cached)"
-        mkdir -p "$CACHE"
-        curl -sSL -o "$CACHE/et-$VERSION.tar.gz" \
-            "https://github.com/exiftool/exiftool/archive/refs/tags/$VERSION.tar.gz"
-        tar xzf "$CACHE/et-$VERSION.tar.gz" -C "$CACHE"
+    if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+        TARGET_ROOT=$(uv run python -c \
+            'from pathlib import Path; import sys; from scripts.ops_paths import durable_root; print(durable_root(Path(sys.argv[1]).expanduser(), "CARGO_TARGET_DIR"))' \
+            "$CARGO_TARGET_DIR")
+    else
+        TARGET_ROOT=$(uv run python -c \
+            'from scripts.ops_paths import target_root; print(target_root() / "verify-tables")')
     fi
+    export CARGO_TARGET_DIR="$TARGET_ROOT"
+    RUN_PARENT="$TARGET_ROOT/verify-tables-runs"
+    mkdir -p "$RUN_PARENT"
+    RUN_ROOT=$(mktemp -d "$RUN_PARENT/run.XXXXXX")
+    mkdir -p "$RUN_ROOT/tmp"
+    export TMPDIR="$RUN_ROOT/tmp"
+
+    # Resolve and probe once.  release_oracle.py honors only the explicit
+    # EXIFTOOL_PERL / EXIFTOOL_CACHE_DIR channels (or their durable defaults),
+    # verifies the repo pin, required Perl modules and DOCX capability, and
+    # never downloads or substitutes a source tree.
+    ORACLE_RECEIPT="$RUN_ROOT/release-oracle.json"
+    uv run python tools/ci/release_oracle.py \
+        --repo . --output "$ORACLE_RECEIPT"
+    PERL=$(uv run python -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["perl_path"])' \
+        "$ORACLE_RECEIPT")
+    TREE=$(uv run python -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["tree_path"])' \
+        "$ORACLE_RECEIPT")
+    VERIFIED_VERSION=$(uv run python -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["exiftool_version"])' \
+        "$ORACLE_RECEIPT")
+    [[ "$VERIFIED_VERSION" == "$PIN" ]] || {
+        echo "❌ verified ExifTool $VERIFIED_VERSION does not match repository pin $PIN" >&2
+        exit 1
+    }
+    LIB="$TREE/lib"
+    EXIFTOOL="$TREE/exiftool"
+    export EXIFTOOL_PERL="$PERL"
+    export OXIDEX_TABLES_PERL="$PERL"
+    export EXIFTOOL_CACHE_DIR="$(dirname "$TREE")"
+    export EXIFTOOL_HOME=/dev/null
+    export PERL5LIB=
+    export PERLLIB=
+    export PERL5OPT=
 
     # Migrated tables also require native-to-generated completeness, so an
     # upstream row addition cannot pass merely because old rows still match.
     # Include inactive keyed definitions and keep this scope in sync with CI.
-    python3 tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
+    uv run python tools/exiftool-tables/verify.py "$GENERATED" "$LIB" \
         --oracle tools/exiftool-tables/oracle.pl \
         --keyed-generated src/exiftool_tables/keyed_tables.rs \
         --word-processor Image::ExifTool::CanonCustom::ProcessCanonCustom \
         --native-inventory --native-inventory-table Sony:Tag202a
     # Serial completeness is checked against a fresh native source population.
-    SERIAL_DUMP="$CACHE/serial-verify-$VERSION.json"
-    "${EXIFTOOL_PERL:-perl}" tools/exiftool-tables/dump_tables.pl "$LIB" > "$SERIAL_DUMP"
-    python3 tools/exiftool-tables/verify_serial_directory.py \
+    SERIAL_DUMP="$RUN_ROOT/serial-verify-$VERSION.json"
+    "$PERL" -I"$LIB" tools/exiftool-tables/dump_tables.pl "$LIB" > "$SERIAL_DUMP"
+    uv run python tools/exiftool-tables/verify_serial_directory.py \
         src/exiftool_tables/serial_tables.rs "$SERIAL_DUMP"
     # Step 27's structure check above proves an edge was transcribed. This
     # live-Perl oracle proves its generated Start/Base arithmetic evaluates
     # identically (ExifTool.pm:10118-10137), using this exact pinned tree.
-    python3 tools/exiftool-tables/verify_subdirs.py "$GENERATED" "$LIB" \
-        --exiftool "$CACHE/exiftool-$VERSION/exiftool"
+    uv run python tools/exiftool-tables/verify_subdirs.py "$GENERATED" "$LIB" \
+        --exiftool "$EXIFTOOL" --perl "$PERL"
+    echo "verify-tables evidence retained at $RUN_ROOT"
 
 # Tag-machinery overhaul Step 28: the reachability census -- which of the
 # generated ProcessBinaryData tables the generic engine may walk, and why not.
