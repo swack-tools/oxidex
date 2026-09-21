@@ -24,7 +24,7 @@ spec.loader.exec_module(fleet)
 
 
 TEST_ROOT = Path(
-    "/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller-tests"
+    fleet.OPS_ROOT / "evidence/20260919-beta1-functional/controller-tests"
 )
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -55,8 +55,8 @@ def task(number: int, state: str = "launchable", dependencies: list[int] | None 
         "merge_sha": None,
         "target_sha": SHA_A,
         "paths": {
-            "worktree": f"/Users/allen/git/task-{number}",
-            "target": f"/Users/allen/git/oxidex-beta1-targets/task-{number}",
+            "worktree": str(fleet.GIT_ROOT / f"task-{number}"),
+            "target": str(fleet.TARGET_BASE / f"task-{number}"),
             "evidence": str(TEST_ROOT / f"task-{number}"),
             "prd": str(TEST_ROOT / "prds" / f"{number:02d}-task.md"),
             "report": str(TEST_ROOT / "reports" / f"{number:02d}-task.md"),

@@ -19,10 +19,11 @@ from collections.abc import Sequence
 from typing import Any
 
 
-DEFAULT_PERL = pathlib.Path(
-    "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
-)
-DEFAULT_CACHE_ROOT = pathlib.Path("/Users/allen/oxidex-ops/cache/exiftool")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from scripts.ops_paths import ops_root
+
+DEFAULT_PERL = ops_root() / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+DEFAULT_CACHE_ROOT = ops_root() / "cache/exiftool"
 
 
 class OracleProbeError(RuntimeError):

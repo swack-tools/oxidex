@@ -243,6 +243,16 @@ does not authorize the real release tag: pushing the signed tag requires
 separate explicit maintainer authorization for the exact version, tag, and
 `main` commit.
 
+Operational paths must be portable: never hardcode a user's absolute home.
+Use `OXIDEX_OPS_DIR`, defaulting to `$HOME/oxidex-ops` (`Path.home()` in Python),
+through `scripts/ops_paths.py`. Keep durable evidence, caches, and configuration
+below that root. Fleet worktrees retain `OXIDEX_WORKTREE_ROOT` (default
+`$HOME/git`) and targets retain `OXIDEX_TARGET_ROOT` (default
+`$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`) for existing-ledger compatibility.
+Never put durable state or worktrees in `/tmp`, `/private/tmp`, or other
+system temporary storage. Hosted CI scratch caches are a separate,
+explicit channel and cannot serve as maintainer release-qualification evidence.
+
 ## Before the first edit, and before the first remote command
 
 The rules above are about trusting a *measurement*. These are about trusting the
@@ -258,7 +268,7 @@ agents sharing one tree is not hypothetical here — a live acceptance run found
 its tree gone dirty 58 s in, from a sibling's staged edits, and everything
 measured after that point was measuring an unknown tree. One agent, one
 worktree, one branch:
-`git -C <repo> worktree add -b <branch> /Users/allen/git/<dir> <base>`.
+`git -C <repo> worktree add -b <branch> "$OXIDEX_OPS_DIR/worktrees/<dir>" <base>`.
 
 **Start from a base you have just verified, not one you were handed.** Before
 implementing: `tools/preflight.sh --upstream` (fetches origin and reports how far

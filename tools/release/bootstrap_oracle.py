@@ -25,7 +25,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-DURABLE_ROOT = Path("/Users/allen/oxidex-ops")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.ops_paths import ops_root
+
+DURABLE_ROOT = ops_root()
 MIN_CORPUS_FILES = 4_000
 VERSION = "13.59"
 LOCK_PATH = Path(__file__).with_name("oracle-lock.json")

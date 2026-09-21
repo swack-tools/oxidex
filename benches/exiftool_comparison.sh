@@ -79,8 +79,7 @@ check_prerequisites() {
     local kv
     kv="$(python3 "$SCRIPT_DIR/instrument_check.py" "$REQUESTED_BIN" ${OXIDEX_MAX_LOAD:+--max-load "$OXIDEX_MAX_LOAD"})"
     eval "$kv"
-    # shellcheck disable=SC2153 # set by the eval above
-    read -r -a EXIFTOOL <<< "$EXIFTOOL_CMD"
+    # Keep EXIFTOOL_CMD shell-quoted for Hyperfine's -N tokenizer, including -config ''.
     [ "$(cat "$PROJECT_ROOT/.exiftool-version")" = "$EXIFTOOL_VERSION" ] \
         || { echo -e "${RED}Error: oracle $EXIFTOOL_VERSION != .exiftool-version${NC}"; exit 2; }
     [ -d "$EXIFTOOL_CORPUS" ] || { echo -e "${RED}Error: corpus $EXIFTOOL_CORPUS missing${NC}"; exit 1; }
@@ -117,12 +116,16 @@ benchmark_single_file() {
     local stub="$FIXTURE_DIR/jpeg/simple/sample_with_exif.jpg"
     local canon="$EXIFTOOL_CORPUS/Canon.jpg"
     [ -f "$stub" ] && [ -f "$canon" ] || { echo -e "${RED}Error: test files missing${NC}"; exit 1; }
+    local stub_arg canon_arg binary_arg
+    printf -v stub_arg '%q' "$stub"
+    printf -v canon_arg '%q' "$canon"
+    printf -v binary_arg '%q' "$OXIDEX_BIN"
     LOAD_1a=$(load1)
     "${HF[@]}" --export-markdown "$TEMP_DIR/single_file.md" --export-json "$TEMP_DIR/single_file.json" \
-        "${EXIFTOOL[*]} $stub" "$OXIDEX_BIN $stub"
+        "$EXIFTOOL_CMD $stub_arg" "$binary_arg $stub_arg"
     LOAD_1b=$(load1)
     "${HF[@]}" --export-markdown "$TEMP_DIR/single_canon.md" --export-json "$TEMP_DIR/single_canon.json" \
-        "${EXIFTOOL[*]} -j -a -G1 $canon" "$OXIDEX_BIN -j -a -G1 $canon"
+        "$EXIFTOOL_CMD -j -a -G1 $canon_arg" "$binary_arg -j -a -G1 $canon_arg"
     stamp_after; echo ""
 }
 
@@ -142,10 +145,13 @@ benchmark_batch_processing() {
         done
     done
     BATCH_COUNT=$(find "$batch_dir" -name "*.jpg" | wc -l | tr -d ' ')
+    local batch_arg binary_arg
+    printf -v batch_arg '%q' "$batch_dir"
+    printf -v binary_arg '%q' "$OXIDEX_BIN"
     echo "  ${#fixtures[@]} source fixtures replicated to $BATCH_COUNT files"
     LOAD_2=$(load1)
     "${HF[@]}" --export-markdown "$TEMP_DIR/batch.md" --export-json "$TEMP_DIR/batch.json" \
-        "${EXIFTOOL[*]} -r $batch_dir" "$OXIDEX_BIN -r $batch_dir"
+        "$EXIFTOOL_CMD -r $batch_arg" "$binary_arg -r $batch_arg"
     stamp_after; echo ""
 }
 
@@ -156,10 +162,15 @@ benchmark_write_operation() {
     SCENARIO="write"; echo -e "${BLUE}Benchmark 3: Write Operation (Modify EXIF Tag)${NC}"; stamp_load
     local src="$FIXTURE_DIR/jpeg/simple/sample_with_exif.jpg" wdir="$TEMP_DIR/write_test"
     mkdir -p "$wdir"
+    local source_arg perl_arg rust_arg binary_arg
+    printf -v source_arg '%q' "$src"
+    printf -v perl_arg '%q' "$wdir/test_perl.jpg"
+    printf -v rust_arg '%q' "$wdir/test_rust.jpg"
+    printf -v binary_arg '%q' "$OXIDEX_BIN"
     LOAD_3=$(load1)
     "${HF[@]}" --export-markdown "$TEMP_DIR/write.md" --export-json "$TEMP_DIR/write.json" \
-        --prepare "cp $src $wdir/test_perl.jpg" "${EXIFTOOL[*]} -Artist=BenchmarkTest -overwrite_original $wdir/test_perl.jpg" \
-        --prepare "cp $src $wdir/test_rust.jpg" "$OXIDEX_BIN -EXIF:Artist=BenchmarkTest $wdir/test_rust.jpg"
+        --prepare "cp $source_arg $perl_arg" "$EXIFTOOL_CMD -Artist=BenchmarkTest -overwrite_original $perl_arg" \
+        --prepare "cp $source_arg $rust_arg" "$binary_arg -EXIF:Artist=BenchmarkTest $rust_arg"
     stamp_after; echo ""
 }
 
@@ -170,9 +181,12 @@ benchmark_format_detection() {
     SCENARIO="detection"; echo -e "${BLUE}Benchmark 4: Format Detection Overhead${NC}"; stamp_load
     local ddir="$TEMP_DIR/detection_test"; mkdir -p "$ddir"
     cp "$FIXTURE_DIR/jpeg/simple/sample_with_exif.jpg" "$ddir/test.jpg"
+    local sample_arg binary_arg
+    printf -v sample_arg '%q' "$ddir/test.jpg"
+    printf -v binary_arg '%q' "$OXIDEX_BIN"
     LOAD_4=$(load1)
     "${HF[@]}" --export-markdown "$TEMP_DIR/detection.md" --export-json "$TEMP_DIR/detection.json" \
-        "${EXIFTOOL[*]} $ddir/test.jpg" "$OXIDEX_BIN $ddir/test.jpg"
+        "$EXIFTOOL_CMD $sample_arg" "$binary_arg $sample_arg"
     stamp_after; echo ""
 }
 
@@ -183,13 +197,16 @@ benchmark_corpus() {
     SCENARIO="corpus"; echo -e "${BLUE}Benchmark 5: t/images corpus, one invocation (-j -a -G1)${NC}"; stamp_load
     local files=(); while IFS= read -r f; do files+=("$f"); done < <(find "$EXIFTOOL_CORPUS" -maxdepth 1 -type f | sort)
     CORPUS_COUNT=${#files[@]}
+    local file_args binary_arg
+    printf -v file_args '%q ' "${files[@]}"
+    printf -v binary_arg '%q' "$OXIDEX_BIN"
     echo "  $CORPUS_COUNT files under $EXIFTOOL_CORPUS"
     LOAD_5=$(load1)
     "${HF[@]}" --export-markdown "$TEMP_DIR/corpus.md" --export-json "$TEMP_DIR/corpus.json" \
-        "${EXIFTOOL[*]} -j -a -G1 ${files[*]}" "$OXIDEX_BIN -j -a -G1 ${files[*]}"
+        "$EXIFTOOL_CMD -j -a -G1 $file_args" "$binary_arg -j -a -G1 $file_args"
     LOAD_5b=$(load1)
     RAYON_NUM_THREADS=1 "${HF[@]}" --export-markdown "$TEMP_DIR/corpus_1t.md" --export-json "$TEMP_DIR/corpus_1t.json" \
-        "${EXIFTOOL[*]} -j -a -G1 ${files[*]}" "$OXIDEX_BIN -j -a -G1 ${files[*]}"
+        "$EXIFTOOL_CMD -j -a -G1 $file_args" "$binary_arg -j -a -G1 $file_args"
     LOAD_END=$(load1); stamp_after; echo ""
 }
 

@@ -80,8 +80,9 @@ is absent, before accepting its signed commit shape.
 ## Rehearsal
 
 ```bash
+export OXIDEX_OPS_DIR="$(python3 scripts/ops_paths.py)"
 python3 tools/release/fleet_controller.py fixture \
-  --root /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/controller-tests/task0-step8
+  --root "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/controller-tests/task0-step8"
 ```
 
 The fixture persists a running Task 0 with an old dead process in the snapshot,

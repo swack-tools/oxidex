@@ -32,11 +32,14 @@ from pathlib import Path, PurePath
 from typing import Any
 
 
-OPS_ROOT = Path("/Users/allen/oxidex-ops").resolve()
-GIT_ROOT = Path("/Users/allen/git").resolve()
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.ops_paths import ops_root, target_root, worktree_root
+
+OPS_ROOT = ops_root()
+GIT_ROOT = worktree_root()
 CONTROLLER_BASE = OPS_ROOT / "evidence/20260919-beta1-functional/controller"
 EVIDENCE_BASE = OPS_ROOT / "evidence/20260919-beta1-functional"
-TARGET_BASE = GIT_ROOT / "oxidex-beta1-targets"
+TARGET_BASE = target_root()
 SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -175,7 +178,7 @@ def reject_symlink_components(path: Path) -> None:
 def require_operational_path(path: Path) -> Path:
     reject_symlink_components(path)
     value = path.expanduser().resolve(strict=False)
-    if not any(value == root or root in value.parents for root in (OPS_ROOT, GIT_ROOT)):
+    if not any(value == root or root in value.parents for root in (OPS_ROOT, GIT_ROOT, TARGET_BASE)):
         raise Refused(f"path outside durable roots: {value}")
     return value
 
@@ -819,8 +822,8 @@ def _launch_instruction(task: Mapping[str, Any]) -> tuple[str, str]:
         return (
             "bash",
             "python3 tools/release/fleet_controller.py launch "
-            f"--root {CONTROLLER_BASE} "
-            "--repo /Users/allen/git/oxidex-beta1-functional-integration "
+            f"--root {shlex.quote(str(CONTROLLER_BASE))} "
+            f"--repo {shlex.quote(str(GIT_ROOT / 'oxidex-beta1-functional-integration'))} "
             f"--task {task['number']}",
         )
     if kind == "Desktop":

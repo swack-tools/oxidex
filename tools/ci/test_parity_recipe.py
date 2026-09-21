@@ -22,7 +22,6 @@ from tools.release import bootstrap_oracle as bootstrap
 
 
 REPO = Path(__file__).resolve().parents[2]
-CANONICAL_ROOT = "/Users/allen/oxidex-ops"
 MANIFEST = "evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json"
 PERL = "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
 CACHE = "cache/exiftool/13.59"
@@ -56,7 +55,8 @@ def record_boundary(kind: str, argv: list[str]) -> None:
 
 class ParityRecipeTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="parity-recipe-")
+        bootstrap.DURABLE_ROOT.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="parity-recipe-", dir=bootstrap.DURABLE_ROOT)
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         files = {
@@ -85,7 +85,7 @@ class ParityRecipeTests(unittest.TestCase):
         setup = snippets[0]
         conformance = next(s for s in snippets if "conformance.py" in s)
         # Substitute deployment locations only; do not rewrite flags or commands.
-        recipe = (setup + "\n" + conformance).replace(CANONICAL_ROOT, str(self.root))
+        recipe = setup + "\n" + conformance
         recipe = recipe.replace("/absolute/durable/evidence/root", str(self.root / "evidence"))
         recipe = recipe.replace("/absolute/dedicated/parity-target", str(self.root / "target"))
         harness = r'''
@@ -110,6 +110,7 @@ git() {
 }
 '''
         environment = {**os.environ, "PYTHONPATH": str(REPO), "RECIPE_ROOT": str(self.root),
+                       "OXIDEX_OPS_DIR": str(self.root),
                        "RECIPE_PYTHON": sys.executable, "PYTHONDONTWRITEBYTECODE": "1",
                        "PARITY_LOCK": str(self.root / "lock.py"), "PARITY_MIN_FILES": "1",
                        "PARITY_MIN_TAGS": "1", "PARITY_BIN": str(self.root / "oxidex")}
