@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -54,6 +56,30 @@ class MatrixContractTests(unittest.TestCase):
             candidate.write_text(json.dumps(raw))
             with self.assertRaisesRegex(qualification.Refused, "mandatory"):
                 qualification.load_matrix(candidate, "13.59")
+
+    def test_row_labels_bind_exact_versions_policies_and_fixed_source_commits(self) -> None:
+        original = json.loads((HERE / "version_transition_matrix.json").read_text())
+        mutations = (
+            (1, "before_version", "12.00"),
+            (1, "artifact_manifest", {**original["rows"][1]["artifact_manifest"], "comparison": "identical"}),
+            (2, "artifact_manifest", {**original["rows"][2]["artifact_manifest"], "comparison": "manifest-delta"}),
+        )
+        for index, key, value in mutations:
+            with self.subTest(index=index, key=key), TemporaryDirectory() as temporary:
+                changed = json.loads(json.dumps(original))
+                changed["rows"][index][key] = value
+                candidate = Path(temporary) / "matrix.json"
+                candidate.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(qualification.Refused, "Task19 contract|row label"):
+                    qualification.load_matrix(candidate, "13.59")
+        for side in qualification.SIDES:
+            with self.subTest(side=side), TemporaryDirectory() as temporary:
+                changed = json.loads(json.dumps(original))
+                changed["rows"][1]["immutable_source_identities"][side].pop("expected_peeled_commit")
+                candidate = Path(temporary) / "matrix.json"
+                candidate.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(qualification.Refused, "fixed source identity"):
+                    qualification.load_matrix(candidate, "13.59")
 
 
 class VerifiedInputTests(unittest.TestCase):
@@ -173,13 +199,54 @@ class SideAndRecoveryTests(unittest.TestCase):
             journal = {"phase": "running", "active": {"release": "11.78", "stage": "generate"}}
             (run_dir / "execution-status.json").write_text(json.dumps(journal))
             with patch.object(qualification.executor, "recover") as recover:
-                qualification._recover_if_running(run_dir, Path("cache"), Path("sources"))
-            recover.assert_called_once_with(run_dir, Path("cache"), Path("sources"))
+                qualification._recover_if_running(run_dir, Path("cache"), Path("sources"), host_lock_fd=17)
+            recover.assert_called_once_with(run_dir, Path("cache"), Path("sources"), host_lock_fd=17)
             journal["phase"] = "interrupted"
             (run_dir / "execution-status.json").write_text(json.dumps(journal))
             with patch.object(qualification.executor, "recover") as recover:
                 qualification._recover_if_running(run_dir, Path("cache"), Path("sources"))
             recover.assert_not_called()
+
+    def test_real_recovery_reuses_the_validated_external_lease(self) -> None:
+        temporary, capture, catalog, plan, resolution, materialization, cache, sources, release = native_fixture.make_state()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        fixture = root / "fixture.jpg"; fixture.write_bytes(b"\xff\xd8fixture")
+        read_manifest = root / "read.json"
+        read_manifest.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest",
+            "fixtures": [{"path": str(fixture), "sha256": qualification._sha_file(fixture),
+                          "bytes": fixture.stat().st_size}],
+        }))
+        write_manifest = root / "write.json"
+        write_manifest.write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest",
+            "fixtures": [{"path": str(fixture), "sha256": qualification._sha_file(fixture),
+                          "bytes": fixture.stat().st_size}],
+        }))
+        lease_path = root / "transition.host.lock"; lease_path.touch()
+        run_dir = root / "run"
+        config = qualification._side_config(
+            release=release, source_commit=plan["repository_commit"], perl=Path(sys.executable).resolve(),
+            read_manifest=read_manifest, write_manifest=write_manifest, native_cases=[{"name": "case"}],
+            lease=lease_path, target=root / "target",
+        )
+        qualification.executor.initialize_run(
+            run_dir, capture, catalog, plan, resolution, materialization, config,
+        )
+        journal_path = run_dir / "execution-status.json"
+        journal = json.loads(journal_path.read_text())
+        journal["phase"] = "running"
+        journal["active"] = {"release": release, "stage": "generate"}
+        journal["releases"][release]["stages"]["generate"] = "running"
+        journal_path.write_text(json.dumps(journal))
+        receipts = [root / name for name in ("owner.json", "heartbeat.jsonl", "expiry.json", "release.json")]
+        with qualification.TransitionLease(
+            lease=lease_path, run_id="recover", owner_receipt=receipts[0],
+            heartbeat_receipt=receipts[1], expiry_receipt=receipts[2], release_receipt=receipts[3],
+        ) as held:
+            qualification._recover_if_running(run_dir, cache, sources, host_lock_fd=held.fileno)
+        self.assertEqual(json.loads(journal_path.read_text())["phase"], "interrupted")
 
 
 class LeaseTests(unittest.TestCase):
@@ -193,11 +260,82 @@ class LeaseTests(unittest.TestCase):
                 lease=lease_path, run_id="unit-run", owner_receipt=receipts[0],
                 heartbeat_receipt=receipts[1], expiry_receipt=receipts[2], release_receipt=receipts[3],
             ) as lease:
+                self.assertTrue(os.get_inheritable(lease.fileno))
                 lease.heartbeat("unit", "same-pin", "before")
                 lease.finish("complete")
             self.assertTrue(all(receipt.is_file() for receipt in receipts))
             self.assertEqual(json.loads(receipts[3].read_text())["release_status"], "released")
             self.assertGreaterEqual(len(receipts[1].read_text().splitlines()), 2)
+
+    def test_inherited_descriptor_keeps_lock_until_real_child_exits(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease_path = root / "transition.host.lock"; lease_path.touch()
+            child_pid = root / "child.pid"
+            helper = root / "supervisor.py"
+            helper.write_text(
+                "import os, subprocess, sys\nfrom pathlib import Path\n"
+                f"sys.path.insert(0, {str(HERE)!r})\n"
+                "import version_transition_qualification as q\n"
+                f"r=Path({str(root)!r}); lease=Path({str(lease_path)!r})\n"
+                "held=q.TransitionLease(lease=lease, run_id='inherit', owner_receipt=r/'owner.json', "
+                "heartbeat_receipt=r/'heartbeat.jsonl', expiry_receipt=r/'expiry.json', release_receipt=r/'release.json').__enter__()\n"
+                "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1.2)'], close_fds=False, "
+                "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                f"Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+                "os._exit(0)\n"
+            )
+            finished = subprocess.run([sys.executable, str(helper)], cwd=root, timeout=5)
+            self.assertEqual(finished.returncode, 0)
+            self.assertTrue(child_pid.is_file())
+            with self.assertRaisesRegex(qualification.executor.Refused, "already held"):
+                with qualification.executor._HostLock(lease_path):
+                    pass
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline:
+                try:
+                    with qualification.executor._HostLock(lease_path):
+                        break
+                except qualification.executor.Refused:
+                    time.sleep(0.05)
+            else:
+                self.fail("inherited descriptor did not release after child exit")
+
+    def test_receipt_failures_always_release_and_preserve_body_error(self) -> None:
+        for failure_kind in ("owner", "heartbeat", "expiry"):
+            with self.subTest(failure_kind=failure_kind), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lease_path = root / "transition.host.lock"; lease_path.touch()
+                owner, heartbeat, expiry, release = [root / name for name in
+                    ("owner.json", "heartbeat.jsonl", "expiry.json", "release.json")]
+                lease = qualification.TransitionLease(
+                    lease=lease_path, run_id=failure_kind, owner_receipt=owner,
+                    heartbeat_receipt=heartbeat, expiry_receipt=expiry, release_receipt=release,
+                )
+                if failure_kind == "owner":
+                    original = qualification._atomic_json
+                    effect = lambda target, value: (_ for _ in ()).throw(OSError("owner failed")) \
+                        if target == owner else original(target, value)
+                    context = patch.object(qualification, "_atomic_json", side_effect=effect)
+                elif failure_kind == "heartbeat":
+                    context = patch.object(qualification, "_append_jsonl", side_effect=OSError("heartbeat failed"))
+                else:
+                    original = qualification._atomic_json
+                    effect = lambda target, value: (_ for _ in ()).throw(OSError("expiry failed")) \
+                        if target == expiry else original(target, value)
+                    context = patch.object(qualification, "_atomic_json", side_effect=effect)
+                with context:
+                    if failure_kind == "expiry":
+                        with self.assertRaisesRegex(RuntimeError, "body failed"):
+                            with lease:
+                                raise RuntimeError("body failed")
+                    else:
+                        with self.assertRaisesRegex(OSError, f"{failure_kind} failed"):
+                            with lease:
+                                pass
+                self.assertIsNone(lease.file)
+                with qualification.executor._HostLock(lease_path):
+                    pass
 
 
 class WrapperCallTests(unittest.TestCase):
@@ -239,7 +377,15 @@ class WrapperCallTests(unittest.TestCase):
             "durable_output_directory": str(self.row_output),
         }
         (self.root / "read.json").write_text("{}")
-        (self.root / "write.json").write_text("{}")
+        fixture = self.root / "fixture.jpg"; fixture.write_bytes(b"\xff\xd8fixture")
+        fixture_row = {"path": str(fixture), "sha256": qualification._sha_file(fixture),
+                       "bytes": fixture.stat().st_size}
+        (self.root / "read.json").write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [fixture_row],
+        }))
+        (self.root / "write.json").write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [fixture_row],
+        }))
         (self.root / "cases.json").write_text('[{"name":"case"}]')
         self.caller = {"pin_version": "13.59", "head": "a" * 40}
         self.identity = {
@@ -286,7 +432,7 @@ class WrapperCallTests(unittest.TestCase):
         result, configs = self.invoke(execute)
         self.assertEqual(result["status"], "tooling-executed-nonpromoting")
         self.assertEqual(len(calls), 2)
-        self.assertTrue(all(set(call[-1]) == {"host_lock_fd"}
+        self.assertTrue(all(set(call[-1]) == {"host_lock_fd", "stage_guard"}
                             and type(call[-1]["host_lock_fd"]) is int for call in calls))
         self.assertEqual([config["execution_releases"] for config in configs], [["13.59"], ["13.59"]])
         self.assertTrue(all("write" in config["commands"] for config in configs))
@@ -303,7 +449,57 @@ class WrapperCallTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 self.invoke(interrupted)
         recover.assert_called_once()
+        self.assertIsInstance(recover.call_args.kwargs["host_lock_fd"], int)
         self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())["terminal_status"], "failed")
+
+    def test_recovery_refusal_does_not_mask_original_interruption(self) -> None:
+        def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            (run_dir / "execution-status.json").write_text(json.dumps({
+                "phase": "running", "active": {"release": "13.59", "stage": "generate"},
+            }))
+            raise KeyboardInterrupt("original interruption")
+        with patch.object(qualification.executor, "recover",
+                          side_effect=qualification.executor.Refused("live child")):
+            with self.assertRaisesRegex(KeyboardInterrupt, "original interruption") as caught:
+                self.invoke(interrupted)
+        self.assertTrue(any("durable interruption recovery failed" in note
+                            for note in getattr(caught.exception, "__notes__", [])))
+
+    def test_native_cases_are_frozen_before_first_side_and_rechecked(self) -> None:
+        calls = 0
+        def mutates_after_before(_run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                (self.root / "cases.json").write_text('[{"name":"narrower"}]')
+            return {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}}
+        with self.assertRaisesRegex(qualification.Refused, "native-case input changed"):
+            self.invoke(mutates_after_before)
+        self.assertEqual(calls, 1)
+
+    def test_fixture_manifest_is_frozen_before_first_side_and_rechecked(self) -> None:
+        calls = 0
+        def mutates_after_before(_run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                (self.root / "read.json").write_text("{}")
+            return {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}}
+        with self.assertRaisesRegex(qualification.Refused, "selected input changed"):
+            self.invoke(mutates_after_before)
+        self.assertEqual(calls, 1)
+
+    def test_verified_source_identity_is_frozen_before_first_side_and_rechecked(self) -> None:
+        calls = 0
+        def mutates_after_before(_run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.identity["source_tree_sha256"] = "0" * 64
+            return {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}}
+        with self.assertRaisesRegex(qualification.Refused, "source input changed"):
+            self.invoke(mutates_after_before)
+        self.assertEqual(calls, 1)
 
     def test_stale_target_refuses_before_executor(self) -> None:
         self.row_target.mkdir(parents=True)

@@ -336,8 +336,27 @@ class ExecutorTests(unittest.TestCase):
         journal["active"] = {"release": self.releases[0], "stage": "generate", "child": {"pid": os.getpid(), "pgid": os.getpid()}}
         journal["releases"][self.releases[0]]["stages"]["generate"] = "running"
         status.write_text(json.dumps(journal))
-        with self.assertRaisesRegex(executor.Refused, "still live"):
-            executor.recover(self.run_dir, self.cache, self.sources)
+        self.lock.touch()
+        with executor._HostLock(self.lock) as held, self.assertRaisesRegex(executor.Refused, "still live"):
+            executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno())
+
+    def test_stage_guard_failure_after_generate_stops_later_stages(self):
+        self.initialize(self.config())
+        boundaries = []
+        def guard(release, stage, boundary):
+            boundaries.append((release, stage, boundary))
+            if stage == "generate" and boundary == "after":
+                raise executor.Refused("lease receipt guard failed")
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(
+                self.run_dir, self.repository, self.cache, self.sources,
+                run=self.command, checkout=self.checkout, stage_guard=guard,
+            )
+        self.assertEqual(journal["phase"], "failed")
+        self.assertEqual([argv[0] for argv, _, _ in self.calls], ["generate"])
+        self.assertIn((self.releases[0], "native", "before"), boundaries)
+        self.assertIn((self.releases[0], "generate", "after"), boundaries)
+        self.assertNotIn((self.releases[0], "build", "before"), boundaries)
 
     def test_main_returns_nonzero_for_failed_execution(self):
         failed = {"phase": "failed", "promotion": "forbidden", "scope": {"parity": "unproven"}}

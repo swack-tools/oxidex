@@ -748,7 +748,8 @@ def _verify_checkout_head(checkout: Path, expected_commit: str,
 
 def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str, checkout: Path, target: Path,
                native: tuple[Path, Path, Path], perl: str, native_probe: dict[str, Any], config: dict[str, Any],
-               run: Callable[..., subprocess.CompletedProcess[str]]) -> bool:
+               run: Callable[..., subprocess.CompletedProcess[str]],
+               stage_guard: Callable[[str, str, str], None] | None = None) -> bool:
     state = journal["releases"][release]["stages"][stage]
     if state == "passed" or state == "unsupported":
         return True
@@ -793,9 +794,11 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
     def started(pid: int, pgid: int) -> None:
         journal["active"]["child"] = {"pid": pid, "pgid": pgid}
         _store_journal(run_dir, journal)
-    record = _run_record(_expand(config["commands"][stage], values), cwd=checkout, env=env, run=run, started=started)
-    command_log = _command_log(run_dir, release, stage, record)
     try:
+        if stage_guard is not None:
+            stage_guard(release, stage, "before")
+        record = _run_record(_expand(config["commands"][stage], values), cwd=checkout, env=env, run=run, started=started)
+        command_log = _command_log(run_dir, release, stage, record)
         if record["state"] != "ok":
             raise Refused(f"{stage} command {record['state']}")
         after_source = _source_tree(checkout)
@@ -826,10 +829,15 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                     or fixture_report.get("manifest") != fixture_binding["path"]
                     or fixture_report.get("manifest_sha256") != fixture_binding["sha256"]):
                 raise Refused("write result did not use the immutable selected JPEG fixture manifest")
-    except Refused as exc:
+        if stage_guard is not None:
+            stage_guard(release, stage, "after")
+    except (Refused, OSError) as exc:
         journal["releases"][release]["stages"][stage] = "failed"
         journal["releases"][release]["state"] = "failed"
-        journal["releases"][release]["failure"] = {"stage": stage, "detail": str(exc), "command": command_log}
+        failure = {"stage": stage, "detail": str(exc)}
+        if "command_log" in locals():
+            failure["command"] = command_log
+        journal["releases"][release]["failure"] = failure
         journal["phase"], journal["active"] = "failed", None
         _event(journal, "stage_failed", release=release, stage=stage, detail=str(exc))
         _store_journal(run_dir, journal)
@@ -844,7 +852,8 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
 
 
 def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tuple[dict[str, Any], ...], config: dict[str, Any],
-                archive_cache: Path, source_root: Path, run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any] | None:
+                archive_cache: Path, source_root: Path, run: Callable[..., subprocess.CompletedProcess[str]],
+                stage_guard: Callable[[str, str, str], None] | None = None) -> dict[str, Any] | None:
     state = journal["releases"][release]["stages"]["native"]
     if state == "passed":
         return _read(run_dir / journal["releases"][release]["reports"]["native"]["path"])
@@ -874,12 +883,16 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
             raise
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     try:
+        if stage_guard is not None:
+            stage_guard(release, "native", "before")
         report = native_oracle.probe_materialized_native(materialization, plan, catalog, capture, resolution,
                                                          archive_cache, source_root, release, config["perls"][release],
                                                          config["native_cases"][release], run=native_run)
         native_oracle.write_probe_report(output, report)
         if report.get("state") != "ready" or not report.get("cases"):
             raise Refused("native oracle did not provide ready cases")
+        if stage_guard is not None:
+            stage_guard(release, "native", "after")
     except (Refused, native_oracle.Refused, catalog_stage.Refused, rehearsal.Refused, OSError,
             subprocess.TimeoutExpired) as exc:
         journal["releases"][release]["stages"]["native"] = "failed"
@@ -934,7 +947,8 @@ def _external_host_lock(config: Mapping[str, Any], descriptor: int | None):
 def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: Path, *,
             run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
             checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout,
-            host_lock_fd: int | None = None) -> dict[str, Any]:
+            host_lock_fd: int | None = None,
+            stage_guard: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
     """Run each selected release once. Failed or interrupted stages are never retried."""
     journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
     lock = _external_host_lock(config, host_lock_fd)
@@ -956,6 +970,8 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 journal["phase"], journal["active"] = "running", {"release": release, "stage": "checkout"}
                 _event(journal, "checkout_started", release=release)
                 _store_journal(run_dir, journal)
+                if stage_guard is not None:
+                    stage_guard(release, "checkout", "before")
                 owned = checkout(repository, config["execution_source_commit"], checkout_path, run)
                 if owned.resolve() != checkout_path.resolve() or owned.is_symlink() or not owned.is_dir():
                     raise Refused("checkout provider did not return the owned release checkout")
@@ -964,14 +980,17 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 if target.exists() or target.is_symlink():
                     raise Refused("execution target already exists; stale target reuse is forbidden")
                 target.mkdir(parents=True)
+                if stage_guard is not None:
+                    stage_guard(release, "checkout", "after")
                 journal["active"] = None
                 _event(journal, "checkout_completed", release=release)
                 _store_journal(run_dir, journal)
-                native = _run_native(run_dir, journal, release, docs, config, archive_cache, source_root, run)
+                native = _run_native(run_dir, journal, release, docs, config, archive_cache, source_root, run,
+                                     stage_guard)
                 if native is None: return journal
                 for stage in ("generate", "build", "read", "write"):
                     if not _run_stage(run_dir, journal, release, stage, owned, target, _native_identity(materialization, source_root, release),
-                                      config["perls"][release], native, config, run): return journal
+                                      config["perls"][release], native, config, run, stage_guard): return journal
                 statuses = journal["releases"][release]["stages"]
                 journal["releases"][release]["state"] = "passed_with_write_gap" if statuses["write"] == "unsupported" else "passed"
                 _event(journal, "release_completed", release=release, state=journal["releases"][release]["state"])
@@ -998,10 +1017,11 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         return journal
 
 
-def recover(run_dir: Path, archive_cache: Path, source_root: Path) -> dict[str, Any]:
+def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
+            host_lock_fd: int | None = None) -> dict[str, Any]:
     """Record interruption without guessing whether an active command completed."""
     journal, _, config = _load_journal(run_dir, archive_cache, source_root)
-    with _HostLock(Path(config["host_lock"])):
+    with _external_host_lock(config, host_lock_fd):
         if journal.get("phase") != "running" or not isinstance(journal.get("active"), dict):
             raise Refused("only a running execution can be recovered as interrupted")
         active = journal["active"]

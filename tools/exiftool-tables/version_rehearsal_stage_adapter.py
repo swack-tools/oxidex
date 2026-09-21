@@ -294,15 +294,34 @@ def generate(args: argparse.Namespace, *, run: Callable[..., subprocess.Complete
     # measurement guard, which otherwise rejects that required, attributable
     # pin diff before generation can reach its artifact proof.
     env["OXIDEX_ALLOW_DIRTY_TREE"] = "1"
-    record = _run(["bash", str(checkout / "tools" / "exiftool-tables" / "regen-all.sh")], cwd=checkout, env=env, run=run)
-    raw = _raw(report, "generate", record)
-    if record["state"] != "ok":
+    command = ["bash", str(checkout / "tools" / "exiftool-tables" / "regen-all.sh")]
+    first = _run(command, cwd=checkout, env=env, run=run)
+    if first["state"] != "ok":
         raise Refused("sanctioned regen-all.sh failed")
     if pin.read_text(encoding="utf-8") != args.release + "\n":
         raise Refused("sanctioned generation changed selected release pin")
+    first_artifacts = _artifact_rows(checkout)
+    first_source = _source_tree(checkout)
+    first_pin = {"sha256": _sha(pin), "bytes": pin.stat().st_size}
+    second = _run(command, cwd=checkout, env=env, run=run)
+    raw = _raw(report, "generate", {"first": first, "second": second})
+    if second["state"] != "ok":
+        raise Refused("second sanctioned regen-all.sh failed")
+    second_artifacts = _artifact_rows(checkout)
+    second_source = _source_tree(checkout)
+    second_pin = {"sha256": _sha(pin), "bytes": pin.stat().st_size}
+    if first_pin != second_pin or pin.read_text(encoding="utf-8") != args.release + "\n":
+        raise Refused("second regeneration changed selected release pin")
+    if first_artifacts != second_artifacts or first_source != second_source:
+        raise Refused("second regeneration was not clean and idempotent")
     result = {**_base("generate", args, checkout, identity), "state": "passed", "denominator": 1,
-              "generated_artifacts": _artifact_rows(checkout), "raw_report": raw,
+              "generated_artifacts": second_artifacts, "raw_report": raw,
               "clean_source_before": {"git_status": "clean", "source_tree_sha256": clean_source},
+              "second_regeneration": {"state": "clean", "first_source_tree_sha256": first_source,
+                                      "second_source_tree_sha256": second_source,
+                                      "first_pin": first_pin, "second_pin": second_pin,
+                                      "first_artifacts": first_artifacts,
+                                      "second_artifacts": second_artifacts},
               "sanctioned_command": "tools/exiftool-tables/regen-all.sh"}
     _atomic(report, result)
     return result

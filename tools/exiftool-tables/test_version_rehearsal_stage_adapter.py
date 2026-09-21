@@ -187,10 +187,33 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(Path(bash[-1]).resolve(), self.checkout.resolve() / "tools/exiftool-tables/regen-all.sh")
         self.assertEqual(Path(env["EXIFTOOL_PERL"]).resolve(), self.perl.resolve()); self.assertEqual(Path(env["OXIDEX_EXIFTOOL_LIB"]).resolve(), (self.native / "lib").resolve()); self.assertEqual(Path(env["OXIDEX_ET_CACHE"]).resolve(), (self.target / "exiftool-cache").resolve()); self.assertEqual(Path(env["CARGO_TARGET_DIR"]).resolve(), self.target.resolve())
         self.assertEqual(env["OXIDEX_ALLOW_DIRTY_TREE"], "1")
+        self.assertEqual(len([row for row in self.seen if row[0][0] == "bash"]), 2)
+        self.assertEqual(result["second_regeneration"]["state"], "clean")
+        self.assertEqual(result["second_regeneration"]["first_source_tree_sha256"],
+                         result["second_regeneration"]["second_source_tree_sha256"])
+        self.assertEqual(result["second_regeneration"]["first_pin"],
+                         result["second_regeneration"]["second_pin"])
+        self.assertEqual(result["second_regeneration"]["first_artifacts"],
+                         result["second_regeneration"]["second_artifacts"])
         self.assertEqual(
             [row["path"] for row in result["generated_artifacts"]],
             [item.path for item in artifacts.inventory(self.checkout)],
         )
+
+    def test_second_in_place_regeneration_must_be_clean(self):
+        calls = 0
+        generated = self.checkout / artifacts.ARTIFACTS[0].path
+        def changes_only_on_second(argv, **kwargs):
+            nonlocal calls
+            result = self.fake_run(argv, **kwargs)
+            if argv[0] == "bash":
+                calls += 1
+                if calls == 2:
+                    generated.write_text(generated.read_text() + "second-pass-drift")
+            return result
+        with self.assertRaisesRegex(adapter.Refused, "second regeneration was not clean"):
+            adapter.generate(self.args("generate"), run=changes_only_on_second)
+        self.assertEqual(calls, 2)
 
     def test_build_and_actual_read_bind_binary_fixture_and_zero_mismatches(self):
         adapter.generate(self.args("generate"), run=self.fake_run)

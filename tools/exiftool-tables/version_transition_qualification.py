@@ -10,6 +10,7 @@ the caller is inspected before and after every side and is never promoted.
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import hashlib
 import json
@@ -44,6 +45,10 @@ RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 EXPECTED_PERL_VERSION = "v5.38.2"
 EXPECTED_PERL_SHA256 = "e78cfd5a061c7e0f4ee7d0cc40a8878186d9bd321f930609ad5bdaec78410959"
+FIXED_SOURCE_COMMITS = {
+    "11.78": "ca8685788f5763c547349f239764bd19cf1952da",
+    "12.64": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
+}
 INPUT_NAMES = ("capture", "catalog", "plan", "resolution", "materialization")
 SIDES = ("before", "after")
 
@@ -141,8 +146,13 @@ def load_matrix(matrix_path: Path, pinned_version: str) -> dict[str, Any]:
         raise Refused("transition matrix must contain the exact ordered Task19 rows")
     target_templates: list[str] = []
     output_templates: list[str] = []
+    contracts = {
+        f"same-pin-{pinned_version}": (pinned_version, pinned_version, "identical"),
+        "11.78-to-12.64": ("11.78", "12.64", "manifest-delta"),
+        "12.64-to-11.78": ("12.64", "11.78", "manifest-delta-with-removals"),
+    }
     for row in value["rows"]:
-        _validate_row(row)
+        _validate_row(row, contracts[row["id"]])
         target_templates.append(row["target_directory"])
         output_templates.append(row["durable_output_directory"])
     if len(set(target_templates)) != 3 or len(set(output_templates)) != 3:
@@ -150,10 +160,12 @@ def load_matrix(matrix_path: Path, pinned_version: str) -> dict[str, Any]:
     return value
 
 
-def _validate_row(row: Mapping[str, Any]) -> None:
+def _validate_row(row: Mapping[str, Any], contract: tuple[str, str, str]) -> None:
     before, after = row.get("before_version"), row.get("after_version")
     if not isinstance(before, str) or not isinstance(after, str) or RELEASE.fullmatch(before) is None or RELEASE.fullmatch(after) is None:
         raise Refused("matrix row versions are malformed")
+    if (before, after) != contract[:2]:
+        raise Refused("matrix row label or release pair differs from the Task19 contract")
     identities, fixtures = row.get("immutable_source_identities"), row.get("fixtures")
     if not isinstance(identities, dict) or set(identities) != set(SIDES):
         raise Refused("matrix row must resolve both immutable source identities")
@@ -165,6 +177,9 @@ def _validate_row(row: Mapping[str, Any]) -> None:
                 or identity.get("resolver") != "verified-input-bundle"
                 or not isinstance(identity.get("input_bundle"), str)):
             raise Refused("matrix source identity resolver is incomplete")
+        if (row.get("id") in {"11.78-to-12.64", "12.64-to-11.78"}
+                and identity.get("expected_peeled_commit") != FIXED_SOURCE_COMMITS[release]):
+            raise Refused("matrix fixed source identity differs from the checked Task19 contract")
         fixture = fixtures[side]
         if (not isinstance(fixture, dict)
                 or set(fixture) != {"read_manifest", "write_manifest", "native_cases"}
@@ -175,6 +190,8 @@ def _validate_row(row: Mapping[str, Any]) -> None:
             or artifact.get("source") != "tools/exiftool-tables/artifacts.py"
             or artifact.get("comparison") not in {"identical", "manifest-delta", "manifest-delta-with-removals"}):
         raise Refused("matrix artifact-manifest contract is incomplete")
+    if (before, after, artifact["comparison"]) != contract:
+        raise Refused("matrix row label, release pair, or comparison policy differs from the Task19 contract")
     if (row.get("fresh_generation") != "both-sides" or row.get("native_read") != "mandatory"
             or row.get("native_write_readback") != "mandatory" or row.get("promotion") != "forbidden"
             or not isinstance(row.get("target_directory"), str)
@@ -306,6 +323,58 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
         "source_root": str(source_root),
         "documents": dict(zip(INPUT_NAMES, (capture, catalog, plan, resolution, materialization), strict=True)),
     }
+
+
+def _file_binding(file_path: Path, label: str) -> dict[str, Any]:
+    if file_path.is_symlink() or not file_path.is_file():
+        raise Refused(f"{label} must be an existing regular file: {file_path}")
+    resolved = file_path.resolve()
+    return {"path": str(resolved), "sha256": _sha_file(resolved), "bytes": resolved.stat().st_size}
+
+
+def _freeze_side_inputs(row: Mapping[str, Any], side: str) -> dict[str, Any]:
+    identity_config = row["immutable_source_identities"][side]
+    bundle = Path(identity_config["input_bundle"])
+    identity = resolve_source_identity(identity_config, bundle)
+    fixtures = row["fixtures"][side]
+    read_manifest = Path(fixtures["read_manifest"])
+    write_manifest = Path(fixtures["write_manifest"])
+    cases_path = Path(fixtures["native_cases"])
+    cases = _read_array(cases_path, "native cases")
+    return {
+        "identity_config": dict(identity_config),
+        "bundle": str(bundle),
+        "identity": copy.deepcopy(identity),
+        "read_manifest": str(read_manifest),
+        "read_binding": executor._fixture_binding(
+            str(read_manifest), kind="oxidex_version_rehearsal_fixture_manifest", jpeg_only=False,
+        ),
+        "write_manifest": str(write_manifest),
+        "write_binding": executor._write_fixture_binding(str(write_manifest)),
+        "native_cases_path": str(cases_path),
+        "native_cases_binding": _file_binding(cases_path, "native cases"),
+        "native_cases": copy.deepcopy(cases),
+    }
+
+
+def _verify_frozen_side(frozen: Mapping[str, Any]) -> None:
+    try:
+        identity = resolve_source_identity(frozen["identity_config"], Path(frozen["bundle"]))
+        if identity != frozen["identity"]:
+            raise Refused("verified source input changed after qualification preflight")
+        read_binding = executor._fixture_binding(
+            frozen["read_manifest"], kind="oxidex_version_rehearsal_fixture_manifest", jpeg_only=False,
+        )
+        if read_binding != frozen["read_binding"]:
+            raise Refused("read fixture input changed after qualification preflight")
+        if executor._write_fixture_binding(frozen["write_manifest"]) != frozen["write_binding"]:
+            raise Refused("write fixture input changed after qualification preflight")
+        cases_path = Path(frozen["native_cases_path"])
+        if (_file_binding(cases_path, "native cases") != frozen["native_cases_binding"]
+                or _read_array(cases_path, "native cases") != frozen["native_cases"]):
+            raise Refused("native-case input changed after qualification preflight")
+    except executor.Refused as exc:
+        raise Refused(f"selected input changed after qualification preflight: {exc}") from exc
 
 
 def _perl(ops_root: Path) -> Path:
@@ -444,23 +513,43 @@ class TransitionLease:
             observed_owner = self.file.read().strip() or "owner metadata unavailable"
             self.file.close()
             raise Refused(f"transition lease is held: {observed_owner}") from exc
-        self.acquired_at = time.time()
-        self.expires_at = self.acquired_at + self.expires_seconds
-        real = str(self.lease.resolve())
-        owner_record = {
-            "run_id": self.run_id, "owner": self.owner, "pid": os.getpid(), "pgid": os.getpgrp(),
-            "acquired_at": self.acquired_at, "lock_path": str(self.lease), "lock_realpath": real,
-            "lease_mode": "nonblocking-exclusive", "lease_expires_at": self.expires_at,
-            "expiry_policy": "stop-before-next-stage-cleanup-journal-release",
-        }
-        self.file.seek(0)
-        self.file.truncate()
-        self.file.write(json.dumps(owner_record, sort_keys=True) + "\n")
-        self.file.flush()
-        os.fsync(self.file.fileno())
-        _atomic_json(self.owner_receipt, owner_record)
-        self.heartbeat("acquired", None, None)
-        return self
+        os.set_inheritable(self.file.fileno(), True)
+        try:
+            self.acquired_at = time.time()
+            self.expires_at = self.acquired_at + self.expires_seconds
+            real = str(self.lease.resolve())
+            owner_record = {
+                "run_id": self.run_id, "owner": self.owner, "pid": os.getpid(), "pgid": os.getpgrp(),
+                "acquired_at": self.acquired_at, "lock_path": str(self.lease), "lock_realpath": real,
+                "lease_mode": "nonblocking-exclusive", "lease_expires_at": self.expires_at,
+                "expiry_policy": "stop-before-next-stage-cleanup-journal-release",
+            }
+            self.file.seek(0)
+            self.file.truncate()
+            self.file.write(json.dumps(owner_record, sort_keys=True) + "\n")
+            self.file.flush()
+            os.fsync(self.file.fileno())
+            _atomic_json(self.owner_receipt, owner_record)
+            self.heartbeat("acquired", None, None)
+            return self
+        except BaseException as acquire_error:
+            try:
+                fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
+            finally:
+                self.file.close()
+                self.file = None
+            try:
+                _atomic_json(self.release_receipt, {
+                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
+                    "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
+                    "release_status": "released-after-acquire-failure", "terminal_status": "failed",
+                    "release_reason": "lease-acquisition-receipt-failure",
+                    "flock_release_confirmed": True, "receipt_failures": [str(acquire_error)],
+                })
+            except BaseException as receipt_error:
+                if hasattr(acquire_error, "add_note"):
+                    acquire_error.add_note(f"transition lease acquisition release receipt failed: {receipt_error}")
+            raise
 
     def heartbeat(self, event: str, row: str | None, stage: str | None) -> None:
         with self._heartbeat_lock:
@@ -472,6 +561,12 @@ class TransitionLease:
                 "sequence": self.sequence, "timestamp": time.time(), "event": event,
                 "row": row, "stage": stage,
             })
+
+    def guard(self) -> None:
+        if self.file is None or self.file.closed:
+            raise Refused("transition lease is not held")
+        if time.time() >= self.expires_at:
+            raise Refused("transition lease expired before the next stage")
 
     @property
     def fileno(self) -> int:
@@ -486,27 +581,50 @@ class TransitionLease:
         expired = time.time() >= self.expires_at
         terminal = "failed" if exc_type is not None else self.terminal_status
         expiry_status = "expired" if expired else ("aborted" if terminal != "complete" else "not-expired")
-        _atomic_json(self.expiry_receipt, {
-            "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-            "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
-            "expired_at": time.time() if expired else None, "expiry_status": expiry_status,
-            "terminal_status": terminal,
-        })
+        receipt_failures: list[str] = []
+        try:
+            _atomic_json(self.expiry_receipt, {
+                "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
+                "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
+                "expired_at": time.time() if expired else None, "expiry_status": expiry_status,
+                "terminal_status": terminal,
+            })
+        except BaseException as receipt_error:
+            receipt_failures.append(f"expiry receipt: {receipt_error}")
         release_status = "released"
         confirmed = False
-        try:
-            if self.file is not None:
+        if self.file is not None:
+            try:
                 fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-                self.file.close()
                 confirmed = True
-        except OSError:
-            release_status = "release-failed"
-        _atomic_json(self.release_receipt, {
-            "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-            "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
-            "release_status": release_status, "terminal_status": terminal,
-            "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
-        })
+            except OSError as release_error:
+                release_status = "release-failed"
+                receipt_failures.append(f"lock release: {release_error}")
+            finally:
+                try:
+                    self.file.close()
+                except OSError as close_error:
+                    release_status = "release-failed"
+                    receipt_failures.append(f"lock close: {close_error}")
+                finally:
+                    self.file = None
+        try:
+            _atomic_json(self.release_receipt, {
+                "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
+                "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
+                "release_status": release_status, "terminal_status": terminal,
+                "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
+                "receipt_failures": receipt_failures,
+            })
+        except BaseException as receipt_error:
+            receipt_failures.append(f"release receipt: {receipt_error}")
+        if receipt_failures:
+            detail = "; ".join(receipt_failures)
+            if exc is not None:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(f"transition lease cleanup warning: {detail}")
+                return None
+            raise Refused(f"transition lease cleanup failed: {detail}")
 
 
 class ReceiptCadence:
@@ -554,13 +672,14 @@ class ReceiptCadence:
             self.check()
 
 
-def _recover_if_running(run_dir: Path, archive_cache: Path, source_root: Path) -> None:
+def _recover_if_running(run_dir: Path, archive_cache: Path, source_root: Path, *,
+                        host_lock_fd: int | None = None) -> None:
     journal_path = run_dir / "execution-status.json"
     if not journal_path.is_file() or journal_path.is_symlink():
         return
     journal = _read_object(journal_path, "execution journal")
     if journal.get("phase") == "running" and isinstance(journal.get("active"), dict):
-        executor.recover(run_dir, archive_cache, source_root)
+        executor.recover(run_dir, archive_cache, source_root, host_lock_fd=host_lock_fd)
 
 
 def _validate_receipt_contract(*, output_root: Path, run_id: str, lease_path: Path,
@@ -606,8 +725,16 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     rows = [row for row in matrix["rows"] if only is None or row["id"] == only]
     if not rows:
         raise Refused(f"matrix row is not selected: {only}")
-    perl = _perl(ops_paths.ops_root())
     source_commit = caller["head"]
+    frozen_inputs: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        frozen_inputs[row["id"]] = {}
+        for side in SIDES:
+            frozen = _freeze_side_inputs(row, side)
+            if frozen["identity"]["documents"]["plan"].get("repository_commit") != source_commit:
+                raise Refused("verified transition plan is not bound to the caller execution source commit")
+            frozen_inputs[row["id"]][side] = frozen
+    perl = _perl(ops_paths.ops_root())
     results: list[dict[str, Any]] = []
     _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                     "state": "preflight", "rows": [row["id"] for row in rows],
@@ -628,20 +755,12 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                 for side, release in zip(SIDES, (row["before_version"], row["after_version"]), strict=True):
                     cadence.position(row["id"], side)
                     host_lease.heartbeat("side-start", row["id"], side)
-                    identity_config = row["immutable_source_identities"][side]
-                    bundle = Path(identity_config["input_bundle"])
-                    identity = resolve_source_identity(identity_config, bundle)
-                    if identity["documents"]["plan"].get("repository_commit") != source_commit:
-                        raise Refused("verified transition plan is not bound to the caller execution source commit")
-                    fixtures = row["fixtures"][side]
-                    read_manifest = Path(fixtures["read_manifest"])
-                    write_manifest = Path(fixtures["write_manifest"])
-                    native_cases = _read_array(Path(fixtures["native_cases"]), "native cases")
-                    # The executor binds and rechecks the complete write fixture
-                    # manifest at initialization. The adapter does the same for
-                    # read fixtures before comparison.
-                    _read_object(read_manifest, "read fixture manifest")
-                    _read_object(write_manifest, "write fixture manifest")
+                    frozen = frozen_inputs[row["id"]][side]
+                    _verify_frozen_side(frozen)
+                    identity = frozen["identity"]
+                    read_manifest = Path(frozen["read_manifest"])
+                    write_manifest = Path(frozen["write_manifest"])
+                    native_cases = frozen["native_cases"]
                     side_run = row_output / side
                     side_target = row_target / side
                     documents = identity["documents"]
@@ -654,15 +773,33 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         side_run, documents["capture"], documents["catalog"], documents["plan"],
                         documents["resolution"], documents["materialization"], config,
                     )
+                    def stage_guard(_release: str, _stage: str, _boundary: str,
+                                    *, selected=frozen) -> None:
+                        try:
+                            host_lease.guard()
+                            cadence.check()
+                            _verify_frozen_side(selected)
+                            host_lease.guard()
+                            cadence.check()
+                        except (Refused, OSError, ValueError) as exc:
+                            raise executor.Refused(str(exc)) from exc
                     try:
                         journal = execute(
                             side_run, repository, Path(identity["archive_cache"]), Path(identity["source_root"]),
-                            host_lock_fd=host_lease.fileno,
+                            host_lock_fd=host_lease.fileno, stage_guard=stage_guard,
                         )
                         cadence.check()
-                    except BaseException:
-                        _recover_if_running(side_run, Path(identity["archive_cache"]), Path(identity["source_root"]))
+                    except BaseException as execution_error:
+                        try:
+                            _recover_if_running(
+                                side_run, Path(identity["archive_cache"]), Path(identity["source_root"]),
+                                host_lock_fd=host_lease.fileno,
+                            )
+                        except BaseException as recovery_error:
+                            if hasattr(execution_error, "add_note"):
+                                execution_error.add_note(f"durable interruption recovery failed: {recovery_error}")
                         raise
+                    _verify_frozen_side(frozen)
                     sides[side] = _side_receipt(side_run, journal, release, identity)
                     verify_caller(caller)
                     host_lease.heartbeat("side-complete", row["id"], side)
@@ -672,12 +809,21 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         "execution_journal": str(side_run / "execution-status.json"),
                     })
                 delta = _compare_sides(row, sides["before"], sides["after"])
+                host_lease.guard()
+                cadence.check()
+                for frozen in frozen_inputs[row["id"]].values():
+                    _verify_frozen_side(frozen)
                 result = {"id": row["id"], "before": sides["before"], "after": sides["after"],
                           "artifact_delta": delta, "caller_restored": True,
                           "promotion": "forbidden"}
                 _atomic_json(row_output / "transition-result.json", result)
                 results.append(result)
                 verify_caller(caller)
+            for row_inputs in frozen_inputs.values():
+                for frozen in row_inputs.values():
+                    _verify_frozen_side(frozen)
+            host_lease.guard()
+            cadence.check()
             final = {
                 "schema": SCHEMA, "kind": RESULT_KIND, "run_id": run_id,
                 "promotion": "forbidden", "status": "tooling-executed-nonpromoting",
