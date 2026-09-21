@@ -163,7 +163,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::EXIF_IFD_HAND_KEPT",
     "table": "Main"
   },
@@ -177,7 +177,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   },
@@ -191,7 +191,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   },
@@ -205,7 +205,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   },
@@ -219,7 +219,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   },
@@ -233,7 +233,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   },
@@ -247,7 +247,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   },
@@ -261,7 +261,7 @@
     "owner": "residual",
     "refusal": null,
     "source_release": "13.59",
-    "source_sha256": "24f396715af6f29ecc1f1d16db1d5db75f6c87dbbd09297bc355f523f35d8730",
+    "source_sha256": "ec52c543b9541c0ead0f9b759e7dd9a5f470bd91e404ba57d0f8b5dd1066bb06",
     "symbol": "src/core/tiff_helpers.rs::IFD1_RESIDUAL_IDS",
     "table": "Main"
   }
