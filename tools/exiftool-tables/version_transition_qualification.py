@@ -614,7 +614,7 @@ class TransitionLease:
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         expired = time.time() >= self.expires_at
-        terminal = "failed" if exc_type is not None else self.terminal_status
+        terminal = "failed" if exc_type is not None or expired else self.terminal_status
         expiry_status = "expired" if expired else ("aborted" if terminal != "complete" else "not-expired")
         receipt_failures: list[str] = []
         try:
@@ -653,6 +653,36 @@ class TransitionLease:
             })
         except BaseException as receipt_error:
             receipt_failures.append(f"release receipt: {receipt_error}")
+        # Receipt I/O and descriptor cleanup can outlast the last guard. Latch
+        # expiry after that work, and correct both terminal receipts before
+        # refusing publication. Cleanup above must run even for expired leases.
+        if not expired and time.time() >= self.expires_at:
+            expired = True
+            for target, record in (
+                (self.expiry_receipt, {
+                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
+                    "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
+                    "expired_at": time.time(), "expiry_status": "expired",
+                    "terminal_status": "failed",
+                }),
+                (self.release_receipt, {
+                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
+                    "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
+                    "release_status": release_status, "terminal_status": "failed",
+                    "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
+                    "receipt_failures": receipt_failures,
+                }),
+            ):
+                try:
+                    # Keep the ordinary publisher's stale-receipt refusal:
+                    # only this invocation's terminal records are superseded.
+                    corrected = target.with_name(f"{target.name}.expired")
+                    _atomic_json(corrected, record)
+                    os.replace(corrected, target)
+                except BaseException as receipt_error:
+                    receipt_failures.append(f"expired terminal receipt {target}: {receipt_error}")
+        if expired:
+            receipt_failures.insert(0, "transition lease expired during final cleanup")
         if receipt_failures:
             detail = "; ".join(receipt_failures)
             if exc is not None:

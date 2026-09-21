@@ -473,6 +473,65 @@ class WrapperCallTests(unittest.TestCase):
                 })
         self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
 
+    def test_final_lease_expiry_refuses_success_and_releases_lock(self) -> None:
+        self._check_terminal_cleanup(expire="before")
+
+    def test_expiry_during_cleanup_receipts_refuses_success(self) -> None:
+        self._check_terminal_cleanup(expire="during")
+
+    def test_final_expiry_preserves_existing_execution_exception(self) -> None:
+        self._check_terminal_cleanup(expire="before", fail=True)
+
+    def test_successful_final_cleanup_records_complete_and_releases_lock(self) -> None:
+        self._check_terminal_cleanup()
+
+    def _check_terminal_cleanup(self, *, expire=None, fail=False) -> None:
+        original_exit = qualification.TransitionLease.__exit__
+        original_write = qualification._atomic_json
+        captured = []
+        failure = RuntimeError("execution failed before cleanup")
+
+        def cleanup(lease, *args):
+            captured.append((lease, lease.file))
+            if expire == "before":
+                lease.expires_at = 0
+            return original_exit(lease, *args)
+
+        def write(target, value):
+            original_write(target, value)
+            if expire == "during" and target == self.receipts["release_receipt"]:
+                captured[0][0].expires_at = 0
+
+        def execute(*_args, **_kwargs):
+            if fail:
+                raise failure
+            return {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}}
+
+        with patch.object(qualification.TransitionLease, "__exit__", cleanup), \
+             patch.object(qualification, "_atomic_json", side_effect=write):
+            if fail:
+                with self.assertRaises(RuntimeError) as raised:
+                    self.invoke(execute)
+                self.assertIs(raised.exception, failure)
+            elif expire:
+                with self.assertRaisesRegex(qualification.Refused, "lease expired"):
+                    self.invoke(execute)
+            else:
+                self.invoke(execute)
+        self.assertEqual((self.output / self.run_id / "qualification-result.json").exists(),
+                         not (expire or fail))
+        expiry = json.loads(self.receipts["expiry_receipt"].read_text())
+        release = json.loads(self.receipts["release_receipt"].read_text())
+        self.assertEqual(expiry["expiry_status"], "expired" if expire else "not-expired")
+        for receipt in (expiry, release):
+            self.assertEqual(receipt["terminal_status"], "failed" if expire or fail else "complete")
+        self.assertEqual(release["release_status"], "released")
+        self.assertTrue(release["flock_release_confirmed"])
+        self.assertIsNone(captured[0][0].file)
+        self.assertTrue(captured[0][1].closed)
+        with qualification.executor._HostLock(self.lease):
+            pass
+
     def test_contending_invocation_writes_no_handoff_before_lease(self) -> None:
         with qualification.executor._HostLock(self.lease):
             with self.assertRaisesRegex(qualification.Refused, "transition lease is held"):
