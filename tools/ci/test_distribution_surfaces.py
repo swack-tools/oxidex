@@ -60,7 +60,11 @@ class DistributionSurfaceTests(unittest.TestCase):
 
     def test_cli_examples_are_development_state_not_a_tip_release_build(self):
         self.assertIn("current reviewed source snapshot", CLI_USAGE)
-        self.assertIn("final signed tag remains pending", CLI_USAGE)
+        self.assertIn("development/pre-tag state", CLI_USAGE)
+        self.assertIn(
+            "Neither a final signed tag nor a release-qualified\nSHA has been established.",
+            CLI_USAGE,
+        )
         self.assertNotIn("release build of the\n`refactor/tag-machinery` tip", CLI_USAGE)
 
     def test_readme_does_not_advertise_unpublished_rust_registries(self):

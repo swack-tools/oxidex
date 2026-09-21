@@ -12,8 +12,9 @@ layouts** still differ from ExifTool's; they are listed under
 
 ::: warning Beta: v2.0.0-beta.1
 The command line and its output may still change before 2.0.0. The examples
-on this page were checked against a release build of the
-current reviewed source snapshot; the final signed tag remains pending.
+on this page were checked against the current reviewed source snapshot, a
+development/pre-tag state. Neither a final signed tag nor a release-qualified
+SHA has been established.
 :::
 
 ## Reading
