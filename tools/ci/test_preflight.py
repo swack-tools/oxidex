@@ -15,7 +15,14 @@ PREFLIGHT = REPO / "tools/preflight.sh"
 
 class PreflightDiagnosticsTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory(prefix="preflight-portability-", dir=os.environ["TMPDIR"])
+        configured_tmpdir = os.environ.get("TMPDIR")
+        if configured_tmpdir:
+            scratch_parent = Path(configured_tmpdir)
+        else:
+            ops_dir = Path(os.environ.get("OXIDEX_OPS_DIR", Path.home() / "oxidex-ops"))
+            scratch_parent = ops_dir / "tmp" / "preflight-portability-tests"
+        scratch_parent.mkdir(parents=True, exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(prefix="preflight-portability-", dir=scratch_parent)
         self.root = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
