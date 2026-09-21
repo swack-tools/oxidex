@@ -204,7 +204,7 @@ def capability_probe(exiftool, perl, et_lib, expect_version, probe_file):
         f"capability probe: exiftool={exiftool} version={version.stdout.strip()!r} "
         f"carrier={probe_file} FileType="
         f"{PROBE_CARRIER_FILETYPE if f'\"FileType\": \"{PROBE_CARRIER_FILETYPE}\"' in parsed.stdout else '<degraded-or-missing>'} "
-        f"perl={perl} perl-version={eval_lines.get('VERSION')!r} eval($dirStart+$val)="
+        f"perl={perl} exiftool-module-version={eval_lines.get('VERSION')!r} eval($dirStart+$val)="
         f"{eval_lines.get('EVAL')!r} rc=({version.returncode},{parsed.returncode},{eval_run.returncode}) "
         f"-> {'OK' if ok else 'FAILED'}"
     )

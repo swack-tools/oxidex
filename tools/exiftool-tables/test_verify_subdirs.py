@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import tempfile
 import textwrap
 import types
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 
@@ -115,7 +117,13 @@ class CapabilityProbeTests(unittest.TestCase):
                 "PERL5OPT": "-MHostile",
             }
             with mock.patch.dict(os.environ, environment, clear=False):
-                module.capability_probe(exiftool, perl, library, "13.59", carrier)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    module.capability_probe(exiftool, perl, library, "13.59", carrier)
+
+            diagnostic = output.getvalue()
+            self.assertIn("exiftool-module-version='13.59'", diagnostic)
+            self.assertNotIn("perl-version=", diagnostic)
 
             calls = [
                 json.loads(line)
