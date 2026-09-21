@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -14,14 +15,22 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+from scripts.ops_paths import target_root  # noqa: E402 -- direct-file test execution
+
 JUST = shutil.which("just")
+WORKFLOW = REPO / ".github/workflows/ci.yml"
 
 
 class VerifyTablesRecipeTests(unittest.TestCase):
     def setUp(self):
         if JUST is None:
             self.skipTest("just is unavailable")
-        self.temporary = tempfile.TemporaryDirectory(prefix="verify-tables-recipe-")
+        scratch = target_root() / "verify-tables-recipe-tests"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="verify-tables-recipe-", dir=scratch
+        )
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.bin = self.root / "bin"
@@ -150,7 +159,14 @@ class VerifyTablesRecipeTests(unittest.TestCase):
             "PYTHONDONTWRITEBYTECODE": "1",
         }
         environment.update(overrides or {})
-        command = [JUST, "--justfile", str(REPO / "justfile"), "--working-directory", str(REPO), "verify-tables"]
+        command = [
+            JUST,
+            "--justfile",
+            str(REPO / "justfile"),
+            "--working-directory",
+            str(REPO),
+            "verify-tables",
+        ]
         if version:
             command.append(version)
         return subprocess.run(
@@ -165,7 +181,10 @@ class VerifyTablesRecipeTests(unittest.TestCase):
     def read_calls(self):
         if not self.calls.is_file():
             return []
-        return [json.loads(line) for line in self.calls.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.loads(line)
+            for line in self.calls.read_text(encoding="utf-8").splitlines()
+        ]
 
     def test_one_verified_oracle_reaches_every_verifier_under_hostile_ambient_state(self):
         result = self.run_recipe()
@@ -181,15 +200,34 @@ class VerifyTablesRecipeTests(unittest.TestCase):
         self.assertEqual(verify["argv"][2], str(self.tree / "lib"))
         subdirs = by_script["tools/exiftool-tables/verify_subdirs.py"]
         self.assertEqual(subdirs["argv"][2], str(self.tree / "lib"))
-        self.assertEqual(subdirs["argv"][subdirs["argv"].index("--perl") + 1], str(self.perl))
-        self.assertEqual(subdirs["argv"][subdirs["argv"].index("--exiftool") + 1], str(self.tree / "exiftool"))
+        self.assertEqual(
+            subdirs["argv"][subdirs["argv"].index("--perl") + 1], str(self.perl)
+        )
+        self.assertEqual(
+            subdirs["argv"][subdirs["argv"].index("--exiftool") + 1],
+            str(self.tree / "exiftool"),
+        )
 
-        serial = next(call for call in perl_calls if any(arg.endswith("dump_tables.pl") for arg in call["argv"]))
+        serial = next(
+            call
+            for call in perl_calls
+            if any(arg.endswith("dump_tables.pl") for arg in call["argv"])
+        )
         self.assertEqual(serial["argv"][0], f"-I{self.tree / 'lib'}")
         self.assertEqual(serial["argv"][-1], str(self.tree / "lib"))
         probe_prefix = [f"-I{self.tree / 'lib'}", str(self.tree / "exiftool"), "-config", ""]
-        self.assertTrue(any(call["argv"][:4] == probe_prefix and "-ver" in call["argv"] for call in perl_calls))
-        self.assertTrue(any(call["argv"][:4] == probe_prefix and "-FileType" in call["argv"] for call in perl_calls))
+        self.assertTrue(
+            any(
+                call["argv"][:4] == probe_prefix and "-ver" in call["argv"]
+                for call in perl_calls
+            )
+        )
+        self.assertTrue(
+            any(
+                call["argv"][:4] == probe_prefix and "-FileType" in call["argv"]
+                for call in perl_calls
+            )
+        )
 
         downstream = [verify, subdirs, serial]
         for call in downstream:
@@ -223,9 +261,28 @@ class VerifyTablesRecipeTests(unittest.TestCase):
                     "tools/exiftool-tables/verify_subdirs.py",
                 }
                 self.assertFalse(
-                    any(call["kind"] == "python" and call["argv"] and call["argv"][0] in downstream
-                        for call in self.read_calls())
+                    any(
+                        call["kind"] == "python"
+                        and call["argv"]
+                        and call["argv"][0] in downstream
+                        for call in self.read_calls()
+                    )
                 )
+
+    def test_hosted_subdir_verifier_receives_action_selected_perl(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        step = re.search(
+            r"(?ms)^      - name: Verify committed tables against ExifTool\n"
+            r".*?(?=^      - name: )",
+            workflow,
+        )
+        self.assertIsNotNone(step, "hosted table-verification step is absent")
+        command = step.group(0)
+        self.assertRegex(
+            command,
+            r"(?s)verify_subdirs\.py.*?--exiftool \"\$EXIFTOOL_SOURCE/exiftool\""
+            r"\s+\\\s+--perl \"\$OXIDEX_TABLES_PERL\"",
+        )
 
 
 if __name__ == "__main__":

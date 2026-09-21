@@ -649,7 +649,8 @@ jobs:
           python3 tools/exiftool-tables/verify_subdirs.py \
             src/exiftool_tables/binary/mod.rs \
             "$EXIFTOOL_SOURCE/lib" \
-            --exiftool "$EXIFTOOL_SOURCE/exiftool"
+            --exiftool "$EXIFTOOL_SOURCE/exiftool" \
+            --perl "$OXIDEX_TABLES_PERL"
       # Step 14 (tag-machinery overhaul): tier 1 above is binary/ (the split
       # binary tables);
       # tier 2 is everything downstream of it that regen.sh never touches --

@@ -54,6 +54,7 @@ Instruments, per AGENTS.md:
 """
 
 import argparse
+import importlib
 import itertools
 import os
 import re
@@ -61,13 +62,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
-# ``verify.py`` owns the deliberately robust parser for the committed Rust
-# Field literals.  Reusing its artifact reader is appropriate here: this
-# oracle's independence is Perl's raw facts + runtime evaluation, while using
-# the exact parsed generated source is what prevents a hypothetical compiler
-# output from standing in for the code that ships.
-import verify
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -138,11 +132,12 @@ def _cartesian(**channels):
     return [dict(zip(names, values)) for values in itertools.product(*(channels[n] for n in names))]
 
 
-def _native_env():
+def _native_env(perl):
     """Environment shared by native probes, excluding ambient Perl/config."""
     return {
         **os.environ,
         "EXIFTOOL_HOME": os.devnull,
+        "OXIDEX_TABLES_PERL": str(perl),
         "PERL5LIB": "",
         "PERLLIB": "",
         "PERL5OPT": "",
@@ -165,7 +160,7 @@ def capability_probe(exiftool, perl, et_lib, expect_version, probe_file):
     working perl and ``ZIP`` under one where ``Archive::Zip`` fails to load.
     """
     oracle = [str(perl), f"-I{et_lib}", str(exiftool), "-config", ""]
-    environment = _native_env()
+    environment = _native_env(perl)
     eval_probe = (
         f'use lib "{_perl_quote(str(et_lib))}"; use Image::ExifTool; '
         'package Image::ExifTool; '
@@ -223,6 +218,58 @@ def capability_probe(exiftool, perl, et_lib, expect_version, probe_file):
         )
 
 
+def oracle_version(perl, et_lib):
+    """Read the source-tree version with the same explicit Perl as all probes."""
+    try:
+        run = subprocess.run(
+            [
+                str(perl),
+                f"-I{et_lib}",
+                "-e",
+                "require Image::ExifTool; print $Image::ExifTool::VERSION",
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            env=_native_env(perl),
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(
+            f"oracle version probe failed under explicit Perl {perl}: {exc}"
+        ) from exc
+    return run.stdout.strip()
+
+
+def load_verifier(perl):
+    """Import verify.py only after binding its existing resolver to CLI Perl."""
+    selected = _native_env(perl)
+    names = (
+        "EXIFTOOL_HOME",
+        "OXIDEX_TABLES_PERL",
+        "PERL5LIB",
+        "PERLLIB",
+        "PERL5OPT",
+    )
+    previous = {name: os.environ.get(name) for name in names}
+    for name in names:
+        os.environ[name] = selected[name]
+    try:
+        verifier = importlib.import_module("verify")
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    if verifier._PERL != str(Path(perl).resolve()):
+        raise SystemExit(
+            f"verify.py resolved Perl {verifier._PERL}, but --perl selected {perl}"
+        )
+    return verifier
+
+
 def load_perl_subdirs(perl, et_lib):
     """Raw SUBDIR facts from the live Perl hash, independent of codegen."""
     run = subprocess.run(
@@ -231,7 +278,7 @@ def load_perl_subdirs(perl, et_lib):
         text=True,
         encoding="utf-8",
         timeout=90,
-        env=_native_env(),
+        env=_native_env(perl),
     )
     if run.returncode:
         print("oracle.pl stderr:", run.stderr[-4000:], file=sys.stderr)
@@ -244,14 +291,14 @@ def load_perl_subdirs(perl, et_lib):
     return facts
 
 
-def census(generated_rs, perl_facts):
+def census(generated_rs, perl_facts, verifier):
     """Join every generated edge to its raw live-Perl Start/Base strings."""
     # By ATTRIBUTE, not by position: this caller has been broken twice by
     # `parse_rust` growing a return value (8-of-11 in Step 25, fixed in
     # da1fec86 by hardcoding 11; then 11-of-13 when Step 28's print_conv
     # accounting appended pc_refused/pc_kinds). Naming the one field this
     # verifier actually consumes ends that class -- see `verify.ParsedRust`.
-    generated_edges = verify.parse_rust(generated_rs).subdir_edges
+    generated_edges = verifier.parse_rust(generated_rs).subdir_edges
     edges = []
     missing = []
     for key, edge in sorted(generated_edges.items()):
@@ -372,7 +419,7 @@ def run_perl(perl, script, timeout):
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_native_env(),
+            env=_native_env(perl),
         )
     finally:
         script_path.unlink(missing_ok=True)
@@ -471,10 +518,15 @@ def main():
         ],
     )
 
-    version = verify.oracle_version(args.et_lib)
+    verifier = load_verifier(args.perl)
+    version = oracle_version(args.perl, args.et_lib)
     capability_probe(args.exiftool, args.perl, args.et_lib, version, probe_file)
 
-    edges = census(args.generated_rs, load_perl_subdirs(args.perl, args.et_lib))
+    edges = census(
+        args.generated_rs,
+        load_perl_subdirs(args.perl, args.et_lib),
+        verifier,
+    )
     assert_execution_shapes(edges)
     jobs = build_jobs(edges)
     start_edges = len(edges)
