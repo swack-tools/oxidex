@@ -1210,6 +1210,34 @@ class SeverityTests(unittest.TestCase):
 
 
 class MeasurementTranscriptTests(unittest.TestCase):
+    def test_mixed_root_spellings_produce_a_receipt_in_manifest_order(self):
+        """A docs-coverage-style absolute+relative corpus must self-validate."""
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relative_root = root / "a-relative"
+            absolute_root = root / "z-absolute"
+            relative_root.mkdir()
+            absolute_root.mkdir()
+            (relative_root / "relative.jpg").write_bytes(b"relative")
+            (absolute_root / "absolute.jpg").write_bytes(b"absolute")
+            try:
+                os.chdir(root)
+                selected = conformance.select_corpus_files(
+                    ["a-relative", str(absolute_root)],
+                    recursive=True,
+                    only=None,
+                    exts=None,
+                    excluded=set(),
+                )
+                manifest = conformance.corpus_manifest(selected)
+                transcript_paths = [
+                    conformance.transcript_row(path, {})["path"] for path in selected
+                ]
+                self.assertEqual(transcript_paths, sorted(manifest["files"]))
+            finally:
+                os.chdir(old_cwd)
+
     def test_volatile_file_tags_do_not_invalidate_a_stable_scored_row(self):
         path = "/corpus/AAC.aac"
         oracle_before = {
