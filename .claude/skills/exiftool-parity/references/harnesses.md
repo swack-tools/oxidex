@@ -10,16 +10,16 @@ evidence that a measurement has already run.
 
 Read the expected ExifTool release from the repository's `.exiftool-version`.
 The canonical local interpreter is
-`/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2`; the pinned tree is
-`/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool`; its executable is
-`/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool` and its library
-is `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/lib`. Invoke that
+`~/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2`; the pinned tree is
+`~/oxidex-ops/cache/exiftool/13.59/exiftool`; its executable is
+`~/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool` and its library
+is `~/oxidex-ops/cache/exiftool/13.59/exiftool/lib`. Invoke that
 interpreter explicitly with that library and script, with user configuration
 excluded. Require
 Perl `v5.38.2`, the pinned ExifTool version, working standard/decompression
 modules, and `OOXML.docx` reporting **DOCX**, not ZIP. The authenticated
 combined corpus is the sibling
-`/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples`, never a child
+`~/oxidex-ops/cache/exiftool/13.59/combined-samples`, never a child
 of the checkout; select it only after `bootstrap_oracle.py verify` has refreshed
 its sibling manifest. A version probe alone is insufficient. Export
 `EXIFTOOL_PERL` for harnesses that resolve their own oracle.
@@ -45,9 +45,10 @@ PARITY_EVIDENCE=$(mktemp -d "$EVIDENCE_ROOT/parity-${PARITY_SHA}.XXXXXX")
 export CARGO_TARGET_DIR=/absolute/dedicated/parity-target
 : "${PARITY_LOCK:?Set the absolute lock controller path}"
 test -f "$PARITY_LOCK"
+export OXIDEX_OPS_DIR="${OXIDEX_OPS_DIR:-$HOME/oxidex-ops}"
 PARITY_PIN=$(tr -d '\r\n' < .exiftool-version)
-EXIFTOOL_PERL=/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2
-EXIFTOOL_CACHE_DIR="/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN"
+EXIFTOOL_PERL="$OXIDEX_OPS_DIR/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+EXIFTOOL_CACHE_DIR="$OXIDEX_OPS_DIR/cache/exiftool/$PARITY_PIN"
 PARITY_PERL="$EXIFTOOL_PERL"
 PARITY_ET_TREE="$EXIFTOOL_CACHE_DIR/exiftool"
 export EXIFTOOL_PERL="$PARITY_PERL"
@@ -102,7 +103,7 @@ interchangeable. Do not infer a regression from a bare tag-name join.
 ## Conformance and fresh base/head comparison
 
 Before selecting the canonical combined corpus (currently
-`/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples`), run
+`~/oxidex-ops/cache/exiftool/13.59/combined-samples`), run
 `bootstrap_oracle.py verify` with the root and pin below and retain its refreshed
 sibling manifest. The combined corpus is a sibling of the ExifTool checkout,
 never a child; an unverified or stale manifest blocks measurement.
@@ -121,7 +122,7 @@ set -euo pipefail
 : "${PARITY_MIN_FILES:?Set the approved file floor}"
 : "${PARITY_MIN_TAGS:?Set the approved native occurrence floor}"
 PARITY_BOOTSTRAP_MANIFEST=$(python3 tools/release/bootstrap_oracle.py verify \
-  --root /Users/allen/oxidex-ops --pin "$PARITY_PIN")
+  --root "$OXIDEX_OPS_DIR" --pin "$PARITY_PIN")
 cp "$PARITY_BOOTSTRAP_MANIFEST" "$PARITY_EVIDENCE/bootstrap-oracle.json"
 shasum -a 256 "$PARITY_EVIDENCE/bootstrap-oracle.json" \
   > "$PARITY_EVIDENCE/bootstrap-oracle.sha256"
@@ -247,7 +248,7 @@ re-run the version/DOCX probes through it before running the matrix:
 ```bash
 #!/bin/bash
 set -euo pipefail
-exec /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+exec "$OXIDEX_OPS_DIR/toolchains/perl-5.38.2/prefix/bin/perl5.38.2" \
   -I/absolute/path/to/pinned-exiftool/lib \
   /absolute/path/to/pinned-exiftool/exiftool -config '' "$@"
 ```

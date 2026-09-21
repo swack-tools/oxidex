@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import time
@@ -122,15 +123,31 @@ class LocateParserFilesTests(unittest.TestCase):
 # The /tmp/... literals below are inert test-fixture values passed to a
 # mocked subprocess.run -- no real filesystem I/O happens in this file.
 class RunFullComparisonTests(unittest.TestCase):
-    @patch("find_tag_gaps.subprocess.run")
-    def test_invokes_just_with_cache_dir_env(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0)
-        result = run_full_comparison("/tmp/fake-cache", repo_root=Path("/fake/repo"))  # nosec B108
-        args, kwargs = mock_run.call_args
-        self.assertEqual(args[0], ["just", "compare-exiftool-full"])
-        self.assertEqual(kwargs["cwd"], Path("/fake/repo"))
-        self.assertEqual(kwargs["env"]["EXIFTOOL_CACHE_DIR"], "/tmp/fake-cache")  # nosec B108
-        self.assertEqual(result, Path("/fake/repo/comparison.json"))
+    def test_full_comparison_reads_this_invocations_retained_result(self):
+        # The recipe is the expensive boundary; it writes only to RESULT_ROOT.
+        # A stale checkout-local result must never become this run's answer.
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "comparison.json").write_text('{"stale": true}')
+            roots = []
+
+            def recipe(argv, *, cwd, env, check):
+                self.assertEqual(argv, ["just", "compare-exiftool-full"])
+                self.assertEqual(env["EXIFTOOL_CACHE_DIR"], str(repo / "cache"))
+                root = Path(env.get("EXIFTOOL_COMPARISON_RESULT_ROOT", repo / "recipe-default"))
+                root.mkdir(parents=True, exist_ok=True)
+                (root / "comparison.json").write_text('{"current": true}')
+                roots.append(root)
+
+            with patch.dict(os.environ, {}, clear=True), patch(
+                "find_tag_gaps.subprocess.run", side_effect=recipe
+            ):
+                first = run_full_comparison(repo / "cache", repo_root=repo)
+                second = run_full_comparison(repo / "cache", repo_root=repo)
+            self.assertEqual(json.loads(first.read_text()), {"current": True})
+            self.assertEqual(json.loads(second.read_text()), {"current": True})
+            self.assertNotEqual(first, second)
+            self.assertTrue(all(root.is_relative_to(repo / "cache") for root in roots))
 
 
 class RunFormatComparisonTests(unittest.TestCase):

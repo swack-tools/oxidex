@@ -1,21 +1,27 @@
 # Durable release storage
 
 Release sources, toolchains, corpora, logs, receipts, and controller state live
-below `/Users/allen/oxidex-ops`. Cargo targets and worktrees live below
-`/Users/allen/git`. Release tooling resolves paths before use and refuses
+below `~/oxidex-ops`, or the absolute durable directory selected by
+`OXIDEX_OPS_DIR`. `scripts/ops_paths.py` owns this default and validates overrides.
+Existing fleet worktrees keep their `~/git` default (`OXIDEX_WORKTREE_ROOT`);
+targets keep `~/git/oxidex-beta1-targets` (`OXIDEX_TARGET_ROOT`). Both may be
+set to durable children of the operational root for a new installation.
+Changing these roots does not relocate an existing controller ledger: select
+the roots that contain its recorded worktrees and targets when resuming it.
+Release tooling resolves paths before use and refuses
 system temporary directories, environment overrides outside the durable root,
 and every path containing a symlink component (including symlinks whose target
 would remain inside the durable root).
 
 ## Pinned oracle layout
 
-- Perl 5.38.2: `/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix`
-- ExifTool 13.59 checkout: `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool`
-- ExifTool executable: `/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool`
-- Combined corpus: `/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples`
-- Downloads: `/Users/allen/oxidex-ops/cache/downloads`
+- Perl 5.38.2: `~/oxidex-ops/toolchains/perl-5.38.2/prefix`
+- ExifTool 13.59 checkout: `~/oxidex-ops/cache/exiftool/13.59/exiftool`
+- ExifTool executable: `~/oxidex-ops/cache/exiftool/13.59/exiftool/exiftool`
+- Combined corpus: `~/oxidex-ops/cache/exiftool/13.59/combined-samples`
+- Downloads: `~/oxidex-ops/cache/downloads`
 - Manifest and journal:
-  `/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap`
+  `~/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap`
 
 `tools/release/oracle-lock.json` pins the Perl and Archive::Zip archive hashes,
 the ExifTool tag object, the locked corpus-tree hash, and every manufacturer sample archive. Provisioning
@@ -37,11 +43,12 @@ automatically, with an append-only recovery-journal entry.
 Provision and verify with:
 
 ```bash
+export OXIDEX_OPS_DIR="$(python3 scripts/ops_paths.py)"
 python3 tools/release/bootstrap_oracle.py provision \
-  --root /Users/allen/oxidex-ops
+  --root "$OXIDEX_OPS_DIR"
 python3 tools/release/bootstrap_oracle.py verify \
-  --root /Users/allen/oxidex-ops --pin 13.59 \
-  --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json
+  --root "$OXIDEX_OPS_DIR" --pin 13.59 \
+  --manifest "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json"
 ```
 
 Verification requires Perl `v5.38.2`, Archive::Zip `1.68`, ExifTool `13.59`,
@@ -63,7 +70,7 @@ The `compare-exiftool-full` and `compare-exiftool-full-update` recipes run
 fence the override, then make their own selected tree/corpus checks; they do
 not claim a complete locked-oracle verification. The two full-comparison
 recipes reject an `EXIFTOOL_CACHE_DIR` override unless it resolves exactly to
-`/Users/allen/oxidex-ops/cache/exiftool/13.59`; their wrapper, library, and
+`~/oxidex-ops/cache/exiftool/13.59`; their wrapper, library, and
 bounded sample path are then derived from that verified canonical cache, not
 from an arbitrary same-version tree. None of these recipes replaces
 the shared oracle or creates release evidence under a system temporary
@@ -74,3 +81,10 @@ The wrapper writes a unique durable JSON identity marker before that exec; its
 private wrapper directory is removed and the receipt parent is fsynced on exit.
 The marker, rather than a script shebang or resolver-only claim, is the evidence
 of the Perl used by a successful measurement.
+
+Hosted documentation uses `just compare-exiftool-ci-update`, the pinned CI
+source action, the runner's capability-checked Perl, and hash-locked sample
+archives. Its ephemeral cache and generated Pages report are separate from
+maintainer release qualification. The indicative benchmark workflow uses the
+same explicit CI source/interpreter channel and does not relax the durable
+resolver when `GITHUB_ACTIONS` happens to be set.

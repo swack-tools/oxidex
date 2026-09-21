@@ -67,11 +67,26 @@ def main() -> int:
     sha = hashlib.sha256(binary.path.read_bytes()).hexdigest()
     version = subprocess.run([str(binary.path), "--version"], capture_output=True, text=True).stdout.strip()
 
-    oracle = exiftool_oracle.resolve_or_exit()
+    if os.environ.get("OXIDEX_BENCHMARK_CI") == "1":
+        for name in ("PERL5LIB", "PERLLIB", "PERL5OPT", "EXIFTOOL"):
+            os.environ.pop(name, None)
+        os.environ["EXIFTOOL_HOME"] = os.devnull
+        try:
+            oracle = exiftool_oracle.resolve_ci_tree(
+                os.environ["EXIFTOOL_SOURCE"], os.environ["OXIDEX_TABLES_PERL"]
+            )
+        except (KeyError, exiftool_oracle.OracleError) as exc:
+            print(f"❌ CI oracle refused: {exc}", file=sys.stderr)
+            return 2
+        corpus = Path(os.environ["EXIFTOOL_SOURCE"]).resolve() / "t/images"
+        docx = corpus / "OOXML.docx"
+    else:
+        oracle = exiftool_oracle.resolve_or_exit()
+        corpus = Path(oracle.argv[-1]).parent / "t/images"
+        docx = exiftool_oracle.cache_dir() / "combined-samples" / "OOXML.docx"
     pin = exiftool_oracle.repo_pin()
-    docx = exiftool_oracle.cache_dir() / "combined-samples" / "OOXML.docx"
     if not docx.is_file():
-        docx = Path(oracle.argv[-1]).parent / "t" / "images" / "OOXML.docx"
+        docx = corpus / "OOXML.docx"
     problems = []
     if not pin:
         problems.append("no .exiftool-version pin found")
@@ -140,7 +155,7 @@ def main() -> int:
         "EXIFTOOL_CMD": shlex.join(oracle.argv),
         "EXIFTOOL_VERSION": oracle.version,
         "EXIFTOOL_PROVENANCE": oracle.provenance(),
-        "EXIFTOOL_CORPUS": str(Path(oracle.argv[-1]).parent / "t" / "images"),
+        "EXIFTOOL_CORPUS": str(corpus),
         "GIT_COMMIT": git.commit or "unknown",
         "GIT_DESCRIBE": git.describe or "",
         "GIT_DIRTY": "1" if git.dirty else "0",

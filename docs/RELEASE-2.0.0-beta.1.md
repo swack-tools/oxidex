@@ -64,8 +64,7 @@ the local dry run. It exercises every guard and creates and verifies the signed
 tag locally, then removes it without pushing:
 
 ```bash
-SSH='ssh -o IdentityAgent=none -o IdentitiesOnly=yes -i /Users/allen/.ssh/id_es25519_swackhamer'
-GIT_SSH_COMMAND="$SSH" git fetch origin main --tags
+git fetch origin main --tags
 SHA=$(git rev-parse origin/main)
 test "$(git rev-parse HEAD)" = "$SHA"
 OXIDEX_TAG_DRY_RUN=1 just tag 2.0.0-beta.1 "$SHA"
@@ -78,7 +77,7 @@ recorded may the maintainer run the real recipe:
 
 ```bash
 export OXIDEX_TAG_AUTHORIZATION="v2.0.0-beta.1@$SHA"
-GIT_SSH_COMMAND="$SSH" just tag 2.0.0-beta.1 "$SHA"
+just tag 2.0.0-beta.1 "$SHA"
 ```
 
 `just tag` refuses anything not reachable from `origin/main`, a commit GitHub

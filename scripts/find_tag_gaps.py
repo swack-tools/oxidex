@@ -25,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -441,14 +442,23 @@ def ensure_tag_comparison_built(repo_root=REPO_ROOT, semaphore_path=None,
 
 
 def run_full_comparison(cache_dir, repo_root=REPO_ROOT):
-    """Run `just compare-exiftool-full` and return the path to comparison.json."""
+    """Retain and return this invocation's comparison in the durable cache."""
+    # Let the recipe validate every path before it creates anything. Unique
+    # paths prevent a stale report or another caller's run becoming our input.
+    receipt_root = Path(os.environ.get(
+        "EXIFTOOL_COMPARISON_RECEIPT_ROOT", str(Path(cache_dir) / "comparison-receipts")
+    ))
+    result_root = Path(os.environ.get(
+        "EXIFTOOL_COMPARISON_RESULT_ROOT", str(receipt_root / f"tag-gaps-{uuid.uuid4().hex}.results")
+    ))
     subprocess.run(  # nosec B603
         ["just", "compare-exiftool-full"],
         cwd=repo_root,
-        env={**os.environ, "EXIFTOOL_CACHE_DIR": str(cache_dir)},
+        env={**os.environ, "EXIFTOOL_CACHE_DIR": str(cache_dir),
+             "EXIFTOOL_COMPARISON_RESULT_ROOT": str(result_root)},
         check=True,
     )
-    return repo_root / "comparison.json"
+    return result_root / "comparison.json"
 
 
 def run_format_comparison(format_name, cache_dir, repo_root=REPO_ROOT, out_suffix="",
@@ -496,12 +506,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="gaps.json")
     parser.add_argument("--only-format")
-    # A fixed /tmp default is a race-condition concern on shared multi-user
-    # systems; this is a single-developer local CLI tool, and the value is
-    # always overridable via EXIFTOOL_CACHE_DIR/--cache-dir.
+    from exiftool_oracle import DEFAULT_CACHE_DIR
     parser.add_argument(
         "--cache-dir",
-        default=os.environ.get("EXIFTOOL_CACHE_DIR", "/tmp/oxidex-exiftool-cache"),  # nosec B108
+        default=os.environ.get("EXIFTOOL_CACHE_DIR", DEFAULT_CACHE_DIR),
     )
     args = parser.parse_args(argv)
 

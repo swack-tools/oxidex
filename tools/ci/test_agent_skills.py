@@ -523,9 +523,9 @@ class SkillMirrorTests(unittest.TestCase):
         self.assertIn("(references/harnesses.md)", entrypoint)
         self.assertNotIn("/tmp/oxidex-perl538-build-", text)
         for phrase in (
-            "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
-            "/Users/allen/oxidex-ops/cache/exiftool/13.59/combined-samples",
-            "/Users/allen/oxidex-ops/cache/exiftool/$PARITY_PIN",
+            "~/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",
+            "~/oxidex-ops/cache/exiftool/13.59/combined-samples",
+            "$OXIDEX_OPS_DIR/cache/exiftool/$PARITY_PIN",
             ".exiftool-version", "DOCX", "--recursive", "--min-files",
             "--min-tags", "--json-out", "blocked", "strict.pm",
         ):
@@ -541,7 +541,7 @@ class SkillMirrorTests(unittest.TestCase):
         self.assertTrue(has_shell_command(parity, "python3 tools/ci/release_oracle.py"))
         self.assertTrue(has_shell_command(
             parity, "python3 tools/release/bootstrap_oracle.py verify",
-            "--root /Users/allen/oxidex-ops", '--pin "$PARITY_PIN"',
+            "--root \"$OXIDEX_OPS_DIR\"", '--pin "$PARITY_PIN"',
         ))
         self.assertTrue(
             has_shell_command(

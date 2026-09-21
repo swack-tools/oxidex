@@ -29,12 +29,17 @@ ORACLE_MODULE = MODULE.parents[2] / "scripts/exiftool_oracle.py"
 oracle_spec = importlib.util.spec_from_file_location("exiftool_oracle", ORACLE_MODULE)
 assert oracle_spec and oracle_spec.loader
 exiftool_oracle = importlib.util.module_from_spec(oracle_spec)
+sys.path.insert(0, str(ORACLE_MODULE.parent))
 oracle_spec.loader.exec_module(exiftool_oracle)
+
+
+def setUpModule():
+    oracle.DURABLE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 class DurablePathTests(unittest.TestCase):
     def test_exact_durable_defaults(self) -> None:
-        root = Path("/Users/allen/oxidex-ops")
+        root = oracle.DURABLE_ROOT
         self.assertEqual(oracle.DURABLE_ROOT, root)
         self.assertEqual(
             oracle.perl_path(root),
@@ -57,7 +62,7 @@ class DurablePathTests(unittest.TestCase):
     def test_public_cache_contract_matches_legacy_path_construction(self) -> None:
         """The helper and old callers share one sibling-corpus layout."""
         cache = exiftool_oracle.cache_dir()
-        self.assertEqual(cache, Path("/Users/allen/oxidex-ops/cache/exiftool/13.59"))
+        self.assertEqual(cache, oracle.DURABLE_ROOT / "cache/exiftool/13.59")
         self.assertEqual(exiftool_oracle.pinned_binary(), cache / "exiftool/exiftool")
         self.assertEqual(exiftool_oracle.pinned_lib(), cache / "exiftool/lib")
         self.assertEqual(oracle.exiftool_path(oracle.DURABLE_ROOT), cache / "exiftool/exiftool")
@@ -74,14 +79,14 @@ class DurablePathTests(unittest.TestCase):
             ):
                 oracle.resolve_durable_root(candidate)
 
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             (root / "escape").symlink_to(Path(tempfile.gettempdir()))
             with self.assertRaisesRegex(oracle.Refused, "outside"):
                 oracle.require_descendant(root / "escape/file", root)
 
     def test_rejects_every_symlink_even_when_target_stays_inside_durable_root(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             target = root / "real"
             target.mkdir()
@@ -112,7 +117,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_environment_overrides_refuse_in_root_symlink_spellings(self) -> None:
         """A lexical durable override must not smuggle a symlink past the fence."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             target = root / "real-cache"
             target.mkdir()
@@ -143,7 +148,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_immutable_installer_materializes_a_fresh_tree(self) -> None:
         """A complete verified staging tree publishes only into an absent path."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
 
@@ -163,7 +168,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertFalse((root / ".bootstrap-tree-backups").exists())
 
     def test_immutable_installer_reuses_exact_verified_canonical_tree(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "toolchains/perl-5.38.2/prefix"
             destination.mkdir(parents=True)
@@ -186,7 +191,7 @@ class DurablePathTests(unittest.TestCase):
             verify(destination)
 
     def test_immutable_installer_refuses_conflicting_destination_without_moving_it(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             destination.mkdir(parents=True)
@@ -209,7 +214,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertFalse((root / ".bootstrap-tree-backups").exists())
 
     def test_immutable_installer_concurrent_loser_verifies_the_winner(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             ready = threading.Barrier(2)
@@ -245,7 +250,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_immutable_installer_hides_live_staging_until_ownership_intent_exists(self) -> None:
         """A second installer must not misclassify a cooperating owner's new stage."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             staging_created = threading.Event()
@@ -329,7 +334,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_immutable_reuse_survives_journal_writing_dead_staging_recovery(self) -> None:
         """A recovery journal is metadata, never a future staging candidate."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             dead = destination.parent / ".exiftool.staging-999999999-dead"
@@ -365,7 +370,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_malformed_recovery_journal_fails_closed(self) -> None:
         """Only the exact, parseable lifecycle journal is exempt from candidates."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             destination.mkdir(parents=True)
@@ -384,7 +389,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_sigkill_after_the_old_replacement_boundary_keeps_verified_canonical_tree(self) -> None:
         """A killed resumer cannot remove the tree old replacement moved aside."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             destination.mkdir(parents=True)
@@ -438,7 +443,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertFalse((root / ".bootstrap-tree-backups").exists())
 
     def test_startup_cleans_only_dead_owned_staging_state(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             abandoned = destination.parent / ".exiftool.staging-999999999-dead"
@@ -466,7 +471,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_dead_verified_staging_is_published_after_real_process_death(self) -> None:
         """SIGKILL after verification leaves a recoverable, authenticated candidate."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             marker = root / "verified-before-publication"
@@ -506,7 +511,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertEqual((destination / "sentinel").read_text(), "verified\n")
 
     def test_unowned_or_ambiguous_dead_staging_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             abandoned = destination.parent / ".exiftool.staging-999999999-dead"
@@ -522,7 +527,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertTrue(abandoned.is_dir())
 
     def test_redundant_authenticated_staging_is_quarantined_not_deleted(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             destination.mkdir(parents=True)
@@ -542,7 +547,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertEqual((quarantine / "sentinel").read_text(), "verified\n")
 
     def test_multiple_authenticated_dead_staging_candidates_refuse_recovery(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             for suffix in ("one", "two"):
@@ -559,7 +564,7 @@ class DurablePathTests(unittest.TestCase):
                 )
 
     def test_staged_perl_verification_and_make_steps_receive_candidate_library_path(self) -> None:
-        root = Path("/Users/allen/oxidex-ops/staged-perl-contract")
+        root = oracle.DURABLE_ROOT / "staged-perl-contract"
         candidate = root / "toolchains/perl-5.38.2/prefix"
         environment = oracle.staged_perl_environment(candidate)
         self.assertIn(str(candidate / "lib"), environment["PERL5LIB"].split(":"))
@@ -567,7 +572,7 @@ class DurablePathTests(unittest.TestCase):
         self.assertEqual(oracle.staged_perl_environment(candidate)["PERL5LIB"], environment["PERL5LIB"])
 
     def test_staged_perl_verifier_uses_candidate_libs_and_refuses_wrong_archive_zip(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             candidate = root / "toolchains/perl-5.38.2/prefix"
             perl = candidate / "bin/perl5.38.2"
@@ -587,7 +592,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertTrue(all(env and str(candidate / "lib") in env["PERL5LIB"] for env in observed))
 
     def test_explicit_legacy_nested_corpus_quarantine_is_required_and_transactional(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             sibling = root / "cache/exiftool/13.59/combined-samples"
             nested = root / "cache/exiftool/13.59/exiftool/combined-samples"
@@ -619,7 +624,7 @@ class DurablePathTests(unittest.TestCase):
                 oracle.assert_no_legacy_nested_corpus(root)
 
     def test_legacy_nested_corpus_conflict_fails_closed_without_mutation(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             sibling = root / "cache/exiftool/13.59/combined-samples"
             nested = root / "cache/exiftool/13.59/exiftool/combined-samples"
@@ -635,7 +640,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertTrue(nested.exists())
 
     def test_legacy_nested_corpus_quarantine_resumes_after_the_rename_window(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             sibling = root / "cache/exiftool/13.59/combined-samples"
             sibling.mkdir(parents=True)
@@ -679,7 +684,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_safe_extract_remains_secure_on_the_supported_python3_runtime(self) -> None:
         """A durable archive can be extracted without relying on new-only tarfile APIs."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             archive = root / "source.tar"
             with tarfile.open(archive, "w") as source:
@@ -739,7 +744,7 @@ class DurablePathTests(unittest.TestCase):
     def test_full_comparison_recipes_refuse_same_version_alternate_cache_before_measurement(self) -> None:
         """A durable 13.59-looking override is not the authenticated canonical cache."""
         repository = MODULE.parents[2]
-        alternate = Path(tempfile.mkdtemp(dir="/Users/allen/oxidex-ops")) / "alternate-cache"
+        alternate = Path(tempfile.mkdtemp(dir=oracle.DURABLE_ROOT)) / "alternate-cache"
         (alternate / "exiftool/lib").mkdir(parents=True)
         (alternate / "combined-samples").mkdir()
         (alternate / "exiftool/lib/changed.pm").write_text("changed\n", encoding="utf-8")
@@ -788,7 +793,7 @@ class DurablePathTests(unittest.TestCase):
                 self.assertIn("write-comparison-wrapper", output)
                 self.assertIn("cleanup-comparison-workdir", output)
                 self.assertIn("MARKER_DIR=", output)
-                self.assertIn("locked.py --shared \"$BUILD_LOG\" -- cargo build", output)
+                self.assertIn('locked.py" --shared "$BUILD_LOG" -- cargo build', output)
                 self.assertNotRegex(output, r"(?m)^cargo build ")
                 self.assertIn("CANONICAL_CACHE_DIR=", output)
                 self.assertIn("requires canonical authenticated cache", output)
@@ -797,7 +802,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_comparison_wrapper_publication_is_behavioral_and_private(self) -> None:
         """Exercise the publisher under hostile umask, spaces, concurrency, and cleanup."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory) / "paths with spaces"
             root.mkdir()
             root.chmod(0o700)
@@ -894,7 +899,7 @@ class DurablePathTests(unittest.TestCase):
 
     def test_corpus_manifest_publication_is_safe_for_concurrent_verify_calls(self) -> None:
         """Two production publication calls cannot share or mutate one partial inode."""
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             corpus = oracle.corpus_path(root)
             corpus.mkdir(parents=True)
@@ -983,7 +988,7 @@ class DurablePathTests(unittest.TestCase):
     def test_verify_refuses_missing_hashes_bad_probes_and_outside_manifest(self) -> None:
         manifest = {"artifacts": {"perl": {}}}
         with self.assertRaisesRegex(oracle.Refused, "hash"):
-            oracle.validate_manifest(manifest, Path("/Users/allen/oxidex-ops"))
+            oracle.validate_manifest(manifest, oracle.DURABLE_ROOT)
         with self.assertRaisesRegex(oracle.Refused, "outside"):
             oracle.validate_manifest(
                 {
@@ -991,7 +996,7 @@ class DurablePathTests(unittest.TestCase):
                         "perl": {"path": "/tmp/perl", "sha256": "a" * 64}
                     }
                 },
-                Path("/Users/allen/oxidex-ops"),
+                oracle.DURABLE_ROOT,
             )
         with self.assertRaisesRegex(oracle.Refused, "Perl"):
             oracle.validate_versions("v5.36.0", "1.68", "13.59", "DOCX", 4000)
@@ -1005,7 +1010,7 @@ class DurablePathTests(unittest.TestCase):
             oracle.validate_versions("v5.38.2", "1.68", "13.59", "DOCX", 3999)
 
     def test_locked_download_is_atomic_and_hash_checked(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/downloads/source.tar.gz"
             destination.parent.mkdir(parents=True)
@@ -1034,7 +1039,7 @@ class DurablePathTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), b"replacement")
 
     def test_immutable_tree_install_keeps_canonical_tree_on_staging_failure(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "toolchains/perl-5.38.2/prefix"
             destination.parent.mkdir(parents=True)
@@ -1058,7 +1063,7 @@ class DurablePathTests(unittest.TestCase):
             ])
 
     def test_provision_restores_last_known_good_tree_when_final_probe_fails(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             destination = root / "cache/exiftool/13.59"
             destination.mkdir(parents=True)
@@ -1085,17 +1090,17 @@ class DurablePathTests(unittest.TestCase):
             self.assertFalse(list(destination.parent.glob(".13.59.previous-*")))
 
     def test_destdir_payload_keeps_compiled_prefix_at_final_durable_path(self) -> None:
-        destination = Path("/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix")
+        destination = oracle.DURABLE_ROOT / "toolchains/perl-5.38.2/prefix"
         install_root = Path(
-            "/Users/allen/oxidex-ops/toolchains/perl-5.38.2/.prefix.staging-1/.destdir"
+            oracle.DURABLE_ROOT / "toolchains/perl-5.38.2/.prefix.staging-1/.destdir"
         )
         self.assertEqual(
             oracle.destdir_payload(destination, install_root),
-            install_root / "Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix",
+            install_root / destination.relative_to(destination.anchor),
         )
 
     def test_manifest_authenticates_sources_trees_corpus_and_executables(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             files = {
                 "archive": root / "cache/downloads/archive.tar.gz",
@@ -1116,7 +1121,7 @@ class DurablePathTests(unittest.TestCase):
                 oracle.validate_manifest({"artifacts": artifacts}, root)
 
     def test_locked_manifest_detects_tree_and_library_damage_and_plans_repair(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             perl_tree = root / "toolchains/perl-5.38.2/prefix"
             zip_library = perl_tree / "lib/5.38.2/Archive/Zip.pm"
@@ -1166,7 +1171,7 @@ class DurablePathTests(unittest.TestCase):
                 )
 
     def test_provision_downloads_locked_inputs_and_writes_complete_manifest(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/Users/allen/oxidex-ops") as directory:
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
             root = Path(directory)
             evidence = (
                 root

@@ -40,7 +40,7 @@ concurrency:
 jobs:
   comparison-report:
     name: Generate ExifTool comparison report
-    # 8x: `just compare-exiftool-full-update` builds the tag-comparison binary
+    # `just compare-exiftool-ci-update` builds the tag-comparison binary
     # from cold and then runs it across the ExifTool sample corpus (restored
     # from the corpus cache below; downloaded only on the first run after an
     # .exiftool-version bump).
@@ -74,6 +74,9 @@ jobs:
       - name: Install Perl (for ExifTool)
         run: sudo apt-get update -qq && sudo apt-get install -y perl libarchive-zip-perl
 
+      - name: Prepare pinned ExifTool source
+        uses: ./.github/actions/pinned-exiftool
+
       # taiki-e/install-action, not extractions/setup-just: the latter was
       # measured at 77s to install one small binary, which was a third of
       # this job. install-action fetches a prebuilt binary and is what the
@@ -97,112 +100,40 @@ jobs:
           esac
           echo "Pinned ExifTool: $V"
           echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "EXIFTOOL_CACHE_DIR=$HOME/.cache/oxidex-exiftool" >> "$GITHUB_ENV"
 
-      # The recipe's whole working set: the pinned ExifTool source tree plus
-      # the 13 manufacturer sample tarballs (~84MB total, sizes measured
-      # 2026-08-08 against the GCS mirror). Uncached, every run re-fetched all
-      # of it with exiftool.org -- a small, throttle-happy server -- as the
-      # PRIMARY source and no transfer timeout (the recipe's --connect-timeout
-      # bounds only the connect phase), so the download step had an unbounded
-      # tail and an external availability dependency on every main push.
-      # Cached, it is a seconds-long restore, and the corpus is bit-identical
-      # between version bumps -- the published coverage numbers cannot shrink
-      # because one mirror hiccuped mid-run.
-      #
-      #  - Keyed on the pin with NO restore-keys: a fuzzy match on a
-      #    version-pinned ExifTool cache serves a stale release (the standing
-      #    rule; see ci.yml's ExifTool cache).
-      #  - 'exiftool-corpus-' is deliberately a DIFFERENT key family from the
-      #    'exiftool-<ver>-<os>' keys other workflows use: those hold
-      #    source-only trees at other paths, and a key shared across layouts
-      #    restores whichever layout happened to save first.
-      #  - restore + save are separate steps because the combined action saves
-      #    from a post step declared `post-if: success()`: a comparison
-      #    failure -- the case cache-on-failure exists for -- would throw away
-      #    a perfectly good corpus download.
+      # Cache only manufacturer archives, validated against oracle-lock.json
+      # on every use. The pinned source comes from the action above. Keep a
+      # separate cache namespace from the old unverified extracted corpus.
       - name: Restore ExifTool corpus cache
         id: corpus-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/oxidex-exiftool-cache
-          key: exiftool-corpus-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
-
-      # The recipe trusts what it finds in the cache dir: a tarball that
-      # exists is extracted with `|| true`, so a truncated one silently
-      # SHRINKS the corpus instead of failing, and the source tree is trusted
-      # on the word of a marker file. Heal both here, before the recipe runs:
-      # anything corrupt is deleted so the recipe re-downloads it fresh (the
-      # heal path IS the normal cold path). The warning annotation keeps a
-      # repeatedly-healing -- i.e. poisoned -- cache entry visible.
-      - name: Verify restored corpus
-        if: steps.corpus-cache.outputs.cache-hit == 'true'
-        env:
-          V: ${{ steps.exiftool-version.outputs.version }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          DIR=/tmp/oxidex-exiftool-cache
-          for f in "$DIR"/samples-*.tar.gz; do
-            if ! gzip -t "$f" 2>/dev/null; then
-              echo "::warning::corrupt $(basename "$f") in corpus cache; deleted for re-download"
-              rm -f "$f"
-            fi
-          done
-          GOT=$("$DIR/exiftool/exiftool" -ver 2>/dev/null || true)
-          if [ "$GOT" != "$V" ]; then
-            echo "::warning::cached ExifTool reports '${GOT:-nothing}', expected $V; deleted for re-download"
-            rm -rf "$DIR/exiftool" "$DIR/.exiftool-version"
-          fi
+          path: ${{ env.EXIFTOOL_CACHE_DIR }}
+          key: exiftool-corpus-locked-v2-${{ steps.exiftool-version.outputs.version }}-${{ runner.os }}
 
       - name: Generate ExifTool comparison report
-        run: just compare-exiftool-full-update
-        env:
-          # Same literal path as the corpus cache steps above. The recipe's
-          # default happens to match, but the coupling should be explicit
-          # rather than a coincidence. (The GITHUB_TOKEN that used to be
-          # passed here was dead weight: nothing under this recipe reads it
-          # -- checked the justfile and src/bin/tag-comparison -- and it only
-          # curls public endpoints.)
-          EXIFTOOL_CACHE_DIR: /tmp/oxidex-exiftool-cache
+        run: just compare-exiftool-ci-update
 
-      # Save only a corpus that is provably complete: the pinned source tree
-      # answering `-ver` correctly, plus every manufacturer tarball present
-      # and gzip-valid. The key is immutable once saved, so persisting a
-      # partial set (say, one manufacturer unavailable mid-run) would pin
-      # that gap until the next .exiftool-version bump. Skipping the save
-      # instead costs one more download attempt next run and corrupts
-      # nothing.
-      #
-      # The list mirrors MANUFACTURERS in the justfile's
-      # compare-exiftool-full-update recipe. If the two drift, the failure
-      # mode is a skipped save with the culprit named in the log -- never
-      # wrong data.
+      # A failed build may still have acquired every authenticated archive.
+      # Save those only after checking the same lock used by the generator.
       - name: Check corpus is complete before save
         id: corpus-check
         if: always() && steps.corpus-cache.outputs.cache-hit != 'true'
-        env:
-          V: ${{ steps.exiftool-version.outputs.version }}
         run: |
-          set -euo pipefail
-          DIR=/tmp/oxidex-exiftool-cache
-          complete=true
-          if [ -z "$V" ]; then
-            echo "no resolved ExifTool version"
-            complete=false
-          fi
-          GOT=$("$DIR/exiftool/exiftool" -ver 2>/dev/null || true)
-          if [ "$GOT" != "$V" ]; then
-            echo "source tree bad or missing (got '${GOT:-nothing}', want $V)"
-            complete=false
-          fi
-          for m in Canon Nikon Sony FujiFilm Panasonic Apple Google Samsung Olympus Pentax Leica DJI GoPro; do
-            if ! gzip -t "$DIR/samples-$m.tar.gz" 2>/dev/null; then
-              echo "samples-$m.tar.gz missing or corrupt"
-              complete=false
-            fi
-          done
-          echo "complete=$complete" >> "$GITHUB_OUTPUT"
-          [ "$complete" = true ] || echo "corpus incomplete; the save step below will be skipped"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from tools.release.bootstrap_oracle import LOCK, sha256_file
+          cache = Path(os.environ.get('EXIFTOOL_CACHE_DIR', '/nonexistent'))
+          complete = all(
+              (cache / item['filename']).is_file()
+              and sha256_file(cache / item['filename']) == item['sha256']
+              for name, item in LOCK['archives'].items() if name.startswith('samples_')
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'complete={str(complete).lower()}', file=output)
+          PY
 
       # always(): a failed comparison still downloaded a good corpus, and
       # persisting it is the point -- same reasoning as cache-on-failure on
@@ -212,7 +143,7 @@ jobs:
         if: always() && steps.corpus-cache.outputs.cache-hit != 'true' && steps.corpus-check.outputs.complete == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: /tmp/oxidex-exiftool-cache
+          path: ${{ env.EXIFTOOL_CACHE_DIR }}
           key: ${{ steps.corpus-cache.outputs.cache-primary-key }}
 
       # docs/reference/comparison/ is gitignored and generated at deploy time,

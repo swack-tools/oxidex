@@ -649,10 +649,11 @@ docs-coverage:
     # (~4,200 manufacturer sample files, populated by `just compare-exiftool-full`).
     # That corpus is a local developer cache absent on CI, so the COMMITTED report
     # is never generated from it -- see docs/contributing/measuring-coverage.md.
-    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/Users/allen/oxidex-ops/cache/exiftool/13.59}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
+    OPS_ROOT=$(python3 scripts/ops_paths.py)
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$(python3 scripts/ops_paths.py --cache)}"
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$CACHE_DIR" >/dev/null
     ET_DIR="$CACHE_DIR/exiftool"
-    RECEIPT_DIR="/Users/allen/oxidex-ops/evidence/20260919-beta1-functional/docs-coverage"
+    RECEIPT_DIR="$OPS_ROOT/evidence/20260919-beta1-functional/docs-coverage"
     mkdir -p "$RECEIPT_DIR"
     CONFORMANCE_JSON="$RECEIPT_DIR/conformance.json"
     V=$(tr -d '[:space:]' < .exiftool-version)
@@ -756,8 +757,9 @@ docs-coverage-definitions:
 duplicate-loss-scan *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-/Users/allen/oxidex-ops/cache/exiftool/13.59}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
+    OPS_ROOT=$(python3 scripts/ops_paths.py)
+    CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$(python3 scripts/ops_paths.py --cache)}"
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$CACHE_DIR" >/dev/null
     CORPUS="$CACHE_DIR/exiftool/t/images"
     if [ ! -d "$CORPUS" ]; then
         echo "❌ $CORPUS not found -- populate the pinned ExifTool cache first" >&2
@@ -1057,9 +1059,10 @@ compare-exiftool-full:
     set -euo pipefail
 
     # Use fixed cache directory for reuse across runs
-    CANONICAL_CACHE_DIR="/Users/allen/oxidex-ops/cache/exiftool/13.59"
+    OPS_ROOT=$(python3 scripts/ops_paths.py)
+    CANONICAL_CACHE_DIR=$(python3 scripts/ops_paths.py --cache)
     CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$CANONICAL_CACHE_DIR}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$CACHE_DIR" >/dev/null
     SELECTED_CACHE_DIR=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CACHE_DIR")
     CANONICAL_CACHE_RESOLVED=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CANONICAL_CACHE_DIR")
     [[ "$SELECTED_CACHE_DIR" == "$CANONICAL_CACHE_RESOLVED" ]] || {
@@ -1095,10 +1098,10 @@ compare-exiftool-full:
     # Provisioning owns this tree. Comparison recipes verify and consume it;
     # they never delete or replace a shared release oracle in place.
     python3 tools/release/bootstrap_oracle.py verify \
-        --root /Users/allen/oxidex-ops --pin "$VERSION" \
-        --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json \
+        --root "$OPS_ROOT" --pin "$VERSION" \
+        --manifest "$OPS_ROOT/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json" \
         >/dev/null
-    CACHED_VERSION=$(/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+    CACHED_VERSION=$("$OPS_ROOT/toolchains/perl-5.38.2/prefix/bin/perl5.38.2" \
         -I"$EXIFTOOL_DIR/lib" "$EXIFTOOL_DIR/exiftool" -ver)
     [[ "$CACHED_VERSION" == "$VERSION" ]] || {
         echo "Durable ExifTool is $CACHED_VERSION, expected $VERSION" >&2
@@ -1123,14 +1126,14 @@ compare-exiftool-full:
     # atomically in a per-invocation durable receipt directory; it is removed
     # on every exit and cannot collide with another comparison.
     RECEIPT_WORK_ROOT="${EXIFTOOL_COMPARISON_RECEIPT_ROOT:-$CACHE_DIR/comparison-receipts}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$RECEIPT_WORK_ROOT" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$RECEIPT_WORK_ROOT" >/dev/null
     mkdir -p -m 700 "$RECEIPT_WORK_ROOT"
     WORK_DIR=$(mktemp -d "$RECEIPT_WORK_ROOT/tag-comparison.XXXXXXXX")
     chmod 700 "$WORK_DIR"
     cleanup_comparison_wrapper() {
         local cleanup_status=$?
         python3 tools/release/bootstrap_oracle.py cleanup-comparison-workdir \
-            --root /Users/allen/oxidex-ops --work-directory "$WORK_DIR" \
+            --root "$OPS_ROOT" --work-directory "$WORK_DIR" \
             --receipt-root "$RECEIPT_WORK_ROOT" >/dev/null || cleanup_status=$?
         trap - EXIT
         exit "$cleanup_status"
@@ -1139,11 +1142,11 @@ compare-exiftool-full:
     EXIFTOOL_WRAPPER="$WORK_DIR/exiftool"
     MARKER_DIR="$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").identity"
     python3 tools/release/bootstrap_oracle.py write-comparison-wrapper \
-        --root /Users/allen/oxidex-ops --target "$EXIFTOOL_WRAPPER" \
-        --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+        --root "$OPS_ROOT" --target "$EXIFTOOL_WRAPPER" \
+        --perl "$OPS_ROOT/toolchains/perl-5.38.2/prefix/bin/perl5.38.2" \
         --library "$EXIFTOOL_DIR/lib" --script "$EXIFTOOL_DIR/exiftool" \
         --marker-directory "$MARKER_DIR" >/dev/null
-    echo "   ✓ Comparison interpreter: /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+    echo "   ✓ Comparison interpreter: $OPS_ROOT/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
 
     [[ -d "$COMBINED_DIR" ]] || {
         echo "Authenticated combined corpus missing; run bootstrap_oracle.py provision" >&2
@@ -1159,15 +1162,15 @@ compare-exiftool-full:
     echo "   Total files for comparison: $TOTAL_FILES"
 
     echo "🔨 Building tag-comparison tool..."
-    TARGET_DIR="${CARGO_TARGET_DIR:-/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap}"
+    TARGET_DIR="${CARGO_TARGET_DIR:-$OPS_ROOT/targets/durable-controller-oracle-bootstrap}"
     BUILD_LOG="${TAG_COMPARISON_BUILD_LOG:-$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").build.log}"
     BUILD_PARENT=$(dirname "$BUILD_LOG")
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$BUILD_PARENT" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$BUILD_PARENT" >/dev/null
     mkdir -p "$BUILD_PARENT"
-    CARGO_TARGET_DIR="$TARGET_DIR" python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared "$BUILD_LOG" -- cargo build --release --bin tag-comparison --features tag-comparison-binary
+    CARGO_TARGET_DIR="$TARGET_DIR" python3 "$OPS_ROOT/evidence/20260917-group1-batch2/locked.py" --shared "$BUILD_LOG" -- cargo build --release --bin tag-comparison --features tag-comparison-binary
     TAG_COMPARISON="$TARGET_DIR/release/tag-comparison"
     RESULT_ROOT="${EXIFTOOL_COMPARISON_RESULT_ROOT:-$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").results}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$RESULT_ROOT" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$RESULT_ROOT" >/dev/null
     mkdir -p "$RESULT_ROOT/reports"
     RESULT_JSON="$RESULT_ROOT/comparison.json"
     TAG_CACHE_DIR="$RESULT_ROOT/tag-cache"
@@ -1198,7 +1201,12 @@ compare-exiftool-full:
     echo ""
     echo "✅ Comprehensive comparison complete!"
 
-# Run full comparison and update docs (for CI)
+# Hosted documentation reports use runner storage and a capability-checked Perl.
+# Release qualification uses the authenticated durable recipes below/above.
+compare-exiftool-ci-update:
+    python3 tools/ci/docs_comparison.py
+
+# Run authenticated maintainer comparison and update docs
 # Falls back to GCS cache at gs://oxidex-samples/exiftool/ if exiftool.org is unavailable
 # OPTIMIZED: Uses parallel downloads and caching
 compare-exiftool-full-update:
@@ -1206,9 +1214,10 @@ compare-exiftool-full-update:
     set -euo pipefail
 
     # Use fixed cache directory for reuse across runs
-    CANONICAL_CACHE_DIR="/Users/allen/oxidex-ops/cache/exiftool/13.59"
+    OPS_ROOT=$(python3 scripts/ops_paths.py)
+    CANONICAL_CACHE_DIR=$(python3 scripts/ops_paths.py --cache)
     CACHE_DIR="${EXIFTOOL_CACHE_DIR:-$CANONICAL_CACHE_DIR}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$CACHE_DIR" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$CACHE_DIR" >/dev/null
     SELECTED_CACHE_DIR=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CACHE_DIR")
     CANONICAL_CACHE_RESOLVED=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$CANONICAL_CACHE_DIR")
     [[ "$SELECTED_CACHE_DIR" == "$CANONICAL_CACHE_RESOLVED" ]] || {
@@ -1234,10 +1243,10 @@ compare-exiftool-full-update:
     # Provisioning owns this tree. Comparison recipes verify and consume it;
     # they never delete or replace a shared release oracle in place.
     python3 tools/release/bootstrap_oracle.py verify \
-        --root /Users/allen/oxidex-ops --pin "$VERSION" \
-        --manifest /Users/allen/oxidex-ops/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json \
+        --root "$OPS_ROOT" --pin "$VERSION" \
+        --manifest "$OPS_ROOT/evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json" \
         >/dev/null
-    CACHED_VERSION=$(/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+    CACHED_VERSION=$("$OPS_ROOT/toolchains/perl-5.38.2/prefix/bin/perl5.38.2" \
         -I"$EXIFTOOL_DIR/lib" "$EXIFTOOL_DIR/exiftool" -ver)
     [[ "$CACHED_VERSION" == "$VERSION" ]] || {
         echo "Durable ExifTool is $CACHED_VERSION, expected $VERSION" >&2
@@ -1259,14 +1268,14 @@ compare-exiftool-full-update:
         fi
     fi
     RECEIPT_WORK_ROOT="${EXIFTOOL_COMPARISON_RECEIPT_ROOT:-$CACHE_DIR/comparison-receipts}"
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$RECEIPT_WORK_ROOT" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$RECEIPT_WORK_ROOT" >/dev/null
     mkdir -p -m 700 "$RECEIPT_WORK_ROOT"
     WORK_DIR=$(mktemp -d "$RECEIPT_WORK_ROOT/tag-comparison.XXXXXXXX")
     chmod 700 "$WORK_DIR"
     cleanup_comparison_wrapper() {
         local cleanup_status=$?
         python3 tools/release/bootstrap_oracle.py cleanup-comparison-workdir \
-            --root /Users/allen/oxidex-ops --work-directory "$WORK_DIR" \
+            --root "$OPS_ROOT" --work-directory "$WORK_DIR" \
             --receipt-root "$RECEIPT_WORK_ROOT" >/dev/null || cleanup_status=$?
         trap - EXIT
         exit "$cleanup_status"
@@ -1275,11 +1284,11 @@ compare-exiftool-full-update:
     EXIFTOOL_WRAPPER="$WORK_DIR/exiftool"
     MARKER_DIR="$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").identity"
     python3 tools/release/bootstrap_oracle.py write-comparison-wrapper \
-        --root /Users/allen/oxidex-ops --target "$EXIFTOOL_WRAPPER" \
-        --perl /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2 \
+        --root "$OPS_ROOT" --target "$EXIFTOOL_WRAPPER" \
+        --perl "$OPS_ROOT/toolchains/perl-5.38.2/prefix/bin/perl5.38.2" \
         --library "$EXIFTOOL_DIR/lib" --script "$EXIFTOOL_DIR/exiftool" \
         --marker-directory "$MARKER_DIR" >/dev/null
-    echo "   ✓ Comparison interpreter: /Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
+    echo "   ✓ Comparison interpreter: $OPS_ROOT/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"
 
     [[ -d "$COMBINED_DIR" ]] || {
         echo "Authenticated combined corpus missing; run bootstrap_oracle.py provision" >&2
@@ -1295,12 +1304,12 @@ compare-exiftool-full-update:
     echo "   Total files for comparison: $TOTAL_FILES"
 
     echo "🔨 Building tag-comparison tool..."
-    TARGET_DIR="${CARGO_TARGET_DIR:-/Users/allen/git/oxidex-beta1-targets/durable-controller-oracle-bootstrap}"
+    TARGET_DIR="${CARGO_TARGET_DIR:-$OPS_ROOT/targets/durable-controller-oracle-bootstrap}"
     BUILD_LOG="${TAG_COMPARISON_BUILD_LOG:-$RECEIPT_WORK_ROOT/$(basename "$WORK_DIR").build.log}"
     BUILD_PARENT=$(dirname "$BUILD_LOG")
-    python3 tools/release/bootstrap_oracle.py check-path --root /Users/allen/oxidex-ops --path "$BUILD_PARENT" >/dev/null
+    python3 tools/release/bootstrap_oracle.py check-path --root "$OPS_ROOT" --path "$BUILD_PARENT" >/dev/null
     mkdir -p "$BUILD_PARENT"
-    CARGO_TARGET_DIR="$TARGET_DIR" python3 /Users/allen/oxidex-ops/evidence/20260917-group1-batch2/locked.py --shared "$BUILD_LOG" -- cargo build --release --bin tag-comparison --features tag-comparison-binary
+    CARGO_TARGET_DIR="$TARGET_DIR" python3 "$OPS_ROOT/evidence/20260917-group1-batch2/locked.py" --shared "$BUILD_LOG" -- cargo build --release --bin tag-comparison --features tag-comparison-binary
     TAG_COMPARISON="$TARGET_DIR/release/tag-comparison"
 
     OXIDEX_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')

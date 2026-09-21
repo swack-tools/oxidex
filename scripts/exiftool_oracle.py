@@ -27,7 +27,7 @@ Resolution order:
 
 1. ``$EXIFTOOL`` -- an explicit binary path, for callers who mean it.
 2. ``$EXIFTOOL_CACHE_DIR/exiftool/exiftool`` (cache dir defaults to
-   ``/Users/allen/oxidex-ops/cache/exiftool/13.59``) run under the durable
+   ``$OXIDEX_OPS_DIR/cache/exiftool/13.59``) run under the durable
    pinned Perl installation.
 3. ``exiftool`` off ``PATH`` -- last resort, reported as unverified.
 
@@ -51,13 +51,18 @@ CACHE_DIR_ENV = "EXIFTOOL_CACHE_DIR"
 PERL_ENV = "EXIFTOOL_PERL"
 TABLE_PERL_ENV = "OXIDEX_TABLES_PERL"
 ALLOW_SKEW_ENV = "OXIDEX_ALLOW_EXIFTOOL_SKEW"
-DEFAULT_CACHE_DIR = "/Users/allen/oxidex-ops/cache/exiftool/13.59"
-DURABLE_ROOT = Path("/Users/allen/oxidex-ops").resolve()
+try:
+    from .ops_paths import ops_root, oracle_cache_root
+except ImportError:
+    from ops_paths import ops_root, oracle_cache_root
+
+DURABLE_ROOT = ops_root()
+DEFAULT_CACHE_DIR = str(oracle_cache_root())
 
 # Ordering is a preference, not the decision: choose_perl() picks the first that
 # actually loads REQUIRED_MODULES. Bare "perl" is last precisely because
 # `#!/usr/bin/env perl` finding a module-less Homebrew perl is the bug being fixed.
-PERL_CANDIDATES = ("/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2",)
+PERL_CANDIDATES = (str(DURABLE_ROOT / "toolchains/perl-5.38.2/prefix/bin/perl5.38.2"),)
 
 # Archive::Zip gates every OOXML/ZIP-container format. Without it ExifTool
 # reports FileType: ZIP for a .docx and says so only in a Warning nothing reads.
@@ -442,6 +447,31 @@ def resolve_tree(tree: str | Path) -> Oracle:
         interpreter=perl,
         missing_modules=missing_modules(perl),
     )
+
+
+def resolve_ci_tree(tree: str | Path, perl: str) -> Oracle:
+    """Resolve the explicitly selected hosted-CI source without release fallback.
+
+    Callers opt into this channel; setting GITHUB_ACTIONS never relaxes the
+    durable resolver. A CI source must match the repository pin and pass DOCX.
+    """
+    tree = Path(tree).resolve()
+    script, library = tree / "exiftool", tree / "lib"
+    if not script.is_file() or not library.is_dir():
+        raise OracleError(f"CI pinned source is incomplete: {tree}")
+    if (tree / ".ExifTool_config").exists():
+        raise OracleError("CI pinned source contains .ExifTool_config")
+    interpreter = choose_table_perl(perl)
+    if not interpreter:
+        raise DegradedError("CI Perl is absent or missing required modules")
+    argv = [interpreter, f"-I{library}", str(script), "-config", ""]
+    version = _probe_version(argv)
+    pin = repo_pin()
+    if not pin or version != pin:
+        raise SkewError(f"CI ExifTool version {version!r} does not match repository pin {pin!r}")
+    result = Oracle(argv, version, pin, "CI pinned source", interpreter, [])
+    result.check_container_support(tree / "t/images/OOXML.docx")
+    return result
 
 
 _SHARED: Oracle | None = None

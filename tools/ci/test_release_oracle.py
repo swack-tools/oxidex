@@ -87,11 +87,11 @@ class ReleaseOracleTests(unittest.TestCase):
                 os.environ.update(old)
             self.assertEqual(
                 perl,
-                pathlib.Path("/Users/allen/oxidex-ops/toolchains/perl-5.38.2/prefix/bin/perl5.38.2"),
+                release_oracle.DEFAULT_PERL,
             )
             self.assertEqual(
                 tree,
-                pathlib.Path("/Users/allen/oxidex-ops/cache/exiftool/13.59/exiftool"),
+                release_oracle.DEFAULT_CACHE_ROOT / "13.59/exiftool",
             )
 
 

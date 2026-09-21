@@ -85,10 +85,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq hyperfine bc
           hyperfine --version
-      # scripts/exiftool_oracle.py resolves the pinned tree as
-      # $EXIFTOOL_CACHE_DIR/exiftool and runs it as `perl -I<lib> exiftool`
-      # under $EXIFTOOL_PERL, checking that perl's modules -- no bare
-      # `exiftool` from PATH anywhere. instrument_check.py (called by the
+      # The explicit CI channel consumes EXIFTOOL_SOURCE/OXIDEX_TABLES_PERL
+      # from the pinned action without relaxing durable release resolution.
+      # instrument_check.py (called by the
       # script before any timing) then asserts -ver == .exiftool-version and
       # the OOXML.docx -> DOCX probe, and refuses otherwise.
       - name: Run benches/exiftool_comparison.sh
@@ -96,9 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           unset PERL5LIB PERLLIB PERL5OPT
-          mkdir -p "$RUNNER_TEMP/exiftool-cache"
-          ln -sfn "$EXIFTOOL_SOURCE" "$RUNNER_TEMP/exiftool-cache/exiftool"
-          export EXIFTOOL_CACHE_DIR="$RUNNER_TEMP/exiftool-cache" EXIFTOOL_PERL=perl
+          export OXIDEX_BENCHMARK_CI=1
           CPU=$(lscpu | sed -n 's/^Model name: *//p' | head -1)
           BENCH_ENVIRONMENT="CI, INDICATIVE ONLY: GitHub Actions, GitHub-hosted shared runner $RUNNER_LABEL (image ${ImageVersion:-unknown}), $(nproc) vCPU, $CPU; run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           export BENCH_ENVIRONMENT
