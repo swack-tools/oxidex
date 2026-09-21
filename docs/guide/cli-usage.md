@@ -13,7 +13,7 @@ layouts** still differ from ExifTool's; they are listed under
 ::: warning Beta: v2.0.0-beta.1
 The command line and its output may still change before 2.0.0. The examples
 on this page were checked against a release build of the
-`refactor/tag-machinery` tip.
+current reviewed source snapshot; the final signed tag remains pending.
 :::
 
 ## Reading

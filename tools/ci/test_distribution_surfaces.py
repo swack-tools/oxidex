@@ -24,9 +24,45 @@ HOMEBREW_README = (
 )
 PACKAGE_TEST = (REPO / "scripts/test-packages.sh").read_text(encoding="utf-8")
 PACKAGE_BUILD = (REPO / "scripts/build-all-packages.sh").read_text(encoding="utf-8")
+PERFORMANCE_PAGE = (REPO / "docs/performance/index.md").read_text(encoding="utf-8")
+API_REFERENCE = (REPO / "docs/reference/api-reference.md").read_text(encoding="utf-8")
+AUTOGENERATION_PLAN = (REPO / "docs/AUTOGENERATION-PLAN.md").read_text(
+    encoding="utf-8"
+)
+CLI_USAGE = (REPO / "docs/guide/cli-usage.md").read_text(encoding="utf-8")
+CORE_MODULE = (REPO / "src/core/mod.rs").read_text(encoding="utf-8")
+TAG_OCCURRENCE_MODULE = (REPO / "src/core/tag_occurrence.rs").read_text(
+    encoding="utf-8"
+)
 
 
 class DistributionSurfaceTests(unittest.TestCase):
+    def test_historical_benchmark_provenance_remains_exact_and_non_candidate(self):
+        self.assertIn("Historical indicative CI measurement", PERFORMANCE_PAGE)
+        self.assertIn("run `35355315041`", PERFORMANCE_PAGE)
+        self.assertIn(
+            "commit\n`b07fb7f6406689b401b221cecb3a891735b902fd`", PERFORMANCE_PAGE
+        )
+        self.assertNotIn("commit\n`24184580`", PERFORMANCE_PAGE)
+        self.assertIn("Benchmarks (historical, non-candidate)", AUTOGENERATION_PLAN)
+        self.assertIn("exact-candidate receipt is required", AUTOGENERATION_PLAN)
+
+    def test_api_reference_uses_the_actual_public_occurrence_paths(self):
+        self.assertIn(
+            "pub use tag_occurrence::{Group, Instance, Provenance, SHIM_DEFAULT_PRIORITY, TagOccurrence};",
+            CORE_MODULE,
+        )
+        self.assertIn("pub enum ValueChannel", TAG_OCCURRENCE_MODULE)
+        self.assertIn("`oxidex::core::TagOccurrence`", API_REFERENCE)
+        self.assertIn(
+            "`oxidex::core::tag_occurrence::ValueChannel`", API_REFERENCE
+        )
+
+    def test_cli_examples_are_development_state_not_a_tip_release_build(self):
+        self.assertIn("current reviewed source snapshot", CLI_USAGE)
+        self.assertIn("final signed tag remains pending", CLI_USAGE)
+        self.assertNotIn("release build of the\n`refactor/tag-machinery` tip", CLI_USAGE)
+
     def test_readme_does_not_advertise_unpublished_rust_registries(self):
         self.assertNotIn("crates.io/crates/oxidex", README)
         self.assertNotIn("docs.rs/oxidex", README)

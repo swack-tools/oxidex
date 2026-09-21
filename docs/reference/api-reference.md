@@ -123,7 +123,11 @@ A value is validated when it is written, not when it is set.
 
 `oxidex::exiftool_tables` (the generated tables, the engines and the v2
 `Session`) is reachable as a module, but it is internal machinery. It will
-change without notice. The generated write modules under `oxidex::writers`
+change without notice. `TagOccurrence` is re-exported as
+`oxidex::core::TagOccurrence`, while `ValueChannel` is available at
+`oxidex::core::tag_occurrence::ValueChannel`. These occurrence and
+value-channel interfaces are beta APIs: their shape and stability are not
+guaranteed before 2.0.0. The generated write modules under `oxidex::writers`
 are crate-private.
 
 ## See also
