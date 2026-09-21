@@ -50,7 +50,7 @@ class SplitHelpersMirrorConformanceTests(unittest.TestCase):
 
     def test_census_flags_are_the_gates_own_argv(self):
         # conformance.run_exiftool is the corpus gate's oracle read; the
-        # mirrored constant must be exactly its flags.
+        # mirrored census flags follow the mandatory user-config fence.
         class Oracle:
             def command(self, extra):
                 return ["exiftool", *extra]
@@ -66,7 +66,10 @@ class SplitHelpersMirrorConformanceTests(unittest.TestCase):
 
         with mock.patch.object(conformance.subprocess, "run", fake_run):
             conformance.run_exiftool(Oracle(), "x.jpg")
-        self.assertEqual(seen["argv"][1:-1], list(exiftool_oracle.CENSUS_ORACLE_FLAGS))
+        self.assertEqual(
+            seen["argv"],
+            ["exiftool", "-config", "", *exiftool_oracle.CENSUS_ORACLE_FLAGS, "x.jpg"],
+        )
 
 
 if __name__ == "__main__":
