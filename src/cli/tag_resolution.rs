@@ -349,11 +349,15 @@ fn resolved_print_value(occurrence: &TagOccurrence) -> TagValue {
         // value's type/meaning. `format_tag_value_rules` expects the stored
         // APEX input for its PrintConv arm; passing this already-converted
         // float back through it would apply ValueConv a second time
-        // (`14.0` -> `128.0`).
+        // (`14.0` -> `128.0`). Start from the stored input so both stages run
+        // once and normal output keeps aperture rounding and shutter labels.
         if crate::core::exiftool_compat::apex_value_conv(&occurrence.name, &occurrence.raw)
             .is_some()
         {
-            return value.into_owned();
+            return crate::core::exiftool_compat::format_tag_value_rules(
+                &occurrence.lookup_key(),
+                &occurrence.raw,
+            );
         }
         crate::core::exiftool_compat::format_tag_value_rules(
             &occurrence.lookup_key(),

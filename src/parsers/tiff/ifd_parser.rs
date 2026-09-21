@@ -464,6 +464,17 @@ pub fn find_entry_position(
     byte_order: ByteOrder,
     tag_id: u16,
 ) -> Option<EntryPosition> {
+    find_entry_position_at(reader, ifd_offset, byte_order, tag_id, None)
+}
+
+/// Locates one physical entry when supplied, otherwise the first matching id.
+pub(crate) fn find_entry_position_at(
+    reader: &dyn FileReader,
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    tag_id: u16,
+    entry_index: Option<usize>,
+) -> Option<EntryPosition> {
     let io_order = byte_order.to_io_byte_order();
     let count_bytes = reader.read(ifd_offset, 2).ok()?;
     let entry_count = EndianReader::new(count_bytes, io_order).u16_at(0)?;
@@ -480,6 +491,9 @@ pub fn find_entry_position(
     let entries = EndianReader::new(entries_data, io_order);
 
     (0..entry_count as usize).find_map(|i| {
+        if entry_index.is_some_and(|index| index != i) {
+            return None;
+        }
         let base = i * 12;
         if entries.u16_at(base)? != tag_id {
             return None;

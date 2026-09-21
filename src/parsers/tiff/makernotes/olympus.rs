@@ -487,7 +487,9 @@ impl MakerNoteParser for OlympusParser {
             byte_order,
             model,
             ctx.payload_tiff_offset(),
-            ctx.tiff_base(),
+            // Directory starts are local to this MakerNote window, so its
+            // guard domain must identify the payload, not the shared TIFF.
+            ctx.payload_base(),
             session,
             cond_ctx,
             tags,

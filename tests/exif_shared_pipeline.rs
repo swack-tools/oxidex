@@ -261,6 +261,179 @@ fn jpeg_with_exif(tiff: &[u8]) -> Vec<u8> {
     jpeg
 }
 
+fn inline_makernote(id: u16, field_type: u16, value: u32, fuji: bool) -> Vec<u8> {
+    let mut note = if fuji {
+        let mut header = b"FUJIFILM".to_vec();
+        header.extend(12u32.to_le_bytes());
+        header
+    } else {
+        Vec::new()
+    };
+    note.extend(1u16.to_le_bytes());
+    note.extend(id.to_le_bytes());
+    note.extend(field_type.to_le_bytes());
+    note.extend(1u32.to_le_bytes());
+    note.extend(value.to_le_bytes());
+    note.extend(0u32.to_le_bytes());
+    note
+}
+
+fn distinct_makernotes_tiff(make: &[u8], first: &[u8], second: &[u8], third: &[u8]) -> Vec<u8> {
+    let mut tiff = le_tiff(&[ascii(0x010f, make), (0x8769, 4, 1, vec![0; 4])]);
+    let exif_offset = tiff.len();
+    tiff[30..34].copy_from_slice(&(exif_offset as u32).to_le_bytes());
+    let first_offset = exif_offset + 2 + 4 * 12 + 4;
+    let second_offset = first_offset + first.len();
+    tiff.extend(4u16.to_le_bytes());
+    // Two references to the first payload must still be deduplicated, while
+    // a different payload in this same TIFF must be walked independently.
+    for (bytes, offset) in [
+        (first, first_offset),
+        (first, first_offset),
+        (second, second_offset),
+        (third, second_offset + second.len()),
+    ] {
+        tiff.extend(0x927cu16.to_le_bytes());
+        tiff.extend(7u16.to_le_bytes());
+        tiff.extend((bytes.len() as u32).to_le_bytes());
+        tiff.extend((offset as u32).to_le_bytes());
+    }
+    tiff.extend(0u32.to_le_bytes());
+    tiff.extend(first);
+    tiff.extend(second);
+    tiff.extend(third);
+    tiff
+}
+
+fn assert_distinct_makernotes(tiff: &[u8], expected: &[(&str, &[&str])]) {
+    for (suffix, bytes) in [(".tiff", tiff.to_vec()), (".jpg", jpeg_with_exif(tiff))] {
+        let mut file = tempfile::Builder::new().suffix(suffix).tempfile().unwrap();
+        file.write_all(&bytes).unwrap();
+        let metadata = read_metadata(file.path()).expect("MakerNote carrier parses");
+        for (key, value) in expected {
+            let occurrences: Vec<_> = metadata
+                .project_occurrences(ValueChannel::PrintConv)
+                .filter(|(name, _, _)| name == key)
+                .map(|(_, _, value)| {
+                    value
+                        .as_string()
+                        .expect("printed MakerNote value")
+                        .to_owned()
+                })
+                .collect();
+            assert_eq!(occurrences, *value, "{suffix}: {key}");
+        }
+    }
+}
+
+#[test]
+fn canon_distinct_makernotes_in_one_tiff_keep_both_payloads() {
+    let first = inline_makernote(0x000e, 4, 123, false);
+    let second = inline_makernote(0x00b4, 3, 1, false);
+    let third = inline_makernote(0x000e, 4, 456, false);
+    assert_distinct_makernotes(
+        &distinct_makernotes_tiff(b"Canon\0", &first, &second, &third),
+        &[
+            ("Canon:CanonFileLength", &["123", "456"]),
+            ("Canon:ColorSpace", &["sRGB"]),
+        ],
+    );
+}
+
+#[test]
+fn fujifilm_distinct_makernotes_in_one_tiff_keep_both_payloads() {
+    let first = inline_makernote(0x1002, 3, 0, true);
+    let second = inline_makernote(0x1021, 3, 0, true);
+    let third = inline_makernote(0x1002, 3, 0x100, true);
+    assert_distinct_makernotes(
+        &distinct_makernotes_tiff(b"FUJIFILM\0", &first, &second, &third),
+        &[
+            ("FujiFilm:WhiteBalance", &["Auto", "Daylight"]),
+            ("FujiFilm:FocusMode", &["Auto"]),
+        ],
+    );
+}
+
+#[test]
+fn olympus_distinct_makernotes_in_one_tiff_keep_all_payloads() {
+    let note = |id, value| {
+        let mut bytes = b"OLYMPUS\0II\x03\0".to_vec();
+        bytes.extend(inline_makernote(id, 3, value, false));
+        bytes
+    };
+    let first = note(0x0202, 0);
+    let second = note(0x0203, 0);
+    let third = note(0x0202, 1);
+    assert_distinct_makernotes(
+        &distinct_makernotes_tiff(b"OLYMPUS\0", &first, &second, &third),
+        &[
+            ("Olympus:Macro", &["Off", "On"]),
+            ("Olympus:BWMode", &["Off"]),
+        ],
+    );
+}
+
+#[test]
+fn legacy_ifd2_apex_cli_applies_printconv_only_for_normal_output() {
+    // IFD2 still uses the legacy rational producer. IFD0 and IFD1 are empty.
+    let entries = [
+        (0x9201u16, 10u16, 7i32, 1i32),
+        (0x9202, 5, 249519, 32768),
+        (0x9205, 5, 1, 1),
+    ];
+    let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+    tiff.extend(0u16.to_le_bytes());
+    tiff.extend(14u32.to_le_bytes());
+    tiff.extend(0u16.to_le_bytes());
+    tiff.extend(20u32.to_le_bytes());
+    tiff.extend(3u16.to_le_bytes());
+    for (index, (id, field_type, _, _)) in entries.iter().enumerate() {
+        tiff.extend(id.to_le_bytes());
+        tiff.extend(field_type.to_le_bytes());
+        tiff.extend(1u32.to_le_bytes());
+        tiff.extend((62 + index as u32 * 8).to_le_bytes());
+    }
+    tiff.extend(0u32.to_le_bytes());
+    for (_, _, numerator, denominator) in entries {
+        tiff.extend(numerator.to_le_bytes());
+        tiff.extend(denominator.to_le_bytes());
+    }
+    let mut file = tempfile::Builder::new().suffix(".tiff").tempfile().unwrap();
+    file.write_all(&tiff).unwrap();
+    for (raw, expected) in [
+        (
+            false,
+            [
+                "IFD2:ShutterSpeedValue: 1/128",
+                "IFD2:ApertureValue: 14.0",
+                "IFD2:MaxApertureValue: 1.4",
+            ],
+        ),
+        (
+            true,
+            [
+                "IFD2:ShutterSpeedValue: 0.0078125",
+                "IFD2:ApertureValue: 14.0000278113061",
+                "IFD2:MaxApertureValue: 1.4142135623731",
+            ],
+        ),
+    ] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_oxidex"));
+        if raw {
+            command.arg("--no-print-conv");
+        }
+        let output = command.arg(file.path()).output().expect("run CLI");
+        assert!(output.status.success(), "{:?}", output.stderr);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        for line in expected {
+            assert!(
+                stdout.lines().any(|actual| actual == line),
+                "raw={raw}, missing {line}:\n{stdout}"
+            );
+        }
+    }
+}
+
 #[test]
 fn public_jpeg_and_tiff_reads_preserve_an_explicitly_requested_edge() {
     let options = ReadOptions::new(&["ExifIFD:ApplicationNotes".to_string()], false);

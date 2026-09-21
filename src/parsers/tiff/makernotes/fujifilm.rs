@@ -170,7 +170,9 @@ impl MakerNoteParser for FujifilmParser {
     ) -> std::result::Result<(), String> {
         self.parse_note_with_session(
             ctx.payload(),
-            ctx.tiff_base(),
+            // Fuji offsets and the engine's directory start are relative to
+            // this payload, not the enclosing TIFF shared by other notes.
+            ctx.payload_base(),
             model,
             session,
             cond_ctx,
