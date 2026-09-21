@@ -700,6 +700,59 @@ class DurablePathTests(unittest.TestCase):
                 "durable payload\n",
             )
 
+    def test_materialize_corpus_normalizes_modes_across_umasks_and_keeps_executables(self) -> None:
+        """The locked corpus tree is host-umask independent without losing executability."""
+        with tempfile.TemporaryDirectory(dir=oracle.DURABLE_ROOT) as directory:
+            root = Path(directory)
+            base = oracle.exiftool_root(root) / "t/images"
+            base.mkdir(parents=True)
+            (base / "base.txt").write_bytes(b"base\n")
+            (base / "base.txt").chmod(0o664)
+            archive = root / "samples_fixture.tar"
+            with tarfile.open(archive, "w") as source:
+                nested = tarfile.TarInfo("nested")
+                nested.type = tarfile.DIRTYPE
+                nested.mode = 0o775
+                source.addfile(nested)
+                ordinary = tarfile.TarInfo("archive.txt")
+                ordinary.mode = 0o664
+                ordinary.size = len(b"archive\n")
+                source.addfile(ordinary, io.BytesIO(b"archive\n"))
+                executable = tarfile.TarInfo("run-fixture")
+                executable.mode = 0o775
+                executable.size = len(b"#!/bin/sh\n")
+                source.addfile(executable, io.BytesIO(b"#!/bin/sh\n"))
+
+            expected_tree = root / "expected"
+            shutil.copytree(base, expected_tree)
+            with tarfile.open(archive) as source:
+                source.extractall(expected_tree)
+            for item in expected_tree.rglob("*"):
+                item.chmod(
+                    0o755 if item.is_dir() or item.name == "run-fixture" else 0o644
+                )
+            expected = oracle.sha256_tree(expected_tree)
+            test_lock = {**oracle.LOCK, "corpus_tree_sha256": expected}
+
+            for mask in (0o002, 0o077):
+                with self.subTest(umask=oct(mask)), mock.patch.object(
+                    oracle, "DURABLE_ROOT", root
+                ), mock.patch.object(oracle, "LOCK", test_lock), mock.patch.object(
+                    oracle, "MIN_CORPUS_FILES", 3
+                ):
+                    old_umask = os.umask(mask)
+                    try:
+                        oracle._materialize_corpus(root, {"samples_fixture": archive})
+                    finally:
+                        os.umask(old_umask)
+                    corpus = oracle.corpus_path(root)
+                    self.assertEqual(oracle.sha256_tree(corpus), expected)
+                    self.assertEqual((corpus / "nested").stat().st_mode & 0o777, 0o755)
+                    self.assertEqual((corpus / "base.txt").stat().st_mode & 0o777, 0o644)
+                    self.assertEqual((corpus / "archive.txt").stat().st_mode & 0o777, 0o644)
+                    self.assertEqual((corpus / "run-fixture").stat().st_mode & 0o777, 0o755)
+                    shutil.rmtree(corpus)
+
     def test_named_release_recipes_have_no_system_temporary_defaults(self) -> None:
         repository = MODULE.parents[2]
         for recipe in (
