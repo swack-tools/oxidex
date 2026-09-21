@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parents[2]
 @contextmanager
 def isolated_roots():
     """Give this test a durable root and an external sibling it owns."""
-    with tempfile.TemporaryDirectory(prefix="docs-test-roots-") as case:
+    with tempfile.TemporaryDirectory(prefix="docs-test-roots-", dir=REPO.parent) as case:
         root = Path(case)
         durable = root / "durable"
         external = root / "external"
@@ -45,7 +45,7 @@ class DocsComparisonRecipeTests(unittest.TestCase):
                            # Keep the subprocess resolver's temporary-root
                            # classifier independent of the caller's hostile
                            # TMPDIR while retaining the owned sibling topology.
-                           "TMPDIR": ""}
+                           "TMPDIR": str(external)}
             environment.pop("EXIFTOOL_SOURCE", None)
             result = subprocess.run(
                 ["bash", "-c", command], cwd=REPO, env=environment,
