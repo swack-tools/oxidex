@@ -771,6 +771,10 @@ class DurablePathTests(unittest.TestCase):
                 item.chmod(0o755 if item.is_dir() or item.name == "base-run" else 0o644)
             with tarfile.open(archive) as source:
                 source.extractall(expected_tree)
+            # Pre-3.14 bare extraction preserves the archive's group-write bit,
+            # unlike the production data filter. Pin the expected data-filter
+            # result rather than relying on tarfile's version-dependent default.
+            (expected_tree / "archive.txt").chmod(0o644)
             for item in expected_tree.rglob("*"):
                 if item.is_dir():
                     item.chmod(0o755)
