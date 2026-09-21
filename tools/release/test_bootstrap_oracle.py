@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -15,7 +16,7 @@ import tarfile
 import textwrap
 import threading
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -757,7 +758,7 @@ class DurablePathTests(unittest.TestCase):
                 nested.mode = 0o775
                 source.addfile(nested)
                 ordinary = tarfile.TarInfo("archive.txt")
-                ordinary.mode = 0o664
+                ordinary.mode = 0o644
                 ordinary.size = len(b"archive\n")
                 source.addfile(ordinary, io.BytesIO(b"archive\n"))
                 private = tarfile.TarInfo("archive-private")
@@ -771,35 +772,59 @@ class DurablePathTests(unittest.TestCase):
                 item.chmod(0o755 if item.is_dir() or item.name == "base-run" else 0o644)
             with tarfile.open(archive) as source:
                 source.extractall(expected_tree)
-            # Pre-3.14 bare extraction preserves the archive's group-write bit,
-            # unlike the production data filter. Pin the expected data-filter
-            # result rather than relying on tarfile's version-dependent default.
-            (expected_tree / "archive.txt").chmod(0o644)
             for item in expected_tree.rglob("*"):
                 if item.is_dir():
                     item.chmod(0o755)
             expected = oracle.sha256_tree(expected_tree)
             test_lock = {**oracle.LOCK, "corpus_tree_sha256": expected}
+            original_extractall = tarfile.TarFile.extractall
+
+            def legacy_extractall(
+                source: tarfile.TarFile,
+                destination: Path,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                if "filter" in kwargs:
+                    raise TypeError("filter keyword is unavailable")
+                if "filter" in inspect.signature(original_extractall).parameters:
+                    original_extractall(
+                        source, destination, *args, filter="fully_trusted", **kwargs
+                    )
+                else:
+                    original_extractall(source, destination, *args, **kwargs)
 
             for mask in (0o002, 0o077):
-                with self.subTest(umask=oct(mask)), mock.patch.object(
-                    oracle, "DURABLE_ROOT", root
-                ), mock.patch.object(oracle, "LOCK", test_lock), mock.patch.object(
-                    oracle, "MIN_CORPUS_FILES", 4
-                ):
-                    old_umask = os.umask(mask)
-                    try:
-                        oracle._materialize_corpus(root, {"samples_fixture": archive})
-                    finally:
-                        os.umask(old_umask)
-                    corpus = oracle.corpus_path(root)
-                    self.assertEqual(oracle.sha256_tree(corpus), expected)
-                    self.assertEqual((corpus / "nested").stat().st_mode & 0o777, 0o755)
-                    self.assertEqual((corpus / "base.txt").stat().st_mode & 0o777, 0o644)
-                    self.assertEqual((corpus / "base-run").stat().st_mode & 0o777, 0o755)
-                    self.assertEqual((corpus / "archive.txt").stat().st_mode & 0o777, 0o644)
-                    self.assertEqual((corpus / "archive-private").stat().st_mode & 0o777, 0o700)
-                    shutil.rmtree(corpus)
+                for extraction_path in ("data", "legacy"):
+                    with self.subTest(umask=oct(mask), extraction_path=extraction_path), mock.patch.object(
+                        oracle, "DURABLE_ROOT", root
+                    ), mock.patch.object(oracle, "LOCK", test_lock), mock.patch.object(
+                        oracle, "MIN_CORPUS_FILES", 4
+                    ):
+                        extraction = (
+                            mock.patch.object(
+                                tarfile.TarFile,
+                                "extractall",
+                                autospec=True,
+                                side_effect=legacy_extractall,
+                            )
+                            if extraction_path == "legacy"
+                            else nullcontext()
+                        )
+                        old_umask = os.umask(mask)
+                        try:
+                            with extraction:
+                                oracle._materialize_corpus(root, {"samples_fixture": archive})
+                        finally:
+                            os.umask(old_umask)
+                        corpus = oracle.corpus_path(root)
+                        self.assertEqual(oracle.sha256_tree(corpus), expected)
+                        self.assertEqual((corpus / "nested").stat().st_mode & 0o777, 0o755)
+                        self.assertEqual((corpus / "base.txt").stat().st_mode & 0o777, 0o644)
+                        self.assertEqual((corpus / "base-run").stat().st_mode & 0o777, 0o755)
+                        self.assertEqual((corpus / "archive.txt").stat().st_mode & 0o777, 0o644)
+                        self.assertEqual((corpus / "archive-private").stat().st_mode & 0o777, 0o700)
+                        shutil.rmtree(corpus)
 
     def test_named_release_recipes_have_no_system_temporary_defaults(self) -> None:
         repository = MODULE.parents[2]
