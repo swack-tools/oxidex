@@ -412,6 +412,19 @@ impl MetadataMap {
         previous
     }
 
+    /// Records an already-canonical occurrence under an independent literal
+    /// public key. No identity, group, or value channel is reconstructed.
+    pub(crate) fn record_occurrence(
+        &mut self,
+        key: String,
+        mut occurrence: TagOccurrence,
+    ) -> Option<TagValue> {
+        let previous = self.sink.get(&key).cloned();
+        occurrence.order = self.sink.next_order();
+        self.sink.record(key, occurrence);
+        previous
+    }
+
     /// Copies `occurrence` into this map under `new_key`, preserving every
     /// field -- `raw`, `value` (the ValueConv form Step 22 folded into
     /// `TagOccurrence`), `print`, priority, family-1 group and instance --
@@ -460,8 +473,9 @@ impl MetadataMap {
     #[cfg(test)]
     pub(crate) fn occurrences_for(&self, key: &str) -> Vec<&TagOccurrence> {
         self.sink
-            .occurrences()
-            .filter(|o| o.lookup_key() == key)
+            .keyed_occurrences()
+            .filter(|(recorded_key, _)| *recorded_key == key)
+            .map(|(_, occurrence)| occurrence)
             .collect()
     }
 
@@ -477,7 +491,14 @@ impl MetadataMap {
     /// `SHIM_DEFAULT_PRIORITY`, the same failure mode `merge()` had before
     /// Step 19 fixed it.
     pub(crate) fn all_occurrences(&self) -> impl Iterator<Item = (String, &TagOccurrence)> {
-        self.sink.occurrences().map(|o| (o.lookup_key(), o))
+        self.sink
+            .keyed_occurrences()
+            .map(|(key, occurrence)| (key.to_string(), occurrence))
+    }
+
+    /// The allocation-free form of [`all_occurrences`](Self::all_occurrences).
+    pub(crate) fn keyed_occurrences(&self) -> impl Iterator<Item = (&str, &TagOccurrence)> {
+        self.sink.keyed_occurrences()
     }
 
     /// [`all_occurrences`](Self::all_occurrences) without the lookup key:
@@ -497,13 +518,9 @@ impl MetadataMap {
         &self,
         channel: ValueChannel,
     ) -> impl Iterator<Item = (&str, &TagOccurrence, Cow<'_, TagValue>)> {
-        self.sink.occurrences().map(move |occurrence| {
-            let key = match &occurrence.id {
-                oxidex_tags::TagId::Named(key) => key.as_str(),
-                oxidex_tags::TagId::Numeric(_) => occurrence.name.as_ref(),
-            };
-            (key, occurrence, occurrence.project(channel))
-        })
+        self.sink
+            .keyed_occurrences()
+            .map(move |(key, occurrence)| (key, occurrence, occurrence.project(channel)))
     }
 
     /// How many occurrences this map has ever recorded, retired ones
@@ -550,8 +567,9 @@ impl MetadataMap {
 
     /// Merges another map, replaying every occurrence -- not just the
     /// winner projection -- from `other` into `self`'s own sink via
-    /// [`TagSink::record_carrying_over`], preserving each occurrence's
-    /// priority, family-1 group, instance and `value` (ValueConv) form
+    /// the sink's retained-key replay path, preserving each occurrence's
+    /// literal public key, priority, family groups, source identity, instance,
+    /// and `value` (ValueConv) form
     /// rather than flattening it back to `insert()`'s
     /// `SHIM_DEFAULT_PRIORITY`/`Instance::default()`.
     ///
@@ -572,8 +590,8 @@ impl MetadataMap {
     /// `value_forms` pass is needed anymore.
     pub(crate) fn merge(&mut self, other: MetadataMap) {
         self.raw_blocks.extend(other.raw_blocks);
-        for occurrence in other.sink.into_occurrences() {
-            self.sink.record_carrying_over(occurrence);
+        for (key, occurrence) in other.sink.into_keyed_occurrences() {
+            self.sink.record_keyed_carrying_over(key, occurrence);
         }
     }
 
@@ -773,6 +791,124 @@ impl IntoIterator for MetadataMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_occurrence(id: oxidex_tags::TagId, name: &str, raw: TagValue) -> TagOccurrence {
+        use super::super::tag_occurrence::{Instance, Provenance, intern};
+
+        TagOccurrence {
+            id,
+            name: intern(name),
+            group0: intern("MakerNotes"),
+            group1: intern("Olympus"),
+            group2: Some(intern("Camera")),
+            instance: Instance::default(),
+            raw: raw.clone(),
+            value: Some(raw.clone()),
+            print: Some(raw.clone()),
+            stored: Some(raw),
+            priority: 1,
+            is_list: false,
+            order: 999,
+            origin: Provenance {
+                module: Some("Olympus"),
+                table: Some("CameraSettings"),
+                byte_range: None,
+            },
+        }
+    }
+
+    #[test]
+    fn explicit_key_survives_merge_projection_and_normalization() {
+        let mut source = MetadataMap::new();
+        let winner = source_occurrence(
+            oxidex_tags::TagId::Numeric(0x0900),
+            "ManometerPressure",
+            TagValue::Float(101.3),
+        );
+        source.record_occurrence("Olympus:ManometerPressure".to_string(), winner.clone());
+
+        let mut loser = winner.clone();
+        loser.raw = TagValue::Float(99.9);
+        loser.value = Some(TagValue::Float(99.9));
+        loser.print = Some(TagValue::new_string("99.9 kPa"));
+        loser.stored = Some(TagValue::Integer(999));
+        loser.priority = 0;
+        source.record_occurrence("Olympus:ManometerPressure".to_string(), loser);
+
+        let named = source_occurrence(
+            oxidex_tags::TagId::Named("-1.2".to_string()),
+            "SignedCoordinate",
+            TagValue::Integer(7),
+        );
+        source.record_occurrence("Olympus:SignedCoordinate".to_string(), named.clone());
+
+        let mut prefixed = source_occurrence(
+            oxidex_tags::TagId::Numeric(0x1000),
+            "Quality",
+            TagValue::new_string("Fine"),
+        );
+        prefixed.origin.module = Some("FujiFilm");
+        prefixed.origin.table = Some("Main");
+        prefixed.group1 = super::super::tag_occurrence::intern("FujiFilm");
+        source.record_occurrence("Fujifilm:Quality".to_string(), prefixed);
+
+        let cloned = source.clone();
+        let normalized = crate::core::tag_normalization::normalize_metadata_map(&cloned);
+        let mut merged = MetadataMap::new();
+        merged.merge(normalized);
+
+        let projected: Vec<_> = merged
+            .project_occurrences(ValueChannel::Stored)
+            .map(|(key, occurrence, value)| {
+                (
+                    key.to_string(),
+                    occurrence.id.clone(),
+                    occurrence.group0.to_string(),
+                    occurrence.group1.to_string(),
+                    value.into_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(projected.len(), 4);
+        assert_eq!(projected[0].0, "Olympus:ManometerPressure");
+        assert_eq!(projected[0].1, oxidex_tags::TagId::Numeric(0x0900));
+        assert_eq!(projected[0].2, "MakerNotes");
+        assert_eq!(projected[0].3, "Olympus");
+        assert_eq!(projected[0].4, TagValue::Float(101.3));
+        assert_eq!(projected[1].0, "Olympus:ManometerPressure");
+        assert_eq!(projected[1].4, TagValue::Integer(999));
+        assert_eq!(projected[2].0, "Olympus:SignedCoordinate");
+        assert_eq!(
+            projected[2].1,
+            oxidex_tags::TagId::Named("-1.2".to_string())
+        );
+        assert_eq!(projected[3].0, "FujiFilm:Quality");
+        assert_eq!(projected[3].1, oxidex_tags::TagId::Numeric(0x1000));
+        assert_eq!(projected[3].2, "MakerNotes");
+
+        merged.remove("Olympus:SignedCoordinate");
+        assert!(
+            merged
+                .project_occurrences(ValueChannel::PrintConv)
+                .all(|(key, _, _)| key != "Olympus:SignedCoordinate")
+        );
+        merged.clear();
+        merged.record_occurrence(
+            "Olympus:Reused".to_string(),
+            source_occurrence(
+                oxidex_tags::TagId::Numeric(1),
+                "Reused",
+                TagValue::Integer(1),
+            ),
+        );
+        assert_eq!(
+            merged
+                .project_occurrences(ValueChannel::Stored)
+                .map(|(key, _, _)| key)
+                .collect::<Vec<_>>(),
+            vec!["Olympus:Reused"]
+        );
+    }
 
     #[test]
     fn raw_producer_records_the_known_display_as_explicit_print() {

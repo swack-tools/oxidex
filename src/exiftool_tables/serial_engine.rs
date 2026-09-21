@@ -227,7 +227,17 @@ pub fn process_serial_directory(
             pos += len;
             continue;
         }
-        if emit_selected(table, tag, condition_resolved, raw, ctx, sink, &mut result) {
+        if emit_selected(
+            table,
+            tag,
+            entry.serial_index,
+            condition_resolved,
+            raw,
+            dir.byte_order,
+            ctx,
+            sink,
+            &mut result,
+        ) {
             break;
         }
         pos += len;
@@ -307,12 +317,15 @@ fn count_for(
 fn emit_selected(
     table: &'static SerialTable,
     tag: &'static SerialTag,
+    serial_index: usize,
     condition_resolved: bool,
     raw: DecodedValue,
+    byte_order: ByteOrder,
     ctx: &mut Ctx,
     sink: &mut dyn SerialEmissionSink,
     result: &mut SerialWalkResult,
 ) -> bool {
+    let stored = runtime::to_stored_tag_value(&raw, byte_order);
     let mut omitted = tag.omitted;
     if condition_resolved {
         omitted.condition = false;
@@ -374,11 +387,17 @@ fn emit_selected(
             group1: tag.groups.g1.unwrap_or(table.group1),
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
+            source_id: u16::try_from(serial_index).map_or_else(
+                |_| oxidex_tags::TagId::Named(serial_index.to_string()),
+                oxidex_tags::TagId::Numeric,
+            ),
+            stored,
             value,
             value_conv,
             low_priority: low_priority(tag.flags),
             avoid: tag.flags.avoid,
             rational: None,
+            is_list: tag.flags.list,
         });
     }
     result.emitted += 1;
@@ -1045,6 +1064,9 @@ mod tests {
         let result = walk(table, b"raw\0ignored", &mut sink, &mut members);
         assert_eq!(result.emitted, 1);
         assert_eq!(sink.rows[0].value, TagValue::String("raw".to_owned()));
+        assert_eq!(sink.rows[0].stored, TagValue::String("raw".to_owned()));
+        assert_eq!(sink.rows[0].source_id, oxidex_tags::TagId::Numeric(0));
+        assert!(!sink.rows[0].is_list);
     }
 
     #[test]

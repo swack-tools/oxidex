@@ -171,9 +171,8 @@ pub(crate) fn occurrence_matches_qualifier(occurrence: &TagOccurrence, qualifier
 /// should render under.
 pub struct ResolvedOccurrence<'a> {
     pub occurrence: &'a TagOccurrence,
-    /// `occurrence.lookup_key()` -- kept alongside rather than recomputed at
-    /// every call site, since [`crate::core::tag_occurrence::TagOccurrence::
-    /// lookup_key`] allocates.
+    /// The literal public key retained by `MetadataMap`, independent of the
+    /// occurrence's canonical source identity and true family groups.
     pub lookup_key: String,
 }
 
@@ -198,6 +197,41 @@ fn matching_occurrences<'a, 'm>(
         .filter(move |occurrence| {
             qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
         })
+}
+
+/// [`matching_occurrences`] with the retained literal public key alongside
+/// each canonical occurrence.
+fn matching_keyed_occurrences<'a, 'm>(
+    metadata: &'m MetadataMap,
+    token: &'a str,
+) -> impl Iterator<Item = (&'m str, &'m TagOccurrence)> {
+    let (qualifier, short_name) = split_request(token);
+    metadata
+        .keyed_occurrences()
+        .filter(move |(_, occurrence)| occurrence.name.eq_ignore_ascii_case(short_name))
+        .filter(move |(_, occurrence)| {
+            qualifier.is_none_or(|q| occurrence_matches_qualifier(occurrence, q))
+        })
+}
+
+fn arbitrate_keyed<'m>(
+    candidates: impl Iterator<Item = (&'m str, &'m TagOccurrence)>,
+) -> Option<(&'m str, &'m TagOccurrence)> {
+    let mut remaining = candidates;
+    let mut winner = remaining.next()?;
+    for candidate in remaining {
+        let effective_old_priority = if winner.1.priority == 0 {
+            1
+        } else {
+            winner.1.priority
+        };
+        let instance_ok = candidate.1.instance == Instance::default()
+            || candidate.1.instance == winner.1.instance;
+        if candidate.1.priority >= effective_old_priority && instance_ok {
+            winner = candidate;
+        }
+    }
+    Some(winner)
 }
 
 /// The single occurrence a bare or group-qualified `token` resolves to under
@@ -295,15 +329,22 @@ pub fn resolve_requested_tags<'a>(
     let mut out = Vec::new();
     for token in requested {
         if all_occurrences {
-            let mut matches: Vec<&TagOccurrence> = matching_occurrences(metadata, token).collect();
-            matches.sort_by_key(|occurrence| occurrence.order);
-            out.extend(matches.into_iter().map(|occurrence| ResolvedOccurrence {
-                lookup_key: occurrence.lookup_key(),
-                occurrence,
-            }));
-        } else if let Some(winner) = resolve_requested_tag(metadata, token) {
+            let mut matches: Vec<(&str, &TagOccurrence)> =
+                matching_keyed_occurrences(metadata, token).collect();
+            matches.sort_by_key(|(_, occurrence)| occurrence.order);
+            out.extend(
+                matches
+                    .into_iter()
+                    .map(|(key, occurrence)| ResolvedOccurrence {
+                        lookup_key: key.to_string(),
+                        occurrence,
+                    }),
+            );
+        } else if let Some((key, winner)) =
+            arbitrate_keyed(matching_keyed_occurrences(metadata, token))
+        {
             out.push(ResolvedOccurrence {
-                lookup_key: winner.lookup_key(),
+                lookup_key: key.to_string(),
                 occurrence: winner,
             });
         }
@@ -654,7 +695,90 @@ pub fn resolve_file_output(raw_metadata: &MetadataMap, args: &CliArgs) -> Resolv
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Instance;
+    use crate::core::{Instance, Provenance, TagOccurrence};
+
+    fn canonical_occurrence(
+        stored: i64,
+        value: f64,
+        print: &str,
+        priority: u8,
+        instance: Instance,
+    ) -> TagOccurrence {
+        TagOccurrence {
+            id: oxidex_tags::TagId::Numeric(0x0900),
+            name: crate::core::tag_occurrence::intern("ManometerPressure"),
+            group0: crate::core::tag_occurrence::intern("MakerNotes"),
+            group1: crate::core::tag_occurrence::intern("Olympus"),
+            group2: Some(crate::core::tag_occurrence::intern("Camera")),
+            instance,
+            raw: TagValue::new_string(print),
+            value: Some(TagValue::Float(value)),
+            print: Some(TagValue::new_string(print)),
+            stored: Some(TagValue::Integer(stored)),
+            priority,
+            is_list: false,
+            order: 999,
+            origin: Provenance {
+                module: Some("Olympus"),
+                table: Some("CameraSettings"),
+                byte_range: None,
+            },
+        }
+    }
+
+    #[test]
+    fn requested_output_uses_recorded_key_with_true_groups() {
+        let mut metadata = MetadataMap::new();
+        metadata.record_occurrence(
+            "Olympus:ManometerPressure".to_string(),
+            canonical_occurrence(1013, 101.3, "101.3 kPa", 1, Instance(1)),
+        );
+        metadata.record_occurrence(
+            "Olympus:ManometerPressure".to_string(),
+            canonical_occurrence(999, 99.9, "99.9 kPa", 0, Instance(1)),
+        );
+        metadata.record_occurrence(
+            "Olympus:ManometerPressure".to_string(),
+            canonical_occurrence(1200, 120.0, "120 kPa", 9, Instance(2)),
+        );
+
+        assert_eq!(
+            metadata.get_string("Olympus:ManometerPressure"),
+            Some("101.3 kPa"),
+            "priority-zero and another instance must not displace the first winner"
+        );
+        for request in [
+            "ManometerPressure",
+            "MakerNotes:ManometerPressure",
+            "Olympus:ManometerPressure",
+        ] {
+            let resolved = resolve_requested_tags(&metadata, &[request.to_string()], false);
+            assert_eq!(resolved.len(), 1, "{request}");
+            assert_eq!(resolved[0].lookup_key, "Olympus:ManometerPressure");
+            assert_eq!(
+                joined_family_label(resolved[0].occurrence, &[0, 1, 4]),
+                "MakerNotes:Olympus:"
+            );
+            assert_eq!(
+                resolved_display_value(resolved[0].occurrence, true),
+                TagValue::Float(101.3)
+            );
+        }
+
+        let all =
+            resolve_requested_tags(&metadata, &["Olympus:ManometerPressure".to_string()], true);
+        assert_eq!(all.len(), 3);
+        assert!(
+            all.iter()
+                .all(|resolved| resolved.lookup_key == "Olympus:ManometerPressure")
+        );
+        assert_eq!(
+            all.iter()
+                .map(|resolved| resolved.occurrence.order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
 
     fn sample_metadata() -> MetadataMap {
         // Mirrors the pinned oracle's ExifTool.jpg shape: IFD0's Make comes

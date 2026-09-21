@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+use crate::core::TagOccurrence;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::parsers::tiff::makernotes::*;
@@ -202,6 +203,58 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) -> Result<(), String> {
+    dispatch_makernote_with_context_and_values_and_session_impl(
+        make,
+        model,
+        ctx,
+        byte_order,
+        session,
+        cond_ctx,
+        tags,
+        value_forms,
+        None,
+    )
+}
+
+/// Session-aware dispatcher that additionally accepts ordered canonical
+/// occurrences from parsers which retain source identity and value forms.
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+    make: &str,
+    model: Option<&str>,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    session: &mut crate::exiftool_tables::session::Session,
+    cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+    occurrences: &mut Vec<(String, TagOccurrence)>,
+) -> Result<(), String> {
+    dispatch_makernote_with_context_and_values_and_session_impl(
+        make,
+        model,
+        ctx,
+        byte_order,
+        session,
+        cond_ctx,
+        tags,
+        value_forms,
+        Some(occurrences),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_makernote_with_context_and_values_and_session_impl(
+    make: &str,
+    model: Option<&str>,
+    ctx: &MakerNoteContext<'_>,
+    byte_order: ByteOrder,
+    session: &mut crate::exiftool_tables::session::Session,
+    cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+    mut occurrences: Option<&mut Vec<(String, TagOccurrence)>>,
+) -> Result<(), String> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
     let data = ctx.payload();
@@ -220,15 +273,28 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
     // table so it wins regardless of brand.
     if phaseone::is_phaseone_makernote(data) {
         let parser = phaseone::PhaseOneMakerNoteParser;
-        parser.parse_with_context_and_values_and_session(
-            ctx,
-            byte_order,
-            model,
-            session,
-            cond_ctx,
-            tags,
-            value_forms,
-        )?;
+        if let Some(rows) = occurrences.as_deref_mut() {
+            parser.parse_with_context_and_values_and_session_and_occurrences(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+                rows,
+            )?;
+        } else {
+            parser.parse_with_context_and_values_and_session(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+            )?;
+        }
         return Ok(());
     }
 
@@ -249,15 +315,28 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
             // `Composite:DOF`. The trait's default implementation ignores
             // `value_forms` and calls `parse_with_context`, so Pentax, Ricoh,
             // GE and Samsung are unaffected.
-            parser.parse_with_context_and_values_and_session(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-            )?;
+            if let Some(rows) = occurrences.as_deref_mut() {
+                parser.parse_with_context_and_values_and_session_and_occurrences(
+                    ctx,
+                    byte_order,
+                    model,
+                    session,
+                    cond_ctx,
+                    tags,
+                    value_forms,
+                    rows,
+                )?;
+            } else {
+                parser.parse_with_context_and_values_and_session(
+                    ctx,
+                    byte_order,
+                    model,
+                    session,
+                    cond_ctx,
+                    tags,
+                    value_forms,
+                )?;
+            }
         }
         return Ok(());
     }
@@ -373,15 +452,28 @@ pub fn dispatch_makernote_with_context_and_values_and_session(
         // whether or not the decoder goes on to use the wider window.
         if parser.validate_header(data) {
             // Parse MakerNote data
-            parser.parse_with_context_and_values_and_session(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-            )?;
+            if let Some(rows) = occurrences.as_deref_mut() {
+                parser.parse_with_context_and_values_and_session_and_occurrences(
+                    ctx,
+                    byte_order,
+                    model,
+                    session,
+                    cond_ctx,
+                    tags,
+                    value_forms,
+                    rows,
+                )?;
+            } else {
+                parser.parse_with_context_and_values_and_session(
+                    ctx,
+                    byte_order,
+                    model,
+                    session,
+                    cond_ctx,
+                    tags,
+                    value_forms,
+                )?;
+            }
         }
     }
 

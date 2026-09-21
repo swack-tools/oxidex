@@ -68,6 +68,7 @@
 
 use crate::core::TagValue;
 use crate::io::ByteOrder;
+use oxidex_tags::TagId;
 
 use super::cond;
 use super::runtime::{DecodedValue, decode_value_of};
@@ -298,6 +299,11 @@ pub struct Emitted {
     pub group1: &'static str,
     pub group2: &'static str,
     pub name: &'static str,
+    /// True source coordinate in the source table, independent of the public
+    /// lookup key selected by an adapter.
+    pub source_id: TagId,
+    /// The typed source value before Mask, RoundFloat, or conversions.
+    pub stored: TagValue,
     pub value: TagValue,
     /// The value ExifTool's `-n` reports -- the `ValueConv` result before
     /// `PrintConv` (ExifTool.pm:3477: `GetValue` stops at `ValueConv` when
@@ -322,6 +328,16 @@ pub struct Emitted {
     /// the fraction as the row's `-n` form without changing what it prints.
     /// IFD tables only; `None` for every binary-table field.
     pub rational: Option<(i64, i64)>,
+    /// The source tag's `List` declaration.
+    pub is_list: bool,
+}
+
+fn binary_source_id(field: &Field) -> TagId {
+    match (u16::try_from(field.index), field.sub) {
+        (Ok(index), None) => TagId::Numeric(index),
+        (_, Some(sub)) => TagId::Named(format!("{}.{sub}", field.index)),
+        _ => TagId::Named(field.index.to_string()),
+    }
 }
 
 /// The `%dirInfo` a `ProcessBinaryData` call receives (ExifTool.pm:9880-9888).
@@ -625,12 +641,14 @@ fn walk_with_policy(
             Err(_) => continue,
         };
         // ExifTool.pm:10076-10077.
-        let Some(raw) = read_value(dir.data, offset, format, field.count, more, dir.byte_order)
+        let Some(stored_raw) =
+            read_value(dir.data, offset, format, field.count, more, dir.byte_order)
         else {
             continue;
         };
+        let stored = super::runtime::to_stored_tag_value(&stored_raw, dir.byte_order);
         // ExifTool.pm:10079.
-        let Some(raw) = apply_mask(raw, field.mask) else {
+        let Some(raw) = apply_mask(stored_raw, field.mask) else {
             continue;
         };
 
@@ -708,6 +726,8 @@ fn walk_with_policy(
                 group1: table.effective_groups(field).1,
                 group2: table.group2,
                 name: field.name,
+                source_id: binary_source_id(field),
+                stored,
                 value,
                 value_conv,
                 low_priority: table.priority == Some(0),
@@ -716,6 +736,7 @@ fn walk_with_policy(
                 // it.
                 avoid: false,
                 rational: None,
+                is_list: false,
             });
         }
     }
@@ -1959,6 +1980,53 @@ mod tests {
              Step 28 the generated schema dropped it and each engine \
              hardcoded its own copy"
         );
+    }
+
+    #[test]
+    fn engine_stored_precedes_mask_and_keeps_source_coordinate() {
+        static FIELDS: &[Field] = &[Field {
+            index: 0,
+            sub: Some(1),
+            name: "Masked",
+            format: Some(Fmt::Int16u),
+            count: 1,
+            mask: Some(Mask {
+                bits: 0x00f0,
+                shift: 4,
+            }),
+            condition: None,
+            raw_conv: None,
+            omitted: Omitted::NONE,
+            value_conv: None,
+            print_conv: PrintConv::None,
+            subdir: None,
+            hook: &[],
+            groups: TagGroups::NONE,
+        }];
+        static TABLE: BinaryTable = BinaryTable {
+            module: "Test",
+            table: "Masked",
+            group0: "MakerNotes",
+            group1: "Test",
+            group2: "Camera",
+            first_entry: 0,
+            default_format: Fmt::Int16u,
+            offsets_sound_until: None,
+            priority: None,
+            gate_a: super::super::GateA { blocked_by: &[] },
+            fields: FIELDS,
+            variants: &[],
+        };
+
+        let rows = run(&TABLE, &[0x12, 0x34]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, TagValue::Integer(3));
+        assert_eq!(rows[0].stored, TagValue::Integer(0x1234));
+        assert_eq!(
+            rows[0].source_id,
+            oxidex_tags::TagId::Named("0.1".to_string())
+        );
+        assert!(!rows[0].is_list);
     }
 
     #[test]
