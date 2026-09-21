@@ -15,6 +15,7 @@ import tarfile
 import textwrap
 import threading
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -254,12 +255,19 @@ class DurablePathTests(unittest.TestCase):
             root = Path(directory)
             destination = root / "cache/exiftool/13.59/exiftool"
             staging_created = threading.Event()
-            release_first_installer = threading.Event()
+            allow_first_intent = threading.Event()
+            second_attempted_lifecycle = threading.Event()
             second_recovery_entered = threading.Event()
+            first_verified = threading.Event()
+            second_verified = threading.Event()
+            release_first_publish = threading.Event()
+            release_second_publish = threading.Event()
+            first_published = threading.Event()
             results: list[str] = []
             failures: list[BaseException] = []
             original_mkdtemp = oracle.tempfile.mkdtemp
             original_recover = oracle._recover_abandoned_staging
+            original_lifecycle_lock = oracle._staging_lifecycle_lock
             first_mkdtemp = True
 
             def pausing_mkdtemp(*args: object, **kwargs: object) -> str:
@@ -268,13 +276,28 @@ class DurablePathTests(unittest.TestCase):
                 if first_mkdtemp:
                     first_mkdtemp = False
                     staging_created.set()
-                    self.assertTrue(release_first_installer.wait(timeout=10))
+                    self.assertTrue(allow_first_intent.wait(timeout=10))
                 return created
 
             def observing_recovery(*args: object, **kwargs: object) -> Path | None:
                 if threading.current_thread().name == "second-installer":
                     second_recovery_entered.set()
                 return original_recover(*args, **kwargs)
+
+            @contextmanager
+            def observing_lifecycle_lock(*args: object, **kwargs: object):
+                if threading.current_thread().name == "second-installer":
+                    second_attempted_lifecycle.set()
+                with original_lifecycle_lock(*args, **kwargs):
+                    yield
+
+            def hold_verified_staging(_staging: Path) -> None:
+                if threading.current_thread().name == "first-installer":
+                    first_verified.set()
+                    self.assertTrue(release_first_publish.wait(timeout=10))
+                else:
+                    second_verified.set()
+                    self.assertTrue(release_second_publish.wait(timeout=10))
 
             def populate(staging: Path) -> None:
                 (staging / "sentinel").write_text("verified\n", encoding="utf-8")
@@ -286,23 +309,40 @@ class DurablePathTests(unittest.TestCase):
             def install() -> None:
                 try:
                     results.append(
-                        oracle.install_immutable_tree(root, destination, populate, verify)
+                        oracle.install_immutable_tree(
+                            root,
+                            destination,
+                            populate,
+                            verify,
+                            after_verify=hold_verified_staging,
+                        )
                     )
+                    if threading.current_thread().name == "first-installer":
+                        first_published.set()
                 except BaseException as exc:  # retained for the parent assertion
                     failures.append(exc)
 
             with mock.patch.object(oracle, "DURABLE_ROOT", root), mock.patch.object(
                 oracle.tempfile, "mkdtemp", side_effect=pausing_mkdtemp
-            ), mock.patch.object(oracle, "_recover_abandoned_staging", side_effect=observing_recovery):
+            ), mock.patch.object(
+                oracle, "_recover_abandoned_staging", side_effect=observing_recovery
+            ), mock.patch.object(
+                oracle, "_staging_lifecycle_lock", side_effect=observing_lifecycle_lock
+            ):
                 first = threading.Thread(target=install, name="first-installer")
                 second = threading.Thread(target=install, name="second-installer")
                 first.start()
                 self.assertTrue(staging_created.wait(timeout=10))
                 second.start()
-                # Before the lifecycle correction this event proves the second
-                # installer saw the first directory without its sidecar.
-                second_recovery_entered.wait(timeout=1)
-                release_first_installer.set()
+                self.assertTrue(second_attempted_lifecycle.wait(timeout=10))
+                self.assertFalse(second_recovery_entered.is_set())
+                allow_first_intent.set()
+                self.assertTrue(first_verified.wait(timeout=10))
+                self.assertTrue(second_verified.wait(timeout=10))
+                self.assertTrue(second_recovery_entered.is_set())
+                release_first_publish.set()
+                self.assertTrue(first_published.wait(timeout=10))
+                release_second_publish.set()
                 first.join(timeout=20)
                 second.join(timeout=20)
             self.assertFalse(first.is_alive())
