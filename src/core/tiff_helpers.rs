@@ -1431,7 +1431,25 @@ fn parse_exif_directory_with_session(
             } else {
                 raw_bytes_to_tag_value(bytes, *field_type, *value_count, *tag_id, byte_order)
             };
-            metadata.insert_occurrence(tag_name, tag_value, priority, "", Instance::default());
+            if matches!(base_name, "OpcodeList1" | "OpcodeList2" | "OpcodeList3") {
+                // Exif.pm 13.59's `%opcodeInfo` declares `ConvertBinary => 1`:
+                // the UNDEFINED payload remains the ValueConv/stored form,
+                // while `PrintOpcode` supplies the display string. Keep both
+                // channels so `--no-print-conv` and copy/write paths never
+                // have to reconstruct bytes from the rendered opcode names.
+                let binary = TagValue::Binary(bytes.to_vec());
+                metadata.insert_occurrence_with_forms(
+                    tag_name,
+                    tag_value,
+                    binary.clone(),
+                    Some(binary),
+                    priority,
+                    "",
+                    Instance::default(),
+                );
+            } else {
+                metadata.insert_occurrence(tag_name, tag_value, priority, "", Instance::default());
+            }
         }
 
         // Engine rows whose entry the hand walk never reached (`parse_ifd`

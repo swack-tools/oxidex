@@ -378,5 +378,21 @@ class CommittedOutputs(unittest.TestCase):
         self.assertEqual(sorted(cap["fields"]), sorted(g["id"] for g in self.ledger["generated"]))
 
 
+class CheckedWorklistOutput(unittest.TestCase):
+    def test_normal_regeneration_checks_but_does_not_rewrite_worklist(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "worklist.json"
+            path.write_text("stale\n")
+            with self.assertRaisesRegex(ValueError, "checked refusal worklist"):
+                C.write_or_check_worklist(path, "current\n", write=False)
+            self.assertEqual(path.read_text(), "stale\n")
+
+    def test_explicit_worklist_option_is_the_only_writer(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "worklist.json"
+            C.write_or_check_worklist(path, "current\n", write=True)
+            self.assertEqual(path.read_text(), "current\n")
+
+
 if __name__ == "__main__":
     unittest.main()
