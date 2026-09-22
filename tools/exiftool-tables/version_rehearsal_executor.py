@@ -870,48 +870,27 @@ def _close_ownership_probe(child: subprocess.Popen[str]) -> None:
 
 
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
-    """Give an adapter a chance to reap, then bound cleanup by its process group."""
+    """Non-catchably stop and verify the complete owned process lifetime."""
     _refresh_owned_descendants(child)
-    _signal_owned_descendants(child, signal.SIGTERM)
+    _signal_owned_descendants(child, signal.SIGKILL)
+    _signal_owned_group(child, signal.SIGKILL)
     try:
         stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        # A child can be created after the first snapshot. Refresh before the
-        # process-group fallback, which also covers descendants that close the
-        # inherited stdout/stderr pipes and otherwise evade communicate().
-        _refresh_owned_descendants(child)
-        _signal_owned_descendants(child, signal.SIGTERM)
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = exc.output, exc.stderr
+        _signal_owned_group(child, signal.SIGKILL)
         try:
             stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            _signal_owned_group(child, signal.SIGTERM)
-            try:
-                stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
-                except subprocess.TimeoutExpired as exc:
-                    # Never turn timeout cleanup into an unbounded wait.
-                    stdout, stderr = exc.output, exc.stderr
-    # communicate() only proves the direct adapter has exited. Its late child
-    # may have closed inherited pipes and may not have existed in either
-    # snapshot, so always drain the owned group before releasing the lock.
-    _signal_owned_group(child, signal.SIGTERM)
+        except subprocess.TimeoutExpired as retry:
+            stdout, stderr = retry.output, retry.stderr
+    if child.poll() is None:
+        raise OSError("owned direct child is still live after bounded cleanup")
     deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
     while _group_live(child.pid) and time.monotonic() < deadline:
+        _signal_owned_group(child, signal.SIGKILL)
         time.sleep(0.02)
     if _group_live(child.pid):
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
-        while _group_live(child.pid) and time.monotonic() < deadline:
-            time.sleep(0.02)
+        raise OSError("owned process group is still live after bounded cleanup")
     _refresh_owned_descendants(child)
     _signal_owned_descendants(child, signal.SIGKILL)
     survivors = _wait_owned_descendants(child)
@@ -1034,11 +1013,13 @@ def _spawn_with_deferred_sigint(
     if threading.current_thread() is not threading.main_thread():
         raise OSError("owned child creation requires the main thread")
     pending = False
+    pending_frame = None
     previous_handler = signal.getsignal(signal.SIGINT)
 
-    def defer_sigint(_signum: int, _frame: Any) -> None:
-        nonlocal pending
+    def defer_sigint(_signum: int, frame: Any) -> None:
+        nonlocal pending, pending_frame
         pending = True
+        pending_frame = frame
 
     read_fd = write_fd = -1
     signal.signal(signal.SIGINT, defer_sigint)
@@ -1057,7 +1038,13 @@ def _spawn_with_deferred_sigint(
             os.close(read_fd)
         signal.signal(signal.SIGINT, previous_handler)
     if pending:
-        raise KeyboardInterrupt("SIGINT deferred until owned child creation completed")
+        if previous_handler == signal.SIG_IGN:
+            return child
+        handler = signal.default_int_handler if previous_handler == signal.SIG_DFL else previous_handler
+        if callable(handler):
+            handler(signal.SIGINT, pending_frame)
+        else:
+            raise KeyboardInterrupt("SIGINT deferred until owned child creation completed")
     return child
 
 

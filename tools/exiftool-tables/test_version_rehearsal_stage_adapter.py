@@ -555,17 +555,13 @@ class AdapterTests(unittest.TestCase):
             f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_executor as e\n"
             "e.COMMAND_TIMEOUT_SECONDS = 1\n"
             f"with e._HostLock(Path({str(lock)!r})):\n"
-            " try:\n"
-            f"  r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
-            " except e.OwnedChildCleanupIncomplete as exc:\n"
-            "  print(json.dumps({'state': 'cleanup_incomplete', 'detail': str(exc)}))\n"
-            "  raise SystemExit(1)\n"
+            f" r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
             "print(json.dumps(r))\n")
         finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=10)
-        self.assertNotEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+        self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
         outcome = json.loads(finished.stdout)
-        self.assertEqual(outcome["state"], "cleanup_incomplete")
-        self.assertIn("cannot be verified after catchable termination", outcome["detail"])
+        self.assertEqual(outcome["state"], "timeout")
+        self.assertNotIn("cleanup_error", outcome)
         self.assertTrue(pid.is_file(), "nested child did not start")
         self.assertTrue(leader.is_file(), "adapter group leader did not start")
         child = int(pid.read_text())
@@ -599,28 +595,24 @@ class AdapterTests(unittest.TestCase):
             f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_executor as e\n"
             "e.COMMAND_TIMEOUT_SECONDS = 1\n"
             f"with e._HostLock(Path({str(lock)!r})):\n"
-            " try:\n"
-            f"  r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
-            " except e.OwnedChildCleanupIncomplete as exc:\n"
-            "  print(json.dumps({'state': 'cleanup_incomplete', 'detail': str(exc)}))\n"
-            "  raise SystemExit(1)\n"
+            f" r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
             "print(json.dumps(r))\n")
         finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=12)
-        self.assertNotEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+        self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
         outcome = json.loads(finished.stdout)
-        self.assertEqual(outcome["state"], "cleanup_incomplete")
-        self.assertIn("cannot be verified after catchable termination", outcome["detail"])
-        self.assertTrue(pid.is_file(), "late child did not start")
+        self.assertEqual(outcome["state"], "timeout")
+        self.assertNotIn("cleanup_error", outcome)
         self.assertTrue(leader.is_file(), "late adapter group leader did not start")
-        child = int(pid.read_text())
         group = int(leader.read_text())
         import version_rehearsal_executor as executor
-        for _ in range(20):
-            if not executor._pid_live(child):
-                break
-            time.sleep(0.05)
-        else:
-            self.fail("process-group fallback left the late child live")
+        if pid.is_file():
+            child = int(pid.read_text())
+            for _ in range(20):
+                if not executor._pid_live(child):
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("process-group fallback left the late child live")
         self.assertFalse(executor._group_live(group), "process-group fallback left the late group live")
         with executor._HostLock(lock): pass
 
