@@ -372,13 +372,78 @@ fn durable_ops_root(path: &Path) -> PathBuf {
 }
 
 fn expand_tilde(path: PathBuf) -> PathBuf {
-    match path.strip_prefix("~") {
-        Ok(remainder) => {
-            PathBuf::from(env::var_os("HOME").expect("OXIDEX_OPS_DIR ~ expansion needs HOME"))
-                .join(remainder)
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        let Some(Component::Normal(first)) = path.components().next() else {
+            return path;
+        };
+        let bytes = first.as_bytes();
+        if bytes.first() != Some(&b'~') {
+            return path;
         }
-        Err(_) => path,
+        let home = unix_home_dir(bytes.get(1..).expect("tilde prefix has a suffix"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "OXIDEX_OPS_DIR names an unsupported home directory: {}",
+                    path.display()
+                )
+            });
+        home.join(
+            path.strip_prefix(first)
+                .expect("first path component is present"),
+        )
     }
+    #[cfg(not(unix))]
+    {
+        let Some(Component::Normal(first)) = path.components().next() else {
+            return path;
+        };
+        let Some(first) = first.to_str() else {
+            return path;
+        };
+        let Some(user) = first.strip_prefix('~') else {
+            return path;
+        };
+        let home = if user.is_empty() || env::var("USERNAME").ok().as_deref() == Some(user) {
+            env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"))
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            panic!(
+                "OXIDEX_OPS_DIR names an unsupported home directory: {}",
+                path.display()
+            )
+        });
+        PathBuf::from(home).join(
+            path.strip_prefix(first)
+                .expect("first path component is present"),
+        )
+    }
+}
+
+#[cfg(unix)]
+fn unix_home_dir(user: &[u8]) -> Option<PathBuf> {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStringExt;
+
+    let entry = unsafe {
+        if user.is_empty() {
+            libc::getpwuid(libc::geteuid())
+        } else {
+            libc::getpwnam(CString::new(user).ok()?.as_ptr())
+        }
+    };
+    if entry.is_null() || unsafe { (*entry).pw_dir.is_null() } {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_vec(
+        unsafe { CStr::from_ptr((*entry).pw_dir) }
+            .to_bytes()
+            .to_vec(),
+    )))
 }
 
 fn reject_symlink_components(path: &Path) {
@@ -435,12 +500,15 @@ fn path_is_present(path: &Path) -> bool {
 #[cfg(test)]
 mod environment_tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
 
     const CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_EXPLICIT_CACHE_CHILD";
     const WRAPPER_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRAPPER_CHILD";
     const NO_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_NO_FALLBACK_CHILD";
     const WRONG_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRONG_FALLBACK_CHILD";
     const OPS_ROOT_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_OPS_ROOT_CHILD";
+    const TILDE_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_TILDE_CHILD";
 
     #[test]
     fn explicit_cache_does_not_require_fallback_environment() {
@@ -658,6 +726,78 @@ mod environment_tests {
         #[cfg(unix)]
         {
             let _ = std::fs::remove_file(durable_parent.join("pinned-fixture-ops-root-link"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tilde_expansion_matches_ops_paths_without_environment_shortcuts() {
+        if let Some(mode) = env::var_os(TILDE_CHILD_ENV) {
+            if mode == OsStr::new("unsupported") {
+                let rust_failure =
+                    std::panic::catch_unwind(|| FixtureConfig::from_environment("13.59"));
+                assert!(rust_failure.is_err(), "unsupported users must fail closed");
+                let python = std::process::Command::new("python3")
+                    .args(["scripts/ops_paths.py"])
+                    .output()
+                    .expect("run canonical ops-paths control");
+                assert!(
+                    !python.status.success(),
+                    "canonical ops_paths must also refuse an unsupported user"
+                );
+                return;
+            }
+
+            let python = std::process::Command::new("python3")
+                .args(["scripts/ops_paths.py"])
+                .output()
+                .expect("run canonical ops-paths control");
+            assert!(
+                python.status.success(),
+                "ops_paths failed: {:?}",
+                python.stderr
+            );
+            let root = PathBuf::from(OsStr::from_bytes(
+                python
+                    .stdout
+                    .strip_suffix(b"\n")
+                    .expect("ops_paths newline"),
+            ));
+            assert_eq!(
+                FixtureConfig::from_environment("13.59").cache_dir,
+                Some(root.join("cache/exiftool/13.59")),
+                "Rust fixture fallback must match scripts/ops_paths.py"
+            );
+            return;
+        }
+
+        for (mode, configured, remove_home) in [
+            ("named", "~allen/oxidex-review-path", false),
+            ("current", "~/oxidex-review-path", true),
+            (
+                "unsupported",
+                "~oxidex-fixture-no-such-user/fixtures",
+                false,
+            ),
+        ] {
+            let mut command = std::process::Command::new(env::current_exe().unwrap());
+            command
+                .arg("tilde_expansion_matches_ops_paths_without_environment_shortcuts")
+                .env(TILDE_CHILD_ENV, mode)
+                .env("OXIDEX_OPS_DIR", configured)
+                .env_remove("EXIFTOOL")
+                .env_remove("EXIFTOOL_CACHE_DIR")
+                .env_remove(REQUIRED_ENV);
+            if remove_home {
+                command.env_remove("HOME");
+            } else {
+                command.env("HOME", "/untrusted-home-must-not-win");
+            }
+            let child_result = command.status().expect("run tilde differential control");
+            assert!(
+                child_result.success(),
+                "tilde differential failed for {mode}"
+            );
         }
     }
 }

@@ -64,6 +64,10 @@ name = "raw_parsing_bench"
 harness = false
 
 [dependencies]
+# Test-only fixture resolution mirrors Python's passwd-backed expanduser
+# behavior on Unix without changing parser behavior.
+libc = "0.2"
+
 # Tag database (separate crate, always optimized)
 oxidex-tags = { path = "oxidex-tags", version = "=2.0.0-beta.1" }
 
