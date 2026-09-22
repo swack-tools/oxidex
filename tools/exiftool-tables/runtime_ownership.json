@@ -6,7 +6,7 @@
     "residual": 19,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "c9663094ee0f5285ca7dbea9927aa022cf67e503172c3a0758a73a721bc4e8fd",
+  "fragment_inputs_sha256": "aa54c57f542a815ec85b6067da9cbdd848531e6b358857e44c177760aa1289fd",
   "rows": [
     {
       "field": {
@@ -32,7 +32,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -46,7 +46,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -60,7 +60,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -74,7 +74,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -88,7 +88,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -102,7 +102,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -116,7 +116,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -130,7 +130,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -144,7 +144,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -158,7 +158,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
@@ -172,7 +172,7 @@
       "owner": "residual",
       "refusal": null,
       "source_release": "13.59",
-      "source_sha256": "11156c3e6488172f4dfc44ebe082d475a009da82c8acffa0ee40a6aeef385b95",
+      "source_sha256": "1e42d385eb7ad85c5d0fa4333a9b3865cc78325667a773b0c12d695aff40e60a",
       "symbol": "src/core/exif_dir_engine.rs::IFD0_HAND_KEPT",
       "table": "Main"
     },
