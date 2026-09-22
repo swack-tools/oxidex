@@ -414,9 +414,12 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // (not those nested inside mwg-rs:Regions) into language-qualified tags.
     let artwork_titles = extract_artwork_title_values(xml_bytes)?;
     for (tag, value) in &artwork_titles {
-        if !results.iter().any(|(t, _)| t == tag) {
-            results.push((tag.clone(), value.clone()));
-        }
+        // The generic RDF pass sees the language alternatives as a List, but
+        // ExifTool's registered ArtworkTitle table chooses its x-default
+        // value for the base tag.
+        results.retain(|(existing, _)| existing != tag);
+        list_elements.retain(|(existing, _)| existing != tag);
+        results.push((tag.clone(), value.clone()));
     }
 
     // PLUS Custom1 is a Bag whose entries are language alternatives. Preserve
@@ -503,10 +506,20 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
     // keeps precedence over this one's plain concatenation.
     let flattened = super::struct_flatten::extract_flattened_struct_fields(xml_bytes)?;
     for (tag, values) in flattened {
-        // The main RDF walk can have already recorded the first rdf:li as a
-        // scalar.  A flattened nested structure is authoritative about the
-        // collection transport, so install it before retaining that text view.
-        if values.len() > 1 {
+        // For unknown schemas, ExifTool keeps the first value collected by
+        // the main RDF walk.  Lightroom's four registered curve fields are
+        // the exception: their declared transport is a list even though that
+        // walk has already recorded the first point as a scalar.
+        let keep_list_transport = matches!(
+            tag.as_str(),
+            "XMP:LookParametersToneCurvePV2012"
+                | "XMP:LookParametersToneCurvePV2012Red"
+                | "XMP:LookParametersToneCurvePV2012Green"
+                | "XMP:LookParametersToneCurvePV2012Blue"
+        );
+        if values.len() > 1
+            && (keep_list_transport || !results.iter().any(|(existing, _)| *existing == tag))
+        {
             list_elements.retain(|(existing, _)| existing != &tag);
             list_elements.push((tag.clone(), values.clone()));
         }
@@ -572,6 +585,10 @@ pub(crate) fn parse_xmp_typed_with_rational_forms(
         .into_iter()
         .map(
             |(tag, value)| match list_elements.iter().find(|(t, _)| *t == tag) {
+                Some((_, elements)) if tag == "XMP:ArtworkTitle" => (
+                    tag,
+                    XmpValue::Scalar(format_xmp_value("XMP:ArtworkTitle", &elements[0])),
+                ),
                 Some((_, elements)) => {
                     let formatted = elements
                         .iter()
@@ -6154,9 +6171,45 @@ mod top_level_struct_tests {
             parse_xmp_typed(xml)
                 .unwrap()
                 .iter()
+                .find(|(tag, _)| tag == "XMP:StructList2Item1")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::Scalar("c1-1".to_string()))
+        );
+        assert_eq!(
+            parse_xmp_typed(xml)
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:StructList2Item2")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::Scalar("c2-1".to_string()))
+        );
+        assert_eq!(
+            parse_xmp_typed(xml)
+                .unwrap()
+                .iter()
                 .find(|(tag, _)| tag == "XMP:StructList2TestList2")
                 .map(|(_, value)| value.clone()),
             Some(XmpValue::List(vec!["y1".to_string(), "y2".to_string()]))
+        );
+    }
+
+    #[test]
+    fn artwork_title_uses_the_x_default_scalar_not_the_language_list() {
+        let xml = r#"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:Iptc4xmpExt='http://iptc.org/std/Iptc4xmpExt/2008-02-29/'>
+ <rdf:Description><Iptc4xmpExt:ArtworkOrObject><rdf:Bag><rdf:li rdf:parseType='Resource'>
+  <Iptc4xmpExt:AOTitle><rdf:Alt>
+   <rdf:li xml:lang='x-default'>test</rdf:li>
+   <rdf:li xml:lang='de'>prüfung</rdf:li><rdf:li xml:lang='fr'>épreuve</rdf:li>
+  </rdf:Alt></Iptc4xmpExt:AOTitle>
+ </rdf:li></rdf:Bag></Iptc4xmpExt:ArtworkOrObject></rdf:Description></rdf:RDF>"#;
+        assert_eq!(
+            parse_xmp_typed(xml.as_bytes())
+                .unwrap()
+                .iter()
+                .find(|(tag, _)| tag == "XMP:ArtworkTitle")
+                .map(|(_, value)| value.clone()),
+            Some(XmpValue::Scalar("test".to_string()))
         );
     }
 

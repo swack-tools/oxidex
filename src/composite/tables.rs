@@ -1065,7 +1065,7 @@ pub static COMPOSITES: &[Composite] = &[
         module: "XMP",
         group2: "Camera",
         priority: 1,
-        require: &[(0, "XMP-aux:LensID"), (1, "Make")],
+        require: &[(0, "XMP-aux:Lens"), (1, "Make")],
         desire: &[
             (2, "LensInfo"),
             (3, "FocalLength"),

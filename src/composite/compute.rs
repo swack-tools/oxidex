@@ -885,6 +885,15 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
             Computed::same(format!("Unknown {:.0}-{:.0}mm", short, long))
         }
 
+        // XMP's auxiliary lens description is used as LensID-2 by ExifTool.
+        ("XMP", "LensID") => {
+            let lens = get(i, 0)?.trim();
+            if !lens.contains("mm") {
+                return None;
+            }
+            Computed::same(lens.replace(" - ", "-").replace(" mm", "mm"))
+        }
+
         // require: FocalLength; desire: ScaleFactor35efl
         // ValueConv: `($val[0] || 0) * ($val[1] || 1)`
         // PrintConv: `$val[1] ? "%.1f mm (35 mm equivalent: %.1f mm)" : "%.1f mm"`
