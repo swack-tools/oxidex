@@ -86,11 +86,11 @@ mod field_offset {
     /// Kodak.pm:78-84: `int8u[2]`.
     pub const MONTH_DAY_CREATED: usize = 0x12;
     /// Kodak.pm:85-91: `int8u[4]`, formatted as hh:mm:ss.hh.
-    pub const TIME_CREATED: usize = 0x14;
+    pub(super) const TIME_CREATED: usize = 0x14;
     /// Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
     pub const TOTAL_ZOOM: usize = 0x62;
     /// Kodak.pm:231-235: `int16u`, zero is `Off`.
-    pub const DATE_TIME_STAMP: usize = 0x64;
+    pub(super) const DATE_TIME_STAMP: usize = 0x64;
 }
 
 /// Kodak MakerNote parser implementation
