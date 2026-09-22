@@ -540,11 +540,13 @@ class AdapterTests(unittest.TestCase):
     def test_executor_timeout_kills_adapter_nested_child_and_releases_lock(self):
         """Exercise executor -> adapter._run -> sleeping child with real PIDs."""
         lock, pid = self.root / "shared.lock", self.root / "nested.pid"
+        leader = self.root / "adapter.pid"
         helper = self.root / "adapter-helper.py"
         child_code = f"from pathlib import Path; import os,time; Path({str(pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
         helper.write_text(
             "import os, subprocess, sys\nfrom pathlib import Path\n"
             f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_stage_adapter as a\n"
+            f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
             f"code = {child_code!r}\n"
             "a._run([sys.executable, '-c', code], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n")
         supervisor = self.root / "executor-supervisor.py"
@@ -553,29 +555,40 @@ class AdapterTests(unittest.TestCase):
             f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_executor as e\n"
             "e.COMMAND_TIMEOUT_SECONDS = 1\n"
             f"with e._HostLock(Path({str(lock)!r})):\n"
-            f" r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
+            " try:\n"
+            f"  r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
+            " except e.OwnedChildCleanupIncomplete as exc:\n"
+            "  print(json.dumps({'state': 'cleanup_incomplete', 'detail': str(exc)}))\n"
+            "  raise SystemExit(1)\n"
             "print(json.dumps(r))\n")
         finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=10)
-        self.assertEqual(finished.returncode, 0, finished.stderr)
-        self.assertEqual(json.loads(finished.stdout)["state"], "timeout", finished.stdout + finished.stderr)
+        self.assertNotEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+        outcome = json.loads(finished.stdout)
+        self.assertEqual(outcome["state"], "cleanup_incomplete")
+        self.assertIn("cannot be verified after catchable termination", outcome["detail"])
         self.assertTrue(pid.is_file(), "nested child did not start")
+        self.assertTrue(leader.is_file(), "adapter group leader did not start")
         child = int(pid.read_text())
-        live = True
-        for _ in range(20):
-            try: os.kill(child, 0)
-            except ProcessLookupError: live = False; break
-            time.sleep(0.05)
-        self.assertFalse(live, "executor timeout orphaned adapter child")
+        group = int(leader.read_text())
         import version_rehearsal_executor as executor
+        for _ in range(20):
+            if not executor._pid_live(child):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("executor timeout orphaned adapter child")
+        self.assertFalse(executor._group_live(group), "executor timeout left the adapter group live")
         with executor._HostLock(lock): pass
 
     def test_executor_timeout_reaps_late_child_after_parent_exits(self):
         """A child born after the snapshot cannot survive its parent's early exit."""
         lock, pid = self.root / "late.lock", self.root / "late.pid"
+        leader = self.root / "late-adapter.pid"
         helper = self.root / "late-helper.py"
         child_code = f"from pathlib import Path; import os,time; Path({str(pid)!r}).write_text(str(os.getpid())); time.sleep(30)"
         helper.write_text(
             "import os, subprocess, sys, time\nfrom pathlib import Path\n"
+            f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
             "time.sleep(1.2)\n"
             f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)\n"
             f"Path({str(pid)!r}).write_text(str(child.pid))\n"
@@ -586,20 +599,29 @@ class AdapterTests(unittest.TestCase):
             f"sys.path.insert(0, {str(HERE)!r})\nimport version_rehearsal_executor as e\n"
             "e.COMMAND_TIMEOUT_SECONDS = 1\n"
             f"with e._HostLock(Path({str(lock)!r})):\n"
-            f" r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
+            " try:\n"
+            f"  r=e._run_record([sys.executable, {str(helper)!r}], cwd=Path.cwd(), env=dict(os.environ), run=subprocess.run)\n"
+            " except e.OwnedChildCleanupIncomplete as exc:\n"
+            "  print(json.dumps({'state': 'cleanup_incomplete', 'detail': str(exc)}))\n"
+            "  raise SystemExit(1)\n"
             "print(json.dumps(r))\n")
         finished = subprocess.run([sys.executable, str(supervisor)], cwd=self.root, text=True, capture_output=True, timeout=12)
-        self.assertEqual(finished.returncode, 0, finished.stderr)
-        self.assertEqual(json.loads(finished.stdout)["state"], "timeout", finished.stdout + finished.stderr)
+        self.assertNotEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+        outcome = json.loads(finished.stdout)
+        self.assertEqual(outcome["state"], "cleanup_incomplete")
+        self.assertIn("cannot be verified after catchable termination", outcome["detail"])
         self.assertTrue(pid.is_file(), "late child did not start")
+        self.assertTrue(leader.is_file(), "late adapter group leader did not start")
         child = int(pid.read_text())
+        group = int(leader.read_text())
+        import version_rehearsal_executor as executor
         for _ in range(20):
-            try: os.kill(child, 0)
-            except ProcessLookupError: break
+            if not executor._pid_live(child):
+                break
             time.sleep(0.05)
         else:
             self.fail("process-group fallback left the late child live")
-        import version_rehearsal_executor as executor
+        self.assertFalse(executor._group_live(group), "process-group fallback left the late group live")
         with executor._HostLock(lock): pass
 
 
