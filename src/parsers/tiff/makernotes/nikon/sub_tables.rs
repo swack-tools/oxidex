@@ -326,6 +326,79 @@ pub fn parse_file_info(
     }
 }
 
+/// `Nikon::MakerNotes0x56` (Main tag 0x0056), the Z-series burst record.
+///
+/// `BurstFlag` is a hidden member in Nikon.pm: it controls the packed burst
+/// fields but is not itself emitted. `PixelShiftActive` is a separate int8u
+/// field, so its byte must not be read as part of the trailing word.
+pub fn parse_maker_notes_0x56(
+    data: &[u8],
+    order: ByteOrder,
+    tags: &mut HashMap<String, String>,
+    value_forms: &mut HashMap<String, String>,
+) {
+    if let Some(firmware) = data.get(..4).map(ascii_value) {
+        // Nikon.pm: `$val =~ s/(\d{2})/$1./; $val`. The substitution is not
+        // limited to all-numeric firmware strings.
+        let mut rendered = firmware.clone();
+        if let Some(at) = firmware
+            .as_bytes()
+            .windows(2)
+            .position(|pair| pair[0].is_ascii_digit() && pair[1].is_ascii_digit())
+        {
+            rendered.insert(at + 2, '.');
+        }
+        tags.insert("Nikon:FirmwareVersion56".to_string(), rendered);
+    }
+
+    if let Some(burst) = read_u32(data, 4, order).filter(|value| *value != 0) {
+        tags.insert(
+            "Nikon:BurstStartSlotNumber".to_string(),
+            (((burst & 0x2000_0000) >> 29) + 1).to_string(),
+        );
+        tags.insert(
+            "Nikon:BurstStartFolderNumber".to_string(),
+            ((burst & 0x1ff8_0000) >> 19).to_string(),
+        );
+        tags.insert(
+            "Nikon:BurstStartImageNumber".to_string(),
+            ((burst & 0x0007_ffe0) >> 5).to_string(),
+        );
+        let image_type = burst & 0x1f;
+        let displayed = match image_type {
+            0 => "JPG".to_string(),
+            2 => "NEF".to_string(),
+            3 => "TIF".to_string(),
+            4 => "NDF".to_string(),
+            5 => "MOV".to_string(),
+            6 => "NEV".to_string(),
+            7 => "MP4".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        tags.insert("Nikon:BurstStartImageType".to_string(), displayed);
+        value_forms.insert(
+            "Nikon:BurstStartImageType".to_string(),
+            image_type.to_string(),
+        );
+        if let Some(number) = read_u32(data, 8, order) {
+            tags.insert("Nikon:BurstShotNumber".to_string(), number.to_string());
+        }
+    }
+
+    if let Some(&pixel_shift) = data.get(12) {
+        let displayed = match pixel_shift {
+            0 => "No".to_string(),
+            1 => "Yes".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        tags.insert("Nikon:PixelShiftActive".to_string(), displayed);
+        value_forms.insert(
+            "Nikon:PixelShiftActive".to_string(),
+            pixel_shift.to_string(),
+        );
+    }
+}
+
 /// `Nikon::AFTune` (`Nikon::Main` 0x00b9).
 pub fn parse_af_tune(data: &[u8], tags: &mut HashMap<String, String>) {
     const AF_FINE_TUNE: &[(u8, &str)] =
