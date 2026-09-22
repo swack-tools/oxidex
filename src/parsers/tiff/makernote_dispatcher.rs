@@ -87,6 +87,32 @@ pub fn dispatch_makernote_with_model_and_values(
 /// the Make string).
 const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SignatureRoute {
+    KodakType2,
+    HpType4,
+    RicohType2,
+}
+
+/// MakerNotes.pm selects these rebadged binary records from their payload
+/// before consulting EXIF Make. Keep this classifier exact: a near-match must
+/// fall through to the ordinary Make routes rather than claim another
+/// vendor's bytes.
+fn signature_route(data: &[u8]) -> Option<SignatureRoute> {
+    if data.starts_with(b"\x01\0\x01\0\0\0\x04\0") {
+        Some(SignatureRoute::KodakType2)
+    } else if matches!(data.get(..6), Some(b"IIII\x04\0") | Some(b"IIII\x05\0")) {
+        Some(SignatureRoute::HpType4)
+    } else if matches!(
+        data.get(..8),
+        Some(b"II*\0\x08\0\0\0") | Some(b"MM\0*\0\0\0\x08")
+    ) {
+        Some(SignatureRoute::RicohType2)
+    } else {
+        None
+    }
+}
+
 /// Match the vendors whose Make string varies too much for a literal list.
 ///
 /// Returns `None` for everything else so the caller falls through to the
@@ -338,6 +364,44 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
                 tags,
                 value_forms,
             )?;
+        }
+        return Ok(());
+    }
+
+    // Kodak Type2, HP Type4 and Ricoh Type2 are selected by payload before
+    // Make matching in MakerNotes.pm. Pentax/RICOH-branded carriers use all
+    // three layouts, so the broad Pentax prefix routes below must not win.
+    // The family parsers remain the owners of the record decoders; this
+    // shared boundary only establishes the source-defined precedence.
+    if let Some(route) = signature_route(data) {
+        let parser: Box<dyn MakerNoteParser> = match route {
+            SignatureRoute::KodakType2 => Box::new(kodak::KodakParser),
+            SignatureRoute::HpType4 => Box::new(hp::HpParser),
+            SignatureRoute::RicohType2 => Box::new(ricoh::RicohParser),
+        };
+        if parser.validate_header(data) {
+            if let Some(rows) = occurrences.as_deref_mut() {
+                parser.parse_with_context_and_values_and_session_and_occurrences(
+                    ctx,
+                    byte_order,
+                    model,
+                    session,
+                    cond_ctx,
+                    tags,
+                    value_forms,
+                    rows,
+                )?;
+            } else {
+                parser.parse_with_context_and_values_and_session(
+                    ctx,
+                    byte_order,
+                    model,
+                    session,
+                    cond_ctx,
+                    tags,
+                    value_forms,
+                )?;
+            }
         }
         return Ok(());
     }
@@ -734,6 +798,44 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_routes_win_before_conflicting_camera_makes() {
+        assert_eq!(
+            signature_route(b"\x01\0\x01\0\0\0\x04\0PENTAX"),
+            Some(SignatureRoute::KodakType2)
+        );
+        assert_eq!(
+            signature_route(b"IIII\x04\0PENTAX"),
+            Some(SignatureRoute::HpType4)
+        );
+        assert_eq!(
+            signature_route(b"IIII\x05\0PENTAX"),
+            Some(SignatureRoute::HpType4)
+        );
+        assert_eq!(
+            signature_route(b"II*\0\x08\0\0\0RICOH IMAGING"),
+            Some(SignatureRoute::RicohType2)
+        );
+        assert_eq!(
+            signature_route(b"MM\0*\0\0\0\x08RICOH IMAGING"),
+            Some(SignatureRoute::RicohType2)
+        );
+    }
+
+    #[test]
+    fn signature_routes_reject_truncated_and_near_match_prefixes() {
+        for data in [
+            b"\x01\0\x01\0\0\0\x04".as_slice(),
+            b"\x01\0\x01\0\0\0\x05\0".as_slice(),
+            b"IIII\x04".as_slice(),
+            b"IIII\x06\0".as_slice(),
+            b"II*\0\x09\0\0\0".as_slice(),
+            b"MM\0*\0\0\0\x09".as_slice(),
+        ] {
+            assert_eq!(signature_route(data), None, "unexpected route for {data:?}");
+        }
+    }
 
     fn panasonic_quality_note() -> Vec<u8> {
         let mut data = b"Panasonic\0\0\0".to_vec();

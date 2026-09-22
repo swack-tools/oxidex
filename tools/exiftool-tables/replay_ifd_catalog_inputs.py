@@ -83,6 +83,15 @@ def replay(source: bytes, expected: dict, rust: dict,
               "reader_omitted": sum(row["reader_state"] == "omitted" for row in rows)}
     if rows != expected.get("rows") or counts != expected.get("counts"):
         raise ValueError("IFD complete rows/classifications/counts differ from fresh compiler replay")
+    ownership_rows = codegen.gen_ownership_identities(
+        document, sorted(document.get("modules", {}))
+    )
+    ownership_counts = codegen.ownership_identity_counts(ownership_rows)
+    if (
+        ownership_rows != expected.get("ownership_rows")
+        or ownership_counts != expected.get("ownership_counts")
+    ):
+        raise ValueError("ownership rows/counts differ from fresh compiler replay")
     result = copy.deepcopy(expected)
     result["source"]["tables_json_sha256"] = digest(source)
     result["source"]["expr_ledger_sha256"] = digest(fresh_oracle)

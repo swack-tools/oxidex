@@ -161,6 +161,64 @@ class IdentityLedger(unittest.TestCase):
             {("not-a-tag-id", (0,), "One"), ("not-a-tag-id", (1,), "Two")},
         )
 
+    def test_binary_ownership_rows_preserve_fractional_and_kodak_raw_keys(self):
+        binary = {"__name": "Image::ExifTool::ProcessBinaryData"}
+        doc = {
+            "modules": {
+                "Nikon": {"tables": {"MakerNotes0x56": {
+                    "meta": {"PROCESS_PROC": binary},
+                    "tags": {
+                        "4.1": {"Name": "BurstStartSlotNumber"},
+                        "4.4": {"Name": "BurstStartImageType"},
+                    },
+                }}},
+                "Kodak": {"tables": {"Main": {
+                    "meta": {"PROCESS_PROC": binary},
+                    "tags": {"20": {"Name": "TimeCreated"}},
+                }}},
+                "JPEG": {"tables": {"MediaJukebox": {
+                    "meta": {},
+                    "tags": {"Tool_Name": {}},
+                }}},
+                "Trailer": {"tables": {"Vivo": {
+                    "meta": {},
+                    "tags": {"HDRImage": {}},
+                }}},
+            },
+        }
+        rows = codegen.gen_ownership_identities(
+            doc, ["JPEG", "Kodak", "Nikon", "Trailer"]
+        )
+        by_identity = {
+            (row["full_name"], row["raw_key"], tuple(row["variant_path"])): row
+            for row in rows
+        }
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Nikon::MakerNotes0x56", "4.1", ())]["name"],
+            "BurstStartSlotNumber",
+        )
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Nikon::MakerNotes0x56", "4.4", ())]["name"],
+            "BurstStartImageType",
+        )
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Kodak::Main", "20", ())]["name"],
+            "TimeCreated",
+        )
+        self.assertEqual(
+            by_identity[("Image::ExifTool::JPEG::MediaJukebox", "Tool_Name", ())]["name"],
+            "Tool_Name",
+        )
+        self.assertEqual(
+            by_identity[("Image::ExifTool::Trailer::Vivo", "HDRImage", ())]["name"],
+            "HDRImage",
+        )
+        self.assertEqual(
+            {row["source_kind"] for row in rows},
+            {"binary", "named-raw-key"},
+        )
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]) for row in rows))
+
     def test_cli_binds_ledger_to_input_and_emitted_ifd_rust(self):
         doc = self._doc()
         with tempfile.TemporaryDirectory() as tmp:
@@ -177,6 +235,11 @@ class IdentityLedger(unittest.TestCase):
             self.assertIsNone(report["source"]["expr_ledger_sha256"])
             self.assertEqual(report["counts"], {"rows": 5, "emitted": 3, "refused": 2,
                                                 "reader_eligible": 2, "reader_omitted": 1})
+            self.assertEqual(
+                report["ownership_counts"],
+                {"binary_rows": 0, "named_raw_key_rows": 0},
+            )
+            self.assertEqual(report["ownership_rows"], [])
             self.assertEqual(
                 report["source"]["tables_json_sha256"],
                 __import__("hashlib").sha256(tables.read_bytes()).hexdigest(),
