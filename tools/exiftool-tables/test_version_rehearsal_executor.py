@@ -701,6 +701,40 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "identity unavailable"):
                 executor._live_owned_descendants(child)
 
+    def test_darwin_identity_distinguishes_same_second_kernel_start_times(self):
+        coarse_ps = subprocess.CompletedProcess(
+            ["ps"], 0, "Sun Sep 21 22:53:08 2026\n", "",
+        )
+        with patch.object(executor.sys, "platform", "darwin"), \
+             patch.object(executor, "_darwin_start_time", create=True,
+                          side_effect=[(1_795_000_000, 101), (1_795_000_000, 202)]), \
+             patch.object(executor.subprocess, "run", return_value=coarse_ps):
+            first = executor._process_identity(4101)
+            second = executor._process_identity(4101)
+        self.assertNotEqual(first, second)
+
+    def test_darwin_identity_unavailable_fails_closed_instead_of_using_ps(self):
+        coarse_ps = subprocess.CompletedProcess(
+            ["ps"], 0, "Sun Sep 21 22:53:08 2026\n", "",
+        )
+        with patch.object(executor.sys, "platform", "darwin"), \
+             patch.object(executor, "_darwin_start_time", create=True,
+                          side_effect=OSError("libproc unavailable")), \
+             patch.object(executor.subprocess, "run", return_value=coarse_ps), \
+             self.assertRaisesRegex(OSError, "libproc unavailable"):
+            executor._process_identity(4101)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS libproc")
+    def test_actual_darwin_identity_uses_kernel_microsecond_start_time(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            identity = executor._process_identity(child.pid)
+            self.assertRegex(identity, r"^darwin-start:[1-9][0-9]*:[0-9]{1,6}$")
+            self.assertEqual(executor._process_identity(child.pid), identity)
+        finally:
+            child.terminate()
+            child.wait(timeout=5)
+
     def test_untrusted_descendant_enumeration_marks_interrupt_cleanup_incomplete(self):
         child = type("Child", (), {"pid": 4100, "poll": lambda self: None})()
         interruption = KeyboardInterrupt("stop")

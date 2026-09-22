@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -631,6 +632,60 @@ def _pid_live(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
     return True
 
 
+class _DarwinProcBSDInfo(ctypes.Structure):
+    """Darwin's public proc_bsdinfo ABI from <sys/proc_info.h>."""
+
+    _fields_ = [
+        ("pbi_flags", ctypes.c_uint32),
+        ("pbi_status", ctypes.c_uint32),
+        ("pbi_xstatus", ctypes.c_uint32),
+        ("pbi_pid", ctypes.c_uint32),
+        ("pbi_ppid", ctypes.c_uint32),
+        ("pbi_uid", ctypes.c_uint32),
+        ("pbi_gid", ctypes.c_uint32),
+        ("pbi_ruid", ctypes.c_uint32),
+        ("pbi_rgid", ctypes.c_uint32),
+        ("pbi_svuid", ctypes.c_uint32),
+        ("pbi_svgid", ctypes.c_uint32),
+        ("rfu_1", ctypes.c_uint32),
+        ("pbi_comm", ctypes.c_char * 16),
+        ("pbi_name", ctypes.c_char * 32),
+        ("pbi_nfiles", ctypes.c_uint32),
+        ("pbi_pgid", ctypes.c_uint32),
+        ("pbi_pjobc", ctypes.c_uint32),
+        ("e_tdev", ctypes.c_uint32),
+        ("e_tpgid", ctypes.c_uint32),
+        ("pbi_nice", ctypes.c_int32),
+        ("pbi_start_tvsec", ctypes.c_uint64),
+        ("pbi_start_tvusec", ctypes.c_uint64),
+    ]
+
+
+def _darwin_start_time(pid: int) -> tuple[int, int]:
+    """Read the kernel process start timeval; never substitute coarse `ps` text."""
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidinfo = libproc.proc_pidinfo
+    except (OSError, AttributeError) as exc:
+        raise OSError(f"cannot load precise Darwin process identity for pid {pid}") from exc
+    proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                             ctypes.c_void_p, ctypes.c_int]
+    proc_pidinfo.restype = ctypes.c_int
+    info = _DarwinProcBSDInfo()
+    size = ctypes.sizeof(info)
+    received = proc_pidinfo(pid, 3, 0, ctypes.byref(info), size)
+    if received != size or info.pbi_pid != pid:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            raise
+        raise OSError(f"cannot obtain precise Darwin process identity for pid {pid}")
+    seconds, microseconds = int(info.pbi_start_tvsec), int(info.pbi_start_tvusec)
+    if seconds <= 0 or not 0 <= microseconds < 1_000_000:
+        raise OSError(f"Darwin process identity is malformed for pid {pid}")
+    return seconds, microseconds
+
+
 def _process_identity(pid: int, *, proc_root: Path = Path("/proc")) -> str:
     """Return a stable identity token, distinguishing exit from unreadability."""
     if sys.platform.startswith("linux"):
@@ -642,6 +697,9 @@ def _process_identity(pid: int, *, proc_root: Path = Path("/proc")) -> str:
         except ProcessLookupError:
             raise
         raise OSError(f"cannot verify process identity for pid {pid}")
+    if sys.platform == "darwin":
+        seconds, microseconds = _darwin_start_time(pid)
+        return f"darwin-start:{seconds}:{microseconds}"
     try:
         result = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(pid)], text=True,
