@@ -1,6 +1,7 @@
 """Exercise the benchmark instrument with hosted CI's pinned-source channel."""
 
 import os
+import html
 from pathlib import Path
 import json
 import re
@@ -15,6 +16,52 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class BenchmarkOracleTests(unittest.TestCase):
+    def render_table(self, commands):
+        script = (REPO / "benches/exiftool_comparison.sh").read_text()
+        table = re.search(r"^table\(\) \{.*?^\}", script, re.M | re.S).group(0)
+        with tempfile.TemporaryDirectory(prefix="benchmark table ") as directory:
+            root = Path(directory)
+            results = root / "results.json"
+            results.write_text(json.dumps({
+                "results": [{
+                    "command": command,
+                    "median": 0.0123,
+                    "min": 0.0101,
+                    "mean": 0.0134,
+                    "stddev": 0.0012,
+                    "max": 0.0167,
+                    "times": [0.0123, 0.0145],
+                } for command in commands]
+            }))
+            env = {**os.environ, "TEMP_DIR": str(root), "PROJECT_ROOT": str(root)}
+            return subprocess.run(
+                ["bash", "-c", table + '\ntable "$1"', "table", str(results)],
+                env=env, text=True, capture_output=True, check=True,
+            ).stdout
+
+    def test_report_labels_preserve_explicit_perl_command_without_file_count(self):
+        output = self.render_table([
+            "/portable/perl -I/portable/lib /portable/source/exiftool -config '' -j -a -G1 Canon.jpg",
+            "oxidex -j -a -G1 " + " ".join(f"file {index}.jpg" for index in range(12)),
+        ])
+        self.assertIn("<code>/portable/perl -I/portable/lib /portable/source/exiftool -config '' -j -a -G1 Canon.jpg</code>", output)
+        self.assertNotIn("<1 files>", output)
+        self.assertNotIn("<5 files>", output)
+        self.assertIn("file 11.jpg", output)
+        self.assertIn("12.3 ms | 10.1 ms | 13.4 ± 1.2 | 16.7 ms | 2 |", output)
+
+    def test_report_labels_escape_special_paths_without_active_markup(self):
+        command = "oxidex -j -a -G1 path with spaces|pipe`tick<less>&more.jpg\nsecond.jpg"
+        output = self.render_table([command])
+        self.assertIn("&#124;", output)
+        self.assertIn("&#96;", output)
+        self.assertIn("&lt;", output)
+        self.assertIn("&gt;", output)
+        self.assertIn("&amp;", output)
+        self.assertNotIn("<less>", output)
+        rendered_code = re.search(r"<code>(.*?)</code>", output).group(1)
+        self.assertEqual(html.unescape(rendered_code), command)
+
     def test_single_file_scenario_preserves_empty_config_and_paths_at_timer_boundary(self):
         script = (REPO / "benches/exiftool_comparison.sh").read_text()
         scenario = re.search(r"^benchmark_single_file\(\) \{.*?^\}", script, re.M | re.S).group(0)
