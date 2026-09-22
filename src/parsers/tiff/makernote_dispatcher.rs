@@ -87,45 +87,6 @@ pub fn dispatch_makernote_with_model_and_values(
 /// the Make string).
 const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SignatureRoute {
-    KodakType2,
-    HpType4,
-    RicohType2,
-}
-
-/// Enforce each MakerNotes.pm condition before the broad Make routes below.
-/// Kodak Type2 and HP Type4 are payload-only; Ricoh Type2 combines its exact
-/// payload shape with the required Make/model gate. Keep every condition
-/// exact so a near-match falls through rather than claiming another vendor's
-/// bytes.
-fn signature_route(data: &[u8], make: &str, model: Option<&str>) -> Option<SignatureRoute> {
-    let kodak_type2 = data
-        .get(8..)
-        .is_some_and(|tail| tail.starts_with(b"Eastman Kodak"))
-        || data.get(..12).is_some_and(|prefix| {
-            prefix[0] == 1
-                && prefix[1] == 0
-                && matches!(prefix[2], 0 | 1)
-                && prefix[3..8] == [0, 0, 0, 4, 0]
-                && prefix[8..12].iter().all(u8::is_ascii_alphabetic)
-        });
-    let ricoh_type2 = data.get(..12).is_some_and(|prefix| {
-        (prefix.starts_with(b"II*\0\x08\0\0\0") && prefix[9..] == [0, 0, 0])
-            || (prefix.starts_with(b"MM\0*\0\0\0\x08\0") && prefix[10..] == [0, 0])
-    });
-    let ricoh_make = make.starts_with("RICOH") || make.starts_with("PENTAX RICOH");
-    if kodak_type2 {
-        Some(SignatureRoute::KodakType2)
-    } else if matches!(data.get(..6), Some(b"IIII\x04\0") | Some(b"IIII\x05\0")) {
-        Some(SignatureRoute::HpType4)
-    } else if ricoh_make && (ricoh_type2 || model == Some("RICOH WG-M1")) {
-        Some(SignatureRoute::RicohType2)
-    } else {
-        None
-    }
-}
-
 /// Match the vendors whose Make string varies too much for a literal list.
 ///
 /// Returns `None` for everything else so the caller falls through to the
@@ -377,45 +338,6 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
                 tags,
                 value_forms,
             )?;
-        }
-        return Ok(());
-    }
-
-    // Enforce the source conditions before broad Make matching: Kodak Type2
-    // and HP Type4 are payload-only, while Ricoh Type2 requires its
-    // Make/model gate as well. Pentax/RICOH-branded carriers use all three
-    // layouts, so the broad Pentax prefix routes below must not win. The
-    // family parsers remain the owners of the record decoders; this shared
-    // boundary only establishes the source-defined precedence.
-    if let Some(route) = signature_route(data, make, model) {
-        let parser: Box<dyn MakerNoteParser> = match route {
-            SignatureRoute::KodakType2 => Box::new(kodak::KodakParser),
-            SignatureRoute::HpType4 => Box::new(hp::HpParser),
-            SignatureRoute::RicohType2 => Box::new(ricoh::RicohParser),
-        };
-        if parser.validate_header(data) {
-            if let Some(rows) = occurrences.as_deref_mut() {
-                parser.parse_with_context_and_values_and_session_and_occurrences(
-                    ctx,
-                    byte_order,
-                    model,
-                    session,
-                    cond_ctx,
-                    tags,
-                    value_forms,
-                    rows,
-                )?;
-            } else {
-                parser.parse_with_context_and_values_and_session(
-                    ctx,
-                    byte_order,
-                    model,
-                    session,
-                    cond_ctx,
-                    tags,
-                    value_forms,
-                )?;
-            }
         }
         return Ok(());
     }
@@ -812,82 +734,6 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn signature_routes_win_before_conflicting_camera_makes() {
-        assert_eq!(
-            signature_route(b"\x01\0\x01\0\0\0\x04\0ABcd", "PENTAX", None),
-            Some(SignatureRoute::KodakType2)
-        );
-        assert_eq!(
-            signature_route(b"\x01\0\x00\0\0\0\x04\0WXYZ", "MINOLTA", None),
-            Some(SignatureRoute::KodakType2)
-        );
-        assert_eq!(
-            signature_route(b"12345678Eastman Kodak", "MINOLTA", None),
-            Some(SignatureRoute::KodakType2)
-        );
-        assert_eq!(
-            signature_route(b"IIII\x04\0PENTAX", "PENTAX", None),
-            Some(SignatureRoute::HpType4)
-        );
-        assert_eq!(
-            signature_route(b"IIII\x05\0PENTAX", "PENTAX", None),
-            Some(SignatureRoute::HpType4)
-        );
-        assert_eq!(
-            signature_route(
-                b"II*\0\x08\0\0\0\x01\0\0\0",
-                "RICOH IMAGING COMPANY, LTD.",
-                None,
-            ),
-            Some(SignatureRoute::RicohType2)
-        );
-        assert_eq!(
-            signature_route(b"MM\0*\0\0\0\x08\0\x01\0\0", "PENTAX RICOH", None),
-            Some(SignatureRoute::RicohType2)
-        );
-        assert_eq!(
-            signature_route(b"II*\0\x08\0\0\0\x02\0\0\0", "PENTAX RICOH IMAGING", None,),
-            Some(SignatureRoute::RicohType2)
-        );
-        assert_eq!(
-            signature_route(b"not a TIFF header", "RICOH", Some("RICOH WG-M1")),
-            Some(SignatureRoute::RicohType2)
-        );
-    }
-
-    #[test]
-    fn signature_routes_reject_truncated_and_near_match_prefixes() {
-        for data in [
-            b"\x01\0\x01\0\0\0\x04".as_slice(),
-            b"\x01\0\x01\0\0\0\x05\0".as_slice(),
-            b"\x01\0\x01\0\0\0\x04\0ABC1".as_slice(),
-            b"\x01\0\x02\0\0\0\x04\0ABCD".as_slice(),
-            b"IIII\x04".as_slice(),
-            b"IIII\x06\0".as_slice(),
-            b"II*\0\x08\0\0\0".as_slice(),
-            b"MM\0*\0\0\0\x08".as_slice(),
-            b"II*\0\x08\0\0\0\x01\0\x01\0".as_slice(),
-            b"MM\0*\0\0\0\x08\0\x01\0\x01".as_slice(),
-            b"II*\0\x09\0\0\0".as_slice(),
-            b"MM\0*\0\0\0\x09".as_slice(),
-        ] {
-            assert_eq!(
-                signature_route(data, "UNRELATED", None),
-                None,
-                "unexpected route for {data:?}"
-            );
-        }
-        assert_eq!(
-            signature_route(b"II*\0\x08\0\0\0\x01\0\0\0", "UNRELATED", None,),
-            None,
-        );
-        assert_eq!(
-            signature_route(b"ordinary bytes", "RICOH", Some("not WG-M1")),
-            None,
-        );
-    }
 
     fn panasonic_quality_note() -> Vec<u8> {
         let mut data = b"Panasonic\0\0\0".to_vec();

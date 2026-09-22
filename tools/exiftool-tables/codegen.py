@@ -2925,8 +2925,17 @@ def gen_binary_ownership_identities(doc, module_names):
             if not isinstance(value, dict) or not is_binary_table(value.get("meta") or {}):
                 continue
             tags = value.get("tags") or {}
-            for raw_key in sorted(tags, key=str):
-                source = tags[raw_key]
+            for raw_key_value in sorted(tags, key=str):
+                raw_key = str(raw_key_value)
+                index, _sub_index = parse_index(raw_key)
+                if index is None:
+                    # ProcessBinaryData tables may carry table directives in
+                    # the same hash as their fields.  The runtime generator
+                    # admits only numeric offsets (including fractional
+                    # bit-field keys), so the ownership identity inventory
+                    # must use the identical boundary.
+                    continue
+                source = tags[raw_key_value]
                 variants = source.get("_variants") if isinstance(source, dict) else None
                 alternatives = enumerate(variants) if isinstance(variants, list) else [(None, source)]
                 for variant_index, tag in alternatives:
@@ -2934,7 +2943,7 @@ def gen_binary_ownership_identities(doc, module_names):
                         "module": module,
                         "table": table,
                         "full_name": f"Image::ExifTool::{module}::{table}",
-                        "raw_key": str(raw_key),
+                        "raw_key": raw_key,
                         "variant_path": [] if variant_index is None else [variant_index],
                         "name": tag.get("Name") if isinstance(tag, dict) else None,
                         "source_sha256": _ifd_identity_source_sha256(tag),
@@ -2949,11 +2958,13 @@ def gen_binary_ownership_identities(doc, module_names):
 def gen_ownership_identities(doc, module_names):
     """Return non-IFD identities needed by runtime ownership fragments.
 
-    Besides every binary row, emit an alias for source hashes whose tag name
-    is the raw string key itself. ExifTool tables such as JPEG::MediaJukebox
-    and Trailer::Vivo intentionally use that compact shape (`Tool_Name => {}`,
-    `HDRImage => {...}`), so requiring a separate `Name` would make a real
-    source row impossible to bind.
+    Besides every binary row, emit a bounded alias set for source hashes whose
+    tag name is the raw string key itself. ExifTool's ID_FMT=none tables such
+    as JPEG::MediaJukebox and Trailer::Vivo intentionally use that compact
+    shape (`Tool_Name => {}`, `HDRImage => {...}`), so requiring a separate
+    `Name` would make a real source row impossible to bind. This is not a
+    universal keyed-table classifier: broader coverage requires the hydrated
+    allTables/TagTableKeys projection rather than guessing from hash shape.
     """
     rows = gen_binary_ownership_identities(doc, module_names)
     modules = doc.get("modules") or {}
@@ -2962,7 +2973,17 @@ def gen_ownership_identities(doc, module_names):
         if not isinstance(mod, dict):
             continue
         for table, value in sorted((mod.get("tables") or {}).items()):
-            if not isinstance(value, dict) or is_binary_table(value.get("meta") or {}):
+            if not isinstance(value, dict):
+                continue
+            meta = value.get("meta") or {}
+            variables = meta.get("VARS") if isinstance(meta, dict) else None
+            if is_binary_table(meta) or not (
+                isinstance(variables, dict) and variables.get("ID_FMT") == "none"
+            ):
+                # A string key alone does not make a tag table: ExifTool's
+                # modules also expose PrintConv and lookup hashes in the dump.
+                # ID_FMT=none is the source declaration that the hash contains
+                # real tags whose raw identifiers are their names.
                 continue
             for raw_key, source in sorted((value.get("tags") or {}).items(), key=lambda item: str(item[0])):
                 variants = source.get("_variants") if isinstance(source, dict) else None

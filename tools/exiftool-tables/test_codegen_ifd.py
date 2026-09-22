@@ -170,6 +170,8 @@ class IdentityLedger(unittest.TestCase):
                     "tags": {
                         "4.1": {"Name": "BurstStartSlotNumber"},
                         "4.4": {"Name": "BurstStartImageType"},
+                        "PRINT_CONV": {"Name": "not a field"},
+                        "Groups": {},
                     },
                 }}},
                 "Kodak": {"tables": {"Main": {
@@ -177,17 +179,37 @@ class IdentityLedger(unittest.TestCase):
                     "tags": {"20": {"Name": "TimeCreated"}},
                 }}},
                 "JPEG": {"tables": {"MediaJukebox": {
+                    "meta": {"VARS": {"ID_FMT": "none"}},
+                    "tags": {
+                        "": {},
+                        "123": {},
+                        "Album": {},
+                        "Caption": {},
+                        "Date": {},
+                        "Explicit": {"Name": "ExplicitName"},
+                        "Keywords": {},
+                        "Name": {},
+                        "People": {},
+                        "Places": {},
+                        "Tool_Name": {},
+                        "Tool_Version": {},
+                    },
+                }}},
+                "Lookup": {"tables": {"Values": {
                     "meta": {},
-                    "tags": {"Tool_Name": {}},
+                    "tags": {"OTHER": {}},
+                }, "ValuesWithIdFormat": {
+                    "meta": {"VARS": {"ID_FMT": "hex"}},
+                    "tags": {"OTHER": {}},
                 }}},
                 "Trailer": {"tables": {"Vivo": {
-                    "meta": {},
-                    "tags": {"HDRImage": {}},
+                    "meta": {"VARS": {"ID_FMT": "none"}},
+                    "tags": {"HDRImage": {}, "HiddenData": {}, "JSONInfo": {}},
                 }}},
             },
         }
         rows = codegen.gen_ownership_identities(
-            doc, ["JPEG", "Kodak", "Nikon", "Trailer"]
+            doc, ["JPEG", "Kodak", "Lookup", "Nikon", "Trailer"]
         )
         by_identity = {
             (row["full_name"], row["raw_key"], tuple(row["variant_path"])): row
@@ -205,14 +227,47 @@ class IdentityLedger(unittest.TestCase):
             by_identity[("Image::ExifTool::Kodak::Main", "20", ())]["name"],
             "TimeCreated",
         )
-        self.assertEqual(
-            by_identity[("Image::ExifTool::JPEG::MediaJukebox", "Tool_Name", ())]["name"],
-            "Tool_Name",
+        self.assertNotIn(
+            ("Image::ExifTool::Nikon::MakerNotes0x56", "PRINT_CONV", ()),
+            by_identity,
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Nikon::MakerNotes0x56", "Groups", ()),
+            by_identity,
         )
         self.assertEqual(
-            by_identity[("Image::ExifTool::Trailer::Vivo", "HDRImage", ())]["name"],
-            "HDRImage",
+            {
+                raw_key
+                for full_name, raw_key, variant_path in by_identity
+                if full_name == "Image::ExifTool::JPEG::MediaJukebox"
+                and not variant_path
+            },
+            {
+                "Album", "Caption", "Date", "Keywords", "Name", "People",
+                "Places", "Tool_Name", "Tool_Version",
+            },
         )
+        self.assertEqual(
+            {
+                raw_key
+                for full_name, raw_key, variant_path in by_identity
+                if full_name == "Image::ExifTool::Trailer::Vivo" and not variant_path
+            },
+            {"HDRImage", "HiddenData", "JSONInfo"},
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Lookup::Values", "OTHER", ()),
+            by_identity,
+        )
+        self.assertNotIn(
+            ("Image::ExifTool::Lookup::ValuesWithIdFormat", "OTHER", ()),
+            by_identity,
+        )
+        for raw_key in ("", "123", "Explicit"):
+            self.assertNotIn(
+                ("Image::ExifTool::JPEG::MediaJukebox", raw_key, ()),
+                by_identity,
+            )
         self.assertEqual(
             {row["source_kind"] for row in rows},
             {"binary", "named-raw-key"},
