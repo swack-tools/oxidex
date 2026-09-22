@@ -1974,14 +1974,13 @@ mod tests {
 
     #[test]
     fn samsung_galaxy_a55_timezone_offset_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGalaxyA55_5G.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGalaxyA55_5G.jpg",
-        );
+        };
         let metadata =
-            crate::core::operations::read_metadata(path).expect("Samsung Galaxy A55 parses");
+            crate::core::operations::read_metadata(&path).expect("Samsung Galaxy A55 parses");
 
         assert_eq!(metadata.get_integer("ExifIFD:TimeZoneOffset"), Some(2));
     }

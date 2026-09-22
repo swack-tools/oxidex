@@ -2290,13 +2290,12 @@ mod tests {
 
     #[test]
     fn mie_reports_parsed() {
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/MIE.mie");
-        if !path.is_file() {
-            eprintln!("skipping: pinned fixture not present at {}", path.display());
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("MIE.mie") else {
+            eprintln!("skipping: pinned fixture MIE.mie is absent");
             return;
-        }
+        };
 
-        let report = read_metadata_report(path).expect("MIE now has a real parser");
+        let report = read_metadata_report(&path).expect("MIE now has a real parser");
 
         // Step 32 routed `FileFormat::MIE` to `mie.rs`'s standalone-document
         // parser -- this file used to bottom out in `add_identity_tags`
@@ -2315,13 +2314,12 @@ mod tests {
 
     #[test]
     fn samsung_i8910_scalado_app4_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGT-i8910.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGT-i8910.jpg",
-        );
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Samsung GT-i8910 fixture");
         let metadata = parse_jpeg_metadata(&reader, &ReadOptions::default_full_listing())
             .expect("parse pinned Samsung fixture");

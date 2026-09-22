@@ -1315,12 +1315,7 @@ mod step19_duplicate_retention_regression {
 
     use std::path::Path;
 
-    fn occurrence_count(path: &str, key: &str) -> usize {
-        let path = Path::new(path);
-        if !path.is_file() {
-            eprintln!("skip: pinned fixture {} not present", path.display());
-            return usize::MAX; // never equals an asserted expectation
-        }
+    fn occurrence_count(path: &Path, key: &str) -> usize {
         let report = crate::core::operations::read_metadata_report(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         report.metadata.occurrences_for(key).len()
@@ -1330,13 +1325,10 @@ mod step19_duplicate_retention_regression {
     /// variant JPEG.pm declares as the same tag -- both `Priority => 0`.
     #[test]
     fn exiftool_jpg_retains_both_comment_sources() {
-        let n = occurrence_count(
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/ExifTool.jpg",
-            "File:Comment",
-        );
-        if n == usize::MAX {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
             return;
-        }
+        };
+        let n = occurrence_count(&path, "File:Comment");
         assert_eq!(n, 2);
     }
 
@@ -1344,25 +1336,19 @@ mod step19_duplicate_retention_regression {
     /// `Track1`'s wins the bare key (`TagSink::record`'s DOC_NUM guard).
     #[test]
     fn quicktime_mov_retains_both_track_ids() {
-        let n = occurrence_count(
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/QuickTime.mov",
-            "QuickTime:TrackID",
-        );
-        if n == usize::MAX {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("QuickTime.mov") else {
             return;
-        }
+        };
+        let n = occurrence_count(&path, "QuickTime:TrackID");
         assert_eq!(n, 2);
     }
 
     #[test]
     fn canonraw_cr3_retains_all_four_track_ids() {
-        let n = occurrence_count(
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr3",
-            "QuickTime:TrackID",
-        );
-        if n == usize::MAX {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("CanonRaw.cr3") else {
             return;
-        }
+        };
+        let n = occurrence_count(&path, "QuickTime:TrackID");
         assert_eq!(n, 4);
     }
 
@@ -1370,24 +1356,22 @@ mod step19_duplicate_retention_regression {
     /// the 0x0005 Main + 0x0215 `CameraInfo` `PentaxModelID` pair.
     #[test]
     fn pentax_jpg_retains_lens_type_and_model_id_duplicates() {
-        let root = "/tmp/oxidex-exiftool-cache/exiftool/t/images/Pentax.jpg";
-        let lens = occurrence_count(root, "Pentax:LensType");
-        let model = occurrence_count(root, "Pentax:PentaxModelID");
-        if lens == usize::MAX {
+        let Some(root) = crate::test_support::pinned_t_images_fixture_path("Pentax.jpg") else {
             return;
-        }
+        };
+        let lens = occurrence_count(&root, "Pentax:LensType");
+        let model = occurrence_count(&root, "Pentax:PentaxModelID");
         assert_eq!(lens, 2);
         assert_eq!(model, 2);
     }
 
     #[test]
     fn pentax_avi_retains_lens_type_and_model_id_duplicates() {
-        let root = "/tmp/oxidex-exiftool-cache/exiftool/t/images/Pentax.avi";
-        let lens = occurrence_count(root, "Pentax:LensType");
-        let model = occurrence_count(root, "Pentax:PentaxModelID");
-        if lens == usize::MAX {
+        let Some(root) = crate::test_support::pinned_t_images_fixture_path("Pentax.avi") else {
             return;
-        }
+        };
+        let lens = occurrence_count(&root, "Pentax:LensType");
+        let model = occurrence_count(&root, "Pentax:PentaxModelID");
         assert_eq!(lens, 2);
         assert_eq!(model, 2);
     }

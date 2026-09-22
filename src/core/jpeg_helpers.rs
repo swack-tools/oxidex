@@ -2250,17 +2250,12 @@ mod tests {
 
     #[test]
     fn dji_mavic2_thermal_app_payloads_match_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path(
+            "DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
+        ) else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/DJI/DJI_MAVIC2-ENTERPRISE-ADVANCED.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned DJI Mavic 2 Enterprise Advanced fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned DJI fixture");
@@ -2282,16 +2277,11 @@ mod tests {
 
     #[test]
     fn leica_tl2_ifd2_jpg_from_raw_pair_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Leica/LeicaTL2.jpg")
+        else {
             return;
-        }
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaTL2.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Leica TL2 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Leica TL2 segments");
@@ -2309,16 +2299,11 @@ mod tests {
 
     #[test]
     fn leica_cl_ifd2_preview_pair_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Leica/LeicaCL.jpg")
+        else {
             return;
-        }
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaCL.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Leica CL fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Leica CL segments");
@@ -2342,17 +2327,12 @@ mod tests {
 
     #[test]
     fn olympus_sh25mr_gps_area_information_decodes_exif_unicode() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Olympus/OlympusSH-25MR.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Olympus/OlympusSH-25MR.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Olympus SH-25MR fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Olympus SH-25MR segments");
@@ -2368,15 +2348,10 @@ mod tests {
 
     #[test]
     fn ricoh2_empty_gps_dest_distance_ref_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Ricoh2.jpg") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Ricoh2 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Ricoh2 segments");
@@ -2393,16 +2368,11 @@ mod tests {
 
     #[test]
     fn nikon_z7_2_lens_serial_number_stops_at_first_nul() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Nikon/NikonZ7_2.jpg")
+        else {
             return;
-        }
-        let path =
-            std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonZ7_2.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Nikon Z7 II fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Nikon Z7 II segments");
@@ -2418,17 +2388,12 @@ mod tests {
 
     #[test]
     fn samsung_sdc130z_learning_opt_out_uses_exif_int16u_override() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungSDC-130Z.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungSDC-130Z.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Samsung SDC-130Z fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Samsung SDC-130Z segments");
@@ -2444,17 +2409,12 @@ mod tests {
 
     #[test]
     fn panasonic_tz57_title2_uses_exif_string_format_override() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Panasonic/PanasonicDMC-TZ57.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic/PanasonicDMC-TZ57.jpg",
-        );
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
-        let reader = crate::io::buffered_reader::BufferedReader::new(path)
+        };
+        let reader = crate::io::buffered_reader::BufferedReader::new(&path)
             .expect("read pinned Panasonic TZ57 fixture");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse pinned Panasonic TZ57 segments");
@@ -2494,21 +2454,13 @@ mod tests {
 
     #[test]
     fn ricoh2_app5_azimuth_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let paths = [
-            "/tmp/oxidex-exiftool-cache/combined-samples/Ricoh2.jpg",
-            "/tmp/oxidex-exiftool-cache/exiftool/t/images/Ricoh2.jpg",
-        ];
-        let Some(path) = paths
-            .iter()
-            .find(|path| std::path::Path::new(path).exists())
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Ricoh2.jpg")
+            .or_else(|| crate::test_support::pinned_t_images_fixture_path("Ricoh2.jpg"))
         else {
             return;
         };
-        let reader = crate::io::buffered_reader::BufferedReader::new(std::path::Path::new(path))
-            .expect("read Ricoh2.jpg");
+        let reader =
+            crate::io::buffered_reader::BufferedReader::new(&path).expect("read Ricoh2.jpg");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse Ricoh2.jpg segments");
         let mut metadata = MetadataMap::new();
@@ -2520,16 +2472,11 @@ mod tests {
 
     #[test]
     fn exiftool_jpeg_rmeta_menu_fields_match_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("ExifTool.jpg") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/ExifTool.jpg");
-        if !path.exists() {
-            eprintln!("skipping: corpus fixture not present at {}", path.display());
-            return;
-        }
+        };
         let reader =
-            crate::io::buffered_reader::BufferedReader::new(path).expect("read ExifTool.jpg");
+            crate::io::buffered_reader::BufferedReader::new(&path).expect("read ExifTool.jpg");
         let segments = crate::parsers::jpeg::segment_parser::parse_segments(&reader)
             .expect("parse ExifTool.jpg segments");
         let mut metadata = MetadataMap::new();

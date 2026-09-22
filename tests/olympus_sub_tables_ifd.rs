@@ -50,13 +50,12 @@
 //! `AntiShockWaitingTime`) has no `t/images` carrier and is pinned on
 //! corpus files in an `#[ignore]`d test.
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
 use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
-use std::path::Path;
-
-const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus";
 
 /// The seven sub-tables slice I-3 enables.
 const SUB_TABLES: [&str; 7] = [
@@ -109,14 +108,7 @@ fn olympus_main_line_is_still_in_force_for_the_edges() {
 /// `None` -- never silently -- when the pinned ExifTool checkout is not
 /// present on this machine.
 fn t_images_carrier(name: &str) -> Option<MetadataMap> {
-    let path = Path::new(T_IMAGES).join(name);
-    if !path.is_file() {
-        eprintln!(
-            "skipping: {} is not present (the pinned ExifTool 13.59 checkout's t/images is not on this machine)",
-            path.display()
-        );
-        return None;
-    }
+    let path = fixtures::pinned_t_images_fixture_path(name)?;
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
@@ -619,7 +611,8 @@ fn olympus2_jpg_sub_table_tags_match_the_pinned_oracle() {
 #[test]
 #[ignore = "requires the combined-samples corpus"]
 fn corpus_carriers_gain_the_rows_the_hand_tables_lacked_in_exiftools_order() {
-    let em5 = Path::new(CORPUS).join("OlympusE-M5.jpg");
+    let em5 = fixtures::pinned_combined_fixture_path("Olympus/OlympusE-M5.jpg")
+        .expect("configured Olympus E-M5 fixture");
     let metadata = read_metadata(&em5).expect("OlympusE-M5.jpg parses");
     assert_tags(
         &metadata,
@@ -692,7 +685,8 @@ fn corpus_carriers_gain_the_rows_the_hand_tables_lacked_in_exiftools_order() {
         ],
     );
 
-    let em1ii = Path::new(CORPUS).join("OlympusE-M1MarkII.jpg");
+    let em1ii = fixtures::pinned_combined_fixture_path("Olympus/OlympusE-M1MarkII.jpg")
+        .expect("configured Olympus E-M1 Mark II fixture");
     let metadata = read_metadata(&em1ii).expect("OlympusE-M1MarkII.jpg parses");
     assert_tags(
         &metadata,
@@ -706,7 +700,8 @@ fn corpus_carriers_gain_the_rows_the_hand_tables_lacked_in_exiftools_order() {
         ],
     );
 
-    let ep1 = Path::new(CORPUS).join("OlympusE-P1.jpg");
+    let ep1 = fixtures::pinned_combined_fixture_path("Olympus/OlympusE-P1.jpg")
+        .expect("configured Olympus E-P1 fixture");
     let metadata = read_metadata(&ep1).expect("OlympusE-P1.jpg parses");
     assert_tags(
         &metadata,
@@ -731,7 +726,8 @@ fn corpus_carriers_gain_the_rows_the_hand_tables_lacked_in_exiftools_order() {
         "OlympusE-P1.jpg: AFPoint must not be reported (RawConv undef)"
     );
 
-    let xz1 = Path::new(CORPUS).join("OlympusXZ-1.jpg");
+    let xz1 = fixtures::pinned_combined_fixture_path("Olympus/OlympusXZ-1.jpg")
+        .expect("configured Olympus XZ-1 fixture");
     let metadata = read_metadata(&xz1).expect("OlympusXZ-1.jpg parses");
     assert_tags(
         &metadata,

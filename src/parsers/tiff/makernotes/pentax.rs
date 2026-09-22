@@ -4045,13 +4045,13 @@ mod tests {
 
     #[test]
     fn samsung_gx20_auto_bracketing_uses_pentax_two_value_print_conv() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGX20.jpg")
+        else {
             return;
-        }
-        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
-        ))
-        .expect("read pinned Samsung GX20 fixture");
+        };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned Samsung GX20 fixture");
         assert_eq!(
             metadata.get_string("Pentax:AutoBracketing"),
             Some("0 EV, No Extended Bracket")
@@ -6208,13 +6208,13 @@ mod tests {
 
     #[test]
     fn samsung_gx20_hometown_city_uses_pentax_city_table() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGX20.jpg")
+        else {
             return;
-        }
-        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
-        ))
-        .expect("read pinned Samsung GX20 fixture");
+        };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned Samsung GX20 fixture");
         assert_eq!(metadata.get_string("Pentax:HometownCity"), Some("New York"));
     }
 
@@ -6227,10 +6227,13 @@ mod tests {
         // '$val =~ tr/ /x/; $val'` -- two packed int16u (width, height), not
         // one int32u. Regression test for the bug where this printed the raw
         // packed word (41943520, 0x028001E0) instead of "640x480".
-        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungGX20.jpg",
-        ))
-        .expect("read pinned Samsung GX20 fixture");
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungGX20.jpg")
+        else {
+            return;
+        };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned Samsung GX20 fixture");
         assert_eq!(
             metadata.get_string("Pentax:PreviewImageSize"),
             Some("640x480")
@@ -6255,13 +6258,11 @@ mod tests {
     /// do fire.
     #[test]
     fn pentax_jpg_lens_type_default_winner_is_unchanged() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Pentax.jpg") else {
             return;
-        }
-        let metadata = crate::core::operations::read_metadata(std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Pentax.jpg",
-        ))
-        .expect("read pinned Pentax.jpg fixture");
+        };
+        let metadata =
+            crate::core::operations::read_metadata(&path).expect("read pinned Pentax.jpg fixture");
 
         assert_eq!(
             metadata.get_string("Pentax:LensType"),
@@ -6283,16 +6284,15 @@ mod tests {
     /// second (`Optio S7` / `Optio SV`); its `-j -G1 -a` keeps the first.
     #[test]
     fn pentax_optio_duplicates_read_identically_on_every_run() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
         for (file, model_ids) in [
             ("PentaxOptioL20.jpg", ["Optio L20", "Optio S7"]),
             ("PentaxOptioSVi.jpg", ["Optio SVi", "Optio SV"]),
         ] {
-            let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT)
-                .join("Pentax")
-                .join(file);
+            let Some(path) =
+                crate::test_support::pinned_combined_fixture_path(&format!("Pentax/{file}"))
+            else {
+                return;
+            };
             // Every occurrence in `order`, as `-a` renders them; the access
             // time is the clock (each read moves it), not the parser.
             let read = || -> Vec<(String, String)> {
