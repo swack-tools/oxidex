@@ -1186,6 +1186,12 @@ impl PentaxParser {
                         &mut members,
                         tags,
                     );
+                    // `FlashInfo` byte 24 has a second, fractional table key
+                    // (`24.1`) which the generated integer-index layout cannot
+                    // represent.  Decode that one field from the same record.
+                    if entry.tag_id == PENTAX_FLASH_INFO {
+                        decode_pentax_external_flash_guide_number(&record, tags);
+                    }
                     // `LensInfoQ`'s `LensInfo` field (Pentax.pm:6048-6053,
                     // offset 0x2a, `string[20]`) has a `ValueConv =>
                     // '$val=~s/mm/mm /'` -- inserting a space after the
@@ -2066,7 +2072,7 @@ impl PentaxParser {
                 // `PrintConv => '$val =~ tr/ /x/; $val'` turns the space into
                 // an "x". `CAFPointsInFocus`/`CAFPointsSelected` need
                 // `DecodeAFPoints`, a bitmask walk over a grid whose size this
-                // byte determines, and neither is decoded here.
+                // byte determines.
                 PENTAX_CAF_POINT_INFO => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 2 {
@@ -2076,6 +2082,15 @@ impl PentaxParser {
                         tags.insert(
                             "Pentax:CAFGridSize".to_string(),
                             format!("{}x{}", b >> 4, b & 0x0f),
+                        );
+                        let point_bits = raw.get(2..).unwrap_or_default();
+                        tags.insert(
+                            "Pentax:CAFPointsInFocus".to_string(),
+                            decode_caf_points(point_bits, n, 0x02),
+                        );
+                        tags.insert(
+                            "Pentax:CAFPointsSelected".to_string(),
+                            decode_caf_points(point_bits, n, 0x03),
                         );
                     }
                 }
@@ -2863,6 +2878,52 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
     }
 }
 
+/// Decode `Pentax::FlashInfo`'s fractional index `24.1`.
+///
+/// ExifTool's `Mask => 0x1f` reads byte 24's low five bits, remaps stored 29
+/// to -3, then applies `2**($val / 16 + 4)` and prints zero as `n/a`
+/// (Pentax.pm:4650-4661). The generated table has only integer byte offsets,
+/// so this one fractional field remains beside the generated record decoder.
+fn decode_pentax_external_flash_guide_number(record: &[u8], tags: &mut HashMap<String, String>) {
+    let Some(&byte) = record.get(24) else {
+        return;
+    };
+    let raw = byte & 0x1f;
+    let value = if raw == 0 {
+        "n/a".to_string()
+    } else {
+        let exponent = if raw == 29 { -3.0 } else { f64::from(raw) };
+        let guide_number = 2_f64.powf(exponent / 16.0 + 4.0);
+        (guide_number + 0.5).floor().to_string()
+    };
+    tags.insert("Pentax:ExternalFlashGuideNumber".to_string(), value);
+}
+
+/// Decode the two-bit contrast-detect AF point records in `CAFPointInfo`.
+///
+/// This is `DecodeAFPoints($val, $num, 2, $mask)` from Pentax.pm:6727-6754.
+/// With no optional `bitVal`, ExifTool selects a point when *any* bit in the
+/// mask is set: mask 0x02 accepts states 2 and 3, while 0x03 accepts 1, 2 and
+/// 3. Points are one-based and packed from each byte's most-significant pair.
+fn decode_caf_points(bytes: &[u8], point_count: u32, mask: u8) -> String {
+    if bytes.is_empty() {
+        return "(none)".to_string();
+    }
+
+    let mut points = Vec::new();
+    for point in 0..point_count {
+        let byte_index = (point / 4) as usize;
+        let Some(&byte) = bytes.get(byte_index) else {
+            break;
+        };
+        let shift = 6 - (point % 4) * 2;
+        if ((byte >> shift) & mask) != 0 {
+            points.push((point + 1).to_string());
+        }
+    }
+    points.join(",")
+}
+
 /// The `%Pentax::Main` tags whose ExifTool entry is a `SubDirectory` over a
 /// `ProcessBinaryData` table this reader can transcribe, the table each one
 /// selects, and the byte order to read the record in.
@@ -2872,6 +2933,7 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
 /// produces nothing here rather than a guess -- `%Pentax` has an
 /// `...Unknown` companion table for exactly those, and ExifTool reports no
 /// named tags from it either.
+
 fn pentax_binary_subdir(
     entry: &IfdEntry,
     model: Option<&str>,
