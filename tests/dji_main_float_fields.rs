@@ -24,9 +24,7 @@ use oxidex::core::operations::read_metadata;
 mod fixtures;
 
 fn assert_fields(file: &str, expected: &[(&str, &str)]) {
-    let Some(path) = fixtures::pinned_combined_fixture_path(&format!("DJI/{file}")) else {
-        return;
-    };
+    let path = fixtures::required_combined_fixture_path(&format!("DJI/{file}"));
     let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
     for (tag, value) in expected {
         assert_eq!(

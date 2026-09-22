@@ -46,6 +46,11 @@ fn carrier(dir: &str, name: &str) -> Option<MetadataMap> {
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
+fn required_corpus_carrier(name: &str) -> MetadataMap {
+    let path = fixtures::required_combined_fixture_path(&format!("FujiFilm/{name}"));
+    read_metadata(&path).unwrap_or_else(|error| panic!("{name} parses: {error}"))
+}
+
 fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
     let value = metadata.get(key)?;
     value
@@ -251,27 +256,24 @@ fn corpus_main_tags_match_the_pinned_oracle() {
             &[("FujiFilm:ColorTemperature", "10000")][..],
         ),
     ] {
-        if let Some(metadata) = carrier(CORPUS, file) {
-            assert_tags(&metadata, file, expected);
-        }
+        let metadata = required_corpus_carrier(file);
+        assert_tags(&metadata, file, expected);
     }
     // unsupplied: 0x1446 FlickerReduction (`omitted.print_conv`); the oracle
     // prints `Off (0x0001)`, nothing here produces it.
-    if let Some(metadata) = carrier(CORPUS, "FujiFilmX-H2S.jpg") {
-        assert_eq!(
-            shown(&metadata, "FujiFilm:FlickerReduction"),
-            None,
-            "FujiFilmX-H2S.jpg: FlickerReduction is unsupplied"
-        );
-    }
+    let metadata = required_corpus_carrier("FujiFilmX-H2S.jpg");
+    assert_eq!(
+        shown(&metadata, "FujiFilm:FlickerReduction"),
+        None,
+        "FujiFilmX-H2S.jpg: FlickerReduction is unsupplied"
+    );
     // residual 0x0000 under the entry-format rule (Exif.pm:6463-6478): the
     // note's four trailing all-zero entries (type 0) are skipped, so they no
     // longer overwrite the real Version with "".
-    if let Some(metadata) = carrier(CORPUS, "FujiFilmFinePixXP150.jpg") {
-        assert_tags(
-            &metadata,
-            "FujiFilmFinePixXP150.jpg",
-            &[("FujiFilm:Version", "0130")],
-        );
-    }
+    let metadata = required_corpus_carrier("FujiFilmFinePixXP150.jpg");
+    assert_tags(
+        &metadata,
+        "FujiFilmFinePixXP150.jpg",
+        &[("FujiFilm:Version", "0130")],
+    );
 }

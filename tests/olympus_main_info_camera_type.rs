@@ -48,9 +48,7 @@ fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
 }
 
 fn assert_tags(file: &str, expected: &[(&str, &str)]) {
-    let Some(path) = fixtures::pinned_combined_fixture_path(&format!("Olympus/{file}")) else {
-        return;
-    };
+    let path = fixtures::required_combined_fixture_path(&format!("Olympus/{file}"));
     let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file} parses: {e}"));
     for (key, want) in expected {
         assert_eq!(

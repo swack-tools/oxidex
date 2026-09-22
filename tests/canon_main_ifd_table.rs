@@ -72,6 +72,11 @@ fn carrier(dir: &str, name: &str) -> Option<MetadataMap> {
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
+fn required_corpus_carrier(name: &str) -> MetadataMap {
+    let path = fixtures::required_combined_fixture_path(&format!("Canon/{name}"));
+    read_metadata(&path).unwrap_or_else(|error| panic!("{name} parses: {error}"))
+}
+
 fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
     let value = metadata.get(key)?;
     value
@@ -219,24 +224,22 @@ fn no_print_conv_shows_the_engine_value_conv() {
 #[ignore = "needs /tmp/oxidex-exiftool-cache/combined-samples/Canon"]
 fn corpus_main_tags_match_the_pinned_oracle() {
     // engine: 0x000c alternative 1 (`/EOS D30\b/`), and 0x000e.
-    if let Some(metadata) = carrier(CORPUS, "CanonEOS_D30.jpg") {
-        assert_tags(
-            &metadata,
-            "CanonEOS_D30.jpg",
-            &[
-                ("Canon:SerialNumber", "093107059"),
-                ("Canon:CanonFileLength", "1305916"),
-            ],
-        );
-    }
+    let metadata = required_corpus_carrier("CanonEOS_D30.jpg");
+    assert_tags(
+        &metadata,
+        "CanonEOS_D30.jpg",
+        &[
+            ("Canon:SerialNumber", "093107059"),
+            ("Canon:CanonFileLength", "1305916"),
+        ],
+    );
     // engine: a non-UTF-8 string is `fix_utf8`'d to `?`, as ExifTool's -j.
-    if let Some(metadata) = carrier(CORPUS, "CanonDIGITAL_IXUS_IIs.jpg") {
-        assert_tags(
-            &metadata,
-            "CanonDIGITAL_IXUS_IIs.jpg",
-            &[("Canon:OwnerName", "Ren? Kuunders")],
-        );
-    }
+    let metadata = required_corpus_carrier("CanonDIGITAL_IXUS_IIs.jpg");
+    assert_tags(
+        &metadata,
+        "CanonDIGITAL_IXUS_IIs.jpg",
+        &[("Canon:OwnerName", "Ren? Kuunders")],
+    );
     // residual, decision D3: 0x0096 on /EOS 5D/ bodies is the SerialInfo
     // edge, so no Main `InternalSerialNumber`. The oracle's `E005986` on the
     // 5D is SerialInfo's own key-9 row, now decoded through the generated
@@ -246,23 +249,21 @@ fn corpus_main_tags_match_the_pinned_oracle() {
         ("CanonEOS5D.jpg", Some("E005986")),
         ("CanonEOS5D_MarkII.jpg", None),
     ] {
-        if let Some(metadata) = carrier(CORPUS, file) {
-            assert_eq!(
-                shown(&metadata, "Canon:InternalSerialNumber").as_deref(),
-                want,
-                "{file}: 0x0096 on a /EOS 5D/ body is SerialInfo's row, never the Main value"
-            );
-        }
-    }
-    // engine: 0x0082 RawDataLength, a zero value.
-    if let Some(metadata) = carrier(CORPUS, "CanonEOS-1DS.jpg") {
-        assert_tags(
-            &metadata,
-            "CanonEOS-1DS.jpg",
-            &[
-                ("Canon:RawDataLength", "0"),
-                ("Canon:SerialNumber", "101215"),
-            ],
+        let metadata = required_corpus_carrier(file);
+        assert_eq!(
+            shown(&metadata, "Canon:InternalSerialNumber").as_deref(),
+            want,
+            "{file}: 0x0096 on a /EOS 5D/ body is SerialInfo's row, never the Main value"
         );
     }
+    // engine: 0x0082 RawDataLength, a zero value.
+    let metadata = required_corpus_carrier("CanonEOS-1DS.jpg");
+    assert_tags(
+        &metadata,
+        "CanonEOS-1DS.jpg",
+        &[
+            ("Canon:RawDataLength", "0"),
+            ("Canon:SerialNumber", "101215"),
+        ],
+    );
 }
