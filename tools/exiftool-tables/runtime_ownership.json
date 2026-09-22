@@ -3,10 +3,10 @@
     "generated": 553,
     "not-applicable": 29,
     "refused": 17,
-    "residual": 24,
+    "residual": 26,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "966af86677257485fc1e0c4c63629bf05be5945e291145a1602a481c686c1853",
+  "fragment_inputs_sha256": "6cc295bf7240cdd13d7fd0eccf7fa6224812af20d043a914e3a5b203403d4258",
   "rows": [
     {
       "field": {
@@ -8815,6 +8815,58 @@
       "source_sha256": "952f63280c119fed6fc2f60d832623f7d8186f6f8aff81a1025e049e9f26670e",
       "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
       "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "EmbeddedAudioFile"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"
+      },
+      "module": "Samsung",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Samsung::Trailer",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "EmbeddedAudioFile",
+        "raw_key": "0x0100",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "e9b50c8eb90ff557cf277a0c9ed9497f9e192df5403c6e786a3175abf78ea24c",
+      "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+      "table": "Trailer"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "EmbeddedAudioFileName"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"
+      },
+      "module": "Samsung",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Samsung::Trailer",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "EmbeddedAudioFileName",
+        "raw_key": "0x0100-name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "22539c93fe4a2c3fff86d928b31d0e7bf7c5e636fc272d6c8286b3fbdcaf3212",
+      "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+      "table": "Trailer"
     }
   ],
   "schema": 1,

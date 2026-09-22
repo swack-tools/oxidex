@@ -30,6 +30,8 @@ use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::lookup_tag_name;
+use chrono::{Duration, NaiveDate};
+use quick_xml::{Reader, events::Event};
 
 /// Processes JFIF APP0 segments and extracts version and resolution metadata.
 ///
@@ -1438,6 +1440,82 @@ pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         // (JPEG.pm:667).
         metadata.insert_with_group1("APP15:Quality", TagValue::Integer(quality), "GraphConv");
     }
+}
+
+/// Processes ExifTool's exact `Media Jukebox\0` APP9 XML packet.
+pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP9: u16 = 0xffe9;
+    const IDENTIFIER: &[u8] = b"Media Jukebox\0";
+    const FIELDS: [&str; 9] = [
+        "Caption",
+        "Keywords",
+        "Tool_Name",
+        "Tool_Version",
+        "People",
+        "Places",
+        "Album",
+        "Name",
+        "Date",
+    ];
+    for segment in segments.iter().filter(|segment| segment.marker == APP9) {
+        let Some(xml) = segment.data.strip_prefix(IDENTIFIER) else {
+            continue;
+        };
+        let mut reader = Reader::from_reader(xml);
+        reader.config_mut().trim_text(true);
+        let mut buffer = Vec::new();
+        let mut current: Option<String> = None;
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) => {
+                    let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                    current = FIELDS.contains(&name.as_str()).then_some(name);
+                }
+                Ok(Event::Text(text)) => {
+                    if let Some(field) = current.as_deref()
+                        && let Ok(value) = text.decode()
+                    {
+                        let value = if field == "Date" {
+                            // JPEG.pm routes Date through ConvertUnixTime and
+                            // ConvertDateTime.  Do not turn an invalid float
+                            // into a plausible epoch/saturated timestamp.
+                            let Some(date) = format_media_jukebox_date(value.as_ref()) else {
+                                continue;
+                            };
+                            date
+                        } else {
+                            value.into_owned()
+                        };
+                        metadata.insert_with_group1(
+                            format!("XML:{field}"),
+                            TagValue::new_string(value),
+                            "MediaJukebox",
+                        );
+                    }
+                }
+                Ok(Event::End(_)) => current = None,
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+}
+
+fn format_media_jukebox_date(value: &str) -> Option<String> {
+    let days = value.parse::<f64>().ok()?;
+    if !days.is_finite() {
+        return None;
+    }
+    let seconds = (days * 86_400.0).round();
+    if !seconds.is_finite() || !(i64::MIN as f64..i64::MAX as f64).contains(&seconds) {
+        return None;
+    }
+    let seconds = seconds as i64;
+    let epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?.and_hms_opt(0, 0, 0)?;
+    epoch
+        .checked_add_signed(Duration::seconds(seconds))
+        .map(|date| date.format("%Y:%m:%d %H:%M:%S").to_string())
 }
 
 /// Processes JPEG COM (comment) segments, and the APP10 "UNICODE" comment

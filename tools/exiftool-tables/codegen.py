@@ -2955,6 +2955,38 @@ def gen_binary_ownership_identities(doc, module_names):
     )
 
 
+def gen_samsung_trailer_ownership_identities(doc):
+    """Return the two source identities Task 16 reads from Samsung::Trailer.
+
+    ProcessSamsung is neither ProcessBinaryData nor a generic named-key table:
+    it interprets the paired `0x0100-name`/`0x0100` records as one bounded
+    Sound & Shot directory entry. Keep this admission table-qualified so an
+    unrelated PROCESS_PROC table cannot acquire ownership rows by resemblance.
+    """
+    table = ((doc.get("modules") or {}).get("Samsung") or {}).get("tables", {}).get("Trailer")
+    if not isinstance(table, dict):
+        return []
+    proc = (table.get("meta") or {}).get("PROCESS_PROC")
+    if not isinstance(proc, dict) or (proc.get("__name") or "") != "Image::ExifTool::Samsung::ProcessSamsung":
+        return []
+    rows = []
+    for raw_key, expected_name in (("0x0100-name", "EmbeddedAudioFileName"), ("0x0100", "EmbeddedAudioFile")):
+        source = (table.get("tags") or {}).get(raw_key)
+        if not isinstance(source, dict) or source.get("Name") != expected_name:
+            return []
+        rows.append({
+            "module": "Samsung",
+            "table": "Trailer",
+            "full_name": "Image::ExifTool::Samsung::Trailer",
+            "raw_key": raw_key,
+            "variant_path": [],
+            "name": expected_name,
+            "source_sha256": _ifd_identity_source_sha256(source),
+            "source_kind": "samsung-trailer",
+        })
+    return rows
+
+
 def gen_ownership_identities(doc, module_names):
     """Return non-IFD identities needed by runtime ownership fragments.
 
@@ -2967,6 +2999,8 @@ def gen_ownership_identities(doc, module_names):
     allTables/TagTableKeys projection rather than guessing from hash shape.
     """
     rows = gen_binary_ownership_identities(doc, module_names)
+    if "Samsung" in module_names:
+        rows.extend(gen_samsung_trailer_ownership_identities(doc))
     modules = doc.get("modules") or {}
     for module in module_names:
         mod = modules.get(module)

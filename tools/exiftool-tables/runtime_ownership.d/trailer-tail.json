@@ -1,0 +1,28 @@
+[
+  {
+    "field": {"kind": "name", "value": "EmbeddedAudioFileName"},
+    "fixture": {"relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"},
+    "module": "Samsung",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {"full_name": "Image::ExifTool::Samsung::Trailer", "ledger": "tools/exiftool-tables/ifd_identity_ledger.json", "name": "EmbeddedAudioFileName", "raw_key": "0x0100-name", "variant_path": []},
+    "source_release": "13.59",
+    "source_sha256": "22539c93fe4a2c3fff86d928b31d0e7bf7c5e636fc272d6c8286b3fbdcaf3212",
+    "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+    "table": "Trailer"
+  },
+  {
+    "field": {"kind": "name", "value": "EmbeddedAudioFile"},
+    "fixture": {"relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg", "root": "OXIDEX_OPS_DIR", "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"},
+    "module": "Samsung",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {"full_name": "Image::ExifTool::Samsung::Trailer", "ledger": "tools/exiftool-tables/ifd_identity_ledger.json", "name": "EmbeddedAudioFile", "raw_key": "0x0100", "variant_path": []},
+    "source_release": "13.59",
+    "source_sha256": "e9b50c8eb90ff557cf277a0c9ed9497f9e192df5403c6e786a3175abf78ea24c",
+    "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+    "table": "Trailer"
+  }
+]
