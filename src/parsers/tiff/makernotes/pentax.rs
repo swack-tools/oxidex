@@ -2083,7 +2083,9 @@ impl PentaxParser {
                             "Pentax:CAFGridSize".to_string(),
                             format!("{}x{}", b >> 4, b & 0x0f),
                         );
-                        let point_bits = raw.get(2..).unwrap_or_default();
+                        let point_bytes = n.div_ceil(4) as usize;
+                        let point_end = raw.len().min(2 + point_bytes);
+                        let point_bits = &raw[2..point_end];
                         tags.insert(
                             "Pentax:CAFPointsInFocus".to_string(),
                             decode_caf_points(point_bits, n, 0x02),

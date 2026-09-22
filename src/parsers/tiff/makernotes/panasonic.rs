@@ -729,7 +729,15 @@ impl MakerNoteParser for PanasonicParser {
         // own entry list within `tiff()`, for the "Suspicious offset" guard
         // in `resolve_value_offset`.
         let full_tiff = ctx.is_located().then(|| (ctx.tiff(), ctx.payload_offset()));
-        self.parse_impl_with_tiff(ctx.window(), byte_order, model, full_tiff, tags, None)
+        let data = if is_panasonic_type2_makernote(ctx.payload()) {
+            // Type2 is a fixed binary record, not an IFD with TIFF-relative
+            // offsets. Restrict it to the entry's declared bytes so fields do
+            // not leak out of a short MakerNote into following TIFF data.
+            ctx.payload()
+        } else {
+            ctx.window()
+        };
+        self.parse_impl_with_tiff(data, byte_order, model, full_tiff, tags, None)
     }
 
     fn parse_with_context_and_values_and_session_and_occurrences(
@@ -744,14 +752,12 @@ impl MakerNoteParser for PanasonicParser {
         occurrences: &mut Vec<(String, TagOccurrence)>,
     ) -> std::result::Result<(), String> {
         let full_tiff = ctx.is_located().then(|| (ctx.tiff(), ctx.payload_offset()));
-        self.parse_impl_with_tiff(
-            ctx.window(),
-            byte_order,
-            model,
-            full_tiff,
-            tags,
-            Some(occurrences),
-        )
+        let data = if is_panasonic_type2_makernote(ctx.payload()) {
+            ctx.payload()
+        } else {
+            ctx.window()
+        };
+        self.parse_impl_with_tiff(data, byte_order, model, full_tiff, tags, Some(occurrences))
     }
 }
 

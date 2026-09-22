@@ -12,7 +12,8 @@ use oxidex::core::TagValue;
 use oxidex::core::operations::read_metadata;
 use oxidex::core::tag_occurrence::ValueChannel;
 use oxidex::parsers::tiff::ifd_parser::ByteOrder;
-use oxidex::parsers::tiff::makernotes::panasonic::parse_panasonic_makernotes;
+use oxidex::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
+use oxidex::parsers::tiff::makernotes::panasonic::{PanasonicParser, parse_panasonic_makernotes};
 use oxidex::parsers::tiff::makernotes::pentax::PentaxParser;
 use oxidex::parsers::tiff::makernotes::shared::MakerNoteParser;
 use std::collections::HashMap;
@@ -62,6 +63,43 @@ fn pentax_caf_point_info_decodes_source_bitmasks() {
 }
 
 #[test]
+fn pentax_caf_point_info_honors_the_grid_sized_bitfield() {
+    // Pentax.pm's dynamic Format gives a 0x0 grid zero AF bytes even when the
+    // enclosing record has trailing data. DecodeAFPoints sees no bytes and
+    // prints "(none)"; it must not consume those trailing record bytes.
+    let data = pentax_block(0x0238, 7, 6, &[0, 0, 0xff, 0xff, 0xff, 0xff]);
+    let mut tags = HashMap::new();
+    PentaxParser::default()
+        .parse(&data, ByteOrder::LittleEndian, &mut tags)
+        .expect("synthetic Pentax CAF MakerNote parses");
+
+    assert_eq!(
+        tags.get("Pentax:CAFPointsInFocus").map(String::as_str),
+        Some("(none)")
+    );
+    assert_eq!(
+        tags.get("Pentax:CAFPointsSelected").map(String::as_str),
+        Some("(none)")
+    );
+
+    // A non-empty, all-zero point bitfield is different: DecodeAFPoints joins
+    // an empty selected-point list to the empty string.
+    let data = pentax_block(0x0238, 7, 6, &[0, 0x22, 0, 0, 0, 0]);
+    let mut tags = HashMap::new();
+    PentaxParser::default()
+        .parse(&data, ByteOrder::LittleEndian, &mut tags)
+        .expect("synthetic all-zero Pentax CAF MakerNote parses");
+    assert_eq!(
+        tags.get("Pentax:CAFPointsInFocus").map(String::as_str),
+        Some("")
+    );
+    assert_eq!(
+        tags.get("Pentax:CAFPointsSelected").map(String::as_str),
+        Some("")
+    );
+}
+
+#[test]
 fn pentax_external_flash_guide_number_decodes_fractional_field() {
     for (raw, expected) in [(0_u8, "n/a"), (6, "21"), (29, "14"), (31, "61")] {
         let mut record = [0_u8; 27];
@@ -90,6 +128,28 @@ fn panasonic_mke_type2_uses_generated_little_endian_layout() {
         Some("MKEM")
     );
     assert_eq!(tags.get("Panasonic:Gain").map(String::as_str), Some("136"));
+}
+
+#[test]
+fn panasonic_short_mked_does_not_decode_trailing_tiff_bytes_as_gain() {
+    let note_offset = 8;
+    let note_len = 4;
+    let mut tiff = vec![0_u8; 24];
+    tiff[note_offset..note_offset + note_len].copy_from_slice(b"MKED");
+    // Type2 Gain is at record offset 6. These bytes are deliberately outside
+    // the declared MakerNote payload and must not be visible to its decoder.
+    tiff[note_offset + 6..note_offset + 8].copy_from_slice(&136_u16.to_le_bytes());
+    let ctx = MakerNoteContext::in_tiff(&tiff, note_offset, note_len, 0);
+    let mut tags = HashMap::new();
+    PanasonicParser
+        .parse_with_context(&ctx, ByteOrder::BigEndian, None, &mut tags)
+        .expect("short MKED MakerNote parses");
+
+    assert_eq!(
+        tags.get("Panasonic:MakerNoteType").map(String::as_str),
+        Some("MKED")
+    );
+    assert!(!tags.contains_key("Panasonic:Gain"));
 }
 
 #[test]
