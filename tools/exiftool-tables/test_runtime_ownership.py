@@ -488,6 +488,39 @@ class TypedFragmentTests(unittest.TestCase):
         with self.assertRaisesRegex(self.ownership.Refused, "source ledger schema"):
             self.ownership.build_inventory(root)
 
+    def test_ordinary_mode_rejects_ascii_controls_in_external_references(self):
+        root = self.temporary_root()
+        valid_row = self.vendor_row(ops_fixture=True)
+        valid_candidate = self.candidate(ops_fixture=True)
+        vendor = root / "tools/exiftool-tables/runtime_ownership.d/vendor.json"
+        candidates = root / "tools/exiftool-tables/runtime_ownership.d/vendor-candidates.json"
+        controls = ("\0", "\x01", "\x1f", "\x7f")
+
+        for control in controls:
+            row = copy.deepcopy(valid_row)
+            row["fixture"]["relative_path"] = f"carriers/vendor{control}.bin"
+            self.write_json(vendor, [row])
+            self.write_json(
+                candidates,
+                {"schema": "runtime-deletion-candidates/v1", "candidates": [valid_candidate]},
+            )
+            with self.subTest(reference="external fixture", control=ord(control)):
+                with self.assertRaisesRegex(self.ownership.Refused, "relative path"):
+                    self.ownership.build_inventory(root)
+
+        self.write_json(vendor, [valid_row])
+        for receipt in ("oracle_receipt", "attribution_receipt"):
+            for control in controls:
+                candidate = copy.deepcopy(valid_candidate)
+                candidate[receipt]["relative_path"] = f"evidence/vendor/{receipt}{control}.json"
+                self.write_json(
+                    candidates,
+                    {"schema": "runtime-deletion-candidates/v1", "candidates": [candidate]},
+                )
+                with self.subTest(reference=receipt, control=ord(control)):
+                    with self.assertRaisesRegex(self.ownership.Refused, "relative path"):
+                        self.ownership.build_inventory(root)
+
     def test_portable_reference_tokens_and_paths_are_strict(self):
         root = self.temporary_root()
         valid = self.vendor_row()

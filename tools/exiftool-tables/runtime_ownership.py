@@ -178,7 +178,12 @@ def _expected_residual_rows(root: Path) -> list[dict]:
 def _portable_relative(value: object, label: str) -> str:
     if not isinstance(value, str) or not value or value in {".", ".."}:
         raise Refused(f"invalid {label}: relative path")
-    if "\\" in value or "$" in value or "~" in value:
+    if (
+        "\\" in value
+        or "$" in value
+        or "~" in value
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
         raise Refused(f"invalid {label}: relative path")
     path = PurePosixPath(value)
     if path.is_absolute() or any(part in {".", "..", ""} for part in path.parts):
