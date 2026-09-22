@@ -1823,51 +1823,69 @@ mod tests {
     /// the pinned corpus.
     #[test]
     fn output_rules_are_a_no_op_on_engine_exif_ifd_values() {
-        use crate::parsers::tiff::ifd_parser::ByteOrder as Order;
         let required = crate::test_support::FixtureConfig::from_environment(
             crate::exiftool_oracle::repo_pin(),
         )
         .required();
-        let mut paths: Vec<std::path::PathBuf> = match crate::test_support::pinned_t_images_dir() {
-            Some(root) => match std::fs::read_dir(&root) {
-                Ok(dir) => dir
-                    .filter_map(|entry| match entry {
-                        Ok(entry) => Some(entry.path()),
-                        Err(error) if required => panic!("read {}: {error}", root.display()),
-                        Err(_) => None,
-                    })
-                    .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-                    .collect(),
-                Err(error) if required => panic!("read {}: {error}", root.display()),
-                Err(_) => Vec::new(),
-            },
-            None => Vec::new(),
-        };
+        let mut paths: Vec<(std::path::PathBuf, bool)> =
+            match crate::test_support::pinned_t_images_dir() {
+                Some(root) => match std::fs::read_dir(&root) {
+                    Ok(dir) => dir
+                        .filter_map(|entry| match entry {
+                            Ok(entry) => Some(entry.path()),
+                            Err(error) if required => panic!("read {}: {error}", root.display()),
+                            Err(_) => None,
+                        })
+                        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
+                        // `t/images` also holds JPEGs that intentionally have no
+                        // Exif APP1. They supplement this census but are not its
+                        // named required proof fixtures.
+                        .map(|path| (path, false))
+                        .collect(),
+                    Err(error) if required => panic!("read {}: {error}", root.display()),
+                    Err(_) => Vec::new(),
+                },
+                None => Vec::new(),
+            };
         // The spec's census-named and semantic-case JPEGs (`slices/exif-ifd/
         // work/named.txt`, `special.txt`), from the pinned corpus.
         let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
             return;
         };
-        paths.extend(CORPUS_JPEGS.iter().map(|name| root.join(name)));
-        paths.sort();
+        paths.extend(CORPUS_JPEGS.iter().map(|name| (root.join(name), true)));
+        paths.sort_by(|(left, _), (right, _)| left.cmp(right));
         let mut checked = 0;
         let mut names = std::collections::BTreeSet::new();
         let mut changed = Vec::new();
-        for path in &paths {
+        for (path, named_required) in &paths {
+            let proof_required = required && *named_required;
             let jpeg = match std::fs::read(path) {
                 Ok(bytes) => bytes,
                 Err(error) if required => panic!("read {}: {error}", path.display()),
                 Err(_) => continue,
             };
-            let Some(tiff) = app1_tiff(&jpeg) else {
+            let Some(tiff) = require_fixture_proof(
+                proof_required,
+                path,
+                "Exif APP1/TIFF segment",
+                app1_tiff(&jpeg),
+            ) else {
                 continue;
             };
-            let order = match tiff.get(..2) {
-                Some(b"II") => Order::LittleEndian,
-                Some(b"MM") => Order::BigEndian,
-                _ => continue,
+            let Some(order) = require_fixture_proof(
+                proof_required,
+                path,
+                "TIFF byte order/header",
+                tiff_byte_order(&tiff),
+            ) else {
+                continue;
             };
-            let Some(exif) = exif_ifd_offset(&tiff, order) else {
+            let Some(exif) = require_fixture_proof(
+                proof_required,
+                path,
+                "ExifIFD offset",
+                exif_ifd_offset(&tiff, order),
+            ) else {
                 continue;
             };
             let rows = walk(
@@ -1908,6 +1926,7 @@ mod tests {
                 }
             }
         }
+        require_fixture_census(required, "ExifIFD", checked);
         if checked == 0 {
             eprintln!("skipping: no pinned t/images or corpus JPEGs on this machine");
             return;
@@ -1931,42 +1950,55 @@ mod tests {
             crate::exiftool_oracle::repo_pin(),
         )
         .required();
-        let mut paths: Vec<std::path::PathBuf> = match crate::test_support::pinned_t_images_dir() {
-            Some(root) => match std::fs::read_dir(&root) {
-                Ok(dir) => dir
-                    .filter_map(|entry| match entry {
-                        Ok(entry) => Some(entry.path()),
-                        Err(error) if required => panic!("read {}: {error}", root.display()),
-                        Err(_) => None,
-                    })
-                    .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-                    .collect(),
-                Err(error) if required => panic!("read {}: {error}", root.display()),
-                Err(_) => Vec::new(),
-            },
-            None => Vec::new(),
-        };
+        let mut paths: Vec<(std::path::PathBuf, bool)> =
+            match crate::test_support::pinned_t_images_dir() {
+                Some(root) => match std::fs::read_dir(&root) {
+                    Ok(dir) => dir
+                        .filter_map(|entry| match entry {
+                            Ok(entry) => Some(entry.path()),
+                            Err(error) if required => panic!("read {}: {error}", root.display()),
+                            Err(_) => None,
+                        })
+                        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
+                        // See the ExifIFD counterpart: these are optional
+                        // supplemental JPEGs, unlike the named corpus fixtures.
+                        .map(|path| (path, false))
+                        .collect(),
+                    Err(error) if required => panic!("read {}: {error}", root.display()),
+                    Err(_) => Vec::new(),
+                },
+                None => Vec::new(),
+            };
         let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
             return;
         };
-        paths.extend(CORPUS_JPEGS.iter().map(|name| root.join(name)));
-        paths.sort();
+        paths.extend(CORPUS_JPEGS.iter().map(|name| (root.join(name), true)));
+        paths.sort_by(|(left, _), (right, _)| left.cmp(right));
         let mut checked = 0;
         let mut names = std::collections::BTreeSet::new();
         let mut changed = Vec::new();
-        for path in &paths {
+        for (path, named_required) in &paths {
+            let proof_required = required && *named_required;
             let jpeg = match std::fs::read(path) {
                 Ok(bytes) => bytes,
                 Err(error) if required => panic!("read {}: {error}", path.display()),
                 Err(_) => continue,
             };
-            let Some(tiff) = app1_tiff(&jpeg) else {
+            let Some(tiff) = require_fixture_proof(
+                proof_required,
+                path,
+                "Exif APP1/TIFF segment",
+                app1_tiff(&jpeg),
+            ) else {
                 continue;
             };
-            let order = match tiff.get(..2) {
-                Some(b"II") => ByteOrder::LittleEndian,
-                Some(b"MM") => ByteOrder::BigEndian,
-                _ => continue,
+            let Some(order) = require_fixture_proof(
+                proof_required,
+                path,
+                "TIFF byte order/header",
+                tiff_byte_order(&tiff),
+            ) else {
+                continue;
             };
             let word = |at: usize| -> Option<u32> {
                 let b: [u8; 4] = tiff.get(at..at + 4)?.try_into().ok()?;
@@ -1975,10 +2007,16 @@ mod tests {
                     ByteOrder::BigEndian => u32::from_be_bytes(b),
                 })
             };
-            let Some(ifd0) = word(4) else {
+            let Some(ifd0) = require_fixture_proof(proof_required, path, "IFD0 offset", word(4))
+            else {
                 continue;
             };
-            let Some(rows) = ifd0_walk(&tiff, u64::from(ifd0), order, &MetadataMap::new()) else {
+            let Some(rows) = require_fixture_proof(
+                required,
+                path,
+                "IFD0 walk",
+                ifd0_walk(&tiff, u64::from(ifd0), order, &MetadataMap::new()),
+            ) else {
                 eprintln!("skipping: Exif::Main is not in force");
                 return;
             };
@@ -2008,6 +2046,7 @@ mod tests {
                 }
             }
         }
+        require_fixture_census(required, "IFD0", checked);
         if checked == 0 {
             eprintln!("skipping: no pinned t/images or corpus JPEGs on this machine");
             return;
@@ -2089,6 +2128,37 @@ mod tests {
         None
     }
 
+    /// The complete TIFF byte-order and magic header of an Exif APP1 block.
+    fn tiff_byte_order(tiff: &[u8]) -> Option<ByteOrder> {
+        match tiff.get(..4) {
+            Some(b"II*\0") => Some(ByteOrder::LittleEndian),
+            Some(b"MM\0*") => Some(ByteOrder::BigEndian),
+            _ => None,
+        }
+    }
+
+    /// An absent proof is a skip only for optional fixture runs. Required
+    /// fixture runs must identify the selected path and failed proof instead.
+    fn require_fixture_proof<T>(
+        required: bool,
+        path: &std::path::Path,
+        proof: &str,
+        value: Option<T>,
+    ) -> Option<T> {
+        match value {
+            Some(value) => Some(value),
+            None if required => panic!("required pinned fixture {} failed {proof}", path.display()),
+            None => None,
+        }
+    }
+
+    fn require_fixture_census(required: bool, directory: &str, checked: usize) {
+        assert!(
+            !required || checked != 0,
+            "required pinned fixtures yielded no verified {directory} values"
+        );
+    }
+
     /// IFD0's 0x8769 ExifOffset in a TIFF block.
     fn exif_ifd_offset(tiff: &[u8], order: ByteOrder) -> Option<u64> {
         let io = order.to_io_byte_order();
@@ -2104,6 +2174,66 @@ mod tests {
             .into_iter()
             .find(|entry| entry.tag_id == 0x8769)
             .map(|entry| u64::from(entry.value_offset))
+    }
+
+    #[test]
+    fn required_fixture_proof_rejects_corrupt_named_jpeg_bytes() {
+        let path = std::path::Path::new(CORPUS_JPEGS[0]);
+        let corrupt = b"not a JPEG with an Exif APP1 segment";
+
+        assert!(app1_tiff(corrupt).is_none());
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_fixture_proof(true, path, "APP1/TIFF", app1_tiff(corrupt));
+            })
+            .is_err()
+        );
+        assert!(require_fixture_proof(false, path, "APP1/TIFF", app1_tiff(corrupt)).is_none());
+        assert!(tiff_byte_order(b"II\0\0").is_none());
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_fixture_proof(
+                    true,
+                    path,
+                    "TIFF byte order/header",
+                    tiff_byte_order(b"II\0\0"),
+                );
+            })
+            .is_err()
+        );
+        let no_exif_ifd = b"II*\0\x08\0\0\0\0\0\0\0\0\0";
+        let order = tiff_byte_order(no_exif_ifd).expect("complete TIFF header");
+        assert!(exif_ifd_offset(no_exif_ifd, order).is_none());
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_fixture_proof(
+                    true,
+                    path,
+                    "ExifIFD offset",
+                    exif_ifd_offset(no_exif_ifd, order),
+                );
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn required_fixture_proof_rejects_unavailable_walk_and_empty_census() {
+        let path = std::path::Path::new(CORPUS_JPEGS[1]);
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_fixture_proof(true, path, "IFD0 walk", None::<DirEngineRows>);
+            })
+            .is_err()
+        );
+        assert!(require_fixture_proof(false, path, "IFD0 walk", None::<DirEngineRows>).is_none());
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_fixture_census(true, "IFD0", 0);
+            })
+            .is_err()
+        );
+        require_fixture_census(false, "IFD0", 0);
     }
 
     #[test]
