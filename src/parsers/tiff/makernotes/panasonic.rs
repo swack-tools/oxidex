@@ -103,10 +103,11 @@ fn panasonic_ifd_offset(data: &[u8]) -> Option<usize> {
     }
 }
 
-/// `MakerNotePanasonic2` is selected when a Panasonic MakerNote starts with
-/// `MKE` (MakerNotes.pm:743-750). Unlike Panasonic's TIFF-style Main notes,
-/// this is a headerless `ProcessBinaryData` record.
-fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
+/// The payload half of `MakerNotePanasonic2`'s condition. Its Make half is
+/// enforced by the dispatcher before this parser is selected
+/// (MakerNotes.pm:743-750). Unlike Panasonic's TIFF-style Main notes, this is
+/// a headerless `ProcessBinaryData` record.
+pub(crate) fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
     data.starts_with(b"MKE")
 }
 

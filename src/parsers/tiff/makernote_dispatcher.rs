@@ -397,6 +397,12 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
         // `Main` tag table and "Panasonic:" group -- it is not one of the
         // `Leica2`..`Leica10` layouts, which key on the "Leica Camera AG"
         // prefix instead (MakerNotes.pm:611 onward).
+        // `MakerNoteLeica` and `MakerNotePanasonic2` both select the shared
+        // Panasonic parser only after different source conditions. In
+        // particular, Type2 additionally requires `Make =~ /^Panasonic/`
+        // (MakerNotes.pm:743-750), so a bare Leica MKE payload is not a
+        // Panasonic Type2 record.
+        "leica" if panasonic::is_panasonic_type2_makernote(data) => None,
         "leica" => Some(Box::new(panasonic::PanasonicParser)),
         // `MakerNoteLeica10` (MakerNotes.pm:724-731) is keyed on the signature
         // alone -- `Condition => '$$valPt =~ /^LEICA CAMERA AG\0/'` -- and
@@ -775,6 +781,28 @@ mod tests {
         // Should succeed but not extract any tags
         assert!(result.is_ok());
         assert!(tags.is_empty(), "Should not extract tags for unknown make");
+    }
+
+    /// `MakerNotePanasonic2` requires both `Make =~ /^Panasonic/` and an
+    /// `MKE` payload (MakerNotes.pm:743-750). A bare Leica Make normally
+    /// shares Panasonic::Main, but must not gain Panasonic::Type2 merely
+    /// because arbitrary MakerNote bytes begin with `MKE`.
+    #[test]
+    fn leica_mke_payload_does_not_dispatch_panasonic_type2() {
+        let mut tags = HashMap::new();
+
+        dispatch_makernote(
+            "LEICA",
+            b"MKEM\0\0\x88\0",
+            ByteOrder::BigEndian,
+            &mut tags,
+        )
+        .expect("unmatched Leica MakerNote is ignored");
+
+        assert!(
+            tags.is_empty(),
+            "MakerNotes.pm requires a Panasonic Make before Type2 can emit tags"
+        );
     }
 
     #[test]
