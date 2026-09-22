@@ -33,8 +33,13 @@
 #![allow(dead_code)]
 
 use crate::core::formatters::numeric_precision::perl_number;
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
+use crate::exiftool_tables::Ctx;
+use crate::exiftool_tables::session::Session;
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
+use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use std::collections::HashMap;
 
 use super::shared::MakerNoteParser;
@@ -60,8 +65,12 @@ mod field_offset {
     pub const YEAR_CREATED: usize = 0x10;
     /// Kodak.pm:78-84: `int8u[2]`.
     pub const MONTH_DAY_CREATED: usize = 0x12;
+    /// Kodak.pm:85-91: `int8u[4]`, formatted as hh:mm:ss.hh.
+    pub const TIME_CREATED: usize = 0x14;
     /// Kodak.pm:225-230: `int16u`, `ValueConv => '$val / 100'`.
     pub const TOTAL_ZOOM: usize = 0x62;
+    /// Kodak.pm:231-235: `int16u`, zero is `Off`.
+    pub const DATE_TIME_STAMP: usize = 0x64;
 }
 
 /// Kodak MakerNote parser implementation
@@ -123,6 +132,18 @@ impl KodakParser {
             );
         }
 
+        // TimeCreated: Kodak.pm's `%.2d:%.2d:%.2d.%.2d` ValueConv.
+        if let Some(bytes) = record.get(field_offset::TIME_CREATED..field_offset::TIME_CREATED + 4)
+        {
+            tags.insert(
+                "Kodak:TimeCreated".to_string(),
+                format!(
+                    "{:02}:{:02}:{:02}.{:02}",
+                    bytes[0], bytes[1], bytes[2], bytes[3]
+                ),
+            );
+        }
+
         // TotalZoom: int16u, ValueConv '$val / 100' (no PrintConv, so the
         // ValueConv'd number prints directly -- Perl's default number
         // stringification, which perl_number reproduces).
@@ -132,6 +153,122 @@ impl KodakParser {
                 perl_number(f64::from(v) / 100.0),
             );
         }
+
+        if let Some(v) = reader.u16_at(field_offset::DATE_TIME_STAMP) {
+            tags.insert(
+                "Kodak:DateTimeStamp".to_string(),
+                if v == 0 {
+                    "Off".to_string()
+                } else {
+                    format!("Mode {v}")
+                },
+            );
+        }
+    }
+
+    fn main_occurrences(&self, ctx: &MakerNoteContext<'_>) -> Vec<(String, TagOccurrence)> {
+        let data = ctx.payload();
+        let order = if data.starts_with(b"KDK INFO") {
+            ByteOrder::BigEndian
+        } else if data.starts_with(b"KDK") {
+            ByteOrder::LittleEndian
+        } else {
+            return Vec::new();
+        };
+        let Some(record) = data.get(KODAK_MAIN_START..) else {
+            return Vec::new();
+        };
+        let reader = EndianReader::new(record, order.to_io_byte_order());
+        let mut rows = Vec::new();
+
+        if let Some(bytes) = record.get(field_offset::TIME_CREATED..field_offset::TIME_CREATED + 4)
+        {
+            let raw = TagValue::new_string(format!(
+                "{} {} {} {}",
+                bytes[0], bytes[1], bytes[2], bytes[3]
+            ));
+            let stored = TagValue::Array(
+                bytes
+                    .iter()
+                    .map(|byte| TagValue::Integer(i64::from(*byte)))
+                    .collect(),
+            );
+            let value = TagValue::new_string(format!(
+                "{:02}:{:02}:{:02}.{:02}",
+                bytes[0], bytes[1], bytes[2], bytes[3]
+            ));
+            rows.push((
+                "Kodak:TimeCreated".to_string(),
+                kodak_occurrence(
+                    0x0014,
+                    "TimeCreated",
+                    "Time",
+                    stored,
+                    raw,
+                    value.clone(),
+                    value,
+                    ctx.payload_base() + (KODAK_MAIN_START + field_offset::TIME_CREATED) as u64,
+                    4,
+                ),
+            ));
+        }
+
+        if let Some(v) = reader.u16_at(field_offset::DATE_TIME_STAMP) {
+            let raw = TagValue::Integer(i64::from(v));
+            rows.push((
+                "Kodak:DateTimeStamp".to_string(),
+                kodak_occurrence(
+                    0x0064,
+                    "DateTimeStamp",
+                    "Camera",
+                    raw.clone(),
+                    raw.clone(),
+                    raw,
+                    TagValue::new_string(if v == 0 {
+                        "Off".to_string()
+                    } else {
+                        format!("Mode {v}")
+                    }),
+                    ctx.payload_base() + (KODAK_MAIN_START + field_offset::DATE_TIME_STAMP) as u64,
+                    2,
+                ),
+            ));
+        }
+        rows
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn kodak_occurrence(
+    id: u16,
+    name: &'static str,
+    group2: &'static str,
+    stored: TagValue,
+    raw: TagValue,
+    value: TagValue,
+    print: TagValue,
+    byte_start: u64,
+    byte_len: u64,
+) -> TagOccurrence {
+    TagOccurrence {
+        id: crate::core::TagId::Numeric(id),
+        name: intern(name),
+        group0: intern("MakerNotes"),
+        group1: intern("Kodak"),
+        group2: Some(intern(group2)),
+        instance: Instance::default(),
+        stored: Some(stored),
+        raw,
+        value: Some(value),
+        print: Some(print),
+        priority: 1,
+        is_list: false,
+        order: 0,
+        origin: Provenance {
+            module: Some("Kodak"),
+            table: Some("Main"),
+            byte_range: Some(byte_start..byte_start + byte_len),
+        },
     }
 }
 
@@ -169,6 +306,29 @@ impl MakerNoteParser for KodakParser {
         self.parse_main_record(record, order, tags);
         Ok(())
     }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut Session,
+        _cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        self.parse_with_model(ctx.payload(), byte_order, model, tags)?;
+        let rows = self.main_occurrences(ctx);
+        if rows.iter().any(|(key, _)| key == "Kodak:TimeCreated") {
+            tags.remove("Kodak:TimeCreated");
+        }
+        if rows.iter().any(|(key, _)| key == "Kodak:DateTimeStamp") {
+            tags.remove("Kodak:DateTimeStamp");
+        }
+        occurrences.extend(rows);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -196,7 +356,9 @@ mod tests {
         record[0x10..0x12].copy_from_slice(&2002u16.to_be_bytes());
         record[0x12] = 5;
         record[0x13] = 1;
+        record[0x14..0x18].copy_from_slice(&[10, 22, 28, 62]);
         record[0x62..0x64].copy_from_slice(&140u16.to_be_bytes());
+        record[0x64..0x66].copy_from_slice(&0u16.to_be_bytes());
         data.extend_from_slice(&record);
 
         let mut tags = HashMap::new();
@@ -217,6 +379,11 @@ mod tests {
             Some(&"05:01".to_string())
         );
         assert_eq!(tags.get("Kodak:TotalZoom"), Some(&"1.4".to_string()));
+        assert_eq!(
+            tags.get("Kodak:TimeCreated"),
+            Some(&"10:22:28.62".to_string())
+        );
+        assert_eq!(tags.get("Kodak:DateTimeStamp"), Some(&"Off".to_string()));
     }
 
     #[test]

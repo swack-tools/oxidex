@@ -25,7 +25,8 @@
 #![allow(unused_imports)]
 
 use crate::core::formatters::numeric_precision::perl_number;
-use crate::core::{MetadataMap, TagValue};
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, MetadataMap, Provenance, TagOccurrence, TagValue};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -543,6 +544,45 @@ const CASIO_TYPE2_HOMETOWN_CITY: u16 = 0x3006;
 /// one of which a given payload can ever carry (Type1 XOR Type2). This is
 /// the one `Casio2.jpg` (a Type2 payload) actually exercises.
 const CASIO_TYPE2_ENHANCEMENT: u16 = 0x3016;
+/// Casio.pm:553-561 (Type2::0x3002), an inline `int16u` Quality enum.
+const CASIO_TYPE2_QUALITY: u16 = 0x3002;
+/// Casio.pm:582-1547 (Type2::0x3007), a model-conditioned BestShotMode.
+const CASIO_TYPE2_BEST_SHOT_MODE: u16 = 0x3007;
+/// Casio.pm:1644-1661 (Type2::0x301b), an inline `int16u` ArtMode enum.
+const CASIO_TYPE2_ART_MODE: u16 = 0x301b;
+
+fn record_casio_type2_u16(
+    metadata: &mut MetadataMap,
+    id: u16,
+    name: &'static str,
+    raw: u16,
+    print: String,
+) {
+    let raw = TagValue::Integer(i64::from(raw));
+    metadata.record_occurrence(
+        format!("Casio:{name}"),
+        TagOccurrence {
+            id: crate::core::TagId::Numeric(id),
+            name: intern(name),
+            group0: intern("MakerNotes"),
+            group1: intern("Casio"),
+            group2: Some(intern("Camera")),
+            instance: Instance::default(),
+            stored: Some(raw.clone()),
+            raw: raw.clone(),
+            value: Some(raw),
+            print: Some(TagValue::new_string(print)),
+            priority: 1,
+            is_list: false,
+            order: 0,
+            origin: Provenance {
+                module: Some("Casio"),
+                table: Some("Type2"),
+                byte_range: None,
+            },
+        },
+    );
+}
 
 /// Unpacks the two `int16u` values `PreviewImageSize` (`Casio.pm:280-286`)
 /// packs into one 4-byte inline entry, in the entry's own byte order.
@@ -655,6 +695,57 @@ pub fn parse_casio_type2_extra_tags(
             other => format!("Unknown ({other})"),
         };
         metadata.insert("Casio:Enhancement", TagValue::new_string(text));
+    }
+
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_QUALITY)
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+    {
+        let print = match value {
+            1 => "Economy".to_string(),
+            2 => "Normal".to_string(),
+            3 => "Fine".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        record_casio_type2_u16(metadata, CASIO_TYPE2_QUALITY, "Quality", value, print);
+    }
+
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_BEST_SHOT_MODE)
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+        && value == 0
+    {
+        // Every Casio.pm Condition arm maps zero to Off, including the final
+        // undecoded-model arm selected by Casio2.jpg's EX-Z3. Nonzero values
+        // remain withheld here: selecting their model-specific label needs a
+        // model parameter this existing metadata-side hook does not receive.
+        record_casio_type2_u16(
+            metadata,
+            CASIO_TYPE2_BEST_SHOT_MODE,
+            "BestShotMode",
+            value,
+            "Off".to_string(),
+        );
+    }
+
+    if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_ART_MODE)
+        && let Some(value) = extract_u16_value(&entry, &[], byte_order)
+    {
+        let print = match value {
+            0 => "Normal".to_string(),
+            8 => "Silent Movie".to_string(),
+            39 => "HDR".to_string(),
+            45 => "Premium Auto".to_string(),
+            47 => "Painting".to_string(),
+            49 => "Crayon Drawing".to_string(),
+            51 => "Panorama".to_string(),
+            52 => "Art HDR".to_string(),
+            62 => "High Speed Night Shot".to_string(),
+            64 => "Monochrome".to_string(),
+            67 => "Toy Camera".to_string(),
+            68 => "Pop Art".to_string(),
+            69 => "Light Tone".to_string(),
+            other => format!("Unknown ({other})"),
+        };
+        record_casio_type2_u16(metadata, CASIO_TYPE2_ART_MODE, "ArtMode", value, print);
     }
 
     if let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_HOMETOWN_CITY) {
