@@ -27,12 +27,20 @@ pub enum FixturePopulation {
 #[derive(Clone, Debug)]
 pub struct FixtureConfig {
     source_tree: Option<PathBuf>,
-    cache_dir: PathBuf,
+    cache_dir: Option<PathBuf>,
     required: bool,
 }
 
 impl FixtureConfig {
     pub fn new(source_tree: Option<PathBuf>, cache_dir: PathBuf, required: bool) -> Self {
+        Self::with_optional_cache(source_tree, Some(cache_dir), required)
+    }
+
+    fn with_optional_cache(
+        source_tree: Option<PathBuf>,
+        cache_dir: Option<PathBuf>,
+        required: bool,
+    ) -> Self {
         Self {
             source_tree,
             cache_dir,
@@ -43,15 +51,15 @@ impl FixtureConfig {
     pub fn from_environment(repo_pin: &str) -> Self {
         let exiftool = env::var_os("EXIFTOOL");
         let cache = env::var_os("EXIFTOOL_CACHE_DIR");
-        let fallback_cache = if cache.as_deref().and_then(normalized_path).is_some() {
-            PathBuf::new()
-        } else {
-            durable_cache_dir_from_environment(repo_pin)
-        };
-        Self::from_explicit_environment_values(
+        let explicit_cache = cache.as_deref().and_then(normalized_path);
+        let fallback_cache = explicit_cache
+            .is_none()
+            .then(|| durable_cache_dir_from_environment(repo_pin))
+            .flatten();
+        Self::from_optional_environment_values(
             repo_pin,
             exiftool.as_deref(),
-            cache.as_deref(),
+            explicit_cache,
             fallback_cache,
             env::var(REQUIRED_ENV).is_ok_and(|value| value == "1"),
         )
@@ -67,18 +75,30 @@ impl FixtureConfig {
         fallback_cache: PathBuf,
         required: bool,
     ) -> Self {
+        Self::from_optional_environment_values(
+            repo_pin,
+            exiftool,
+            cache.and_then(normalized_path),
+            Some(fallback_cache),
+            required,
+        )
+    }
+
+    fn from_optional_environment_values(
+        repo_pin: &str,
+        exiftool: Option<&OsStr>,
+        explicit_cache: Option<PathBuf>,
+        fallback_cache: Option<PathBuf>,
+        required: bool,
+    ) -> Self {
         let source_tree = exiftool
             .and_then(normalized_path)
-            .and_then(|binary| binary.parent().map(Path::to_path_buf));
-        if let Some(tree) = &source_tree {
-            assert_pinned_source_tree(tree, repo_pin, "EXIFTOOL");
-        }
-        let explicit_cache = cache.and_then(normalized_path);
+            .and_then(|binary| binary.parent().map(Path::to_path_buf))
+            .and_then(|tree| source_tree_if_pinned(&tree, repo_pin));
         if let Some(cache) = &explicit_cache {
             assert_pinned_cache_dir(cache, repo_pin, "EXIFTOOL_CACHE_DIR");
         }
-        let cache_dir = explicit_cache.unwrap_or(fallback_cache);
-        Self::new(source_tree, cache_dir, required)
+        Self::with_optional_cache(source_tree, explicit_cache.or(fallback_cache), required)
     }
 
     pub fn required(&self) -> bool {
@@ -120,7 +140,10 @@ impl FixtureConfig {
     }
 
     pub fn combined_dir_for_mode(&self) -> Result<Option<PathBuf>, MissingFixture> {
-        self.directory_for_mode("combined-samples directory", vec![self.combined_dir()])
+        self.directory_for_mode(
+            "combined-samples directory",
+            self.combined_dir().into_iter().collect(),
+        )
     }
 
     pub fn candidates(&self, name: &str, population: FixturePopulation) -> Vec<PathBuf> {
@@ -129,14 +152,22 @@ impl FixtureConfig {
                 .t_images_directories()
                 .into_iter()
                 .map(|directory| directory.join(name))
-                .chain(std::iter::once(self.combined_dir().join(name)))
+                .chain(
+                    self.combined_dir()
+                        .into_iter()
+                        .map(|directory| directory.join(name)),
+                )
                 .collect(),
             FixturePopulation::TImages => self
                 .t_images_directories()
                 .into_iter()
                 .map(|directory| directory.join(name))
                 .collect(),
-            FixturePopulation::Combined => vec![self.combined_dir().join(name)],
+            FixturePopulation::Combined => self
+                .combined_dir()
+                .into_iter()
+                .map(|directory| directory.join(name))
+                .collect(),
         }
     }
 
@@ -144,12 +175,18 @@ impl FixtureConfig {
         self.source_tree
             .iter()
             .map(|tree| tree.join("t/images"))
-            .chain(std::iter::once(self.cache_dir.join("exiftool/t/images")))
+            .chain(
+                self.cache_dir
+                    .iter()
+                    .map(|cache| cache.join("exiftool/t/images")),
+            )
             .collect()
     }
 
-    fn combined_dir(&self) -> PathBuf {
-        self.cache_dir.join("combined-samples")
+    fn combined_dir(&self) -> Option<PathBuf> {
+        self.cache_dir
+            .as_ref()
+            .map(|cache| cache.join("combined-samples"))
     }
 
     fn directory_for_mode(
@@ -195,9 +232,24 @@ impl FixtureConfig {
 }
 
 fn normalized_path(value: &OsStr) -> Option<PathBuf> {
-    let value = value.to_string_lossy();
-    let value = value.trim();
-    (!value.is_empty()).then(|| PathBuf::from(value))
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let bytes = value.as_bytes();
+        let first = bytes.iter().position(|byte| !byte.is_ascii_whitespace())?;
+        let last = bytes.iter().rposition(|byte| !byte.is_ascii_whitespace())?;
+        Some(PathBuf::from(std::ffi::OsString::from_vec(
+            bytes[first..=last].to_vec(),
+        )))
+    }
+    #[cfg(not(unix))]
+    {
+        let value = value
+            .to_str()?
+            .trim_matches(|character: char| character.is_ascii_whitespace());
+        (!value.is_empty()).then(|| PathBuf::from(value))
+    }
 }
 
 fn assert_pinned_cache_dir(cache_dir: &Path, repo_pin: &str, variable: &str) {
@@ -222,6 +274,14 @@ fn assert_pinned_source_tree(tree: &Path, repo_pin: &str, variable: &str) {
         "{variable} does not name pinned ExifTool {repo_pin}: {} has no matching $VERSION declaration",
         version_file.display()
     );
+}
+
+fn source_tree_if_pinned(tree: &Path, repo_pin: &str) -> Option<PathBuf> {
+    if !tree.join("lib/Image/ExifTool.pm").is_file() {
+        return None;
+    }
+    assert_pinned_source_tree(tree, repo_pin, "EXIFTOOL");
+    Some(tree.to_path_buf())
 }
 
 /// Test-only adapter for precedence tests that model an explicit ExifTool
@@ -261,7 +321,7 @@ pub fn durable_cache_dir_from_values(
         .join(repo_pin.trim())
 }
 
-fn durable_cache_dir_from_environment(repo_pin: &str) -> PathBuf {
+fn durable_cache_dir_from_environment(repo_pin: &str) -> Option<PathBuf> {
     let ops_dir = env::var_os("OXIDEX_OPS_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
@@ -270,7 +330,9 @@ fn durable_cache_dir_from_environment(repo_pin: &str) -> PathBuf {
     } else {
         env::var_os("HOME").map(PathBuf::from)
     };
-    durable_cache_dir_from_values(ops_dir.as_deref(), home_dir.as_deref(), repo_pin)
+    ops_dir
+        .or_else(|| home_dir.map(|home| home.join("oxidex-ops")))
+        .map(|root| root.join("cache/exiftool").join(repo_pin.trim()))
 }
 
 fn path_is_present(path: &Path) -> bool {
@@ -289,6 +351,8 @@ mod environment_tests {
     use super::*;
 
     const CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_EXPLICIT_CACHE_CHILD";
+    const WRAPPER_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRAPPER_CHILD";
+    const NO_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_NO_FALLBACK_CHILD";
 
     #[test]
     fn explicit_cache_does_not_require_fallback_environment() {
@@ -296,7 +360,7 @@ mod environment_tests {
             let cache = PathBuf::from(env::var_os("EXIFTOOL_CACHE_DIR").unwrap());
             assert_eq!(
                 FixtureConfig::from_environment("13.59").cache_dir,
-                cache,
+                Some(cache),
                 "a validated explicit cache must not consult HOME or OXIDEX_OPS_DIR"
             );
             return;
@@ -323,6 +387,99 @@ mod environment_tests {
             "isolated environment-selection control failed"
         );
     }
+
+    #[test]
+    fn wrapper_exiftool_uses_validated_explicit_cache() {
+        if env::var_os(WRAPPER_CHILD_ENV).is_some() {
+            let cache = PathBuf::from(env::var_os("EXIFTOOL_CACHE_DIR").unwrap());
+            let config = FixtureConfig::from_environment("13.59");
+            assert_eq!(config.source_tree, None, "a wrapper is not a source tree");
+            assert_eq!(config.cache_dir, Some(cache));
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("temporary wrapper cache");
+        let cache = temp.path().join("cache");
+        let version = cache.join("exiftool/lib/Image/ExifTool.pm");
+        std::fs::create_dir_all(version.parent().unwrap()).unwrap();
+        std::fs::write(&version, "$VERSION = '13.59';\n").unwrap();
+        let wrapper = temp.path().join("exiftool-pinned.sh");
+        std::fs::write(&wrapper, "#!/bin/sh\n").unwrap();
+
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .arg("wrapper_exiftool_uses_validated_explicit_cache")
+            .env(WRAPPER_CHILD_ENV, "1")
+            .env("EXIFTOOL", &wrapper)
+            .env("EXIFTOOL_CACHE_DIR", &cache)
+            .env_remove("HOME")
+            .env_remove("OXIDEX_OPS_DIR")
+            .env_remove(REQUIRED_ENV)
+            .status()
+            .expect("run isolated wrapper environment-selection control");
+        assert!(status.success(), "isolated wrapper control failed");
+    }
+
+    #[test]
+    fn absent_fallback_is_optional_only_until_required_resolution() {
+        if env::var_os(NO_FALLBACK_CHILD_ENV).is_some() {
+            let required = env::var_os(REQUIRED_ENV).is_some();
+            let config = FixtureConfig::from_environment("13.59");
+            let outcome = config.resolve_for_mode("missing.bin", FixturePopulation::Any);
+            if required {
+                let error = outcome.expect_err("required lookup must fail without a fixture root");
+                assert!(error.to_string().contains("missing.bin"));
+            } else {
+                assert_eq!(
+                    outcome.unwrap(),
+                    None,
+                    "optional lookup must not invent a cache root"
+                );
+            }
+            return;
+        }
+
+        for required in [false, true] {
+            let mut command = std::process::Command::new(env::current_exe().unwrap());
+            command
+                .arg("absent_fallback_is_optional_only_until_required_resolution")
+                .env(NO_FALLBACK_CHILD_ENV, "1")
+                .env_remove("EXIFTOOL")
+                .env_remove("EXIFTOOL_CACHE_DIR")
+                .env_remove("HOME")
+                .env_remove("OXIDEX_OPS_DIR");
+            if required {
+                command.env(REQUIRED_ENV, "1");
+            } else {
+                command.env_remove(REQUIRED_ENV);
+            }
+            assert!(
+                command
+                    .status()
+                    .expect("run isolated no-fallback environment-selection control")
+                    .success(),
+                "isolated no-fallback control failed with required={required}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn normalized_path_preserves_non_utf8_unix_bytes_while_trimming_ascii_whitespace() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let value = std::ffi::OsString::from_vec(vec![b' ', b'\t', 0xff, b' ', b'x', b'\n']);
+    let normalized = normalized_path(&value).expect("nonblank path");
+    assert_eq!(normalized.as_os_str().as_bytes(), &[0xff, b' ', b'x']);
+}
+
+#[cfg(not(unix))]
+#[test]
+fn normalized_path_trims_ascii_whitespace_portably() {
+    assert_eq!(
+        normalized_path(OsStr::new(" \tfixture path\n ")),
+        Some(PathBuf::from("fixture path"))
+    );
 }
 
 #[derive(Debug)]
