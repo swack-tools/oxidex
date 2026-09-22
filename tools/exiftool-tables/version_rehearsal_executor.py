@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -793,6 +794,57 @@ def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
     return survivors
 
 
+def _ownership_probe_live(child: subprocess.Popen[str]) -> bool:
+    """Report whether any spawned process still inherits the ownership writer."""
+    descriptor = getattr(child, "_oxidex_ownership_read_fd", None)
+    if type(descriptor) is not int or descriptor < 0:
+        if getattr(child, "_oxidex_ownership_released", False) is True:
+            return False
+        raise OSError("owned process lifetime verification is unavailable")
+    try:
+        readable, _, _ = select.select([descriptor], [], [], 0)
+        if not readable:
+            return True
+        payload = os.read(descriptor, 1)
+    except OSError as exc:
+        raise OSError("owned process lifetime verification failed") from exc
+    if payload:
+        raise OSError("owned process lifetime probe received unexpected data")
+    os.close(descriptor)
+    setattr(child, "_oxidex_ownership_read_fd", -1)
+    setattr(child, "_oxidex_ownership_released", True)
+    return False
+
+
+def _wait_for_ownership_release(child: subprocess.Popen[str]) -> bool:
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    inherited = _ownership_probe_live(child)
+    while inherited and time.monotonic() < deadline:
+        time.sleep(0.02)
+        inherited = _ownership_probe_live(child)
+    return inherited
+
+
+def _require_ownership_release(child: subprocess.Popen[str], operation: str) -> None:
+    try:
+        inherited = _wait_for_ownership_release(child)
+    except OSError as exc:
+        raise OwnedChildCleanupIncomplete(
+            f"owned process lifetime ownership cannot be verified after {operation}",
+        ) from exc
+    if inherited:
+        raise OwnedChildCleanupIncomplete(
+            f"owned process lifetime ownership is still inherited after {operation}",
+        )
+
+
+def _close_ownership_probe(child: subprocess.Popen[str]) -> None:
+    descriptor = getattr(child, "_oxidex_ownership_read_fd", None)
+    if type(descriptor) is int and descriptor >= 0:
+        os.close(descriptor)
+        setattr(child, "_oxidex_ownership_read_fd", -1)
+
+
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Give an adapter a chance to reap, then bound cleanup by its process group."""
     _refresh_owned_descendants(child)
@@ -848,6 +900,7 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     if survivors:
         raise OSError("owned descendant processes are still live after bounded cleanup: "
                       + ", ".join(str(pid) for pid in survivors))
+    _require_ownership_release(child, "bounded cleanup")
     return _text_output(stdout), _text_output(stderr)
 
 
@@ -875,6 +928,7 @@ def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
                       + ", ".join(str(pid) for pid in survivors))
     if enumeration_error is not None:
         raise OSError("owned descendant enumeration remained unverified during emergency cleanup") from enumeration_error
+    _require_ownership_release(child, "emergency cleanup")
     return _text_output(stdout), _text_output(stderr)
 
 
@@ -890,7 +944,8 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
         emergency_needed = True
     try:
         _refresh_owned_descendants(child)
-        if child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child):
+        if (child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child)
+                or _ownership_probe_live(child)):
             cleanup_failures.append("owned child process group is still live after bounded cleanup")
             emergency_needed = True
     except BaseException as inspection:
@@ -903,7 +958,8 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
             cleanup_failures.append(f"emergency owned-child cleanup failed: {emergency}")
         try:
             _refresh_owned_descendants(child)
-            if child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child):
+            if (child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child)
+                    or _ownership_probe_live(child)):
                 cleanup_failures.append("owned child process group is still live after emergency cleanup")
                 cleanup_incomplete = True
         except BaseException as inspection:
@@ -931,7 +987,8 @@ def _emergency_cleanup_after_timeout_failure(
         stdout, stderr = "", ""
     try:
         _refresh_owned_descendants(child)
-        incomplete = child.poll() is None or _group_live(child.pid) or bool(_live_owned_descendants(child))
+        incomplete = (child.poll() is None or _group_live(child.pid) or bool(_live_owned_descendants(child))
+                      or _ownership_probe_live(child))
     except BaseException as inspection:
         failures.append(f"owned child cleanup could not be verified: {inspection}")
         incomplete = True
@@ -955,11 +1012,21 @@ def _spawn_with_deferred_sigint(
         nonlocal pending
         pending = True
 
+    read_fd = write_fd = -1
     signal.signal(signal.SIGINT, defer_sigint)
     try:
+        if kwargs.get("close_fds") is not False:
+            raise OSError("owned child creation requires inherited file descriptors")
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
         child = subprocess.Popen(argv, **kwargs)
+        setattr(child, "_oxidex_ownership_read_fd", read_fd)
         owner[0] = child
     finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        if owner[0] is None and read_fd >= 0:
+            os.close(read_fd)
         signal.signal(signal.SIGINT, previous_handler)
     if pending:
         raise KeyboardInterrupt("SIGINT deferred until owned child creation completed")
@@ -1009,9 +1076,12 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 return record
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
+            _close_ownership_probe(child)
         except KeyboardInterrupt as interruption:
             if owner[0] is not None:
                 _cleanup_owned_child_after_interrupt(owner[0], interruption)
+            raise
+        except OwnedChildCleanupIncomplete:
             raise
         except OSError as exc:
             if owner[0] is None:
@@ -1185,6 +1255,9 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                 raise Refused("write result did not cover the exact immutable selected JPEG fixture scope")
         if stage_guard is not None:
             stage_guard(release, stage, "after")
+    except OwnedChildCleanupIncomplete:
+        _store_journal(run_dir, journal)
+        raise
     except (Refused, OSError) as exc:
         journal["releases"][release]["stages"][stage] = "failed"
         journal["releases"][release]["state"] = "failed"
@@ -1253,6 +1326,7 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
         child = owner[0]
         if child is None:
             raise OSError("native child creation did not return an owned process")
+        _close_ownership_probe(child)
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     try:
         if stage_guard is not None:

@@ -390,6 +390,7 @@ class ExecutorTests(unittest.TestCase):
                     child.wait(timeout=5)
                 except (subprocess.TimeoutExpired, ChildProcessError):
                     pass
+                executor._close_ownership_probe(child)
 
     def test_standard_creation_window_interrupt_reaps_created_child(self):
         created: list[subprocess.Popen[str]] = []
@@ -562,6 +563,7 @@ class ExecutorTests(unittest.TestCase):
                     child.communicate(timeout=5)
                 except (subprocess.TimeoutExpired, ChildProcessError):
                     pass
+                executor._close_ownership_probe(child)
 
     def test_timeout_cleanup_normalizes_byte_output_before_journal_rendering(self):
         self.assertEqual(executor._text_output(b"stdout\xff"), "stdout�")
@@ -947,6 +949,85 @@ class ExecutorTests(unittest.TestCase):
                     os.waitpid(direct, 0)
                 except ChildProcessError:
                     pass
+
+    def test_cleanup_fails_closed_when_term_handler_spawns_escaped_descendant(self):
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        descendant_program = (
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import os, signal, subprocess, sys\n"
+            "fd = int(sys.argv[1])\n"
+            "def terminate(_signum, _frame):\n"
+            "    descendant = subprocess.Popen([sys.executable, '-c', sys.argv[2]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+            "    os.write(fd, f'{descendant.pid}\\n'.encode())\n"
+            "    os.close(fd)\n"
+            "    raise SystemExit(0)\n"
+            "signal.signal(signal.SIGTERM, terminate)\n"
+            "os.write(fd, b'ready\\n')\n"
+            "signal.pause()\n"
+        )
+
+        def read_line() -> bytes:
+            payload = b""
+            while not payload.endswith(b"\n"):
+                chunk = os.read(read_fd, 1)
+                if not chunk:
+                    raise AssertionError("owned child closed readiness pipe before reporting")
+                payload += chunk
+            return payload
+
+        owner: list[subprocess.Popen[str] | None] = [None]
+        child = None
+        try:
+            child = executor._spawn_with_deferred_sigint(
+                owner,
+                [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                text=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=False,
+            )
+            os.close(write_fd)
+            write_fd = -1
+            self.assertEqual(read_line(), b"ready\n")
+            cleanup_error = None
+            with patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.05):
+                try:
+                    executor._bounded_timeout_cleanup(child)
+                except OSError as exc:
+                    cleanup_error = exc
+            process_ids["descendant"] = int(read_line())
+            self.assertIsNotNone(cleanup_error, "cleanup reported success with inherited owned work")
+            self.assertIsInstance(cleanup_error, executor.OwnedChildCleanupIncomplete)
+            self.assertIn("ownership", str(cleanup_error))
+            self.assertFalse(executor._group_live(child.pid))
+            self.assertTrue(executor._pid_live(process_ids["descendant"]))
+        finally:
+            if write_fd >= 0:
+                os.close(write_fd)
+            os.close(read_fd)
+            descendant = process_ids.get("descendant")
+            if descendant is not None:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if child is not None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+
+                executor._close_ownership_probe(child)
 
     def test_interrupt_cleanup_failure_preserves_original_and_reaps_emergency_child(self):
         child_pid = None
