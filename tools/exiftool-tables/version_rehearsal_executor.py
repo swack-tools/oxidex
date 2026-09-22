@@ -1001,7 +1001,7 @@ def _emergency_cleanup_after_timeout_failure(
         incomplete = True
     if incomplete:
         raise OwnedChildCleanupIncomplete(
-            "owned child cleanup remains incomplete after native timeout: " + "; ".join(failures),
+            "owned child cleanup remains incomplete after timeout: " + "; ".join(failures),
         ) from cleanup
     return stdout, stderr
 
@@ -1022,6 +1022,8 @@ def _spawn_with_deferred_sigint(
         pending_frame = frame
 
     read_fd = write_fd = -1
+    child: subprocess.Popen[str] | None = None
+    spawn_failure: BaseException | None = None
     signal.signal(signal.SIGINT, defer_sigint)
     try:
         if kwargs.get("close_fds") is not False:
@@ -1031,6 +1033,8 @@ def _spawn_with_deferred_sigint(
         child = subprocess.Popen(argv, **kwargs)
         setattr(child, "_oxidex_ownership_read_fd", read_fd)
         owner[0] = child
+    except BaseException as failure:
+        spawn_failure = failure
     finally:
         if write_fd >= 0:
             os.close(write_fd)
@@ -1038,17 +1042,20 @@ def _spawn_with_deferred_sigint(
             os.close(read_fd)
         signal.signal(signal.SIGINT, previous_handler)
     if pending:
-        if previous_handler == signal.SIG_IGN:
-            return child
         handler = signal.default_int_handler if previous_handler == signal.SIG_DFL else previous_handler
-        if callable(handler):
+        if previous_handler != signal.SIG_IGN and callable(handler):
             try:
                 handler(signal.SIGINT, pending_frame)
             except BaseException as outcome:
-                _cleanup_owned_child_after_interrupt(child, outcome)
+                if child is not None:
+                    _cleanup_owned_child_after_interrupt(child, outcome)
                 raise
-        else:
+        elif previous_handler != signal.SIG_IGN:
             raise KeyboardInterrupt("SIGINT deferred until owned child creation completed")
+    if spawn_failure is not None:
+        raise spawn_failure
+    if child is None:
+        raise OSError("owned child creation did not return a process")
     return child
 
 
@@ -1081,7 +1088,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                     # The timeout is already an established execution fact.
                     # Preserve its process identity and surface cleanup failure
                     # rather than misclassifying it as a failed spawn.
-                    stdout, stderr = _emergency_reap_group(child)
+                    stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
                     cleanup_error = str(cleanup)
                     if not stdout:
                         stdout = partial_stdout

@@ -82,6 +82,59 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(record["cleanup_operation"], "timeout_cleanup")
         self.assertIn("cleanup bridge failed", record["cleanup_error"])
 
+    def test_timeout_emergency_failure_refuses_terminal_state_with_escaped_descendant(self):
+        """Unverified timeout cleanup cannot escape as a terminal-stage OSError."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        descendant_pid = None
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+            "time.sleep(60)\n"
+        )
+
+        def reap_direct_only(child):
+            child.kill()
+            child.communicate(timeout=5)
+            raise OSError("bounded descendant enumeration unverified")
+
+        failure = None
+        try:
+            with patch.object(executor, "COMMAND_TIMEOUT_SECONDS", 0.05), \
+                 patch.object(executor, "_bounded_timeout_cleanup", side_effect=reap_direct_only), \
+                 patch.object(executor, "_emergency_reap_group",
+                              side_effect=OSError("descendant enumeration unverified")):
+                try:
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            descendant_pid = int(os.read(read_fd, 64))
+            self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
+            self.assertIn("cleanup remains incomplete", str(failure))
+            self.assertTrue(executor._pid_live(descendant_pid))
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_postspawn_callback_oserror_reaps_owned_child(self):
         """A post-spawn fault non-catchably reaps its verified owned child."""
         child_pid = None
@@ -891,6 +944,115 @@ class ExecutorTests(unittest.TestCase):
                 except (subprocess.TimeoutExpired, ChildProcessError):
                     pass
                 executor._close_ownership_probe(child)
+
+    def test_failed_spawn_replays_deferred_sigint_to_default_handler(self):
+        owner: list[subprocess.Popen[str] | None] = [None]
+
+        def fail_after_sigint(*_args, **_kwargs):
+            os.kill(os.getpid(), signal.SIGINT)
+            raise FileNotFoundError("missing executable")
+
+        failure = None
+        with patch.object(executor.subprocess, "Popen", side_effect=fail_after_sigint):
+            try:
+                executor._spawn_with_deferred_sigint(
+                    owner, ["missing"], text=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True, close_fds=False,
+                )
+            except BaseException as exc:
+                failure = exc
+        self.assertIsInstance(failure, KeyboardInterrupt)
+        self.assertIsNone(owner[0])
+
+    def test_failed_spawn_ignored_deferred_sigint_preserves_spawn_failure(self):
+        owner: list[subprocess.Popen[str] | None] = [None]
+        previous_handler = signal.getsignal(signal.SIGINT)
+
+        def fail_after_sigint(*_args, **_kwargs):
+            os.kill(os.getpid(), signal.SIGINT)
+            raise FileNotFoundError("missing executable")
+
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            with patch.object(executor.subprocess, "Popen", side_effect=fail_after_sigint), \
+                 self.assertRaisesRegex(FileNotFoundError, "missing executable"):
+                executor._spawn_with_deferred_sigint(
+                    owner, ["missing"], text=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True, close_fds=False,
+                )
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+        self.assertIsNone(owner[0])
+
+    def test_failed_spawn_invokes_returning_custom_handler_before_spawn_failure(self):
+        owner: list[subprocess.Popen[str] | None] = [None]
+        previous_handler = signal.getsignal(signal.SIGINT)
+        calls: list[tuple[int, bool, bool]] = []
+
+        def custom_handler(signum, frame):
+            calls.append((signum, frame is not None, owner[0] is None))
+
+        def fail_after_sigint(*_args, **_kwargs):
+            os.kill(os.getpid(), signal.SIGINT)
+            raise FileNotFoundError("missing executable")
+
+        try:
+            signal.signal(signal.SIGINT, custom_handler)
+            with patch.object(executor.subprocess, "Popen", side_effect=fail_after_sigint), \
+                 self.assertRaisesRegex(FileNotFoundError, "missing executable"):
+                executor._spawn_with_deferred_sigint(
+                    owner, ["missing"], text=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True, close_fds=False,
+                )
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+        self.assertEqual(calls, [(signal.SIGINT, True, True)])
+
+    def test_failed_spawn_propagates_raising_custom_handler_outcome(self):
+        owner: list[subprocess.Popen[str] | None] = [None]
+        previous_handler = signal.getsignal(signal.SIGINT)
+
+        def custom_handler(_signum, _frame):
+            raise SystemExit("custom SIGINT exit")
+
+        def fail_after_sigint(*_args, **_kwargs):
+            os.kill(os.getpid(), signal.SIGINT)
+            raise FileNotFoundError("missing executable")
+
+        failure = None
+        try:
+            signal.signal(signal.SIGINT, custom_handler)
+            with patch.object(executor.subprocess, "Popen", side_effect=fail_after_sigint):
+                try:
+                    executor._spawn_with_deferred_sigint(
+                        owner, ["missing"], text=True, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True, close_fds=False,
+                    )
+                except BaseException as exc:
+                    failure = exc
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+        self.assertIsInstance(failure, SystemExit)
+        self.assertEqual(str(failure), "custom SIGINT exit")
+        self.assertIsNone(owner[0])
+
+    def test_failed_spawn_without_deferred_sigint_preserves_spawn_failure(self):
+        owner: list[subprocess.Popen[str] | None] = [None]
+        missing = FileNotFoundError("missing executable")
+
+        with patch.object(executor.subprocess, "Popen", side_effect=missing), \
+             self.assertRaisesRegex(FileNotFoundError, "missing executable") as caught:
+            executor._spawn_with_deferred_sigint(
+                owner, ["missing"], text=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=False,
+            )
+        self.assertIs(caught.exception, missing)
+        self.assertIsNone(owner[0])
 
     def test_native_creation_defers_process_sigint_delivered_with_cadence_thread(self):
         self.initialize(self.config())
