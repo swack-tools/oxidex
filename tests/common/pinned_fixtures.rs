@@ -725,8 +725,10 @@ mod environment_tests {
         let mut invalid = vec![PathBuf::from("relative-ops"), scratch.path().to_path_buf()];
         #[cfg(unix)]
         {
-            let linked = durable_parent.join("pinned-fixture-ops-root-link");
-            let _ = std::fs::remove_file(&linked);
+            // Each test target includes this module and nextest runs targets in
+            // parallel. Put the probe inside this test's unique TempDir rather
+            // than sharing a fixed name below HOME across parent processes.
+            let linked = durable.path().join("pinned-fixture-ops-root-link");
             std::os::unix::fs::symlink(durable.path(), &linked).expect("create ops-root symlink");
             invalid.push(linked);
         }
@@ -765,10 +767,6 @@ mod environment_tests {
                 child_result.success(),
                 "valid ops-root control failed for {mode}"
             );
-        }
-        #[cfg(unix)]
-        {
-            let _ = std::fs::remove_file(durable_parent.join("pinned-fixture-ops-root-link"));
         }
     }
 
