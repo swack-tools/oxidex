@@ -260,6 +260,88 @@ class ExecutorTests(unittest.TestCase):
         persisted = json.loads((self.run_dir / "execution-status.json").read_text())
         self.assertEqual(persisted["releases"][release]["state"], "failed")
 
+    def test_real_native_child_interrupt_reaps_owned_group_before_recovery(self):
+        """The native runner owns the same interruption cleanup boundary."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        child_program = (
+            "import json, os, subprocess, sys\n"
+            "descendant = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(60)'])\n"
+            "os.write(int(sys.argv[1]), (json.dumps({'descendant': descendant.pid}) + '\\n').encode())\n"
+            "raise SystemExit(descendant.wait())\n"
+        )
+
+        def interrupted_probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", child_program, str(write_fd)],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=60,
+            )
+            self.fail("real native child unexpectedly returned after supervisor interruption")
+
+        original_store = executor._store_journal
+
+        def interrupt_when_child_is_recorded(run_dir, value) -> None:
+            original_store(run_dir, value)
+            active = value.get("active")
+            child = active.get("child") if isinstance(active, dict) else None
+            if not isinstance(child, dict) or process_ids:
+                return
+            process_ids.update(direct=child["pid"], pgid=child["pgid"])
+            os.close(write_fd)
+            payload = b""
+            while not payload.endswith(b"\n"):
+                chunk = os.read(read_fd, 4096)
+                if not chunk:
+                    raise AssertionError("native child closed readiness pipe before reporting its descendant")
+                payload += chunk
+            process_ids.update(json.loads(payload))
+            raise KeyboardInterrupt("interrupt during native child journal record")
+
+        try:
+            with executor._HostLock(self.lock) as held, \
+                 patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=interrupted_probe), \
+                 patch.object(executor, "_store_journal", side_effect=interrupt_when_child_is_recorded):
+                with self.assertRaisesRegex(KeyboardInterrupt, "native child journal record"):
+                    executor._run_native(
+                        self.run_dir, journal, release, docs, config,
+                        self.cache, self.sources, subprocess.run,
+                    )
+                for name in ("direct", "descendant"):
+                    with self.subTest(process=name), self.assertRaises(ProcessLookupError):
+                        os.kill(process_ids[name], 0)
+                recovered = executor.recover(
+                    self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
+                )
+                self.assertEqual(recovered["phase"], "interrupted")
+                self.assertIsNone(recovered["active"])
+            with executor._HostLock(self.lock):
+                pass
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            pgid = process_ids.get("pgid")
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            direct = process_ids.get("direct")
+            if direct is not None:
+                try:
+                    os.waitpid(direct, 0)
+                except ChildProcessError:
+                    pass
+
     def test_timeout_cleanup_normalizes_byte_output_before_journal_rendering(self):
         self.assertEqual(executor._text_output(b"stdout\xff"), "stdout�")
         self.assertEqual(executor._text_output(b""), "")
@@ -446,6 +528,84 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsNotNone(child_pid)
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+    def test_interrupt_surviving_group_triggers_emergency_and_blocks_recovery(self):
+        """A reaped leader must not hide its still-live owned process group."""
+        self.initialize(self.config())
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        release = self.releases[0]
+        child_program = (
+            "import json, os, subprocess, sys\n"
+            "descendant = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, "
+            "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "os.write(int(sys.argv[1]), (json.dumps({'descendant': descendant.pid}) + '\\n').encode())\n"
+            "raise SystemExit(descendant.wait())\n"
+        )
+
+        def interrupted_after_group_ready(pid: int, pgid: int) -> None:
+            process_ids.update(direct=pid, pgid=pgid)
+            journal_path = self.run_dir / "execution-status.json"
+            journal = json.loads(journal_path.read_text())
+            journal["phase"] = "running"
+            journal["active"] = {
+                "release": release, "stage": "generate", "child": {"pid": pid, "pgid": pgid},
+            }
+            journal["releases"][release]["stages"]["generate"] = "running"
+            executor._store_journal(self.run_dir, journal)
+            os.close(write_fd)
+            payload = b""
+            while not payload.endswith(b"\n"):
+                chunk = os.read(read_fd, 4096)
+                if not chunk:
+                    raise AssertionError("owned child closed readiness pipe before reporting its descendant")
+                payload += chunk
+            process_ids.update(json.loads(payload))
+            raise KeyboardInterrupt("original interruption")
+
+        def reap_direct_only(child):
+            child.terminate()
+            return child.communicate(timeout=5)
+
+        try:
+            with executor._HostLock(self.lock) as held, \
+                 patch.object(executor, "_bounded_timeout_cleanup", side_effect=reap_direct_only), \
+                 patch.object(executor, "_emergency_reap_group",
+                              side_effect=OSError("emergency cleanup failed")) as emergency:
+                with self.assertRaisesRegex(KeyboardInterrupt, "original interruption") as caught:
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd)],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                        started=interrupted_after_group_ready,
+                    )
+                notes = list(getattr(caught.exception, "__notes__", []))
+                self.assertTrue(any("process group is still live" in note for note in notes))
+                with self.assertRaisesRegex(executor.Refused, "process group is still live"):
+                    executor.recover(
+                        self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
+                    )
+                self.assertTrue(any("emergency cleanup failed" in note for note in notes))
+                emergency.assert_called_once()
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            pgid = process_ids.get("pgid")
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            direct = process_ids.get("direct")
+            if direct is not None:
+                try:
+                    os.waitpid(direct, 0)
+                except ChildProcessError:
+                    pass
 
     def test_recovery_accepts_legacy_schema_one_config_without_read_bindings(self):
         self.initialize(self.config())

@@ -629,6 +629,37 @@ def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
     return _text_output(stdout), _text_output(stderr)
 
 
+def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interruption: KeyboardInterrupt) -> None:
+    """Bound cleanup of the live Popen we own while preserving the interrupt."""
+    cleanup_failures = []
+    emergency_needed = False
+    try:
+        _bounded_timeout_cleanup(child)
+    except BaseException as cleanup:
+        cleanup_failures.append(f"bounded owned-child cleanup failed: {cleanup}")
+        emergency_needed = True
+    try:
+        if child.poll() is None or _group_live(child.pid):
+            cleanup_failures.append("owned child process group is still live after bounded cleanup")
+            emergency_needed = True
+    except BaseException as inspection:
+        cleanup_failures.append(f"owned child cleanup could not be verified: {inspection}")
+        emergency_needed = True
+    if emergency_needed:
+        try:
+            _emergency_reap_group(child)
+        except BaseException as emergency:
+            cleanup_failures.append(f"emergency owned-child cleanup failed: {emergency}")
+        try:
+            if child.poll() is None or _group_live(child.pid):
+                cleanup_failures.append("owned child process group is still live after emergency cleanup")
+        except BaseException as inspection:
+            cleanup_failures.append(f"emergency owned-child cleanup could not be verified: {inspection}")
+    for failure in cleanup_failures:
+        if hasattr(interruption, "add_note"):
+            interruption.add_note(failure)
+
+
 def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
                 started: Callable[[int, int], None] | None = None) -> dict[str, Any]:
     """Run one bounded command and retain its actual output for the journal log.
@@ -674,23 +705,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
         except KeyboardInterrupt as interruption:
-            cleanup_failures = []
-            try:
-                _bounded_timeout_cleanup(child)
-            except BaseException as cleanup:
-                cleanup_failures.append(f"bounded owned-child cleanup failed: {cleanup}")
-                try:
-                    _emergency_reap_group(child)
-                except BaseException as emergency:
-                    cleanup_failures.append(f"emergency owned-child cleanup failed: {emergency}")
-            try:
-                if child.poll() is None or _group_live(child.pid):
-                    cleanup_failures.append("owned child process group is still live after bounded cleanup")
-            except BaseException as inspection:
-                cleanup_failures.append(f"owned child cleanup could not be verified: {inspection}")
-            for failure in cleanup_failures:
-                if hasattr(interruption, "add_note"):
-                    interruption.add_note(failure)
+            _cleanup_owned_child_after_interrupt(child, interruption)
             raise
         except OSError as exc:
             try:
@@ -902,13 +917,16 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
         kwargs.pop("capture_output", None)
         child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  start_new_session=True, close_fds=False, **kwargs)
-        journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
-        _store_journal(run_dir, journal)
         try:
+            journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
+            _store_journal(run_dir, journal)
             stdout, stderr = child.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             stdout, stderr = _bounded_timeout_cleanup(child)
             exc.output, exc.stderr = stdout, stderr
+            raise
+        except KeyboardInterrupt as interruption:
+            _cleanup_owned_child_after_interrupt(child, interruption)
             raise
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     try:
@@ -1057,15 +1075,23 @@ def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
             raise Refused("only a running execution can be recovered as interrupted")
         active = journal["active"]
         child = active.get("child")
-        if isinstance(child, dict) and type(child.get("pid")) is int and child["pid"] > 0:
-            try:
-                os.kill(child["pid"], 0)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                raise Refused("active child process cannot be inspected; refusing interruption recovery")
-            else:
-                raise Refused("active child process is still live; refusing interruption recovery")
+        if isinstance(child, dict):
+            if type(child.get("pid")) is int and child["pid"] > 0:
+                try:
+                    os.kill(child["pid"], 0)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    raise Refused("active child process cannot be inspected; refusing interruption recovery")
+                else:
+                    raise Refused("active child process is still live; refusing interruption recovery")
+            if type(child.get("pgid")) is int and child["pgid"] > 0:
+                try:
+                    group_live = _group_live(child["pgid"])
+                except PermissionError:
+                    raise Refused("active child process group cannot be inspected; refusing interruption recovery")
+                if group_live:
+                    raise Refused("active child process group is still live; refusing interruption recovery")
         if active.get("stage") in STAGES:
             journal["releases"][active["release"]]["stages"][active["stage"]] = "interrupted"
         journal["phase"], journal["active"] = "interrupted", None
