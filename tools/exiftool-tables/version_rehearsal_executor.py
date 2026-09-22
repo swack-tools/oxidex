@@ -552,18 +552,95 @@ def _text_output(value: str | bytes | None) -> str:
     return value or ""
 
 
-def _group_live(pgid: int) -> bool:
+def _procfs_stat(path: Path) -> tuple[str, int] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    close = raw.rfind(")")
+    fields = raw[close + 2:].split() if close >= 0 else []
+    if len(fields) < 3 or len(fields[0]) != 1:
+        return None
+    try:
+        return fields[0], int(fields[2])
+    except ValueError:
+        return None
+
+
+def _pid_live(pid: int, *, proc_root: Path = Path("/proc")) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    if sys.platform.startswith("linux"):
+        row = _procfs_stat(proc_root / str(pid) / "stat")
+        if row is None:
+            return True
+        return row[0] not in {"Z", "X", "x"}
+    return True
+
+
+def _procfs_group_states(pgid: int, proc_root: Path) -> list[str] | None:
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return None
+    states = []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        row = _procfs_stat(entry / "stat")
+        if row is None:
+            try:
+                entry.stat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+            return None
+        state, group = row
+        if group == pgid:
+            states.append(state)
+    return states
+
+
+def _group_live(pgid: int, *, proc_root: Path = Path("/proc")) -> bool:
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
+    if sys.platform.startswith("linux"):
+        states = _procfs_group_states(pgid, proc_root)
+        if not states:
+            return True
+        return any(state not in {"Z", "X", "x"} for state in states)
     return True
+
+
+def _refresh_owned_descendants(child: subprocess.Popen[str]) -> set[int]:
+    descendants = set(getattr(child, "_oxidex_owned_descendants", set()))
+    descendants.update(_descendants(child.pid))
+    setattr(child, "_oxidex_owned_descendants", descendants)
+    return descendants
+
+
+def _live_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
+    return sorted(pid for pid in getattr(child, "_oxidex_owned_descendants", set()) if _pid_live(pid))
+
+
+def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    survivors = _live_owned_descendants(child)
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.02)
+        survivors = _live_owned_descendants(child)
+    return survivors
 
 
 def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Give an adapter a chance to reap, then bound cleanup by its process group."""
-    descendants = _descendants(child.pid)
-    for pid in reversed(descendants):
+    descendants = _refresh_owned_descendants(child)
+    for pid in sorted(descendants, reverse=True):
         _signal_pid(pid, signal.SIGTERM)
     try:
         stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
@@ -571,8 +648,8 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
         # A child can be created after the first snapshot. Refresh before the
         # process-group fallback, which also covers descendants that close the
         # inherited stdout/stderr pipes and otherwise evade communicate().
-        descendants = _descendants(child.pid)
-        for pid in reversed(descendants):
+        descendants = _refresh_owned_descendants(child)
+        for pid in sorted(descendants, reverse=True):
             _signal_pid(pid, signal.SIGTERM)
         try:
             stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
@@ -611,11 +688,21 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
         deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
         while _group_live(child.pid) and time.monotonic() < deadline:
             time.sleep(0.02)
+    _refresh_owned_descendants(child)
+    for pid in _live_owned_descendants(child):
+        _signal_pid(pid, signal.SIGKILL)
+    survivors = _wait_owned_descendants(child)
+    if survivors:
+        raise OSError("owned descendant processes are still live after bounded cleanup: "
+                      + ", ".join(str(pid) for pid in survivors))
     return _text_output(stdout), _text_output(stderr)
 
 
 def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
     """Kill and reap an owned group after ordinary cleanup itself faults."""
+    descendants = _refresh_owned_descendants(child)
+    for pid in descendants:
+        _signal_pid(pid, signal.SIGKILL)
     try:
         os.killpg(child.pid, signal.SIGKILL)
     except OSError:
@@ -626,6 +713,10 @@ def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
         stdout, stderr = exc.output, exc.stderr
     except OSError:
         stdout, stderr = "", ""
+    survivors = _wait_owned_descendants(child)
+    if survivors:
+        raise OSError("owned descendant processes are still live after emergency cleanup: "
+                      + ", ".join(str(pid) for pid in survivors))
     return _text_output(stdout), _text_output(stderr)
 
 
@@ -633,13 +724,14 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
     """Bound cleanup of the live Popen we own while preserving the interrupt."""
     cleanup_failures = []
     emergency_needed = False
+    cleanup_incomplete = False
     try:
         _bounded_timeout_cleanup(child)
     except BaseException as cleanup:
         cleanup_failures.append(f"bounded owned-child cleanup failed: {cleanup}")
         emergency_needed = True
     try:
-        if child.poll() is None or _group_live(child.pid):
+        if child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child):
             cleanup_failures.append("owned child process group is still live after bounded cleanup")
             emergency_needed = True
     except BaseException as inspection:
@@ -651,10 +743,17 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
         except BaseException as emergency:
             cleanup_failures.append(f"emergency owned-child cleanup failed: {emergency}")
         try:
-            if child.poll() is None or _group_live(child.pid):
+            if child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child):
                 cleanup_failures.append("owned child process group is still live after emergency cleanup")
+                cleanup_incomplete = True
         except BaseException as inspection:
             cleanup_failures.append(f"emergency owned-child cleanup could not be verified: {inspection}")
+            cleanup_incomplete = True
+    setattr(
+        interruption,
+        "_oxidex_owned_child_cleanup",
+        "incomplete" if cleanup_incomplete else "verified",
+    )
     for failure in cleanup_failures:
         if hasattr(interruption, "add_note"):
             interruption.add_note(failure)
@@ -915,19 +1014,28 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
             return run(argv, **kwargs)
         timeout = kwargs.pop("timeout", None)
         kwargs.pop("capture_output", None)
-        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True, close_fds=False, **kwargs)
+        child = None
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
+            child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     start_new_session=True, close_fds=False, **kwargs)
+            restore_mask, previous_mask = previous_mask, None
+            signal.pthread_sigmask(signal.SIG_SETMASK, restore_mask)
             journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
             _store_journal(run_dir, journal)
-            stdout, stderr = child.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            stdout, stderr = _bounded_timeout_cleanup(child)
-            exc.output, exc.stderr = stdout, stderr
-            raise
+            try:
+                stdout, stderr = child.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                stdout, stderr = _bounded_timeout_cleanup(child)
+                exc.output, exc.stderr = stdout, stderr
+                raise
         except KeyboardInterrupt as interruption:
-            _cleanup_owned_child_after_interrupt(child, interruption)
+            if child is not None:
+                _cleanup_owned_child_after_interrupt(child, interruption)
             raise
+        finally:
+            if previous_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     try:
         if stage_guard is not None:
@@ -1078,12 +1186,10 @@ def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
         if isinstance(child, dict):
             if type(child.get("pid")) is int and child["pid"] > 0:
                 try:
-                    os.kill(child["pid"], 0)
-                except ProcessLookupError:
-                    pass
+                    process_live = _pid_live(child["pid"])
                 except PermissionError:
                     raise Refused("active child process cannot be inspected; refusing interruption recovery")
-                else:
+                if process_live:
                     raise Refused("active child process is still live; refusing interruption recovery")
             if type(child.get("pgid")) is int and child["pgid"] > 0:
                 try:

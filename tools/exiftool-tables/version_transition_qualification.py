@@ -860,6 +860,11 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         cadence.check()
                     except BaseException as execution_error:
                         try:
+                            if (isinstance(execution_error, KeyboardInterrupt)
+                                    and getattr(execution_error, "_oxidex_owned_child_cleanup", None) == "incomplete"):
+                                raise executor.Refused(
+                                    "owned child cleanup is incomplete; refusing durable interruption recovery",
+                                )
                             recovered = _recover_if_running(
                                 side_run, Path(identity["archive_cache"]), Path(identity["source_root"]),
                                 host_lock_fd=host_lease.fileno,
@@ -958,9 +963,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt as interruption:
         notes = list(getattr(interruption, "__notes__", []))
         recovery = getattr(interruption, "_oxidex_durable_recovery", None)
-        if recovery == "recovered" and not notes:
+        if recovery == "recovered":
             message = "version transition qualification interrupted after durable recovery"
-        elif recovery == "not-required" and not notes:
+        elif recovery == "not-required":
             message = "version transition qualification interrupted; no running executor journal required recovery"
         else:
             message = "version transition qualification interrupted; durable recovery incomplete or unverified"

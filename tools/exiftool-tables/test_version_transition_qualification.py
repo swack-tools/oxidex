@@ -668,6 +668,23 @@ class WrapperCallTests(unittest.TestCase):
         self.assertTrue(any("durable interruption recovery failed" in note
                             for note in getattr(caught.exception, "__notes__", [])))
 
+    def test_incomplete_owned_cleanup_prevents_durable_recovery_publication(self) -> None:
+        def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):
+            (run_dir / "execution-status.json").write_text(json.dumps({
+                "phase": "running", "active": {"release": "13.59", "stage": "generate"},
+            }))
+            failure = KeyboardInterrupt("original interruption")
+            setattr(failure, "_oxidex_owned_child_cleanup", "incomplete")
+            raise failure
+
+        with patch.object(qualification.executor, "recover") as recover:
+            with self.assertRaisesRegex(KeyboardInterrupt, "original interruption") as caught:
+                self.invoke(interrupted)
+        recover.assert_not_called()
+        self.assertEqual(getattr(caught.exception, "_oxidex_durable_recovery"), "incomplete")
+        self.assertTrue(any("owned child cleanup is incomplete" in note
+                            for note in getattr(caught.exception, "__notes__", [])))
+
     def test_cli_reports_unverified_recovery_truthfully_and_retains_exit_130(self) -> None:
         interrupted = KeyboardInterrupt("original interruption")
         interrupted.add_note("durable interruption recovery failed: active child is still live")
@@ -705,6 +722,26 @@ class WrapperCallTests(unittest.TestCase):
             stderr.getvalue(),
             "version transition qualification interrupted after durable recovery\n",
         )
+
+    def test_cli_reports_recovered_with_secondary_cleanup_warning(self) -> None:
+        interrupted = KeyboardInterrupt("original interruption")
+        setattr(interrupted, "_oxidex_durable_recovery", "recovered")
+        interrupted.add_note("bounded owned-child cleanup failed: diagnostic fault")
+        arguments = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--target-root", "target", "--lease", "lease", "--run-id", "run",
+            "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+            "--expiry-receipt", "expiry", "--release-receipt", "release",
+            "--handoff-receipt", "handoff",
+        ]
+        stderr = io.StringIO()
+        with patch.object(qualification, "run_qualification", side_effect=interrupted), \
+             redirect_stderr(stderr):
+            self.assertEqual(qualification.main(arguments), 130)
+        rendered = stderr.getvalue()
+        self.assertIn("interrupted after durable recovery", rendered)
+        self.assertIn("recovery detail: bounded owned-child cleanup failed", rendered)
+        self.assertNotIn("incomplete or unverified", rendered)
 
     def test_native_cases_are_frozen_before_first_side_and_rechecked(self) -> None:
         calls = 0

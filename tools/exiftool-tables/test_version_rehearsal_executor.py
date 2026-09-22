@@ -9,6 +9,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -342,6 +343,117 @@ class ExecutorTests(unittest.TestCase):
                 except ChildProcessError:
                     pass
 
+    def test_native_creation_window_interrupt_reaps_created_child(self):
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+
+        def interrupt_after_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+                os.kill(os.getpid(), signal.SIGINT)
+            return child
+
+        def interrupted_probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=60,
+            )
+            self.fail("native creation-window child unexpectedly returned")
+
+        try:
+            with executor._HostLock(self.lock) as held, \
+                 patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=interrupted_probe), \
+                 patch.object(executor.subprocess, "Popen", side_effect=interrupt_after_creation):
+                with self.assertRaises(KeyboardInterrupt):
+                    executor._run_native(
+                        self.run_dir, journal, release, docs, config,
+                        self.cache, self.sources, subprocess.run,
+                    )
+                self.assertEqual(len(created), 1)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(created[0].pid, 0)
+                recovered = executor.recover(
+                    self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
+                )
+                self.assertEqual(recovered["phase"], "interrupted")
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+
+    def test_native_timeout_cleanup_interrupt_reaps_created_child(self):
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+        original_cleanup = executor._bounded_timeout_cleanup
+        cleanup_calls = 0
+
+        def track_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+            return child
+
+        def interrupt_first_cleanup(child):
+            nonlocal cleanup_calls
+            cleanup_calls += 1
+            if cleanup_calls == 1:
+                raise KeyboardInterrupt("interrupt during native timeout cleanup")
+            return original_cleanup(child)
+
+        def interrupted_probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=0.01,
+            )
+            self.fail("native timeout child unexpectedly returned")
+
+        try:
+            with executor._HostLock(self.lock) as held, \
+                 patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=interrupted_probe), \
+                 patch.object(executor.subprocess, "Popen", side_effect=track_creation), \
+                 patch.object(executor, "_bounded_timeout_cleanup",
+                              side_effect=interrupt_first_cleanup):
+                with self.assertRaisesRegex(KeyboardInterrupt, "native timeout cleanup"):
+                    executor._run_native(
+                        self.run_dir, journal, release, docs, config,
+                        self.cache, self.sources, subprocess.run,
+                    )
+                self.assertEqual(cleanup_calls, 2)
+                self.assertEqual(len(created), 1)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(created[0].pid, 0)
+                recovered = executor.recover(
+                    self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
+                )
+                self.assertEqual(recovered["phase"], "interrupted")
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+
     def test_timeout_cleanup_normalizes_byte_output_before_journal_rendering(self):
         self.assertEqual(executor._text_output(b"stdout\xff"), "stdout�")
         self.assertEqual(executor._text_output(b""), "")
@@ -424,6 +536,66 @@ class ExecutorTests(unittest.TestCase):
         with executor._HostLock(self.lock) as held, self.assertRaisesRegex(executor.Refused, "still live"):
             executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno())
 
+    def test_procfs_liveness_ignores_zombies_and_fails_closed_on_bad_state(self):
+        proc_root = self.root / "proc"
+        proc_root.mkdir()
+        pgid = 4100
+
+        def stat(pid: int, state: str, group: int = pgid) -> None:
+            directory = proc_root / str(pid)
+            directory.mkdir(exist_ok=True)
+            (directory / "stat").write_text(
+                f"{pid} (worker name) {state} 1 {group} {group} 0 0 0 0 0\n",
+            )
+
+        stat(pgid, "Z")
+        stat(pgid + 1, "Z")
+        with patch.object(executor.sys, "platform", "linux"), \
+             patch.object(executor.os, "killpg"), patch.object(executor.os, "kill"):
+            self.assertFalse(executor._pid_live(pgid, proc_root=proc_root))
+            self.assertFalse(executor._group_live(pgid, proc_root=proc_root))
+            stat(pgid + 1, "S")
+            self.assertTrue(executor._group_live(pgid, proc_root=proc_root))
+            (proc_root / str(pgid + 1) / "stat").write_text("malformed\n")
+            self.assertTrue(executor._group_live(pgid, proc_root=proc_root))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux procfs")
+    def test_recovery_accepts_real_zombie_only_group(self):
+        self.initialize(self.config())
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import os; os._exit(0)"],
+            start_new_session=True,
+        )
+        try:
+            stat_path = Path("/proc") / str(child.pid) / "stat"
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                raw = stat_path.read_text()
+                if raw[raw.rfind(")") + 2:].split()[0] == "Z":
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("real child did not enter zombie state")
+            journal_path = self.run_dir / "execution-status.json"
+            journal = json.loads(journal_path.read_text())
+            release = self.releases[0]
+            journal["phase"] = "running"
+            journal["active"] = {
+                "release": release,
+                "stage": "generate",
+                "child": {"pid": child.pid, "pgid": child.pid},
+            }
+            journal["releases"][release]["stages"]["generate"] = "running"
+            executor._store_journal(self.run_dir, journal)
+            with executor._HostLock(self.lock) as held:
+                recovered = executor.recover(
+                    self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
+                )
+            self.assertEqual(recovered["phase"], "interrupted")
+            self.assertIsNone(recovered["active"])
+        finally:
+            child.wait(timeout=5)
+
     def test_real_child_interrupt_reaps_owned_group_before_durable_recovery(self):
         """Removing interrupt cleanup must leave the recorded real child live."""
         self.initialize(self.config())
@@ -493,6 +665,90 @@ class ExecutorTests(unittest.TestCase):
                 try:
                     os.close(descriptor)
                 except OSError:
+                    pass
+            pgid = process_ids.get("pgid")
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            direct = process_ids.get("direct")
+            if direct is not None:
+                try:
+                    os.waitpid(direct, 0)
+                except ChildProcessError:
+                    pass
+
+    def test_interrupt_reaps_descendant_that_escapes_session_and_ignores_term(self):
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        ready_error: list[BaseException] = []
+        descendant_program = (
+            "import json, os, signal, sys, time\n"
+            "os.setsid()\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "os.write(int(sys.argv[1]), (json.dumps({'descendant': os.getpid()}) + '\\n').encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys\n"
+            "descendant = subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "close_fds=False)\n"
+            "raise SystemExit(descendant.wait())\n"
+        )
+
+        def interrupt_when_escaped_descendant_is_ready() -> None:
+            try:
+                payload = b""
+                while not payload.endswith(b"\n"):
+                    chunk = os.read(read_fd, 4096)
+                    if not chunk:
+                        raise AssertionError("escaped descendant closed readiness pipe before reporting")
+                    payload += chunk
+                process_ids.update(json.loads(payload))
+                os.kill(os.getpid(), signal.SIGINT)
+            except BaseException as exc:
+                ready_error.append(exc)
+
+        def started(pid: int, pgid: int) -> None:
+            process_ids.update(direct=pid, pgid=pgid)
+            os.close(write_fd)
+
+        interrupter = threading.Thread(
+            target=interrupt_when_escaped_descendant_is_ready,
+            daemon=True,
+        )
+        try:
+            with executor._HostLock(self.lock), \
+                 patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.1):
+                interrupter.start()
+                with self.assertRaises(KeyboardInterrupt):
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run, started=started,
+                    )
+                interrupter.join(timeout=5)
+                self.assertFalse(interrupter.is_alive(), "escaped descendant readiness was not observed")
+                if ready_error:
+                    raise ready_error[0]
+                self.assertFalse(executor._pid_live(process_ids["direct"]))
+                self.assertFalse(executor._pid_live(process_ids["descendant"]))
+            with executor._HostLock(self.lock):
+                pass
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            descendant = process_ids.get("descendant")
+            if descendant is not None:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except ProcessLookupError:
                     pass
             pgid = process_ids.get("pgid")
             if pgid is not None:
