@@ -100,7 +100,7 @@
     },
     "source_release": "13.59",
     "source_sha256": "5e1c9cdf70620a74edc5c60c7cc3c52134fe77c96d0a76e37078cb484baabf9f",
-    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_rows",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
     "table": "Main"
   },
   {
@@ -126,7 +126,7 @@
     },
     "source_release": "13.59",
     "source_sha256": "75198b9610806e8160e5fc42ab24d782516c511747be9cda5eb8ac865b11b5f4",
-    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_rows",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
     "table": "Main"
   },
   {
@@ -152,7 +152,7 @@
     },
     "source_release": "13.59",
     "source_sha256": "5493ec6ba510a89bd314db766bed2aee11eef4ed8fd21a8d7deab35b7a8520ae",
-    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_rows",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_datatag",
     "table": "Composite"
   },
   {

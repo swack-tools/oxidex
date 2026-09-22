@@ -29,8 +29,11 @@ use crate::const_decoder;
 use crate::core::tag_occurrence::intern;
 use crate::core::{Instance, MetadataMap, Provenance, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::ifd_engine::{
+    IfdEntryEvent, IfdEntryObserver, process_exif_with_observer,
+};
 use crate::exiftool_tables::session::{MemberVal, Session};
-use crate::exiftool_tables::{Ctx, IfdDir, IfdTable, MemberValue, find_ifd_table, process_exif};
+use crate::exiftool_tables::{Ctx, Emitted, IfdDir, IfdTable, MemberValue, find_ifd_table};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -786,6 +789,7 @@ impl OlympusParser {
         // is deliberate: six of sixty-eight rows under real ExifTool tag
         // names would look like ordinary output, whereas an empty Olympus
         // block is unmistakable.
+        let mut zoomed_preview = ZoomedPreviewState::default();
         let main_table = find_ifd_table("Olympus", "Main").filter(|table| table.enabled());
         if let Some(table) = main_table {
             walk_main_through_engine(
@@ -800,6 +804,7 @@ impl OlympusParser {
                 model,
                 tags,
                 structured_rows.as_deref_mut(),
+                &mut zoomed_preview,
             );
             // The `MAIN` rows the generated table withholds or never
             // transcribed keep their hand conversion, and the three rows the
@@ -816,17 +821,6 @@ impl OlympusParser {
                 tags,
             );
         }
-
-        let mut zoomed_preview = ZoomedPreviewState::default();
-        append_zoomed_preview_rows(
-            data,
-            &entries,
-            base,
-            effective_byte_order,
-            tags,
-            structured_rows.as_deref_mut(),
-            &mut zoomed_preview,
-        );
 
         // Slice I-3 (design spec section 5): the seven sub-tables
         // `enabled_ifd.rs` lists were walked by the engine ABOVE --
@@ -969,6 +963,7 @@ impl OlympusParser {
                 model,
                 tags,
                 structured_rows.as_deref_mut(),
+                &mut zoomed_preview,
             );
             // The same remainder as for the top level: the withheld rows
             // (a MainInfo directory carries SpecialMode and DigitalZoom
@@ -982,20 +977,6 @@ impl OlympusParser {
                 "Olympus",
                 tables::MAIN_RESIDUAL,
                 tags,
-            );
-        }
-
-        if let Some((start, order)) = main_info
-            && let Some(main_info_entries) = ifd::read_ifd(data, start, order)
-        {
-            append_zoomed_preview_rows(
-                data,
-                &main_info_entries,
-                base,
-                order,
-                tags,
-                structured_rows.as_deref_mut(),
-                &mut zoomed_preview,
             );
         }
 
@@ -1044,60 +1025,44 @@ struct ZoomedPreviewState {
     length: Option<i64>,
 }
 
-/// Emit the source scalars in physical IFD-entry order and retain their
-/// independent later-wins values for the one composite DataTag, which is
-/// materialised after every Olympus::Main walk has completed.
-fn append_zoomed_preview_rows(
-    data: &[u8],
-    entries: &[ifd::RawEntry],
-    base: Option<i64>,
-    order: ByteOrder,
-    tags: &mut HashMap<String, String>,
-    mut rows: Option<&mut Vec<(String, TagOccurrence)>>,
-    state: &mut ZoomedPreviewState,
-) {
-    let pair = &tables::ZOOMED_PREVIEW_PAIR;
-    for entry in entries {
-        let (name, value) = match entry.tag_id {
-            id if id == pair.offset_id => ("ZoomedPreviewStart", &mut state.start),
-            id if id == pair.length_id => ("ZoomedPreviewLength", &mut state.length),
-            _ => continue,
+/// Emit the source scalars at their exact generated-engine traversal point
+/// and retain independent later-wins values for the one post-walk DataTag.
+struct ZoomedPreviewObserver<'a> {
+    state: &'a mut ZoomedPreviewState,
+}
+
+impl IfdEntryObserver for ZoomedPreviewObserver<'_> {
+    fn observe(&mut self, event: IfdEntryEvent<'_, '_>, out: &mut Vec<Emitted>) {
+        if event.table.module != "Olympus" || event.table.table != "Main" {
+            return;
+        }
+        let pair = &tables::ZOOMED_PREVIEW_PAIR;
+        let (name, value) = match event.entry.tag_id {
+            id if id == pair.offset_id => ("ZoomedPreviewStart", &mut self.state.start),
+            id if id == pair.length_id => ("ZoomedPreviewLength", &mut self.state.length),
+            _ => return,
         };
-        let Some(decoded) =
-            ifd::decode_entry(data, entry, base, order, None).and_then(|value| value.first_int())
-        else {
-            continue;
+        let Some(decoded) = event.declared_value().and_then(|value| value.as_integer()) else {
+            return;
         };
         *value = Some(decoded);
-
-        let Some(rows) = rows.as_deref_mut() else {
-            tags.insert(format!("Olympus:{name}"), decoded.to_string());
-            continue;
-        };
         let stored = TagValue::Integer(decoded);
-        rows.push((
-            format!("Olympus:{name}"),
-            TagOccurrence {
-                id: crate::core::TagId::Numeric(entry.tag_id),
-                name: intern(name),
-                group0: intern("MakerNotes"),
-                group1: intern("Olympus"),
-                group2: Some(intern("Camera")),
-                instance: Instance::default(),
-                raw: stored.clone(),
-                value: Some(stored.clone()),
-                print: Some(stored.clone()),
-                stored: Some(stored),
-                priority: 1,
-                is_list: false,
-                order: 0,
-                origin: Provenance {
-                    module: Some("Olympus"),
-                    table: Some("Main"),
-                    byte_range: None,
-                },
-            },
-        ));
+        out.push(Emitted {
+            module: "Olympus",
+            table: "Main",
+            group0: "MakerNotes",
+            group1: "Olympus",
+            group2: "Camera",
+            name,
+            source_id: oxidex_tags::TagId::Numeric(event.entry.tag_id),
+            stored: stored.clone(),
+            value: stored,
+            value_conv: None,
+            low_priority: false,
+            avoid: false,
+            rational: None,
+            is_list: false,
+        });
     }
 }
 
@@ -1254,6 +1219,7 @@ fn walk_main_through_engine(
     model: Option<&str>,
     tags: &mut HashMap<String, String>,
     mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
+    zoomed_preview: &mut ZoomedPreviewState,
 ) {
     if let Some(model) = model {
         let model = model.to_string();
@@ -1261,7 +1227,10 @@ fn walk_main_through_engine(
         let _ = session.set_member("Model", MemberVal::Str(model));
     }
     let mut emitted = Vec::new();
-    process_exif(
+    let mut observer = ZoomedPreviewObserver {
+        state: zoomed_preview,
+    };
+    process_exif_with_observer(
         table,
         IfdDir {
             data,
@@ -1274,6 +1243,7 @@ fn walk_main_through_engine(
         session,
         ctx,
         &mut emitted,
+        &mut observer,
     );
     for tag in emitted {
         // The tag's family-1 group as ExifTool reports it: `Olympus` for

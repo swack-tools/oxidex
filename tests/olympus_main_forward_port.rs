@@ -161,6 +161,70 @@ fn type1_preview_note(entries: &[(u16, u32)], order: ByteOrder) -> Vec<u8> {
     note
 }
 
+fn type3_preview_note(entries: &[(u16, u32)], order: ByteOrder) -> Vec<u8> {
+    let mut note = b"OM SYSTEM\0\0\0".to_vec();
+    note.extend_from_slice(match order {
+        ByteOrder::LittleEndian => b"II",
+        ByteOrder::BigEndian => b"MM",
+    });
+    push_u16(&mut note, 3, order);
+    push_u16(&mut note, entries.len() as u16, order);
+    for &(tag, value) in entries {
+        note.extend_from_slice(&entry(tag, 4, 1, value, order));
+    }
+    push_u32(&mut note, 0, order);
+    note
+}
+
+fn preview_main_info_before_top_note(order: ByteOrder) -> Vec<u8> {
+    const MAIN_INFO_OFFSET: u32 = 80;
+    let mut note = b"OLYMPUS\0".to_vec();
+    note.extend_from_slice(match order {
+        ByteOrder::LittleEndian => b"II",
+        ByteOrder::BigEndian => b"MM",
+    });
+    push_u16(&mut note, 3, order);
+    push_u16(&mut note, 3, order);
+    note.extend_from_slice(&entry(0x4000, 4, 1, MAIN_INFO_OFFSET, order));
+    note.extend_from_slice(&entry(0x0f04, 4, 1, 50_000, order));
+    note.extend_from_slice(&entry(0x0f05, 4, 1, 624, order));
+    push_u32(&mut note, 0, order);
+    note.resize(MAIN_INFO_OFFSET as usize, 0);
+    push_u16(&mut note, 2, order);
+    note.extend_from_slice(&entry(0x0f04, 4, 1, 40_000, order));
+    note.extend_from_slice(&entry(0x0f05, 4, 1, 512, order));
+    push_u32(&mut note, 0, order);
+    note
+}
+
+fn duplicate_main_info_preview_note(order: ByteOrder) -> Vec<u8> {
+    const FIRST_MAIN_INFO_OFFSET: u32 = 64;
+    const SECOND_MAIN_INFO_OFFSET: u32 = 112;
+    let mut note = b"OLYMPUS\0".to_vec();
+    note.extend_from_slice(match order {
+        ByteOrder::LittleEndian => b"II",
+        ByteOrder::BigEndian => b"MM",
+    });
+    push_u16(&mut note, 3, order);
+    push_u16(&mut note, 2, order);
+    note.extend_from_slice(&entry(0x4000, 4, 1, FIRST_MAIN_INFO_OFFSET, order));
+    note.extend_from_slice(&entry(0x4000, 4, 1, SECOND_MAIN_INFO_OFFSET, order));
+    push_u32(&mut note, 0, order);
+
+    note.resize(FIRST_MAIN_INFO_OFFSET as usize, 0);
+    push_u16(&mut note, 2, order);
+    note.extend_from_slice(&entry(0x0f04, 4, 1, 40_000, order));
+    note.extend_from_slice(&entry(0x0f05, 4, 1, 512, order));
+    push_u32(&mut note, 0, order);
+
+    note.resize(SECOND_MAIN_INFO_OFFSET as usize, 0);
+    push_u16(&mut note, 2, order);
+    note.extend_from_slice(&entry(0x0f04, 4, 1, 50_000, order));
+    note.extend_from_slice(&entry(0x0f05, 4, 1, 624, order));
+    push_u32(&mut note, 0, order);
+    note
+}
+
 fn preview_main_info_note(
     top_level: Option<(u32, u32)>,
     main_info: (u32, u32),
@@ -841,6 +905,127 @@ fn zoomed_preview_duplicate_scalars_keep_physical_order_and_later_winner() {
 }
 
 #[test]
+fn zoomed_preview_scalars_interleave_with_generated_rows_in_physical_order() {
+    let note = preview_entries_note(
+        b"OLYMPUS\0",
+        &[(0x0f04, 40_000), (0x0040, 123_456), (0x0f05, 624)],
+        ByteOrder::LittleEndian,
+    );
+    let (_tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    let physical: Vec<_> = rows
+        .iter()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "Olympus:ZoomedPreviewStart"
+                    | "Olympus:CompressedImageSize"
+                    | "Olympus:ZoomedPreviewLength"
+            )
+        })
+        .map(|(key, occurrence)| (key.as_str(), occurrence.raw.clone()))
+        .collect();
+    assert_eq!(
+        physical,
+        [
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(40_000)),
+            ("Olympus:CompressedImageSize", TagValue::Integer(123_456)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(624)),
+        ]
+    );
+}
+
+#[test]
+fn main_info_before_later_top_scalars_leaves_top_values_as_winners() {
+    let note = preview_main_info_before_top_note(ByteOrder::LittleEndian);
+    let (_tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    let scalars: Vec<_> = rows
+        .iter()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "Olympus:ZoomedPreviewStart" | "Olympus:ZoomedPreviewLength"
+            )
+        })
+        .map(|(key, occurrence)| (key.as_str(), occurrence.raw.clone()))
+        .collect();
+    assert_eq!(
+        scalars,
+        [
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(40_000)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(512)),
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(50_000)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(624)),
+        ]
+    );
+
+    let mut legacy = HashMap::new();
+    dispatch_makernote(
+        "OLYMPUS CORPORATION",
+        &note,
+        ByteOrder::LittleEndian,
+        &mut legacy,
+    )
+    .expect("pointer-first preview scalars dispatch");
+    assert_eq!(
+        legacy.get("Olympus:ZoomedPreviewStart").map(String::as_str),
+        Some("50000")
+    );
+    assert_eq!(
+        legacy
+            .get("Olympus:ZoomedPreviewLength")
+            .map(String::as_str),
+        Some("624")
+    );
+}
+
+#[test]
+fn duplicate_main_info_pointers_are_observed_in_physical_order() {
+    let note = duplicate_main_info_preview_note(ByteOrder::LittleEndian);
+    let (_tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    let scalars: Vec<_> = rows
+        .iter()
+        .filter(|(key, _)| {
+            matches!(
+                key.as_str(),
+                "Olympus:ZoomedPreviewStart" | "Olympus:ZoomedPreviewLength"
+            )
+        })
+        .map(|(key, occurrence)| (key.as_str(), occurrence.raw.clone()))
+        .collect();
+    assert_eq!(
+        scalars,
+        [
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(40_000)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(512)),
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(50_000)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(624)),
+        ]
+    );
+
+    let mut legacy = HashMap::new();
+    dispatch_makernote(
+        "OLYMPUS CORPORATION",
+        &note,
+        ByteOrder::LittleEndian,
+        &mut legacy,
+    )
+    .expect("duplicate MainInfo pointers dispatch");
+    assert_eq!(
+        legacy.get("Olympus:ZoomedPreviewStart").map(String::as_str),
+        Some("50000")
+    );
+    assert_eq!(
+        legacy
+            .get("Olympus:ZoomedPreviewLength")
+            .map(String::as_str),
+        Some("624")
+    );
+}
+
+#[test]
 fn zoomed_preview_in_bounds_non_jpeg_is_a_datatag() {
     const NOTE_OFFSET: usize = 96;
     let payload = b"not a JPEG";
@@ -944,5 +1129,27 @@ fn raw_reader_structurally_routes_om_makes_and_olymp_signature() {
                         && occurrence.origin.module == Some("Olympus")
                 })
         );
+    }
+}
+
+#[test]
+fn raw_reader_structurally_routes_actual_om_system_header() {
+    let note = type3_preview_note(&[(0x0f04, 40_000), (0x0f05, 624)], ByteOrder::LittleEndian);
+    for make in [
+        b"OM Digital Solutions\0".as_slice(),
+        b"OM SYSTEM\0".as_slice(),
+    ] {
+        let metadata = oxidex::parsers::raw::metadata::parse_raw_metadata(
+            &orf_with_make_and_makernote(make, &note),
+            oxidex::parsers::raw::RawFormat::OlympusORF,
+        )
+        .expect("OM SYSTEM header dispatches through structured Olympus route");
+        assert!(metadata.project_occurrences(ValueChannel::Stored).any(
+            |(key, occurrence, value)| {
+                key == "Olympus:ZoomedPreviewStart"
+                    && occurrence.id == TagId::Numeric(0x0f04)
+                    && value.as_ref() == &TagValue::Integer(40_000)
+            }
+        ));
     }
 }

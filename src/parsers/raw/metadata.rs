@@ -49,7 +49,8 @@ use crate::tag_db::lookup_tag_name;
 
 fn is_olympus_structured_makernote(data: &[u8]) -> bool {
     (data.len() >= 8 && data.starts_with(b"OLYMP\0"))
-        || (data.len() >= 10 && data.starts_with(b"OLYMPUS\0"))
+        || (data.len() >= 12
+            && (data.starts_with(b"OLYMPUS\0II") || data.starts_with(b"OLYMPUS\0MM")))
         || (data.len() >= 16 && data.starts_with(b"OM SYSTEM\0"))
 }
 
@@ -58,6 +59,28 @@ fn is_olympus_make(make: &str) -> bool {
     make.starts_with("olympus")
         || make.starts_with("om digital solutions")
         || make.starts_with("om system")
+}
+
+#[cfg(test)]
+mod olympus_structured_header_tests {
+    use super::is_olympus_structured_makernote;
+
+    #[test]
+    fn type2_requires_its_full_twelve_byte_header() {
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0II"));
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0II\x03"));
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0XX\x03\0"));
+        assert!(is_olympus_structured_makernote(b"OLYMPUS\0II\x03\0"));
+        assert!(is_olympus_structured_makernote(b"OLYMPUS\0MM\x03\0"));
+    }
+
+    #[test]
+    fn type1_and_type3_require_their_complete_headers() {
+        assert!(!is_olympus_structured_makernote(b"OLYMP\0\x03"));
+        assert!(is_olympus_structured_makernote(b"OLYMP\0\x03\0"));
+        assert!(!is_olympus_structured_makernote(b"OM SYSTEM\0\0\0II\x03"));
+        assert!(is_olympus_structured_makernote(b"OM SYSTEM\0\0\0II\x03\0"));
+    }
 }
 
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
