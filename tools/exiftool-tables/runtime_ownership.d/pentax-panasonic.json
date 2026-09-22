@@ -2,6 +2,58 @@
   {
     "field": {
       "kind": "numeric",
+      "value": "0x0000"
+    },
+    "fixture": {
+      "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg",
+      "root": "OXIDEX_OPS_DIR",
+      "sha256": "f5ba5b016b7776eb70aaf0e37930b43ebd4693312033b5b7829666b4448376c3"
+    },
+    "module": "Panasonic",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Panasonic::Type2",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "MakerNoteType",
+      "raw_key": "0",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "98cba2af79e4fd63e4895340c819d2ef09c4c7e65eb0c6e9c4a9188e93ba8fb8",
+    "symbol": "src/parsers/tiff/makernotes/panasonic.rs::insert_generated_type2",
+    "table": "Type2"
+  },
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x0003"
+    },
+    "fixture": {
+      "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg",
+      "root": "OXIDEX_OPS_DIR",
+      "sha256": "f5ba5b016b7776eb70aaf0e37930b43ebd4693312033b5b7829666b4448376c3"
+    },
+    "module": "Panasonic",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Panasonic::Type2",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "Gain",
+      "raw_key": "3",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "36e196104f30f41c345041249be7a4284ed712ff61bc7a9f8914ac910cd879b9",
+    "symbol": "src/parsers/tiff/makernotes/panasonic.rs::insert_generated_type2",
+    "table": "Type2"
+  },
+  {
+    "field": {
+      "kind": "numeric",
       "value": "0x0208"
     },
     "fixture": {
