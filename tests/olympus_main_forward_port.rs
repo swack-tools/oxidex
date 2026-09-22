@@ -240,7 +240,18 @@ fn dispatch_structured(make: &str, note: &[u8], inherited: ByteOrder) -> Structu
     const NOTE_OFFSET: usize = 96;
     let mut tiff = vec![0u8; NOTE_OFFSET];
     tiff.extend_from_slice(note);
-    let ctx = MakerNoteContext::in_tiff(&tiff, NOTE_OFFSET, note.len(), 0);
+    dispatch_structured_in_tiff(make, &tiff, NOTE_OFFSET, note.len(), 0, inherited)
+}
+
+fn dispatch_structured_in_tiff(
+    make: &str,
+    tiff: &[u8],
+    note_offset: usize,
+    note_len: usize,
+    tiff_base: u64,
+    inherited: ByteOrder,
+) -> StructuredDispatchOutput {
+    let ctx = MakerNoteContext::in_tiff(tiff, note_offset, note_len, tiff_base);
     let mut session = Session::new();
     let mut members = HashMap::new();
     let mut tags = HashMap::new();
@@ -363,6 +374,86 @@ fn zoomed_preview_pair_reaches_public_metadata_as_exact_bytes() {
     assert_eq!(occurrences[0].1.group0.as_ref(), "MakerNotes");
     assert_eq!(occurrences[0].1.group1.as_ref(), "Olympus");
     assert_eq!(occurrences[0].2.as_ref(), &TagValue::Binary(expected));
+}
+
+#[test]
+fn zoomed_preview_binary_provenance_includes_nonzero_tiff_base() {
+    const TIFF_BASE: u64 = 4_096;
+    const NOTE_OFFSET: usize = 96;
+    let preview = b"\xff\xd8embedded-preview\xff\xd9";
+    let note_len = preview_note(0, preview.len() as u32, ByteOrder::LittleEndian).len();
+    let preview_start = NOTE_OFFSET + note_len;
+    let note = preview_note(
+        preview_start as u32,
+        preview.len() as u32,
+        ByteOrder::LittleEndian,
+    );
+    let mut tiff = vec![0u8; NOTE_OFFSET];
+    tiff.extend_from_slice(&note);
+    tiff.extend_from_slice(preview);
+
+    let (_tags, _values, rows, _members, _session) = dispatch_structured_in_tiff(
+        "OLYMPUS CORPORATION",
+        &tiff,
+        NOTE_OFFSET,
+        note.len(),
+        TIFF_BASE,
+        ByteOrder::LittleEndian,
+    );
+    let (_, occurrence) = rows
+        .iter()
+        .find(|(key, _)| key == "Olympus:ZoomedPreviewImage")
+        .expect("valid embedded preview occurrence");
+    assert_eq!(
+        occurrence.project(ValueChannel::Stored).as_ref(),
+        &TagValue::Binary(preview.to_vec())
+    );
+    assert_eq!(
+        occurrence.origin.byte_range,
+        Some(
+            TIFF_BASE + preview_start as u64
+                ..TIFF_BASE + preview_start as u64 + preview.len() as u64
+        )
+    );
+}
+
+#[test]
+fn zoomed_preview_binary_fails_closed_when_absolute_range_overflows() {
+    const NOTE_OFFSET: usize = 96;
+    let preview = b"\xff\xd8overflow-preview\xff\xd9";
+    let note_len = preview_note(0, preview.len() as u32, ByteOrder::LittleEndian).len();
+    let preview_start = NOTE_OFFSET + note_len;
+    let note = preview_note(
+        preview_start as u32,
+        preview.len() as u32,
+        ByteOrder::LittleEndian,
+    );
+    let mut tiff = vec![0u8; NOTE_OFFSET];
+    tiff.extend_from_slice(&note);
+    tiff.extend_from_slice(preview);
+
+    let (_tags, _values, rows, _members, _session) = dispatch_structured_in_tiff(
+        "OLYMPUS CORPORATION",
+        &tiff,
+        NOTE_OFFSET,
+        note.len(),
+        u64::MAX - NOTE_OFFSET as u64,
+        ByteOrder::LittleEndian,
+    );
+    assert!(
+        rows.iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewStart")
+    );
+    assert!(
+        rows.iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewLength")
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewImage"),
+        "binary output without an absolute source-file range must fail closed"
+    );
 }
 
 #[test]

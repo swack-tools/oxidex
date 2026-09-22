@@ -1114,6 +1114,18 @@ fn append_zoomed_preview_rows(
     if !bytes.starts_with(&[0xff, 0xd8]) || !bytes.ends_with(&[0xff, 0xd9]) {
         return;
     }
+    let Some(byte_range) = u64::try_from(local_start)
+        .ok()
+        .and_then(|start| data_domain.checked_add(start))
+        .zip(
+            u64::try_from(local_end)
+                .ok()
+                .and_then(|end| data_domain.checked_add(end)),
+        )
+        .map(|(start, end)| start..end)
+    else {
+        return;
+    };
     let binary = TagValue::Binary(bytes.to_vec());
     rows.push((
         format!("Olympus:{}", pair.data_name),
@@ -1137,14 +1149,7 @@ fn append_zoomed_preview_rows(
             origin: Provenance {
                 module: Some("Olympus"),
                 table: Some("Main"),
-                byte_range: start_u64
-                    .checked_add(length_u64)
-                    .map(|end| start_u64..end)
-                    .or_else(|| {
-                        u64::try_from(local_end)
-                            .ok()
-                            .map(|end| data_domain + local_start as u64..data_domain + end)
-                    }),
+                byte_range: Some(byte_range),
             },
         },
     ));
