@@ -240,6 +240,24 @@ class ParseSample(unittest.TestCase):
         self.assertEqual(alt["subdir"]["start"], ("Val", 0))
         self.assertTrue(alt["subdir"]["sub_ifd"])
 
+    def test_fixed_array_runtime_marker_is_not_a_source_enum_fact(self):
+        repo = HERE.parents[1]
+        generated = verify.parse_ifd_rust(repo / "src/exiftool_tables/ifd/mod.rs")
+        stacked = generated.enums[("Olympus", "CameraSettings", "2052")]
+        self.assertNotIn("\x1foxidex-fixed-array-pattern-v1", stacked)
+        self.assertEqual(stacked["0 0"], "No")
+
+    def test_fixed_array_runtime_marker_is_not_hidden_for_another_identity(self):
+        generated = _mutated_sample(
+            'print_conv: PrintConv::StrEnum(&[("D4028", "X-2,C-50Z"),',
+            'print_conv: PrintConv::StrEnum(&[("\\u{1f}oxidex-fixed-array-pattern-v1", ""), '
+            '("D4028", "X-2,C-50Z"),',
+        )
+        self.assertEqual(
+            generated.enums[("Olympus", "Main", "519")]["\x1foxidex-fixed-array-pattern-v1"],
+            "",
+        )
+
 
 class BinaryIsTheUnsizedUndef(unittest.TestCase):
     """Exif.pm:103-104 `'binary' => 7, # (same as undef)`; ReadValue treats

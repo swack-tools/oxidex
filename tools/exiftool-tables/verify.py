@@ -253,6 +253,14 @@ VERSION_RE = re.compile(r'pub const EXIFTOOL_VERSION: &str = "([^"]+)";')
 INT_PAIR_RE = re.compile(r'\(\s*(-?\d+),\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 STR_PAIR_RE = re.compile(r'\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*,?\s*\)')
 
+# `Olympus::CameraSettings::StackedImage` carries this private StrEnum entry
+# as a runtime discriminator for fixed-array wildcard matching. It is not an
+# ExifTool PrintConv fact and therefore must not be compared with oracle ENUM
+# rows. Keep the exception tied to the one source-gated field and exact empty
+# value so a marker anywhere else remains visible to the verifier.
+FIXED_ARRAY_PATTERN_ENUM_KEY = ("Olympus", "CameraSettings", "2052")
+FIXED_ARRAY_PATTERN_MARKER = "\x1foxidex-fixed-array-pattern-v1"
+
 
 # Step 26. ExifTool format name -> the Rust `Fmt` variant a correct
 # transcription must use. Written out here on purpose rather than imported
@@ -696,7 +704,15 @@ def _parse_print_conv(src, pc_start, pc_end, k, enums, bitmasks, other_ids, prin
             if int_keys:
                 enums[k][kk] = unescape(vv)
             else:
-                enums[k][unescape(kk)] = unescape(vv)
+                enum_key = unescape(kk)
+                enum_value = unescape(vv)
+                if (
+                    k == FIXED_ARRAY_PATTERN_ENUM_KEY
+                    and enum_key == FIXED_ARRAY_PATTERN_MARKER
+                    and enum_value == ""
+                ):
+                    continue
+                enums[k][enum_key] = enum_value
     elif _BITMASK_RE.match(pc) or _PARTIAL_ENUM_INT_RE.match(pc):
         # Step 25: both shapes carry an int-domain `exact: &[(i64, "..."),
         # ...]` array built exactly like `IntEnum`'s -- feeding it into the
