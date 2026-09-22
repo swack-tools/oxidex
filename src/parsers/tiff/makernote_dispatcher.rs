@@ -265,48 +265,18 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
 
-    // Phase One's MakerNote is dispatched by ExifTool purely on its own
-    // signature (MakerNotes.pm's `MakerNotePhaseOne` Condition has no Make
-    // check at all), because the format is OEMed under multiple brand names.
-    // Leaf -- acquired by Phase One -- writes the identical directory shape
-    // under `Make: Leaf`; matching only "phase one"/"phase one a/s" left
-    // every Leaf-branded .IIQ unreachable (`Make=="Leaf"` matched nothing in
-    // the table below, so it silently produced zero PhaseOne: tags for real
-    // Leaf/Phase One IIQ files). Check the signature before the Make-keyed
-    // table so it wins regardless of brand.
-    if phaseone::is_phaseone_makernote(data) {
-        let parser = phaseone::PhaseOneMakerNoteParser;
-        if let Some(rows) = occurrences.as_deref_mut() {
-            parser.parse_with_context_and_values_and_session_and_occurrences(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-                rows,
-            )?;
-        } else {
-            parser.parse_with_context_and_values_and_session(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-            )?;
-        }
-        return Ok(());
-    }
-
-    // MakerNotes.pm:505-515's MakerNoteMinolta2 routes literal `MINOL\0` and
-    // `CAMER\0` signatures to Olympus::Main independently of the file Make.
-    // The same condition sets OlympusCAMER, selecting Main 0x2050's binary
-    // CameraParameters alternative. Seed both condition stores used by the
-    // generated IFD path before parsing.
-    if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+    // Preserve the first matching source condition before any Make fallback:
+    // HP4 (:206), Kodak2 (:275), Minolta2 (:508), PhaseOne (:841), Ricoh2
+    // (:924) in pinned MakerNotes.pm. Kodak2 permits arbitrary leading bytes,
+    // so its payload can also match either later signature. The selected
+    // decoder must own a real table before this route consumes the note.
+    let source_parser: Option<Box<dyn MakerNoteParser>> = if hp::is_type4(data) {
+        Some(Box::new(hp::HpParser))
+    } else if kodak::is_type2(data) {
+        Some(Box::new(kodak::KodakParser))
+    } else if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+        // Minolta2's condition sets OlympusCAMER, selecting Olympus::Main
+        // 0x2050's binary CameraParameters alternative. Seed both stores.
         cond_ctx
             .members
             .insert("OlympusCAMER", crate::exiftool_tables::MemberValue::Num(1));
@@ -316,7 +286,16 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
                 crate::exiftool_tables::session::MemberVal::Int(1),
             )
             .expect("OlympusCAMER is an untyped ExifTool member");
-        let parser = olympus::OlympusParser;
+        Some(Box::new(olympus::OlympusParser))
+    } else if phaseone::is_phaseone_makernote(data) {
+        // PhaseOne is signature-only and can appear under Leaf Make.
+        Some(Box::new(phaseone::PhaseOneMakerNoteParser))
+    } else if ricoh::is_type2_selector(make, model, data) {
+        Some(Box::new(ricoh::RicohType2Parser))
+    } else {
+        None
+    };
+    if let Some(parser) = source_parser {
         if let Some(rows) = occurrences.as_deref_mut() {
             parser.parse_with_context_and_values_and_session_and_occurrences(
                 ctx,

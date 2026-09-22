@@ -37,12 +37,32 @@ use crate::core::tag_occurrence::intern;
 use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
 use crate::exiftool_tables::Ctx;
 use crate::exiftool_tables::session::Session;
+use crate::exiftool_tables::{Dir, find_table, process_binary_data};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use std::collections::HashMap;
 
 use super::shared::MakerNoteParser;
+use super::shared::engine_value::engine_value_text;
+
+/// MakerNotes.pm:275-287, after the two earlier KDK variants: both Type2
+/// signatures are independent of EXIF Make. The first has eight arbitrary
+/// bytes before `Eastman Kodak`; the second is the exact byte-shaped header.
+pub(crate) fn is_type2(data: &[u8]) -> bool {
+    if data.get(8..21) == Some(b"Eastman Kodak") {
+        return true;
+    }
+    let Some(header) = data.get(..12) else {
+        return false;
+    };
+    header[0] == 1
+        && header[1] == 0
+        && (header[2] == 0 || header[2] == 1)
+        && header[3..6] == [0, 0, 0]
+        && header[6..8] == [4, 0]
+        && header[8..12].iter().all(u8::is_ascii_alphabetic)
+}
 
 /// `MakerNotes.pm:255`, `:265`: both Kodak1a and Kodak1b `Start
 /// => '$valuePtr + 8'`, past the signature + 2-byte pad.
@@ -86,6 +106,25 @@ impl KodakParser {
     /// Creates a new Kodak parser instance
     pub fn new() -> Self {
         KodakParser
+    }
+
+    fn type2_rows(
+        &self,
+        data: &[u8],
+        cond_ctx: &mut Ctx<'_>,
+    ) -> Vec<crate::exiftool_tables::Emitted> {
+        let mut rows = Vec::new();
+        if let Some(table) = find_table("Kodak", "Type2") {
+            // MakerNotes.pm:286 pins Kodak::Type2 to BigEndian, regardless of
+            // the enclosing TIFF order. The generated table owns all offsets.
+            process_binary_data(
+                table,
+                Dir::whole(data, ByteOrder::BigEndian.to_io_byte_order()),
+                cond_ctx,
+                &mut rows,
+            );
+        }
+        rows
     }
 
     /// Reads `Kodak::Main` (see the module doc comment) out of `record`,
@@ -287,6 +326,16 @@ impl MakerNoteParser for KodakParser {
         _byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        if is_type2(data) {
+            let mut members = HashMap::new();
+            let mut cond_ctx = Ctx::new(&mut members);
+            for row in self.type2_rows(data, &mut cond_ctx) {
+                if let Some(text) = engine_value_text(&row.value) {
+                    tags.insert(format!("{}:{}", row.group1, row.name), text);
+                }
+            }
+            return Ok(());
+        }
         // Byte order is signature-determined for Kodak1a/1b (see the module
         // doc comment), not inherited from the enclosing TIFF -- ignore the
         // caller's `byte_order` the same way Casio Type2 and Sanyo resolve
@@ -318,6 +367,36 @@ impl MakerNoteParser for KodakParser {
         _value_forms: &mut HashMap<String, String>,
         occurrences: &mut Vec<(String, TagOccurrence)>,
     ) -> Result<(), String> {
+        if is_type2(ctx.payload()) {
+            for row in self.type2_rows(ctx.payload(), _cond_ctx) {
+                let key = format!("{}:{}", row.group1, row.name);
+                let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+                occurrences.push((
+                    key,
+                    TagOccurrence {
+                        id: row.source_id,
+                        name: intern(row.name),
+                        group0: intern(row.group0),
+                        group1: intern(row.group1),
+                        group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
+                        instance: Instance::default(),
+                        raw: row.stored.clone(),
+                        value: Some(value),
+                        print: Some(row.value),
+                        stored: Some(row.stored),
+                        priority: u8::from(!(row.low_priority || row.avoid)),
+                        is_list: row.is_list,
+                        order: 0,
+                        origin: Provenance {
+                            module: Some(row.module),
+                            table: Some(row.table),
+                            byte_range: None,
+                        },
+                    },
+                ));
+            }
+            return Ok(());
+        }
         self.parse_with_model(ctx.payload(), byte_order, model, tags)?;
         let rows = self.main_occurrences(ctx);
         if rows.iter().any(|(key, _)| key == "Kodak:TimeCreated") {

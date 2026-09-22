@@ -21,7 +21,11 @@
 
 #![allow(dead_code)]
 
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence};
 use crate::core::{MetadataMap, TagValue};
+use crate::exiftool_tables::Ctx;
+use crate::exiftool_tables::session::Session;
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
@@ -46,6 +50,181 @@ const RICOH_SHARPNESS: u16 = 0x0035;
 
 // Static registry instance for efficient tag lookup and decoding
 static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(ricoh_registry);
+
+/// MakerNotes.pm:924-938. Preserve the source's case-sensitive Make gate and
+/// padded TIFF probe; Ricoh Imaging bodies otherwise reach Pentax by Make.
+pub(crate) fn is_type2_selector(make: &str, model: Option<&str>, data: &[u8]) -> bool {
+    let make = make.strip_prefix("PENTAX ").unwrap_or(make);
+    if !make.starts_with("RICOH") {
+        return false;
+    }
+    if model == Some("RICOH WG-M1") {
+        return true;
+    }
+    let Some(header) = data.get(..12) else {
+        return false;
+    };
+    (header[..8] == *b"MM\0*\0\0\0\x08" && header[8] == 0 && header[10..12] == [0, 0])
+        || (header[..8] == *b"II*\0\x08\0\0\0" && header[9..12] == [0, 0, 0])
+}
+
+/// MakerNotes.pm:1742-1758 `ProcessKodakPatch` rewrites the count two bytes
+/// forward, then starts `ProcessExif` there. Values remain MakerNote-relative
+/// because Ricoh2 declares `Base => '$start - 8'`.
+fn parse_ricoh_type2_rows(
+    ctx: &MakerNoteContext<'_>,
+    inherited_order: ByteOrder,
+) -> Vec<(String, TagOccurrence)> {
+    let payload = ctx.payload();
+    let order = if payload.starts_with(b"II") {
+        ByteOrder::LittleEndian
+    } else if payload.starts_with(b"MM") {
+        ByteOrder::BigEndian
+    } else {
+        inherited_order
+    };
+    let reader = EndianReader::new(payload, order.to_io_byte_order());
+    let Some(first) = reader.u16_at(8) else {
+        return Vec::new();
+    };
+    let Some(second) = reader.u16_at(10) else {
+        return Vec::new();
+    };
+    let count = usize::from(if first != 0 { first } else { second });
+    if count == 0 {
+        return Vec::new();
+    }
+    let Some(end) = count
+        .checked_mul(12)
+        .and_then(|bytes| 12usize.checked_add(bytes))
+    else {
+        return Vec::new();
+    };
+    if end > payload.len() {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    for index in 0..count {
+        let start = 12 + index * 12;
+        let entry = &payload[start..start + 12];
+        let entry_reader = EndianReader::new(entry, order.to_io_byte_order());
+        let Some(id) = entry_reader.u16_at(0) else {
+            continue;
+        };
+        let expected_type = match id {
+            0x0207 => 2, // Ricoh.pm:462-464 string
+            0x0300 => 7, // Ricoh.pm:469-473 undef + trailing-space ValueConv
+            _ => continue,
+        };
+        if entry_reader.u16_at(2) != Some(expected_type) {
+            continue;
+        }
+        let Some(size) = entry_reader.u32_at(4).map(|n| n as usize) else {
+            continue;
+        };
+        let bytes = if size <= 4 {
+            &entry[8..8 + size]
+        } else {
+            let Some(offset) = entry_reader.u32_at(8).map(|n| n as usize) else {
+                continue;
+            };
+            let Some(value_end) = offset.checked_add(size) else {
+                continue;
+            };
+            if offset < end && value_end > 10 {
+                continue; // Conservatively refuse Exif.pm:6549's suspect IFD overlap.
+            }
+            let Some(bytes) = ctx.window().get(offset..value_end) else {
+                continue;
+            };
+            bytes
+        };
+        let (name, raw, value) = if id == 0x0207 {
+            let terminated = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
+            let Ok(text) = std::str::from_utf8(terminated) else {
+                continue;
+            };
+            let value = TagValue::new_string(text);
+            ("RicohModel", value.clone(), value)
+        } else {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                continue;
+            };
+            (
+                "RicohMake",
+                TagValue::Binary(bytes.to_vec()),
+                TagValue::new_string(text.trim_end_matches(' ')),
+            )
+        };
+        rows.push((
+            format!("Ricoh:{name}"),
+            TagOccurrence {
+                id: crate::core::TagId::Numeric(id),
+                name: intern(name),
+                group0: intern("MakerNotes"),
+                group1: intern("Ricoh"),
+                group2: Some(intern("Camera")),
+                instance: Instance::default(),
+                raw: raw.clone(),
+                stored: Some(raw),
+                value: Some(value.clone()),
+                print: Some(value),
+                priority: 1,
+                is_list: false,
+                order: 0,
+                origin: Provenance {
+                    module: Some("Ricoh"),
+                    table: Some("Type2"),
+                    byte_range: None,
+                },
+            },
+        ));
+    }
+    rows
+}
+
+/// A separate parser keeps Ricoh::Main's normal fallback from accidentally
+/// treating an unmatched or lower-case Make as the source's Ricoh::Type2.
+pub struct RicohType2Parser;
+
+impl MakerNoteParser for RicohType2Parser {
+    fn manufacturer_name(&self) -> &'static str {
+        "Ricoh"
+    }
+
+    fn tag_prefix(&self) -> &'static str {
+        "Ricoh:"
+    }
+
+    fn parse(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        for (key, row) in parse_ricoh_type2_rows(&MakerNoteContext::detached(data), byte_order) {
+            if let Some(TagValue::String(value)) = row.print {
+                tags.insert(key, value);
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        _session: &mut Session,
+        _cond_ctx: &mut Ctx<'_>,
+        _tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        occurrences.extend(parse_ricoh_type2_rows(ctx, byte_order));
+        Ok(())
+    }
+}
 
 /// Extracts a 16-bit unsigned value from IFD entry
 ///

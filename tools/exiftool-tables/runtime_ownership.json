@@ -1,13 +1,93 @@
 {
   "category_totals": {
-    "generated": 553,
+    "generated": 561,
     "not-applicable": 29,
-    "refused": 17,
-    "residual": 24,
+    "refused": 18,
+    "residual": 33,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "966af86677257485fc1e0c4c63629bf05be5945e291145a1602a481c686c1853",
+  "fragment_inputs_sha256": "802e459836373b50681f2a5820ab6886c1ad6173ce699f954ebd63ccbce1f273",
   "rows": [
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x3002"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Casio2.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24e19e2eecc5391e63cfbc2a5f17b62a0e86cbb783c98bd294c107a090d6cd02"
+      },
+      "module": "Casio",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Casio::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Quality",
+        "raw_key": "12290",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "2a8a0978dcbc5d3dea5176882a17e469f447a756edc06e4c6206623d804d3dd4",
+      "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x3007"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Casio2.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24e19e2eecc5391e63cfbc2a5f17b62a0e86cbb783c98bd294c107a090d6cd02"
+      },
+      "module": "Casio",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Casio::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "BestShotMode",
+        "raw_key": "12295",
+        "variant_path": [
+          26
+        ]
+      },
+      "source_release": "13.59",
+      "source_sha256": "80cb7841ae15f2687b4441f7694c76d23da9490db46808fe5864efafa42ea7d3",
+      "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x301b"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Casio2.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24e19e2eecc5391e63cfbc2a5f17b62a0e86cbb783c98bd294c107a090d6cd02"
+      },
+      "module": "Casio",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Casio::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ArtMode",
+        "raw_key": "12315",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "74422d1d42012ba275c520d168a8820b92a9383bd721c78c842a71aa779eb72c",
+      "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
+      "table": "Type2"
+    },
     {
       "field": {
         "kind": "index",
@@ -8635,6 +8715,344 @@
     {
       "field": {
         "kind": "numeric",
+        "value": "0x000c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "MaxAperture",
+        "raw_key": "12",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "249d9836071ce00797854f4dc08a204b58373faade990a30e193f72e4007cf1d",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0010"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ExposureTime",
+        "raw_key": "16",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "3d3fcebcfce53e321da5534f0e12914296ff8ee035f55a75c04678456d1087c6",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0014"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CameraDateTime",
+        "raw_key": "20",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "65e9a8d49071bca29bef7e69a9bb9629dfde6cf534bbf73461dc3e6763bb1d1e",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0034"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "ISO",
+        "raw_key": "52",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "f4bfeac27bc245414e5ddfd83c725ebe173eb4510771a5e29e84ec07d2ea9511",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x005c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxOptioE65.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "e9f67325745a9a906f2438c93335b22e7a8b22b11db47a301013da0ba4602fd0"
+      },
+      "module": "HP",
+      "owner": "refused",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": "HP::Type4 SerialNumber RawConv is not modeled; no value emitted",
+      "source_binding": {
+        "full_name": "Image::ExifTool::HP::Type4",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "SerialNumber",
+        "raw_key": "92",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "1194330d88d69c0446ea6f0a4b6e92e5ec1791e667f64d7ad3ff4c4e9f34a53f",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type4"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0002"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/JVC.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "4dfd04b3525052a57ae5825f3da3fbebb155ef311ce7f05c0302290b66aee557"
+      },
+      "module": "JVC",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JVC::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CPUVersions",
+        "raw_key": "2",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "714a16f7609615bf3fd84abfd4aa4c883be1c0c9b7a7461c91a2b0601981327e",
+      "symbol": "src/parsers/tiff/makernotes/jvc.rs::canonical_entry",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0003"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/JVC.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "4dfd04b3525052a57ae5825f3da3fbebb155ef311ce7f05c0302290b66aee557"
+      },
+      "module": "JVC",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JVC::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Quality",
+        "raw_key": "3",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "0624d8947474011160ea94fe3c03e693b3520809937c60d59b3a39a31b0df0e1",
+      "symbol": "src/parsers/tiff/makernotes/jvc.rs::canonical_entry",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0014"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Kodak.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
+      },
+      "module": "Kodak",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "TimeCreated",
+        "raw_key": "20",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "a5cd12e7f01cdbf751fa360f63fbe1e0317ff333efca3ee8366107cc45df94af",
+      "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0064"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Kodak.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "eab06f9fb9f1d5ad6ff888046a5273ca115398f43e7bd01a98a054036a79aed3"
+      },
+      "module": "Kodak",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "DateTimeStamp",
+        "raw_key": "100",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "93f52fc1f3090c2d204ed14ecfca1a69f6256e3b3d1613f3c0c84c712c47d07c",
+      "symbol": "src/parsers/tiff/makernotes/kodak.rs::main_occurrences",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0008"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakMaker",
+        "raw_key": "8",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "228dd03167fd10cc8c8433a1e5151df5448ee18c5da59ebe2ff9d5a216495cb4",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0028"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakModel",
+        "raw_key": "40",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "9836b06a74d51974bc2d59c97e5815ed946d09a5c1fc6bf1f514c4bdebfd2be5",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x006c"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakImageWidth",
+        "raw_key": "108",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "9becf26544e79f516d85898ceef0f542cba0e7d1ed76bd9c8a979124888deec4",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0070"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxEI-200.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "64ba3722f53e599558ac348014914218808c941be4d77633d8be129c28e6b3b6"
+      },
+      "module": "Kodak",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Kodak::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "KodakImageHeight",
+        "raw_key": "112",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "987a4b87d59f0ada49f0211988040f0dbd051ce3b5af192256b12c65fe8fc1cc",
+      "symbol": "src/exiftool_tables/engine.rs::process_binary_data",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
         "value": "0x0804"
       },
       "fixture": {
@@ -8815,6 +9233,58 @@
       "source_sha256": "952f63280c119fed6fc2f60d832623f7d8186f6f8aff81a1025e049e9f26670e",
       "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
       "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0207"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxXG-1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24662e6462f74e3fea579f172485d26d4f9e929a045d2f4d62b628299c102795"
+      },
+      "module": "Ricoh",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Ricoh::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "RicohModel",
+        "raw_key": "519",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "2e50292a28bee86543c59fabea0cea3e86cf460297d1e57a73961dabaeb8ceb0",
+      "symbol": "src/parsers/tiff/makernotes/ricoh.rs::parse_ricoh_type2_rows",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0300"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxXG-1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "24662e6462f74e3fea579f172485d26d4f9e929a045d2f4d62b628299c102795"
+      },
+      "module": "Ricoh",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Ricoh::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "RicohMake",
+        "raw_key": "768",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "94e52182741c2338ab31355c074be488795d1f01af38d8ade680fd3e68d40a69",
+      "symbol": "src/parsers/tiff/makernotes/ricoh.rs::parse_ricoh_type2_rows",
+      "table": "Type2"
     }
   ],
   "schema": 1,
