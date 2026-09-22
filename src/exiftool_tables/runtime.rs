@@ -17,6 +17,10 @@ use crate::io::ByteOrder;
 use super::cond;
 use super::{ALL_BINARY_TABLES, BinaryTable, ExprValue, Field, Fmt, Omitted, PrintConv};
 
+/// Source-gated discriminator for Olympus.pm's exact StackedImage array
+/// OTHER closure. Ordinary ExifTool hash keys can never enable this behavior.
+const FIXED_ARRAY_PATTERN_MARKER: &str = "\u{1f}oxidex-fixed-array-pattern-v1";
+
 /// A value read directly from a generated binary-table field.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DecodedValue {
@@ -1251,6 +1255,43 @@ pub fn render(conv: PrintConv, value: &DecodedValue) -> Option<String> {
             None => unknown_text(&value.perl_string()?),
         }),
         PrintConv::StrEnum(map) => {
+            if map
+                .first()
+                .is_some_and(|(marker, _)| *marker == FIXED_ARRAY_PATTERN_MARKER)
+            {
+                // Strip the non-source discriminator before every value-kind
+                // path, including StringBytes, so it cannot be observed as a
+                // normal exact-match key.
+                let map = &map[1..];
+                let key = match value {
+                    DecodedValue::StringBytes(bytes) => fix_utf8(bytes)?,
+                    _ => value.enum_key()?,
+                };
+                if let Some((_, rendered)) = map.iter().find(|(candidate, _)| *candidate == key) {
+                    return Some((*rendered).to_string());
+                }
+                let mut parts = key.split(' ');
+                let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next())
+                else {
+                    return Some(unknown_text(&key));
+                };
+                if first.is_empty()
+                    || second.is_empty()
+                    || !first.bytes().all(|byte| byte.is_ascii_digit())
+                    || !second.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return Some(unknown_text(&key));
+                }
+                let wildcard = format!("{first} *");
+                return Some(
+                    map.iter()
+                        .find(|(candidate, _)| *candidate == wildcard)
+                        .map_or_else(
+                            || unknown_text(&key),
+                            |(_, rendered)| rendered.replacen('*', second, 1),
+                        ),
+                );
+            }
             if let DecodedValue::StringBytes(bytes) = value {
                 let display = fix_utf8(bytes)?;
                 return Some(

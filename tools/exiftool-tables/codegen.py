@@ -438,7 +438,31 @@ def _rust_pairs(pairs):
     return ", ".join(f'({k}, "{rust_str(v)}")' for k, v in pairs)
 
 
-def conv_for(tag, stats, input_domain, verified_exprs):
+def _fixed_array_pattern_pairs(mapping):
+    """Validate the exact two-decimal-component grammar used by StackedImage."""
+    pairs = []
+    for key, rendered in mapping.items():
+        if not isinstance(key, str) or not isinstance(rendered, str):
+            return None
+        components = key.split(" ")
+        if len(components) != 2 or any(not component for component in components):
+            return None
+        first, second = components
+        if not first.isdecimal() or not (second.isdecimal() or second == "*"):
+            return None
+        if second == "*":
+            if rendered.count("*") != 1:
+                return None
+        elif "*" in rendered:
+            return None
+        pairs.append((key, rendered))
+    return sorted(pairs)
+
+
+FIXED_ARRAY_PATTERN_MARKER = "\x1foxidex-fixed-array-pattern-v1"
+
+
+def conv_for(tag, stats, input_domain, verified_exprs, *, source_identity=None):
     """`(rust_printconv_src, refused)` for one tag.
 
     `refused` is True exactly when ExifTool declares a `PrintConv` here that
@@ -533,6 +557,30 @@ def conv_for(tag, stats, input_domain, verified_exprs):
             deparse = None
             if isinstance(other, dict) and other.get("__perl") == "CODE":
                 deparse = other.get("__deparse")
+                if others.is_fixed_array_pattern_other(deparse):
+                    fixed_array_pairs = _fixed_array_pattern_pairs(m)
+                    exact_identity = source_identity == ("Olympus", "CameraSettings", 0x0804)
+                    exact_shape = (
+                        tag.get("Name") == "StackedImage"
+                        and tag.get("Writable") == "int32u"
+                        and tag.get("Count") in (2, "2")
+                        and input_domain == "list"
+                    )
+                    if exact_identity and exact_shape and fixed_array_pairs:
+                        stats["other_fixed_array_pattern"] += 1
+                        body = ", ".join(
+                            [
+                                f'("{rust_str(FIXED_ARRAY_PATTERN_MARKER)}", "")',
+                                *[
+                                    f'("{rust_str(key)}", "{rust_str(rendered)}")'
+                                    for key, rendered in fixed_array_pairs
+                                ],
+                            ]
+                        )
+                        return f"PrintConv::StrEnum(&[{body}])", False
+                    stats["pc_directives_dropped"]["OTHER"] += 1
+                    stats["other_unregistered"] += 1
+                    return "PrintConv::None", False
                 if deparse:
                     other_id = others.translate_other(deparse)
             if other_id is not None:
@@ -2549,7 +2597,13 @@ def gen_ifd_tag_literal(tag, tag_id, stats, verified_exprs, ctx, table_meta,
         # the REPORT still says why; the table-disqualifying key is NOT
         # raised for it.
         trial = new_ifd_stats()  # carries the nested Counters conv_for indexes into
-        pc_src, pc_refused = conv_for(tag, trial, pc_domain, verified_exprs)
+        pc_src, pc_refused = conv_for(
+            tag,
+            trial,
+            pc_domain,
+            verified_exprs,
+            source_identity=((*enclosing, tag_id) if enclosing is not None else None),
+        )
         if pc_src == "PrintConv::None" and not pc_refused and isinstance(pc, dict):
             pc_refused = True
             withheld_by = [k for k in IFD_WITHHELD_PRINT_CONV_KEYS if trial.get(k)]
@@ -3140,6 +3194,7 @@ IFD_REPORT = (
         ("ValueConv ExprIds (oracle-approved)", "value_conv_compiled"),
         ("BITMASK fields (DecodeBits)", "bitmask_emitted"),
         ("OTHER conversions registered", "other_translated"),
+        ("fixed-array OTHER patterns (exact source identity)", "other_fixed_array_pattern"),
         ("per-tag group overrides", "tag_group_override"),
         ("SubDirectory edges modeled", "ifd_subdir_edge_modeled"),
         ("  target is an IFD-style table", "ifd_subdir_edge_target_ifd"),

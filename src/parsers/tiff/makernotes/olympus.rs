@@ -95,6 +95,10 @@ const OLYMPUS_HEADER_BE: &[u8] = b"OLYMPUS\0MM";
 // `data[0..8] == LITERAL` comparison could never be true and every type-1
 // Olympus JPEG (163 of the 315 in the corpus) was rejected outright.
 const OLYMPUS_HEADER_TYPE1: &[u8] = b"OLYMP\x00";
+// MakerNotes.pm:505-515's MakerNoteMinolta2 signatures. Both route to this
+// Olympus table at byte 8, seed OlympusCAMER, and declare ByteOrder Unknown.
+const OLYMPUS_HEADER_CAMER: &[u8] = b"CAMER\x00";
+const OLYMPUS_HEADER_MINOL: &[u8] = b"MINOL\x00";
 // Type 3 (OM System bodies -- OM-1, OM-3, OM-5, OM-1 Mark II, TG-7). The
 // header is "OM SYSTEM\0" padded to 12 bytes, then "II"/"MM" and a version
 // word, so the directory starts 16 bytes in:
@@ -399,6 +403,12 @@ impl MakerNoteParser for OlympusParser {
 
         // Check for Type 1 headers: "OLYMP\0" plus a two-byte version.
         if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
+            return true;
+        }
+
+        if data.len() >= 8
+            && (&data[0..6] == OLYMPUS_HEADER_CAMER || &data[0..6] == OLYMPUS_HEADER_MINOL)
+        {
             return true;
         }
 
@@ -807,6 +817,18 @@ impl OlympusParser {
             );
         }
 
+        if let Some(rows) = structured_rows.as_deref_mut() {
+            append_zoomed_preview_rows(
+                data,
+                data_base,
+                data_domain,
+                &entries,
+                base,
+                effective_byte_order,
+                rows,
+            );
+        }
+
         // Slice I-3 (design spec section 5): the seven sub-tables
         // `enabled_ifd.rs` lists were walked by the engine ABOVE --
         // `ifd_engine::descend` follows the generated Main table's 0x2010,
@@ -991,6 +1013,117 @@ impl OlympusParser {
 
         Ok(())
     }
+}
+
+/// Materialize Olympus.pm:893-907's OffsetPair/DataTag contract without
+/// flattening its binary value through the residual string map.
+fn append_zoomed_preview_rows(
+    data: &[u8],
+    data_base: Option<u32>,
+    data_domain: u64,
+    entries: &[ifd::RawEntry],
+    base: Option<i64>,
+    order: ByteOrder,
+    rows: &mut Vec<(String, TagOccurrence)>,
+) {
+    let pair = &tables::ZOOMED_PREVIEW_PAIR;
+    let scalar = |id| {
+        entries
+            .iter()
+            .find(|entry| entry.tag_id == id)
+            .and_then(|entry| ifd::decode_entry(data, entry, base, order, None))
+            .and_then(|value| value.first_int())
+    };
+    let (Some(start), Some(length)) = (scalar(pair.offset_id), scalar(pair.length_id)) else {
+        return;
+    };
+    let (Ok(start_u64), Ok(length_u64)) = (u64::try_from(start), u64::try_from(length)) else {
+        return;
+    };
+
+    for (id, name, value) in [
+        (pair.offset_id, "ZoomedPreviewStart", start),
+        (pair.length_id, "ZoomedPreviewLength", length),
+    ] {
+        let value = TagValue::Integer(value);
+        rows.push((
+            format!("Olympus:{name}"),
+            TagOccurrence {
+                id: crate::core::TagId::Numeric(id),
+                name: intern(name),
+                group0: intern("MakerNotes"),
+                group1: intern("Olympus"),
+                group2: Some(intern("Camera")),
+                instance: Instance::default(),
+                raw: value.clone(),
+                value: Some(value.clone()),
+                print: Some(value.clone()),
+                stored: Some(value),
+                priority: 1,
+                is_list: false,
+                order: 0,
+                origin: Provenance {
+                    module: Some("Olympus"),
+                    table: Some("Main"),
+                    byte_range: None,
+                },
+            },
+        ));
+    }
+
+    let Some(local_start) = data_base
+        .map(u64::from)
+        .and_then(|payload_start| start_u64.checked_sub(payload_start))
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return;
+    };
+    let Some(local_end) = usize::try_from(length_u64)
+        .ok()
+        .and_then(|length| local_start.checked_add(length))
+    else {
+        return;
+    };
+    let Some(bytes) = data.get(local_start..local_end) else {
+        return;
+    };
+    if !bytes.starts_with(&[0xff, 0xd8]) || !bytes.ends_with(&[0xff, 0xd9]) {
+        return;
+    }
+    let binary = TagValue::Binary(bytes.to_vec());
+    rows.push((
+        format!("Olympus:{}", pair.data_name),
+        TagOccurrence {
+            id: crate::core::TagId::Named("DataTag:ZoomedPreviewImage".to_string()),
+            name: intern(pair.data_name),
+            group0: intern("MakerNotes"),
+            group1: intern("Olympus"),
+            group2: Some(intern("Preview")),
+            instance: Instance::default(),
+            raw: binary.clone(),
+            value: Some(binary.clone()),
+            print: Some(TagValue::String(format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                bytes.len()
+            ))),
+            stored: Some(binary),
+            priority: 1,
+            is_list: false,
+            order: 0,
+            origin: Provenance {
+                module: Some("Olympus"),
+                table: Some("Main"),
+                byte_range: start_u64
+                    .checked_add(length_u64)
+                    .map(|end| start_u64..end)
+                    .or_else(|| {
+                        u64::try_from(local_end)
+                            .ok()
+                            .map(|end| data_domain + local_start as u64..data_domain + end)
+                    }),
+            },
+        },
+    ));
 }
 
 // ============================================================================
@@ -2067,7 +2200,21 @@ fn detect_header_type_and_offsets(
         return Ok((16, order));
     }
 
-    // Check Type 1 headers: ExifTool's `Start => '$valuePtr + 8'`.
+    // Type 1 and MakerNoteMinolta2 start at byte 8. MINOL/CAMER explicitly
+    // declare ByteOrder Unknown, resolved with Exif.pm:6886-6893's entry-count
+    // predicate rather than inherited blindly from the outer TIFF.
+    if data.len() >= 8
+        && (&data[0..6] == OLYMPUS_HEADER_CAMER || &data[0..6] == OLYMPUS_HEADER_MINOL)
+    {
+        return Ok((
+            8,
+            crate::parsers::tiff::makernotes::shared::ifd_parser_base::resolve_byte_order_at(
+                data,
+                8,
+                default_byte_order,
+            ),
+        ));
+    }
     if data.len() >= 8 && &data[0..6] == OLYMPUS_HEADER_TYPE1 {
         return Ok((8, default_byte_order));
     }

@@ -1,0 +1,186 @@
+[
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x0804"
+    },
+    "fixture": {
+      "relative_path": "cache/exiftool/13.59/combined-samples/Olympus/OlympusOM-1.jpg",
+      "root": "OXIDEX_OPS_DIR",
+      "sha256": "ba6154c71210b0c0319035e93c87cddcc9b7f2d0119fed0bfb23dd0ce9f60f60"
+    },
+    "module": "Olympus",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::CameraSettings",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "StackedImage",
+      "raw_key": "2052",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "1e4a959b821ec0c95015d6ef1e553169e901a2d1d9535a89ce0f70a32ec5daec",
+    "symbol": "src/exiftool_tables/runtime.rs::render",
+    "table": "CameraSettings"
+  },
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x0201"
+    },
+    "fixture": {
+      "relative_path": "cache/exiftool/13.59/combined-samples/Olympus/OlympusC740UZ.jpg",
+      "root": "OXIDEX_OPS_DIR",
+      "sha256": "c97ca0e18a8f9c61635fa177009323411f2966e47fc00cd65e0e7c3f15a088a4"
+    },
+    "module": "Olympus",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::Main",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "Quality",
+      "raw_key": "513",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "25aaffdaee68b832ac176ef88bf82d79dd54d5fc048438437204279a7bc86991",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::parse_camera_type_and_quality",
+    "table": "Main"
+  },
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x0207"
+    },
+    "fixture": {
+      "relative_path": "cache/exiftool/13.59/combined-samples/Olympus/OlympusC740UZ.jpg",
+      "root": "OXIDEX_OPS_DIR",
+      "sha256": "c97ca0e18a8f9c61635fa177009323411f2966e47fc00cd65e0e7c3f15a088a4"
+    },
+    "module": "Olympus",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::Main",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "CameraType",
+      "raw_key": "519",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "a0d5a0c61d51577a18a8880a5fd1f3433e67a7d6ca3b54f005f6d3e37521cefd",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::parse_camera_type_and_quality",
+    "table": "Main"
+  },
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x0f04"
+    },
+    "fixture": {
+      "relative_path": "tests/fixtures/tiff/olympus/zoomed_preview_pair.tiff",
+      "root": "REPOSITORY",
+      "sha256": "9511921d02f8a9a7717fde561e5913dc7cb552bab5a6428f12ca0d07ea3f0bc8"
+    },
+    "module": "Olympus",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::Main",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "ZoomedPreviewStart",
+      "raw_key": "3844",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "5e1c9cdf70620a74edc5c60c7cc3c52134fe77c96d0a76e37078cb484baabf9f",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_rows",
+    "table": "Main"
+  },
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x0f05"
+    },
+    "fixture": {
+      "relative_path": "tests/fixtures/tiff/olympus/zoomed_preview_pair.tiff",
+      "root": "REPOSITORY",
+      "sha256": "9511921d02f8a9a7717fde561e5913dc7cb552bab5a6428f12ca0d07ea3f0bc8"
+    },
+    "module": "Olympus",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::Main",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "ZoomedPreviewLength",
+      "raw_key": "3845",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "75198b9610806e8160e5fc42ab24d782516c511747be9cda5eb8ac865b11b5f4",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_rows",
+    "table": "Main"
+  },
+  {
+    "field": {
+      "kind": "name",
+      "value": "ZoomedPreviewImage"
+    },
+    "fixture": {
+      "relative_path": "tests/fixtures/tiff/olympus/zoomed_preview_pair.tiff",
+      "root": "REPOSITORY",
+      "sha256": "9511921d02f8a9a7717fde561e5913dc7cb552bab5a6428f12ca0d07ea3f0bc8"
+    },
+    "module": "Olympus",
+    "owner": "residual",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::Composite",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "ZoomedPreviewImage",
+      "raw_key": "ZoomedPreviewImage",
+      "variant_path": []
+    },
+    "source_release": "13.59",
+    "source_sha256": "5493ec6ba510a89bd314db766bed2aee11eef4ed8fd21a8d7deab35b7a8520ae",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::append_zoomed_preview_rows",
+    "table": "Composite"
+  },
+  {
+    "field": {
+      "kind": "numeric",
+      "value": "0x2050"
+    },
+    "fixture": {
+      "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxIQ_Digital59e.jpg",
+      "root": "OXIDEX_OPS_DIR",
+      "sha256": "da1dcc3ab4599d6e8a0d5173ab0446ec11fea0b44f613cb655a11985028b88a3"
+    },
+    "module": "Olympus",
+    "owner": "generated",
+    "provenance_schema": "source-carrier/v1",
+    "refusal": null,
+    "source_binding": {
+      "full_name": "Image::ExifTool::Olympus::Main",
+      "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+      "name": "CameraParameters",
+      "raw_key": "8272",
+      "variant_path": [
+        2
+      ]
+    },
+    "source_release": "13.59",
+    "source_sha256": "952f63280c119fed6fc2f60d832623f7d8186f6f8aff81a1025e049e9f26670e",
+    "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
+    "table": "Main"
+  }
+]

@@ -298,6 +298,47 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
         return Ok(());
     }
 
+    // MakerNotes.pm:505-515's MakerNoteMinolta2 routes literal `MINOL\0` and
+    // `CAMER\0` signatures to Olympus::Main independently of the file Make.
+    // The same condition sets OlympusCAMER, selecting Main 0x2050's binary
+    // CameraParameters alternative. Seed both condition stores used by the
+    // generated IFD path before parsing.
+    if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+        cond_ctx
+            .members
+            .insert("OlympusCAMER", crate::exiftool_tables::MemberValue::Num(1));
+        session
+            .set_member(
+                "OlympusCAMER",
+                crate::exiftool_tables::session::MemberVal::Int(1),
+            )
+            .expect("OlympusCAMER is an untyped ExifTool member");
+        let parser = olympus::OlympusParser;
+        if let Some(rows) = occurrences.as_deref_mut() {
+            parser.parse_with_context_and_values_and_session_and_occurrences(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+                rows,
+            )?;
+        } else {
+            parser.parse_with_context_and_values_and_session(
+                ctx,
+                byte_order,
+                model,
+                session,
+                cond_ctx,
+                tags,
+                value_forms,
+            )?;
+        }
+        return Ok(());
+    }
+
     // Vendors that spell their own name several ways across model generations
     // are matched by prefix rather than by an exhaustive literal list. Olympus
     // alone writes six different strings across the sample corpus -- "OLYMPUS

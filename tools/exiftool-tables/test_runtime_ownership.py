@@ -84,9 +84,48 @@ class RuntimeOwnershipTests(unittest.TestCase):
 
     def test_repository_inventory_is_complete_sorted_and_counted(self):
         inventory = self.ownership.build_inventory(self.root)
-        self.assertEqual(inventory["category_totals"], {"generated": 551, "not-applicable": 29, "refused": 17, "residual": 19, "walker-owned": 0})
+        self.assertEqual(
+            inventory["category_totals"],
+            {
+                "generated": 553,
+                "not-applicable": 29,
+                "refused": 17,
+                "residual": 24,
+                "walker-owned": 0,
+            },
+        )
+        self.assertEqual(len(inventory["rows"]), 623)
         self.assertEqual(inventory["rows"], sorted(inventory["rows"], key=lambda r: (r["module"], r["table"], r["field"]["kind"], r["field"]["value"], r["owner"])))
         self.assertIn('("Exif", "Main")', (self.root / "src/exiftool_tables/enabled_ifd.rs").read_text())
+
+        exif_rows = [row for row in inventory["rows"] if row["module"] == "Exif"]
+        self.assertEqual(
+            self.ownership.verify_rows(exif_rows).totals,
+            {
+                "generated": 551,
+                "not-applicable": 29,
+                "refused": 17,
+                "residual": 19,
+                "walker-owned": 0,
+            },
+        )
+        olympus_owners = {
+            self.ownership.StableFieldId.from_row(row).text(): row["owner"]
+            for row in inventory["rows"]
+            if row["module"] == "Olympus"
+        }
+        self.assertEqual(
+            olympus_owners,
+            {
+                "Olympus::CameraSettings:numeric:0x0804": "generated",
+                "Olympus::Composite:name:ZoomedPreviewImage": "residual",
+                "Olympus::Main:numeric:0x0201": "residual",
+                "Olympus::Main:numeric:0x0207": "residual",
+                "Olympus::Main:numeric:0x0f04": "residual",
+                "Olympus::Main:numeric:0x0f05": "residual",
+                "Olympus::Main:numeric:0x2050": "generated",
+            },
+        )
 
     def test_live_residual_arrays_exactly_match_fragments(self):
         fragments = self.ownership._fragment_digest(self.root / "tools/exiftool-tables/runtime_ownership.d")
