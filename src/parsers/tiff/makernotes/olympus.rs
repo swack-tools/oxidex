@@ -817,17 +817,16 @@ impl OlympusParser {
             );
         }
 
-        if let Some(rows) = structured_rows.as_deref_mut() {
-            append_zoomed_preview_rows(
-                data,
-                data_base,
-                data_domain,
-                &entries,
-                base,
-                effective_byte_order,
-                rows,
-            );
-        }
+        append_zoomed_preview_rows(
+            data,
+            data_base,
+            data_domain,
+            &entries,
+            base,
+            effective_byte_order,
+            tags,
+            structured_rows.as_deref_mut(),
+        );
 
         // Slice I-3 (design spec section 5): the seven sub-tables
         // `enabled_ifd.rs` lists were walked by the engine ABOVE --
@@ -986,6 +985,21 @@ impl OlympusParser {
             );
         }
 
+        if let Some((start, order)) = main_info
+            && let Some(main_info_entries) = ifd::read_ifd(data, start, order)
+        {
+            append_zoomed_preview_rows(
+                data,
+                data_base,
+                data_domain,
+                &main_info_entries,
+                base,
+                order,
+                tags,
+                structured_rows.as_deref_mut(),
+            );
+        }
+
         // 0x0201 `Quality`, 0x0207 `CameraType` and 0x0208 `TextInfo` sit
         // wherever the body put them: the older bodies write them in the
         // top-level directory, the `OLYMPUS\0II` bodies from the FE/SP/u
@@ -1024,7 +1038,8 @@ fn append_zoomed_preview_rows(
     entries: &[ifd::RawEntry],
     base: Option<i64>,
     order: ByteOrder,
-    rows: &mut Vec<(String, TagOccurrence)>,
+    tags: &mut HashMap<String, String>,
+    rows: Option<&mut Vec<(String, TagOccurrence)>>,
 ) {
     let pair = &tables::ZOOMED_PREVIEW_PAIR;
     let scalar = |id| {
@@ -1038,6 +1053,15 @@ fn append_zoomed_preview_rows(
         return;
     };
     let (Ok(start_u64), Ok(length_u64)) = (u64::try_from(start), u64::try_from(length)) else {
+        return;
+    };
+
+    let Some(rows) = rows else {
+        tags.insert("Olympus:ZoomedPreviewStart".to_string(), start.to_string());
+        tags.insert(
+            "Olympus:ZoomedPreviewLength".to_string(),
+            length.to_string(),
+        );
         return;
     };
 

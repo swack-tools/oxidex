@@ -143,6 +143,33 @@ fn preview_note(start: u32, length: u32, order: ByteOrder) -> Vec<u8> {
     note
 }
 
+fn preview_main_info_note(
+    top_level: Option<(u32, u32)>,
+    main_info: (u32, u32),
+    order: ByteOrder,
+) -> Vec<u8> {
+    const MAIN_INFO_OFFSET: u32 = 80;
+    let mut note = b"OLYMPUS\0".to_vec();
+    note.extend_from_slice(match order {
+        ByteOrder::LittleEndian => b"II",
+        ByteOrder::BigEndian => b"MM",
+    });
+    push_u16(&mut note, 3, order);
+    push_u16(&mut note, if top_level.is_some() { 3 } else { 1 }, order);
+    if let Some((start, length)) = top_level {
+        note.extend_from_slice(&entry(0x0f04, 4, 1, start, order));
+        note.extend_from_slice(&entry(0x0f05, 4, 1, length, order));
+    }
+    note.extend_from_slice(&entry(0x4000, 4, 1, MAIN_INFO_OFFSET, order));
+    push_u32(&mut note, 0, order);
+    note.resize(MAIN_INFO_OFFSET as usize, 0);
+    push_u16(&mut note, 2, order);
+    note.extend_from_slice(&entry(0x0f04, 4, 1, main_info.0, order));
+    note.extend_from_slice(&entry(0x0f05, 4, 1, main_info.1, order));
+    push_u32(&mut note, 0, order);
+    note
+}
+
 fn selected_preview_orf(order: ByteOrder) -> (Vec<u8>, Vec<u8>, u32) {
     const IFD0_OFFSET: u32 = 8;
     const IFD0_ENTRIES: usize = 5;
@@ -209,11 +236,7 @@ type StructuredDispatchOutput = (
     Session,
 );
 
-fn dispatch_structured(
-    make: &str,
-    note: &[u8],
-    inherited: ByteOrder,
-) -> StructuredDispatchOutput {
+fn dispatch_structured(make: &str, note: &[u8], inherited: ByteOrder) -> StructuredDispatchOutput {
     const NOTE_OFFSET: usize = 96;
     let mut tiff = vec![0u8; NOTE_OFFSET];
     tiff.extend_from_slice(note);
@@ -340,6 +363,130 @@ fn zoomed_preview_pair_reaches_public_metadata_as_exact_bytes() {
     assert_eq!(occurrences[0].1.group0.as_ref(), "MakerNotes");
     assert_eq!(occurrences[0].1.group1.as_ref(), "Olympus");
     assert_eq!(occurrences[0].2.as_ref(), &TagValue::Binary(expected));
+}
+
+#[test]
+fn preview_pair_main_info_emits_exact_scalars_without_invalid_image() {
+    let note = preview_main_info_note(None, (50_000, 624), ByteOrder::LittleEndian);
+    let (tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    assert!(!tags.contains_key("Olympus:ZoomedPreviewStart"));
+    assert!(!tags.contains_key("Olympus:ZoomedPreviewLength"));
+
+    let zoomed: Vec<_> = rows
+        .iter()
+        .filter(|(key, _)| key.starts_with("Olympus:ZoomedPreview"))
+        .collect();
+    assert_eq!(
+        zoomed
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["Olympus:ZoomedPreviewStart", "Olympus:ZoomedPreviewLength",]
+    );
+    for (index, id, value) in [(0, 0x0f04, 50_000), (1, 0x0f05, 624)] {
+        let occurrence = &zoomed[index].1;
+        assert_eq!(occurrence.id, TagId::Numeric(id));
+        assert_eq!(occurrence.group0.as_ref(), "MakerNotes");
+        assert_eq!(occurrence.group1.as_ref(), "Olympus");
+        assert_eq!(
+            occurrence.group2.as_ref().map(|group| group.as_ref()),
+            Some("Camera")
+        );
+        assert_eq!(occurrence.raw, TagValue::Integer(value));
+        assert_eq!(
+            occurrence.project(ValueChannel::ValueConv).as_ref(),
+            &TagValue::Integer(value)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::Integer(value)
+        );
+        assert_eq!(
+            occurrence.project(ValueChannel::Stored).as_ref(),
+            &TagValue::Integer(value)
+        );
+    }
+    assert!(
+        !rows
+            .iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewImage")
+    );
+}
+
+#[test]
+fn preview_pair_top_level_then_main_info_preserves_order_and_later_winner() {
+    let note = preview_main_info_note(Some((40_000, 512)), (50_000, 624), ByteOrder::LittleEndian);
+    let (_tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    let scalars: Vec<_> = rows
+        .iter()
+        .filter(|(key, _)| key.starts_with("Olympus:ZoomedPreview"))
+        .map(|(key, occurrence)| (key.as_str(), occurrence.raw.clone()))
+        .collect();
+    assert_eq!(
+        scalars,
+        [
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(40_000),),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(512),),
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(50_000),),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(624),),
+        ]
+    );
+
+    let mut legacy = HashMap::new();
+    dispatch_makernote(
+        "OLYMPUS CORPORATION",
+        &note,
+        ByteOrder::LittleEndian,
+        &mut legacy,
+    )
+    .expect("combined preview pair dispatches");
+    assert_eq!(
+        legacy.get("Olympus:ZoomedPreviewStart").map(String::as_str),
+        Some("50000")
+    );
+    assert_eq!(
+        legacy
+            .get("Olympus:ZoomedPreviewLength")
+            .map(String::as_str),
+        Some("624")
+    );
+    assert!(!legacy.contains_key("Olympus:ZoomedPreviewImage"));
+}
+
+#[test]
+fn preview_pair_legacy_dispatch_projects_top_level_and_main_info_scalars_only() {
+    for (note, start, length) in [
+        (
+            preview_note(40_000, 512, ByteOrder::LittleEndian),
+            "40000",
+            "512",
+        ),
+        (
+            preview_main_info_note(None, (50_000, 624), ByteOrder::LittleEndian),
+            "50000",
+            "624",
+        ),
+    ] {
+        let mut tags = HashMap::new();
+        dispatch_makernote(
+            "OLYMPUS CORPORATION",
+            &note,
+            ByteOrder::LittleEndian,
+            &mut tags,
+        )
+        .expect("legacy preview pair dispatches");
+        assert_eq!(
+            tags.get("Olympus:ZoomedPreviewStart").map(String::as_str),
+            Some(start)
+        );
+        assert_eq!(
+            tags.get("Olympus:ZoomedPreviewLength").map(String::as_str),
+            Some(length)
+        );
+        assert!(!tags.contains_key("Olympus:ZoomedPreviewImage"));
+    }
 }
 
 #[test]
