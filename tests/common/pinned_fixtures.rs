@@ -383,13 +383,19 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
         if bytes.first() != Some(&b'~') {
             return path;
         }
-        let home = unix_home_dir(bytes.get(1..).expect("tilde prefix has a suffix"))
-            .unwrap_or_else(|| {
-                panic!(
-                    "OXIDEX_OPS_DIR names an unsupported home directory: {}",
-                    path.display()
-                )
-            });
+        let user = bytes.get(1..).expect("tilde prefix has a suffix");
+        let home = (user
+            .is_empty()
+            .then(|| env::var_os("HOME").filter(|value| !value.is_empty()))
+            .flatten()
+            .map(PathBuf::from))
+        .or_else(|| unix_home_dir(user))
+        .unwrap_or_else(|| {
+            panic!(
+                "OXIDEX_OPS_DIR names an unsupported home directory: {}",
+                path.display()
+            )
+        });
         home.join(
             path.strip_prefix(first)
                 .expect("first path component is present"),
@@ -424,26 +430,55 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn unix_home_dir(user: &[u8]) -> Option<PathBuf> {
     use std::ffi::{CStr, CString};
     use std::os::unix::ffi::OsStringExt;
+    use std::ptr;
 
-    let entry = unsafe {
-        if user.is_empty() {
-            libc::getpwuid(libc::geteuid())
-        } else {
-            libc::getpwnam(CString::new(user).ok()?.as_ptr())
+    let name = (!user.is_empty())
+        .then(|| CString::new(user).ok())
+        .flatten();
+    let mut size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) }.max(1024) as usize;
+    for _ in 0..4 {
+        let mut buffer = vec![0_u8; size];
+        let mut entry = unsafe { std::mem::zeroed::<libc::passwd>() };
+        let mut result = ptr::null_mut();
+        let code = unsafe {
+            match name.as_ref() {
+                Some(name) => libc::getpwnam_r(
+                    name.as_ptr(),
+                    &mut entry,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    &mut result,
+                ),
+                None => libc::getpwuid_r(
+                    libc::geteuid(),
+                    &mut entry,
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    &mut result,
+                ),
+            }
+        };
+        if code == libc::ERANGE {
+            size *= 2;
+            continue;
         }
-    };
-    if entry.is_null() || unsafe { (*entry).pw_dir.is_null() } {
-        return None;
+        if code != 0 || result.is_null() || entry.pw_dir.is_null() {
+            return None;
+        }
+        return Some(PathBuf::from(std::ffi::OsString::from_vec(
+            unsafe { CStr::from_ptr(entry.pw_dir) }.to_bytes().to_vec(),
+        )));
     }
-    Some(PathBuf::from(std::ffi::OsString::from_vec(
-        unsafe { CStr::from_ptr((*entry).pw_dir) }
-            .to_bytes()
-            .to_vec(),
-    )))
+    None
+}
+
+#[cfg(all(unix, not(test)))]
+fn unix_home_dir(_user: &[u8]) -> Option<PathBuf> {
+    None
 }
 
 fn reject_symlink_components(path: &Path) {
@@ -771,13 +806,31 @@ mod environment_tests {
             return;
         }
 
-        for (mode, configured, remove_home) in [
-            ("named", "~allen/oxidex-review-path", false),
-            ("current", "~/oxidex-review-path", true),
+        let current_user = std::process::Command::new("id")
+            .arg("-un")
+            .output()
+            .expect("read current passwd username");
+        assert!(current_user.status.success());
+        let current_user = String::from_utf8(current_user.stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        for (mode, configured, home) in [
+            (
+                "named",
+                format!("~{current_user}/oxidex-review-path"),
+                Some("/Users/allen/ignored-home"),
+            ),
+            (
+                "home",
+                "~/oxidex-review-path".to_owned(),
+                Some("/Users/allen/oxidex-review-home"),
+            ),
+            ("current", "~/oxidex-review-path".to_owned(), None),
             (
                 "unsupported",
-                "~oxidex-fixture-no-such-user/fixtures",
-                false,
+                "~oxidex-fixture-no-such-user/fixtures".to_owned(),
+                Some("/Users/allen/ignored-home"),
             ),
         ] {
             let mut command = std::process::Command::new(env::current_exe().unwrap());
@@ -788,10 +841,13 @@ mod environment_tests {
                 .env_remove("EXIFTOOL")
                 .env_remove("EXIFTOOL_CACHE_DIR")
                 .env_remove(REQUIRED_ENV);
-            if remove_home {
-                command.env_remove("HOME");
-            } else {
-                command.env("HOME", "/untrusted-home-must-not-win");
+            match home {
+                Some(home) => {
+                    command.env("HOME", home);
+                }
+                None => {
+                    command.env_remove("HOME");
+                }
             }
             let child_result = command.status().expect("run tilde differential control");
             assert!(
