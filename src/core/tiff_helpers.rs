@@ -14,7 +14,7 @@ use crate::core::tag_conversion::{
     ExifMainResidualPort, apply_tile_offsets_value_conv, exif_main_residual_port,
     exif_raw_conv_drops_entry, gps_coordinate_degrees, raw_bytes_to_tag_value, time_codes_forms,
 };
-use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY};
+use crate::core::tag_occurrence::{Instance, SHIM_DEFAULT_PRIORITY, ValueChannel};
 #[cfg(test)]
 use crate::exiftool_tables::engine_reports;
 use crate::exiftool_tables::session::{MemberVal, Session};
@@ -24,7 +24,7 @@ use crate::parsers::tiff::geotiff_parser;
 use crate::parsers::tiff::ifd_parser::{
     ByteOrder, find_entry_position_at, ifd_entry_count, parse_ifd,
 };
-use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session;
+use crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences;
 use crate::parsers::tiff::makernotes::makernote_context::{
     MakerNoteContext, value_overlaps_directory,
 };
@@ -4193,10 +4193,6 @@ fn parse_makernote_with_session(
     // self-describing (Nikon AFInfo's byte order, for one).
     let model = metadata.get_string("IFD0:Model").map(str::to_string);
 
-    if make.is_empty() {
-        return;
-    }
-
     // `MakerNoteGoogle` is selected by its `HDRP\x02`/`HDRP\x03` signature
     // (see `claimed_before_samsung1a`), not by a numeric TIFF directory. Its
     // encrypted/gzipped envelope is the one GCamera's XMP HDRP property uses,
@@ -4246,7 +4242,8 @@ fn parse_makernote_with_session(
     // Parse MakerNote using the dispatcher
     let mut makernote_tags = HashMap::new();
     let mut value_forms = HashMap::new();
-    if let Err(e) = dispatch_makernote_with_context_and_values_and_session(
+    let mut structured_rows = Vec::new();
+    if let Err(e) = dispatch_makernote_with_context_and_values_and_session_and_occurrences(
         &make,
         model.as_deref(),
         ctx,
@@ -4255,6 +4252,7 @@ fn parse_makernote_with_session(
         cond_ctx,
         &mut makernote_tags,
         &mut value_forms,
+        &mut structured_rows,
     ) {
         // A MakerNote that fails to parse must not fail the file -- ExifTool
         // warns and goes on reading the rest of it -- but it must not be
@@ -4271,7 +4269,17 @@ fn parse_makernote_with_session(
     // `Composite:PreviewImage` over whichever `PreviewImageStart`/
     // `PreviewImageLength` pair this MakerNote produced. See
     // `derive_makernote_preview_image`.
-    derive_makernote_preview_image(ctx, &makernote_tags, metadata);
+    let mut preview_tags = makernote_tags.clone();
+    extend_preview_dependencies(&mut preview_tags, &structured_rows);
+    derive_makernote_preview_image(ctx, &preview_tags, metadata);
+
+    // Structured generated rows already own their physical occurrences.
+    // Record them atomically, in traversal order, before the explicitly
+    // residual map rows below. The latter therefore cannot mutate a
+    // generated occurrence's stored/value/print triplet.
+    for (key, occurrence) in structured_rows {
+        metadata.record_occurrence(key, occurrence);
+    }
 
     // Add manufacturer tags to metadata
     // Note: tag names already include manufacturer prefix (e.g., "Canon:", "Nikon:")
@@ -4335,6 +4343,40 @@ fn parse_makernote_with_session(
     }
     for (tag_name, value) in value_forms {
         metadata.set_value_form(tag_name, value);
+    }
+}
+
+fn extend_preview_dependencies(
+    preview_tags: &mut HashMap<String, String>,
+    structured_rows: &[(String, crate::core::TagOccurrence)],
+) {
+    for (key, occurrence) in structured_rows {
+        let bare = bare_tag_name(key);
+        if matches!(
+            bare,
+            PREVIEW_IMAGE | PREVIEW_IMAGE_START | PREVIEW_IMAGE_LENGTH | PREVIEW_IMAGE_VALID
+        ) && let Some(value) =
+            preview_dependency_text(occurrence.project(ValueChannel::ValueConv).as_ref())
+        {
+            preview_tags.insert(key.clone(), value);
+        }
+    }
+}
+
+/// Convert only the scalar forms used by MakerNote preview dependencies.
+/// This is a private dependency view, not another metadata projection.
+fn preview_dependency_text(value: &TagValue) -> Option<String> {
+    match value {
+        TagValue::String(value) => Some(value.clone()),
+        TagValue::Integer(value) => Some(value.to_string()),
+        TagValue::Float(value) => Some(value.to_string()),
+        TagValue::Rational {
+            numerator,
+            denominator,
+        } if *denominator != 0 => {
+            Some((f64::from(*numerator) / f64::from(*denominator)).to_string())
+        }
+        _ => None,
     }
 }
 
@@ -4748,6 +4790,388 @@ fn parse_makernote(ctx: &MakerNoteContext<'_>, byte_order: ByteOrder, metadata: 
     let mut members = HashMap::new();
     let mut cond_ctx = Ctx::new(&mut members);
     parse_makernote_with_session(ctx, byte_order, &mut session, &mut cond_ctx, metadata);
+}
+
+#[cfg(test)]
+mod makernote_structured_tests {
+    use super::*;
+    use crate::core::tag_occurrence::{TagOccurrence, ValueChannel};
+
+    fn olympus_duplicate_pressure_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+
+        // Olympus::Main at 12, pointing to CameraSettings at 40.
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x2020u16.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&40u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.resize(40, 0);
+
+        // Two physical 0x0900 ManometerPressure entries. Both must survive
+        // as independent canonical occurrences in traversal order.
+        note.extend_from_slice(&2u16.to_le_bytes());
+        for stored in [1013u16, 999u16] {
+            note.extend_from_slice(&0x0900u16.to_le_bytes());
+            note.extend_from_slice(&3u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&stored.to_le_bytes());
+            note.extend_from_slice(&[0, 0]);
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note
+    }
+
+    fn olympus_generated_and_residual_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+
+        // Main: residual Quality, residual CameraType, then the generated
+        // CameraSettings edge. The delayed Quality conversion must observe
+        // the CameraType member while retaining this physical order.
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&0x0201u16.to_le_bytes());
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&[0, 0]);
+        note.extend_from_slice(&0x0207u16.to_le_bytes());
+        note.extend_from_slice(&2u16.to_le_bytes());
+        note.extend_from_slice(&6u32.to_le_bytes());
+        note.extend_from_slice(&56u32.to_le_bytes());
+        note.extend_from_slice(&0x2020u16.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&64u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.resize(56, 0);
+        note.extend_from_slice(b"D4322\0");
+        note.resize(64, 0);
+
+        note.extend_from_slice(&2u16.to_le_bytes());
+        for stored in [1013u16, 999u16] {
+            note.extend_from_slice(&0x0900u16.to_le_bytes());
+            note.extend_from_slice(&3u16.to_le_bytes());
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&stored.to_le_bytes());
+            note.extend_from_slice(&[0, 0]);
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note
+    }
+
+    fn olympus_declined_then_reported_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x2020u16.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&40u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.resize(40, 0);
+
+        note.extend_from_slice(&2u16.to_le_bytes());
+        // The generated scalar conversion declines this array-shaped first
+        // occurrence. A later physical entry with the same source ID must
+        // still be visited and reported exactly once.
+        note.extend_from_slice(&0x0900u16.to_le_bytes());
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&2u32.to_le_bytes());
+        note.extend_from_slice(&1013u16.to_le_bytes());
+        note.extend_from_slice(&999u16.to_le_bytes());
+        note.extend_from_slice(&0x0900u16.to_le_bytes());
+        note.extend_from_slice(&3u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&888u16.to_le_bytes());
+        note.extend_from_slice(&[0, 0]);
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note
+    }
+
+    fn olympus_low_priority_shutter_note() -> Vec<u8> {
+        let mut note = Vec::new();
+        note.extend_from_slice(b"OLYMPUS\0II");
+        note.extend_from_slice(&[0x03, 0x00]);
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&0x1000u16.to_le_bytes());
+        note.extend_from_slice(&10u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&30u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.extend_from_slice(&1i32.to_le_bytes());
+        note.extend_from_slice(&3i32.to_le_bytes());
+        note
+    }
+
+    #[test]
+    fn signature_only_minolta2_routes_without_ifd0_make() {
+        const NOTE_OFFSET: usize = 96;
+        const PAYLOAD_OFFSET: usize = 32;
+        let payload = b"camera-parameters\0\xff";
+        for signature in [b"CAMER\0", b"MINOL\0"] {
+            let mut note = signature.to_vec();
+            note.extend_from_slice(&[0, 0]);
+            note.extend_from_slice(&1u16.to_le_bytes());
+            note.extend_from_slice(&0x2050u16.to_le_bytes());
+            note.extend_from_slice(&7u16.to_le_bytes());
+            note.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            note.extend_from_slice(&((NOTE_OFFSET + PAYLOAD_OFFSET) as u32).to_le_bytes());
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.resize(PAYLOAD_OFFSET, 0);
+            note.extend_from_slice(payload);
+
+            let mut tiff = vec![0; NOTE_OFFSET];
+            tiff.extend_from_slice(&note);
+            let ctx = MakerNoteContext::in_tiff(&tiff, NOTE_OFFSET, note.len(), 0);
+            let mut metadata = MetadataMap::new();
+            parse_makernote(&ctx, ByteOrder::BigEndian, &mut metadata);
+
+            let rows = metadata.occurrences_for("Olympus:CameraParameters");
+            assert_eq!(
+                rows.len(),
+                1,
+                "signature-only routing must not require Make"
+            );
+            assert_eq!(
+                rows[0].project(ValueChannel::Stored).as_ref(),
+                &TagValue::Binary(payload.to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn olympus_generated_forms_are_atomic_per_occurrence() {
+        let note = olympus_duplicate_pressure_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        let rows = metadata.occurrences_for("Olympus:ManometerPressure");
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            assert!(
+                rows.is_empty(),
+                "engine-off attribution must remove the owner"
+            );
+            return;
+        }
+
+        assert_eq!(rows.len(), 2, "one row per physical CameraSettings entry");
+        for (row, stored, value, print) in [
+            (&rows[0], 1013, 101.3, "101.3 kPa"),
+            (&rows[1], 999, 99.9, "99.9 kPa"),
+        ] {
+            assert_eq!(row.id, oxidex_tags::TagId::Numeric(0x0900));
+            assert_eq!(&*row.group0, "MakerNotes");
+            assert_eq!(&*row.group1, "Olympus");
+            assert_eq!(row.origin.module, Some("Olympus"));
+            assert_eq!(row.origin.table, Some("CameraSettings"));
+            assert_eq!(
+                row.project(ValueChannel::Stored).as_ref(),
+                &TagValue::Integer(stored)
+            );
+            assert_eq!(
+                row.project(ValueChannel::ValueConv).as_ref(),
+                &TagValue::Float(value)
+            );
+            assert_eq!(
+                row.project(ValueChannel::PrintConv).as_ref(),
+                &TagValue::new_string(print)
+            );
+            assert_eq!(row.priority, 1, "actual emitted priority must be ordinary");
+        }
+        assert_eq!(rows[0].order + 1, rows[1].order);
+        assert_eq!(
+            metadata.get_string("Olympus:ManometerPressure"),
+            Some("99.9 kPa"),
+            "equal-priority later physical occurrence wins"
+        );
+    }
+
+    #[test]
+    fn olympus_generated_owner_is_exact_once() {
+        let note = olympus_duplicate_pressure_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+        let count = metadata.occurrences_for("Olympus:ManometerPressure").len();
+        let expected = if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            0
+        } else {
+            2
+        };
+        assert_eq!(count, expected, "generated owner must be exact once");
+
+        let declined_note = olympus_declined_then_reported_note();
+        let mut session = Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = Ctx::new(&mut members);
+        let mut residual_tags = HashMap::new();
+        let mut residual_values = HashMap::new();
+        let mut structured = Vec::new();
+        dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+            "OLYMPUS",
+            None,
+            &MakerNoteContext::detached(&declined_note),
+            ByteOrder::LittleEndian,
+            &mut session,
+            &mut cond_ctx,
+            &mut residual_tags,
+            &mut residual_values,
+            &mut structured,
+        )
+        .expect("declined first occurrence does not abort the directory");
+        assert!(!residual_tags.contains_key("Olympus:ManometerPressure"));
+        assert!(!residual_values.contains_key("Olympus:ManometerPressure"));
+        let owned: Vec<_> = structured
+            .iter()
+            .filter(|(key, _)| key == "Olympus:ManometerPressure")
+            .collect();
+        let expected = if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            0
+        } else {
+            1
+        };
+        assert_eq!(owned.len(), expected);
+        if let Some((_, occurrence)) = owned.first() {
+            assert_eq!(
+                occurrence.project(ValueChannel::Stored).as_ref(),
+                &TagValue::Integer(888)
+            );
+            assert_eq!(
+                occurrence.project(ValueChannel::ValueConv).as_ref(),
+                &TagValue::Float(88.8)
+            );
+            assert_eq!(
+                occurrence.project(ValueChannel::PrintConv).as_ref(),
+                &TagValue::new_string("88.8 kPa")
+            );
+        }
+    }
+
+    #[test]
+    fn olympus_source_priority_zero_row_loses_to_existing_standard_occurrence() {
+        let note = olympus_low_priority_shutter_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        metadata.insert_occurrence(
+            "ExifIFD:ShutterSpeedValue",
+            TagValue::Float(2.0),
+            1,
+            "ExifIFD",
+            Instance::default(),
+        );
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        if crate::exiftool_tables::attribution::silenced(
+            crate::exiftool_tables::attribution::Token::Engine,
+        ) {
+            assert!(
+                metadata
+                    .occurrences_for("Olympus:ShutterSpeedValue")
+                    .is_empty()
+            );
+            return;
+        }
+
+        let olympus = metadata.occurrences_for("Olympus:ShutterSpeedValue");
+        assert_eq!(olympus.len(), 1, "one physical Olympus::Main 0x1000 row");
+        assert_eq!(olympus[0].id, oxidex_tags::TagId::Numeric(0x1000));
+        assert_eq!(olympus[0].origin.module, Some("Olympus"));
+        assert_eq!(olympus[0].origin.table, Some("Main"));
+        assert_eq!(olympus[0].priority, 0, "source Priority => 0");
+        assert_eq!(
+            olympus[0].project(ValueChannel::Stored).as_ref(),
+            &TagValue::new_rational(1, 3)
+        );
+
+        let winner =
+            crate::cli::tag_resolution::resolve_requested_tag(&metadata, "ShutterSpeedValue")
+                .expect("bare request sees both source-backed occurrences");
+        assert_eq!(&*winner.group1, "ExifIFD");
+        assert_eq!(winner.priority, 1);
+        assert_eq!(
+            metadata
+                .occurrences()
+                .filter(|row| row.name.as_ref() == "ShutterSpeedValue")
+                .count(),
+            2,
+            "the losing Olympus occurrence remains retained"
+        );
+    }
+
+    #[test]
+    fn olympus_residual_camera_type_and_quality_follow_generated_rows() {
+        let note = olympus_generated_and_residual_note();
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Make", TagValue::new_string("OLYMPUS"));
+        parse_makernote(
+            &MakerNoteContext::detached(&note),
+            ByteOrder::LittleEndian,
+            &mut metadata,
+        );
+
+        assert_eq!(metadata.get_string("Olympus:CameraType"), Some("SP510UZ"));
+        assert_eq!(metadata.get_string("Olympus:Quality"), Some("HQ (Normal)"));
+        let generated = metadata.occurrences_for("Olympus:ManometerPressure");
+        let camera_type = metadata.occurrences_for("Olympus:CameraType");
+        let quality = metadata.occurrences_for("Olympus:Quality");
+        assert_eq!(generated.len(), 2);
+        assert_eq!(camera_type.len(), 1);
+        assert_eq!(quality.len(), 1);
+        assert!(generated[1].order < camera_type[0].order);
+        assert!(camera_type[0].order < quality[0].order);
+    }
+
+    #[test]
+    fn olympus_structured_preview_dependencies_reach_derivation() {
+        fn dependency(key: &str, value: i64) -> (String, TagOccurrence) {
+            let mut occurrence = TagOccurrence::from_insert_shim(key, TagValue::Integer(value), 0);
+            occurrence.value = Some(TagValue::Integer(value));
+            occurrence.print = Some(TagValue::Integer(value));
+            (key.to_string(), occurrence)
+        }
+
+        let tiff: Vec<u8> = (0..32).collect();
+        let ctx = MakerNoteContext::in_tiff(&tiff, 0, tiff.len(), 100);
+        let rows = vec![
+            dependency("Olympus:PreviewImageStart", 108),
+            dependency("Olympus:PreviewImageLength", 3),
+            dependency("Olympus:PreviewImageValid", 1),
+        ];
+        let mut dependencies = HashMap::new();
+        extend_preview_dependencies(&mut dependencies, &rows);
+        let mut metadata = MetadataMap::new();
+        derive_makernote_preview_image(&ctx, &dependencies, &mut metadata);
+
+        assert_eq!(
+            metadata.get("Olympus:PreviewImage"),
+            Some(&TagValue::Binary(vec![8, 9, 10]))
+        );
+    }
 }
 
 #[cfg(test)]

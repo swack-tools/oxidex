@@ -20,8 +20,8 @@ This report records exact source and generated-declaration identities. Generated
 | `blocked_generated_reader_refusal` | 156 |
 | `generated_reader_declaration_option_gated` | 1123 |
 | `generated_reader_declaration_unobserved` | 778 |
-| `ifd_schema_declaration_eligible_unobserved` | 2888 |
-| `ifd_schema_declaration_omitted_unobserved` | 418 |
+| `ifd_schema_declaration_eligible_unobserved` | 2889 |
+| `ifd_schema_declaration_omitted_unobserved` | 417 |
 | `ifd_schema_declaration_refused_unobserved` | 9562 |
 | `source_row_not_yet_consumed` | 18562 |
 
@@ -1008,7 +1008,7 @@ Declarations below are authenticated schema facts, not runtime reachability or o
 | Image::ExifTool::Olympus::AFInfo | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::Olympus::AFTargetInfo | 3 | 3 | 0 | 3 | 0 | 0 | 0 | — |
 | Image::ExifTool::Olympus::AVI | 6 | 5 | 0 | 0 | 0 | 0 | 0 | — |
-| Image::ExifTool::Olympus::CameraSettings | 72 | 70 | 43 | 68 | 0 | 0 | 0 | ifd_isoffset_unsupported: 2; print_conv: 22; raw_conv: 1; value_conv: 3 |
+| Image::ExifTool::Olympus::CameraSettings | 72 | 70 | 44 | 68 | 0 | 0 | 0 | ifd_isoffset_unsupported: 2; print_conv: 21; raw_conv: 1; value_conv: 3 |
 | Image::ExifTool::Olympus::DSS | 5 | 5 | 0 | 0 | 0 | 0 | 0 | — |
 | Image::ExifTool::Olympus::Equipment | 25 | 25 | 18 | 25 | 0 | 0 | 0 | print_conv: 4; raw_conv: 1; value_conv: 2 |
 | Image::ExifTool::Olympus::FETags | 1 | 1 | 1 | 1 | 0 | 0 | 0 | — |

@@ -381,8 +381,18 @@ fn process_word_directory(
             // Format/Count/Size guide tag selection but do not re-read or
             // truncate this masked u16 value.
             let raw = runtime::DecodedValue::Integer(i64::from(value));
+            let stored = runtime::to_stored_tag_value(&raw, block.byte_order);
             if matches!(
-                emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, &mut result),
+                emit_resolved_scalar(
+                    table,
+                    block.scope,
+                    resolved,
+                    raw,
+                    stored,
+                    ctx,
+                    sink,
+                    &mut result,
+                ),
                 ScalarAction::Tainted
             ) {
                 result.word_traces.push(trace);
@@ -706,7 +716,7 @@ fn process_entry<'a>(
     };
     let format = tag.format.unwrap_or_else(|| default_format(entry_type));
     let count = native_count(tag, format, value_size, inline);
-    let Some(raw) = engine::read_value(
+    let Some(read) = engine::read_value_with_stored(
         value,
         0,
         format,
@@ -717,7 +727,16 @@ fn process_entry<'a>(
         result.bad_value += 1;
         return KeyedEntryAction::Continue;
     };
-    match emit_resolved_scalar(table, block.scope, resolved, raw, ctx, sink, result) {
+    match emit_resolved_scalar(
+        table,
+        block.scope,
+        resolved,
+        read.decoded,
+        read.stored,
+        ctx,
+        sink,
+        result,
+    ) {
         ScalarAction::Continue => KeyedEntryAction::Continue,
         ScalarAction::Tainted => KeyedEntryAction::Tainted,
     }
@@ -737,6 +756,7 @@ fn emit_resolved_scalar(
     scope: KeyedScope,
     resolved: ResolvedTag,
     raw: runtime::DecodedValue,
+    stored: TagValue,
     ctx: &mut Ctx,
     sink: &mut dyn KeyedEmissionSink,
     result: &mut KeyedWalkResult,
@@ -810,6 +830,8 @@ fn emit_resolved_scalar(
                 .unwrap_or(tag.groups.g1.unwrap_or(table.group1)),
             group2: tag.groups.g2.unwrap_or(table.group2),
             name: tag.name,
+            source_id: oxidex_tags::TagId::Numeric(tag.raw_id),
+            stored,
             value,
             value_conv,
             // The keyed compiler has already folded table PRIORITY and AVOID into
@@ -819,6 +841,7 @@ fn emit_resolved_scalar(
             // `Emitted::rational` is for IFD tables only (the binary walk sets
             // `None` too); a keyed directory never keeps the raw fraction.
             rational: None,
+            is_list: tag.flags.list,
         });
     }
     result.emitted += 1;
@@ -1793,6 +1816,42 @@ mod tests {
     }
 
     #[test]
+    fn real_keyed_word_table_retains_source_coordinate_storage_and_list_fact() {
+        let table = find_keyed_table("CanonCustom", "FunctionsD30")
+            .expect("generated CanonCustom::FunctionsD30 table");
+        let data = words(ByteOrder::Big, 4, &[0x0101], &[]);
+        let mut members = HashMap::new();
+        let mut ctx = Ctx::new(&mut members);
+        let mut sink = Sink {
+            enabled: true,
+            ..Sink::default()
+        };
+        let result = process_keyed_directory(
+            table,
+            KeyedBlock::new(
+                &data,
+                ByteOrder::Big,
+                KeyedScope {
+                    group1_override: Some("Canon"),
+                },
+            ),
+            &mut ctx,
+            &mut sink,
+        );
+        assert_eq!(result.emitted, 1);
+        assert_eq!(sink.rows.len(), 1);
+        let row = &sink.rows[0];
+        assert_eq!(row.name, "LongExposureNoiseReduction");
+        assert_eq!(row.source_id, oxidex_tags::TagId::Numeric(1));
+        assert_eq!(row.stored, TagValue::Integer(1));
+        assert_eq!(row.value, TagValue::String("On".to_owned()));
+        assert_eq!(row.group0, "MakerNotes");
+        assert_eq!(row.group1, "Canon");
+        assert_eq!(row.group2, "Camera");
+        assert!(!row.is_list, "source flags do not declare List");
+    }
+
+    #[test]
     fn word_directory_uses_empty_missing_model_only_for_length_exception() {
         static TAGS: [KeyedTag; 1] = [tag(1, "CustomFunction", Some(Fmt::Int8u), Some(1))];
         static TABLE: KeyedDirectoryTable = word_table(&TAGS, &[]);
@@ -2478,9 +2537,26 @@ mod tests {
             TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
         );
         assert_eq!(
+            sink.rows[0].stored,
+            TagValue::Array(vec![TagValue::Integer(1), TagValue::Integer(2)])
+        );
+        assert_eq!(sink.rows[0].source_id, oxidex_tags::TagId::Numeric(2));
+        assert!(sink.rows[0].is_list);
+        assert_eq!(
             sink.rows[1].value,
             TagValue::String("(Binary data 2 bytes, use -b option to extract)".into())
         );
+        let scoped = re_scope(
+            sink.rows[0].clone(),
+            KeyedScope {
+                group1_override: Some("Nested"),
+                ..scope()
+            },
+        );
+        assert_eq!(scoped.group1, "Nested");
+        assert_eq!(scoped.stored, sink.rows[0].stored);
+        assert_eq!(scoped.source_id, sink.rows[0].source_id);
+        assert!(scoped.is_list);
         assert!(sink.rows[2].low_priority);
         assert!(sink.rows[2].avoid);
         assert!(!sink.rows[3].low_priority);

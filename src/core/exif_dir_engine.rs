@@ -1183,11 +1183,14 @@ mod tests {
             group1,
             group2: "Image",
             name: "XResolution",
+            source_id: oxidex_tags::TagId::Numeric(0x011a),
+            stored: TagValue::Integer(72),
             value: TagValue::Integer(72),
             value_conv: None,
             low_priority: false,
             avoid: false,
             rational: None,
+            is_list: false,
         }
     }
 

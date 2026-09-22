@@ -47,6 +47,42 @@ use crate::parsers::tiff::makernotes::canon::{
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::tag_db::lookup_tag_name;
 
+fn is_olympus_structured_makernote(data: &[u8]) -> bool {
+    (data.len() >= 8 && data.starts_with(b"OLYMP\0"))
+        || (data.len() >= 12
+            && (data.starts_with(b"OLYMPUS\0II") || data.starts_with(b"OLYMPUS\0MM")))
+        || (data.len() >= 16 && data.starts_with(b"OM SYSTEM\0"))
+}
+
+fn is_olympus_make(make: &str) -> bool {
+    let make = make.trim().to_ascii_lowercase();
+    make.starts_with("olympus")
+        || make.starts_with("om digital solutions")
+        || make.starts_with("om system")
+}
+
+#[cfg(test)]
+mod olympus_structured_header_tests {
+    use super::is_olympus_structured_makernote;
+
+    #[test]
+    fn type2_requires_its_full_twelve_byte_header() {
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0II"));
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0II\x03"));
+        assert!(!is_olympus_structured_makernote(b"OLYMPUS\0XX\x03\0"));
+        assert!(is_olympus_structured_makernote(b"OLYMPUS\0II\x03\0"));
+        assert!(is_olympus_structured_makernote(b"OLYMPUS\0MM\x03\0"));
+    }
+
+    #[test]
+    fn type1_and_type3_require_their_complete_headers() {
+        assert!(!is_olympus_structured_makernote(b"OLYMP\0\x03"));
+        assert!(is_olympus_structured_makernote(b"OLYMP\0\x03\0"));
+        assert!(!is_olympus_structured_makernote(b"OM SYSTEM\0\0\0II\x03"));
+        assert!(is_olympus_structured_makernote(b"OM SYSTEM\0\0\0II\x03\0"));
+    }
+}
+
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
 ///
 /// Some physical RAW IFD tags correspond to standard EXIF concepts but use
@@ -481,6 +517,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 let mut gps_ifd_offset = None;
                 let mut sub_ifd_offsets = Vec::new();
                 let mut makernote_data: Option<Vec<u8>> = None;
+                let mut makernote_location: Option<(usize, usize)> = None;
                 let mut makernote_preview_ifd_base: Option<u64> = None;
                 let mut camera_make: Option<String> = None;
                 let mut dng_adobe_private_data: Option<Vec<u8>> = None;
@@ -682,6 +719,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // MakerNotes contain manufacturer-specific camera settings
                     if *tag_id == 0x927C {
                         makernote_data = Some(bytes.to_vec());
+                        makernote_location = located_selected_external_ifd_entry(
+                            data, ifd_offset, byte_order, 0x927C, bytes,
+                        );
                         makernote_preview_ifd_base =
                             ifd_entry_value_offset(data, ifd_offset, byte_order, 0x927C)
                                 .and_then(|offset| u64::from(offset).checked_add(10));
@@ -928,6 +968,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                 {
                     // Also check EXIF IFD for MakerNote and Make tags
                     let mut exif_makernote: Option<Vec<u8>> = None;
+                    let mut exif_makernote_location: Option<(usize, usize)> = None;
                     let mut exif_make: Option<String> = None;
 
                     for (tag_id, field_type, value_count, raw_bytes) in &exif_tags {
@@ -936,6 +977,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                         // MakerNote in EXIF IFD (more common location)
                         if *tag_id == 0x927C {
                             exif_makernote = Some(bytes.to_vec());
+                            exif_makernote_location = located_selected_external_ifd_entry(
+                                data, offset, byte_order, 0x927C, bytes,
+                            );
                             continue;
                         }
 
@@ -968,6 +1012,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Prefer EXIF IFD MakerNote/Make over IFD0 versions
                     if exif_makernote.is_some() {
                         makernote_data = exif_makernote;
+                        makernote_location = exif_makernote_location;
                         makernote_preview_ifd_base =
                             ifd_entry_value_offset(data, offset, byte_order, 0x927C)
                                 .and_then(|offset| u64::from(offset).checked_add(10));
@@ -1025,6 +1070,7 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     // Use the MakerNote dispatcher to parse manufacturer-specific tags
                     let mut makernote_tags = std::collections::HashMap::new();
                     let mut value_forms = std::collections::HashMap::new();
+                    let mut structured_occurrences = Vec::new();
                     let result = if matches!(
                         make.trim().to_ascii_lowercase().as_str(),
                         "nikon" | "nikon corporation"
@@ -1037,6 +1083,26 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             preview_ifd_base,
                             &mut makernote_tags,
                             &mut value_forms,
+                        )
+                    } else if matches!(format, RawFormat::OlympusORF | RawFormat::OlympusORI)
+                        && is_olympus_make(make)
+                        && is_olympus_structured_makernote(mn_data)
+                        && let Some((payload_offset, payload_len)) = makernote_location
+                    {
+                        let ctx = MakerNoteContext::in_tiff(data, payload_offset, payload_len, 0);
+                        let mut session = crate::exiftool_tables::session::Session::new();
+                        let mut members = std::collections::HashMap::new();
+                        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+                            make,
+                            camera_model.as_deref(),
+                            &ctx,
+                            byte_order,
+                            &mut session,
+                            &mut cond_ctx,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                            &mut structured_occurrences,
                         )
                     } else {
                         crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
@@ -1051,6 +1117,13 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                     if let Err(e) = result {
                         eprintln!("Warning: Failed to parse MakerNote for {}: {}", make, e);
                     } else {
+                        // Structured owners retain their exact identity, typed
+                        // value channels, groups, priority, order and byte
+                        // provenance. Record them before residual map rows and
+                        // never reconstruct them from the string sidecars.
+                        for (key, occurrence) in structured_occurrences {
+                            metadata.record_occurrence(key, occurrence);
+                        }
                         // Add parsed MakerNote tags to metadata.
                         // Tags already have proper prefixes (e.g., "Canon:MacroMode").
                         // `record_makernote_tag` -- not a bare `insert` -- is
@@ -3047,6 +3120,194 @@ fn tiff_external_entry_extent(
         return Some((offset, length));
     }
     None
+}
+
+/// Locate the physical value selected by [`parse_ifd`] for one tag.
+///
+/// The parsed vector deliberately drops malformed entries and no longer
+/// carries their physical indices, while callers select the last surviving
+/// duplicate. Re-scanning with the same warning/skip rules is therefore the
+/// only safe way to bind the selected bytes back to an on-disk extent. A
+/// located context is returned only for an external, in-bounds value that
+/// does not overlap its declaring directory and exactly equals the payload
+/// selected by the parsed walk.
+fn located_selected_external_ifd_entry(
+    tiff: &[u8],
+    ifd_offset: u64,
+    byte_order: ByteOrder,
+    wanted_tag: u16,
+    selected_payload: &[u8],
+) -> Option<(usize, usize)> {
+    let directory_start = usize::try_from(ifd_offset).ok()?;
+    let entry_count = usize::from(read_tiff_u16(
+        tiff.get(directory_start..directory_start.checked_add(2)?)?,
+        byte_order,
+    )?);
+    let entries_len = entry_count.checked_mul(12)?;
+    let directory_end = directory_start
+        .checked_add(2)?
+        .checked_add(entries_len)?
+        .checked_add(4)?;
+    if directory_end > tiff.len() {
+        return None;
+    }
+
+    let mut warnings = 0u32;
+    let mut selected_location: Option<Option<(usize, usize)>> = None;
+    for index in 0..entry_count {
+        if warnings > 10 {
+            break;
+        }
+        let entry_start = directory_start
+            .checked_add(2)?
+            .checked_add(index.checked_mul(12)?)?;
+        let entry = tiff.get(entry_start..entry_start.checked_add(12)?)?;
+        let tag_id = read_tiff_u16(&entry[..2], byte_order)?;
+        let field_type = read_tiff_u16(&entry[2..4], byte_order)?;
+        let Some(type_size) = tiff_field_type_size(field_type) else {
+            if field_type != 0 {
+                warnings += 1;
+            }
+            continue;
+        };
+        let value_count = usize::try_from(read_tiff_u32(&entry[4..8], byte_order)?).ok()?;
+        let Some(value_len) = type_size.checked_mul(value_count) else {
+            warnings += 1;
+            continue;
+        };
+
+        if value_len <= 4 {
+            if tag_id == wanted_tag {
+                selected_location = Some(None);
+            }
+            continue;
+        }
+
+        let value_start = usize::try_from(read_tiff_u32(&entry[8..12], byte_order)?).ok()?;
+        let Some(value_end) = value_start.checked_add(value_len) else {
+            warnings += 1;
+            continue;
+        };
+        if value_end > tiff.len() {
+            warnings += 1;
+            continue;
+        }
+        if tag_id == wanted_tag {
+            let location =
+                (!crate::parsers::tiff::makernotes::makernote_context::value_overlaps_directory(
+                    value_start,
+                    value_len,
+                    directory_start,
+                    directory_end,
+                ))
+                .then_some((value_start, value_len));
+            selected_location = Some(location);
+        }
+    }
+
+    let (value_start, value_len) = selected_location.flatten()?;
+    let value_end = value_start.checked_add(value_len)?;
+    (tiff.get(value_start..value_end)? == selected_payload).then_some((value_start, value_len))
+}
+
+#[cfg(test)]
+mod located_makernote_tests {
+    use super::*;
+
+    fn push_u16(bytes: &mut [u8], value: u16, order: ByteOrder) {
+        let encoded = match order {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        };
+        bytes.copy_from_slice(&encoded);
+    }
+
+    fn push_u32(bytes: &mut [u8], value: u32, order: ByteOrder) {
+        let encoded = match order {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        };
+        bytes.copy_from_slice(&encoded);
+    }
+
+    fn directory(order: ByteOrder, entries: &[(u16, u16, u32, u32)], len: usize) -> Vec<u8> {
+        let mut tiff = vec![0u8; len];
+        push_u16(&mut tiff[8..10], entries.len() as u16, order);
+        for (index, &(tag, ty, count, value)) in entries.iter().enumerate() {
+            let start = 10 + index * 12;
+            push_u16(&mut tiff[start..start + 2], tag, order);
+            push_u16(&mut tiff[start + 2..start + 4], ty, order);
+            push_u32(&mut tiff[start + 4..start + 8], count, order);
+            push_u32(&mut tiff[start + 8..start + 12], value, order);
+        }
+        tiff
+    }
+
+    #[test]
+    fn physical_lookup_tracks_the_last_surviving_duplicate_after_a_skipped_entry() {
+        for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            let first = b"first-note";
+            let selected = b"selected-last";
+            let mut tiff = directory(
+                order,
+                &[
+                    (0x1234, 13, 1, 0), // unknown type: parse_ifd skips it
+                    (0x927c, 7, first.len() as u32, 80),
+                    (0x927c, 7, selected.len() as u32, 112),
+                ],
+                160,
+            );
+            tiff[80..80 + first.len()].copy_from_slice(first);
+            tiff[112..112 + selected.len()].copy_from_slice(selected);
+
+            assert_eq!(
+                located_selected_external_ifd_entry(&tiff, 8, order, 0x927c, selected),
+                Some((112, selected.len()))
+            );
+            assert_eq!(
+                located_selected_external_ifd_entry(&tiff, 8, order, 0x927c, first),
+                None,
+                "the first duplicate must never be rebound as the selected value"
+            );
+        }
+    }
+
+    #[test]
+    fn physical_lookup_refuses_inline_range_overlap_truncation_and_byte_mismatch() {
+        let order = ByteOrder::LittleEndian;
+
+        let inline = directory(order, &[(0x927c, 7, 4, 0x0403_0201)], 64);
+        assert_eq!(
+            located_selected_external_ifd_entry(&inline, 8, order, 0x927c, &[1, 2, 3, 4]),
+            None
+        );
+
+        let out_of_range = directory(order, &[(0x927c, 7, 16, 60)], 64);
+        assert_eq!(
+            located_selected_external_ifd_entry(&out_of_range, 8, order, 0x927c, b"anything"),
+            None
+        );
+
+        let overlap = directory(order, &[(0x927c, 7, 8, 12)], 64);
+        let selected = overlap[12..20].to_vec();
+        assert_eq!(
+            located_selected_external_ifd_entry(&overlap, 8, order, 0x927c, &selected),
+            None
+        );
+
+        let mut mismatch = directory(order, &[(0x927c, 7, 8, 40)], 64);
+        mismatch[40..48].copy_from_slice(b"physical");
+        assert_eq!(
+            located_selected_external_ifd_entry(&mismatch, 8, order, 0x927c, b"different"),
+            None
+        );
+
+        let truncated = directory(order, &[(0x927c, 7, 8, 40)], 25);
+        assert_eq!(
+            located_selected_external_ifd_entry(&truncated, 8, order, 0x927c, b"anything"),
+            None
+        );
+    }
 }
 
 /// TIFF field-type sizes, indexed by the type code. `None` for codes the TIFF

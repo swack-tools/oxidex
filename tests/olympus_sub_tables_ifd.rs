@@ -121,6 +121,7 @@ fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
         .as_string()
         .map(str::to_string)
         .or_else(|| value.as_integer().map(|i| i.to_string()))
+        .or_else(|| value.as_float().map(|f| f.to_string()))
 }
 
 fn assert_tags(metadata: &MetadataMap, file: &str, expected: &[(&str, &str)]) {

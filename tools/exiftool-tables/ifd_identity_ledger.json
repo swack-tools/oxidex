@@ -1,8 +1,8 @@
 {
   "counts": {
     "emitted": 6117,
-    "reader_eligible": 4313,
-    "reader_omitted": 1804,
+    "reader_eligible": 4314,
+    "reader_omitted": 1803,
     "refused": 11734,
     "rows": 17851
   },
@@ -219480,11 +219480,9 @@
       "full_name": "Image::ExifTool::Olympus::CameraSettings",
       "module": "Olympus",
       "name": "StackedImage",
-      "omissions": [
-        "print_conv"
-      ],
+      "omissions": [],
       "raw_key": "2052",
-      "reader_state": "omitted",
+      "reader_state": "eligible",
       "reasons": [],
       "source_sha256": "1e4a959b821ec0c95015d6ef1e553169e901a2d1d9535a89ce0f70a32ec5daec",
       "state": "emitted",
@@ -279285,7 +279283,7 @@
   "source": {
     "expr_ledger_sha256": "3b586e23a4aa0cb5caf0a44f6f1bfc594a2c57acd609ad658c68a76f00909fb3",
     "ifd_rust_hash_format": "rustfmt-2024-per-module",
-    "ifd_rust_sha256": "33e356954844f863db2c4421e6c6d7bf36c8ed4346b789475befe25770c86ed2",
+    "ifd_rust_sha256": "4ca0e7caa4fc1f02639dd4e7272ba34a37e1a95c70bda41141535ba6f29bdd3b",
     "tables_json_sha256": "002b1f70711db04f411287256a69d57744841eeacfacf6c4d6fffda060f0d8ea"
   }
 }
