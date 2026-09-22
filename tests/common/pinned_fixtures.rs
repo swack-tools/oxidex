@@ -10,7 +10,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub const REQUIRED_ENV: &str = "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES";
 
@@ -326,16 +326,99 @@ pub fn durable_cache_dir_from_values(
 
 fn durable_cache_dir_from_environment(repo_pin: &str) -> Option<PathBuf> {
     let ops_dir = env::var_os("OXIDEX_OPS_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
+        .as_deref()
+        .and_then(normalized_path);
     let home_dir = if ops_dir.is_some() {
         None
     } else {
-        env::var_os("HOME").map(PathBuf::from)
+        env::var_os("HOME").as_deref().and_then(normalized_path)
     };
     ops_dir
+        .map(expand_tilde)
         .or_else(|| home_dir.map(|home| home.join("oxidex-ops")))
+        .map(|root| durable_ops_root(&root))
         .map(|root| root.join("cache/exiftool").join(repo_pin.trim()))
+}
+
+/// Mirror `scripts/ops_paths.py` for the test-only durable fallback. This
+/// keeps fixture qualification from accepting a cache outside the operational
+/// root contract used by the release tools.
+fn durable_ops_root(path: &Path) -> PathBuf {
+    assert!(
+        path.is_absolute(),
+        "OXIDEX_OPS_DIR must name an absolute durable directory"
+    );
+    reject_symlink_components(path);
+    let resolved = normalize_absolute_path(path);
+    let temporary_roots = [
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/var/tmp"),
+        env::temp_dir(),
+    ];
+    assert!(
+        !temporary_roots
+            .iter()
+            .map(|root| normalize_absolute_path(root))
+            .any(|root| resolved.starts_with(root)),
+        "OXIDEX_OPS_DIR must be durable, not temporary: {}",
+        path.display()
+    );
+    assert!(
+        resolved.parent().is_some(),
+        "OXIDEX_OPS_DIR must not be a filesystem root"
+    );
+    resolved
+}
+
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(remainder) => {
+            PathBuf::from(env::var_os("HOME").expect("OXIDEX_OPS_DIR ~ expansion needs HOME"))
+                .join(remainder)
+        }
+        Err(_) => path,
+    }
+}
+
+fn reject_symlink_components(path: &Path) {
+    let mut cursor = PathBuf::new();
+    for component in path.components() {
+        cursor.push(component.as_os_str());
+        if matches!(component, Component::CurDir | Component::ParentDir) {
+            continue;
+        }
+        match std::fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                panic!(
+                    "OXIDEX_OPS_DIR must not contain a symlink: {}",
+                    cursor.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => panic!(
+                "could not inspect OXIDEX_OPS_DIR component {}: {error}",
+                cursor.display()
+            ),
+        }
+    }
+}
+
+fn normalize_absolute_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(component) => normalized.push(component),
+        }
+    }
+    normalized
 }
 
 fn path_is_present(path: &Path) -> bool {
@@ -357,6 +440,7 @@ mod environment_tests {
     const WRAPPER_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRAPPER_CHILD";
     const NO_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_NO_FALLBACK_CHILD";
     const WRONG_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRONG_FALLBACK_CHILD";
+    const OPS_ROOT_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_OPS_ROOT_CHILD";
 
     #[test]
     fn explicit_cache_does_not_require_fallback_environment() {
@@ -495,6 +579,86 @@ mod environment_tests {
             .status()
             .expect("run isolated durable-fallback validation control");
         assert!(status.success(), "isolated durable-fallback control failed");
+    }
+
+    #[test]
+    fn ops_root_uses_the_canonical_durable_root_contract() {
+        if let Some(mode) = env::var_os(OPS_ROOT_CHILD_ENV) {
+            if mode == OsStr::new("reject") {
+                let failure = std::panic::catch_unwind(|| FixtureConfig::from_environment("13.59"));
+                assert!(
+                    failure.is_err(),
+                    "an invalid OXIDEX_OPS_DIR must not supply a fixture fallback"
+                );
+                return;
+            }
+
+            let expected_root = PathBuf::from(env::var_os("EXPECTED_OPS_ROOT").unwrap());
+            let config = FixtureConfig::from_environment("13.59");
+            assert_eq!(
+                config.cache_dir,
+                Some(expected_root.join("cache/exiftool/13.59")),
+                "configured root must resolve through the canonical durable root"
+            );
+            return;
+        }
+
+        let home = PathBuf::from(env::var_os("HOME").expect("test needs HOME"));
+        let durable_parent = home.join("oxidex-ops");
+        std::fs::create_dir_all(&durable_parent).expect("create durable test parent");
+        let durable = tempfile::Builder::new()
+            .prefix("pinned-fixture-ops-root-")
+            .tempdir_in(&durable_parent)
+            .expect("create canonical durable root");
+        let scratch = tempfile::tempdir().expect("create scratch root");
+        let mut invalid = vec![PathBuf::from("relative-ops"), scratch.path().to_path_buf()];
+        #[cfg(unix)]
+        {
+            let linked = durable_parent.join("pinned-fixture-ops-root-link");
+            let _ = std::fs::remove_file(&linked);
+            std::os::unix::fs::symlink(durable.path(), &linked).expect("create ops-root symlink");
+            invalid.push(linked);
+        }
+
+        for invalid_root in invalid {
+            let child_result = std::process::Command::new(env::current_exe().unwrap())
+                .arg("ops_root_uses_the_canonical_durable_root_contract")
+                .env(OPS_ROOT_CHILD_ENV, "reject")
+                .env("OXIDEX_OPS_DIR", invalid_root)
+                .env_remove("EXIFTOOL")
+                .env_remove("EXIFTOOL_CACHE_DIR")
+                .env_remove(REQUIRED_ENV)
+                .status()
+                .expect("run invalid ops-root control");
+            assert!(child_result.success(), "invalid ops-root control failed");
+        }
+
+        for (mode, configured_root) in [
+            ("canonical", durable.path().to_path_buf()),
+            (
+                "tilde",
+                PathBuf::from("~/oxidex-ops").join(durable.path().file_name().unwrap()),
+            ),
+        ] {
+            let child_result = std::process::Command::new(env::current_exe().unwrap())
+                .arg("ops_root_uses_the_canonical_durable_root_contract")
+                .env(OPS_ROOT_CHILD_ENV, mode)
+                .env("OXIDEX_OPS_DIR", configured_root)
+                .env("EXPECTED_OPS_ROOT", durable.path())
+                .env_remove("EXIFTOOL")
+                .env_remove("EXIFTOOL_CACHE_DIR")
+                .env_remove(REQUIRED_ENV)
+                .status()
+                .expect("run valid ops-root control");
+            assert!(
+                child_result.success(),
+                "valid ops-root control failed for {mode}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(durable_parent.join("pinned-fixture-ops-root-link"));
+        }
     }
 }
 
