@@ -673,6 +673,25 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 return record
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
+        except KeyboardInterrupt as interruption:
+            cleanup_failures = []
+            try:
+                _bounded_timeout_cleanup(child)
+            except BaseException as cleanup:
+                cleanup_failures.append(f"bounded owned-child cleanup failed: {cleanup}")
+                try:
+                    _emergency_reap_group(child)
+                except BaseException as emergency:
+                    cleanup_failures.append(f"emergency owned-child cleanup failed: {emergency}")
+            try:
+                if child.poll() is None or _group_live(child.pid):
+                    cleanup_failures.append("owned child process group is still live after bounded cleanup")
+            except BaseException as inspection:
+                cleanup_failures.append(f"owned child cleanup could not be verified: {inspection}")
+            for failure in cleanup_failures:
+                if hasattr(interruption, "add_note"):
+                    interruption.add_note(failure)
+            raise
         except OSError as exc:
             try:
                 stdout, stderr = _bounded_timeout_cleanup(child)

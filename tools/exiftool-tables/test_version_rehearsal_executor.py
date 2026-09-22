@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -339,6 +341,111 @@ class ExecutorTests(unittest.TestCase):
         self.lock.touch()
         with executor._HostLock(self.lock) as held, self.assertRaisesRegex(executor.Refused, "still live"):
             executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno())
+
+    def test_real_child_interrupt_reaps_owned_group_before_durable_recovery(self):
+        """Removing interrupt cleanup must leave the recorded real child live."""
+        self.initialize(self.config())
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        ready_error: list[BaseException] = []
+        release = self.releases[0]
+        child_program = (
+            "import json, os, subprocess, sys\n"
+            "descendant = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(60)'])\n"
+            "os.write(int(sys.argv[1]), (json.dumps({'descendant': descendant.pid}) + '\\n').encode())\n"
+            "raise SystemExit(descendant.wait())\n"
+        )
+
+        def interrupt_when_child_group_is_ready() -> None:
+            try:
+                payload = b""
+                while not payload.endswith(b"\n"):
+                    chunk = os.read(read_fd, 4096)
+                    if not chunk:
+                        raise AssertionError("owned child closed readiness pipe before reporting its descendant")
+                    payload += chunk
+                process_ids.update(json.loads(payload))
+                os.kill(os.getpid(), signal.SIGINT)
+            except BaseException as exc:
+                ready_error.append(exc)
+
+        def started(pid: int, pgid: int) -> None:
+            process_ids.update(direct=pid, pgid=pgid)
+            journal_path = self.run_dir / "execution-status.json"
+            journal = json.loads(journal_path.read_text())
+            journal["phase"] = "running"
+            journal["active"] = {
+                "release": release, "stage": "generate", "child": {"pid": pid, "pgid": pgid},
+            }
+            journal["releases"][release]["stages"]["generate"] = "running"
+            executor._store_journal(self.run_dir, journal)
+            os.close(write_fd)
+
+        interrupter = threading.Thread(target=interrupt_when_child_group_is_ready, daemon=True)
+        try:
+            with executor._HostLock(self.lock) as held:
+                interrupter.start()
+                with self.assertRaises(KeyboardInterrupt):
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd)],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run, started=started,
+                    )
+                interrupter.join(timeout=5)
+                self.assertFalse(interrupter.is_alive(), "readiness thread did not observe the real child")
+                if ready_error:
+                    raise ready_error[0]
+                for name in ("direct", "descendant"):
+                    with self.subTest(process=name), self.assertRaises(ProcessLookupError):
+                        os.kill(process_ids[name], 0)
+                recovered = executor.recover(
+                    self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
+                )
+                self.assertEqual(recovered["phase"], "interrupted")
+                self.assertIsNone(recovered["active"])
+            with executor._HostLock(self.lock):
+                pass
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            pgid = process_ids.get("pgid")
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            direct = process_ids.get("direct")
+            if direct is not None:
+                try:
+                    os.waitpid(direct, 0)
+                except ChildProcessError:
+                    pass
+
+    def test_interrupt_cleanup_failure_preserves_original_and_reaps_emergency_child(self):
+        child_pid = None
+
+        def interrupted_after_start(pid, _pgid):
+            nonlocal child_pid
+            child_pid = pid
+            raise KeyboardInterrupt("original interruption")
+
+        with patch.object(executor, "_bounded_timeout_cleanup",
+                          side_effect=OSError("bounded cleanup failed")):
+            with self.assertRaisesRegex(KeyboardInterrupt, "original interruption") as caught:
+                executor._run_record(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                    started=interrupted_after_start,
+                )
+        self.assertTrue(any("bounded cleanup failed" in note
+                            for note in getattr(caught.exception, "__notes__", [])))
+        self.assertIsNotNone(child_pid)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
 
     def test_recovery_accepts_legacy_schema_one_config_without_read_bindings(self):
         self.initialize(self.config())

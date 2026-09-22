@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from tempfile import TemporaryDirectory
 import unittest
@@ -545,11 +549,111 @@ class WrapperCallTests(unittest.TestCase):
             }))
             raise KeyboardInterrupt()
         with patch.object(qualification.executor, "recover") as recover:
-            with self.assertRaises(KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt) as caught:
                 self.invoke(interrupted)
         recover.assert_called_once()
         self.assertIsInstance(recover.call_args.kwargs["host_lock_fd"], int)
+        self.assertEqual(getattr(caught.exception, "_oxidex_durable_recovery"), "recovered")
         self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())["terminal_status"], "failed")
+
+    def test_real_child_interrupt_is_reaped_before_recovery_and_lock_release(self) -> None:
+        """A supervisor-only interrupt must not orphan its owned child group."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        ready_error: list[BaseException] = []
+
+        child_program = (
+            "import json, os, subprocess, sys\n"
+            "descendant = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(60)'])\n"
+            "os.write(int(sys.argv[1]), (json.dumps({'descendant': descendant.pid}) + '\\n').encode())\n"
+            "raise SystemExit(descendant.wait())\n"
+        )
+
+        def interrupt_when_child_group_is_ready() -> None:
+            try:
+                payload = b""
+                while not payload.endswith(b"\n"):
+                    chunk = os.read(read_fd, 4096)
+                    if not chunk:
+                        raise AssertionError("owned child closed readiness pipe before reporting its descendant")
+                    payload += chunk
+                process_ids.update(json.loads(payload))
+                os.kill(os.getpid(), signal.SIGINT)
+            except BaseException as exc:
+                ready_error.append(exc)
+
+        interrupter = threading.Thread(target=interrupt_when_child_group_is_ready, daemon=True)
+
+        def recover(run_dir, _archive_cache, _source_root, **kwargs):
+            self.assertIsInstance(kwargs["host_lock_fd"], int)
+            for name in ("direct", "descendant"):
+                try:
+                    os.kill(process_ids[name], 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise qualification.executor.Refused(f"owned {name} is still live")
+            journal_path = run_dir / "execution-status.json"
+            journal = json.loads(journal_path.read_text())
+            journal["phase"], journal["active"] = "interrupted", None
+            journal_path.write_text(json.dumps(journal))
+            return journal
+
+        def execute(run_dir, _repository, archive_cache, source_root, **kwargs):
+            def started(pid: int, pgid: int) -> None:
+                process_ids.update(direct=pid, pgid=pgid)
+                (run_dir / "execution-status.json").write_text(json.dumps({
+                    "phase": "running",
+                    "active": {
+                        "release": "13.59", "stage": "generate",
+                        "child": {"pid": pid, "pgid": pgid},
+                    },
+                }))
+                os.close(write_fd)
+
+            interrupter.start()
+            qualification.executor._run_record(
+                [sys.executable, "-c", child_program, str(write_fd)],
+                cwd=self.root, env=dict(os.environ), run=subprocess.run, started=started,
+            )
+            self.fail("real child command unexpectedly returned after supervisor interruption")
+
+        try:
+            with patch.object(qualification.executor, "recover", side_effect=recover):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.invoke(execute)
+            interrupter.join(timeout=5)
+            self.assertFalse(interrupter.is_alive(), "readiness thread did not observe the real child")
+            if ready_error:
+                raise ready_error[0]
+            journal = json.loads((self.row_output / "before" / "execution-status.json").read_text())
+            self.assertEqual(journal["phase"], "interrupted")
+            self.assertIsNone(journal["active"])
+            for name in ("direct", "descendant"):
+                with self.subTest(process=name), self.assertRaises(ProcessLookupError):
+                    os.kill(process_ids[name], 0)
+            with qualification.executor._HostLock(self.lease):
+                pass
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            pgid = process_ids.get("pgid")
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            direct = process_ids.get("direct")
+            if direct is not None:
+                try:
+                    os.waitpid(direct, 0)
+                except ChildProcessError:
+                    pass
 
     def test_recovery_refusal_does_not_mask_original_interruption(self) -> None:
         def interrupted(run_dir, _repository, _archive_cache, _source_root, **_kwargs):
@@ -563,6 +667,44 @@ class WrapperCallTests(unittest.TestCase):
                 self.invoke(interrupted)
         self.assertTrue(any("durable interruption recovery failed" in note
                             for note in getattr(caught.exception, "__notes__", [])))
+
+    def test_cli_reports_unverified_recovery_truthfully_and_retains_exit_130(self) -> None:
+        interrupted = KeyboardInterrupt("original interruption")
+        interrupted.add_note("durable interruption recovery failed: active child is still live")
+        arguments = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--target-root", "target", "--lease", "lease", "--run-id", "run",
+            "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+            "--expiry-receipt", "expiry", "--release-receipt", "release",
+            "--handoff-receipt", "handoff",
+        ]
+        stderr = io.StringIO()
+        with patch.object(qualification, "run_qualification", side_effect=interrupted), \
+             redirect_stderr(stderr):
+            self.assertEqual(qualification.main(arguments), 130)
+        rendered = stderr.getvalue()
+        self.assertIn("durable recovery incomplete or unverified", rendered)
+        self.assertIn("active child is still live", rendered)
+        self.assertNotIn("interrupted after durable recovery", rendered)
+
+    def test_cli_claims_durable_recovery_only_when_wrapper_established_it(self) -> None:
+        interrupted = KeyboardInterrupt("original interruption")
+        setattr(interrupted, "_oxidex_durable_recovery", "recovered")
+        arguments = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--target-root", "target", "--lease", "lease", "--run-id", "run",
+            "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+            "--expiry-receipt", "expiry", "--release-receipt", "release",
+            "--handoff-receipt", "handoff",
+        ]
+        stderr = io.StringIO()
+        with patch.object(qualification, "run_qualification", side_effect=interrupted), \
+             redirect_stderr(stderr):
+            self.assertEqual(qualification.main(arguments), 130)
+        self.assertEqual(
+            stderr.getvalue(),
+            "version transition qualification interrupted after durable recovery\n",
+        )
 
     def test_native_cases_are_frozen_before_first_side_and_rechecked(self) -> None:
         calls = 0

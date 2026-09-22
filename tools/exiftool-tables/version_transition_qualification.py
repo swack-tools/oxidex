@@ -738,13 +738,15 @@ class ReceiptCadence:
 
 
 def _recover_if_running(run_dir: Path, archive_cache: Path, source_root: Path, *,
-                        host_lock_fd: int | None = None) -> None:
+                        host_lock_fd: int | None = None) -> bool:
     journal_path = run_dir / "execution-status.json"
     if not journal_path.is_file() or journal_path.is_symlink():
-        return
+        return False
     journal = _read_object(journal_path, "execution journal")
     if journal.get("phase") == "running" and isinstance(journal.get("active"), dict):
         executor.recover(run_dir, archive_cache, source_root, host_lock_fd=host_lock_fd)
+        return True
+    return False
 
 
 def _validate_receipt_contract(*, output_root: Path, run_id: str, lease_path: Path,
@@ -858,13 +860,21 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         cadence.check()
                     except BaseException as execution_error:
                         try:
-                            _recover_if_running(
+                            recovered = _recover_if_running(
                                 side_run, Path(identity["archive_cache"]), Path(identity["source_root"]),
                                 host_lock_fd=host_lease.fileno,
                             )
                         except BaseException as recovery_error:
+                            if isinstance(execution_error, KeyboardInterrupt):
+                                setattr(execution_error, "_oxidex_durable_recovery", "incomplete")
                             if hasattr(execution_error, "add_note"):
                                 execution_error.add_note(f"durable interruption recovery failed: {recovery_error}")
+                        else:
+                            if isinstance(execution_error, KeyboardInterrupt):
+                                setattr(
+                                    execution_error, "_oxidex_durable_recovery",
+                                    "recovered" if recovered else "not-required",
+                                )
                         raise
                     _verify_frozen_side(frozen)
                     sides[side] = _side_receipt(side_run, journal, release, identity)
@@ -945,8 +955,18 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"run_id": result["run_id"], "status": result["status"],
                           "promotion": result["promotion"]}, sort_keys=True))
         return 0
-    except KeyboardInterrupt:
-        print("version transition qualification interrupted after durable recovery", file=sys.stderr)
+    except KeyboardInterrupt as interruption:
+        notes = list(getattr(interruption, "__notes__", []))
+        recovery = getattr(interruption, "_oxidex_durable_recovery", None)
+        if recovery == "recovered" and not notes:
+            message = "version transition qualification interrupted after durable recovery"
+        elif recovery == "not-required" and not notes:
+            message = "version transition qualification interrupted; no running executor journal required recovery"
+        else:
+            message = "version transition qualification interrupted; durable recovery incomplete or unverified"
+        print(message, file=sys.stderr)
+        for note in notes:
+            print(f"recovery detail: {note}", file=sys.stderr)
         return 130
     except (Refused, executor.Refused, rehearsal.Refused, catalog_stage.Refused,
             native_oracle.Refused, stage_adapter.Refused, OSError, ValueError) as exc:
