@@ -98,6 +98,9 @@ impl FixtureConfig {
         if let Some(cache) = &explicit_cache {
             assert_pinned_cache_dir(cache, repo_pin, "EXIFTOOL_CACHE_DIR");
         }
+        if let Some(cache) = fallback_cache.as_ref().filter(|cache| cache.exists()) {
+            assert_pinned_cache_dir(cache, repo_pin, "durable fixture cache");
+        }
         Self::with_optional_cache(source_tree, explicit_cache.or(fallback_cache), required)
     }
 
@@ -353,6 +356,7 @@ mod environment_tests {
     const CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_EXPLICIT_CACHE_CHILD";
     const WRAPPER_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRAPPER_CHILD";
     const NO_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_NO_FALLBACK_CHILD";
+    const WRONG_FALLBACK_CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_WRONG_FALLBACK_CHILD";
 
     #[test]
     fn explicit_cache_does_not_require_fallback_environment() {
@@ -460,6 +464,37 @@ mod environment_tests {
                 "isolated no-fallback control failed with required={required}"
             );
         }
+    }
+
+    #[test]
+    fn existing_durable_fallback_must_identify_the_repo_pin() {
+        if env::var_os(WRONG_FALLBACK_CHILD_ENV).is_some() {
+            let failure = std::panic::catch_unwind(|| FixtureConfig::from_environment("13.59"));
+            assert!(
+                failure.is_err(),
+                "an existing durable fallback must reject a mismatched ExifTool pin"
+            );
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("temporary durable fallback");
+        let version = temp
+            .path()
+            .join("cache/exiftool/13.59/exiftool/lib/Image/ExifTool.pm");
+        std::fs::create_dir_all(version.parent().unwrap()).unwrap();
+        std::fs::write(&version, "$VERSION = '0.00';\n").unwrap();
+
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .arg("existing_durable_fallback_must_identify_the_repo_pin")
+            .env(WRONG_FALLBACK_CHILD_ENV, "1")
+            .env("OXIDEX_OPS_DIR", temp.path())
+            .env_remove("EXIFTOOL")
+            .env_remove("EXIFTOOL_CACHE_DIR")
+            .env_remove("HOME")
+            .env_remove(REQUIRED_ENV)
+            .status()
+            .expect("run isolated durable-fallback validation control");
+        assert!(status.success(), "isolated durable-fallback control failed");
     }
 }
 
