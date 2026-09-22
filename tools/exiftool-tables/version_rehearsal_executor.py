@@ -929,8 +929,8 @@ def _emergency_reap_group(child: subprocess.Popen[str]) -> tuple[str, str]:
     return _text_output(stdout), _text_output(stderr)
 
 
-def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interruption: KeyboardInterrupt) -> None:
-    """Bound cleanup of the live Popen we own while preserving the interrupt."""
+def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interruption: BaseException) -> None:
+    """Bound cleanup of the live Popen we own while preserving the original failure."""
     cleanup_failures = []
     emergency_needed = False
     cleanup_incomplete = False
@@ -1042,7 +1042,11 @@ def _spawn_with_deferred_sigint(
             return child
         handler = signal.default_int_handler if previous_handler == signal.SIG_DFL else previous_handler
         if callable(handler):
-            handler(signal.SIGINT, pending_frame)
+            try:
+                handler(signal.SIGINT, pending_frame)
+            except BaseException as outcome:
+                _cleanup_owned_child_after_interrupt(child, outcome)
+                raise
         else:
             raise KeyboardInterrupt("SIGINT deferred until owned child creation completed")
     return child
@@ -1091,9 +1095,10 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 return record
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
-            _close_ownership_probe(child)
+            _require_ownership_release(child, "successful command completion")
         except KeyboardInterrupt as interruption:
-            if owner[0] is not None:
+            if (owner[0] is not None
+                    and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
                 _cleanup_owned_child_after_interrupt(owner[0], interruption)
             raise
         except OwnedChildCleanupIncomplete:
@@ -1320,7 +1325,15 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
                 start_new_session=True, close_fds=False, **kwargs,
             )
             journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
-            _store_journal(run_dir, journal)
+            try:
+                _store_journal(run_dir, journal)
+            except BaseException as persistence:
+                _cleanup_owned_child_after_interrupt(child, persistence)
+                if getattr(persistence, "_oxidex_owned_child_cleanup", None) != "verified":
+                    raise OwnedChildCleanupIncomplete(
+                        "owned child cleanup remains incomplete after native child journal failure",
+                    ) from persistence
+                raise
             try:
                 stdout, stderr = child.communicate(timeout=timeout)
             except subprocess.TimeoutExpired as exc:
@@ -1335,13 +1348,14 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
                 exc.output, exc.stderr = stdout, stderr
                 raise
         except KeyboardInterrupt as interruption:
-            if owner[0] is not None:
+            if (owner[0] is not None
+                    and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
                 _cleanup_owned_child_after_interrupt(owner[0], interruption)
             raise
         child = owner[0]
         if child is None:
             raise OSError("native child creation did not return an owned process")
-        _close_ownership_probe(child)
+        _require_ownership_release(child, "successful native command completion")
         return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
     try:
         if stage_guard is not None:

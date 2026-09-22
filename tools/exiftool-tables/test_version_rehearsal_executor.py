@@ -98,6 +98,58 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsNotNone(child_pid)
         self.assertFalse(executor._pid_live(child_pid))
 
+    def test_successful_command_refuses_detached_descendant_retaining_ownership(self):
+        """A zero exit cannot become ok while detached owned work retains its proof."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        children: list[subprocess.Popen[str]] = []
+        descendant_pid = None
+        original_popen = executor.subprocess.Popen
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+        )
+
+        def capture_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        try:
+            failure = None
+            with patch.object(executor.subprocess, "Popen", side_effect=capture_child):
+                try:
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            descendant_pid = int(os.read(read_fd, 64))
+            self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
+            self.assertTrue(executor._pid_live(descendant_pid))
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            for child in children:
+                executor._close_ownership_probe(child)
+
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
         if write:
@@ -265,6 +317,194 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(journal["releases"][release]["stages"]["native"], "failed")
         persisted = json.loads((self.run_dir / "execution-status.json").read_text())
         self.assertEqual(persisted["releases"][release]["state"], "failed")
+
+    def test_native_success_refuses_detached_descendant_retaining_ownership(self):
+        """Native success retains active state when detached owned work keeps the proof."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        children: list[subprocess.Popen[str]] = []
+        descendant_pid = None
+        original_popen = executor.subprocess.Popen
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+        )
+
+        def capture_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        def successful_probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=60,
+            )
+            return ready_probe(release)
+
+        try:
+            failure = None
+            with patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=successful_probe), \
+                 patch.object(executor.subprocess, "Popen", side_effect=capture_child):
+                try:
+                    executor._run_native(
+                        self.run_dir, journal, release, docs, config,
+                        self.cache, self.sources, subprocess.run,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            descendant_pid = int(os.read(read_fd, 64))
+            self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
+            self.assertTrue(executor._pid_live(descendant_pid))
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertIsNotNone(persisted["active"])
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            for child in children:
+                executor._close_ownership_probe(child)
+
+    def test_native_child_record_failure_reaps_child_before_clearing_active(self):
+        """A failed post-spawn journal write cannot publish failure with a live child."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        process_ids: list[int] = []
+        failed = False
+        original_store = executor._store_journal
+
+        def probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=60,
+            )
+            self.fail("native child unexpectedly completed")
+
+        def fail_first_child_record(run_dir, value):
+            nonlocal failed
+            active = value.get("active")
+            child = active.get("child") if isinstance(active, dict) else None
+            if isinstance(child, dict) and not failed:
+                failed = True
+                process_ids.append(child["pid"])
+                raise OSError("native child journal persistence failed")
+            return original_store(run_dir, value)
+
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=probe), \
+                 patch.object(executor, "_store_journal", side_effect=fail_first_child_record):
+                result = executor._run_native(
+                    self.run_dir, journal, release, docs, config,
+                    self.cache, self.sources, subprocess.run,
+                )
+            self.assertIsNone(result)
+            self.assertEqual(len(process_ids), 1)
+            self.assertFalse(executor._pid_live(process_ids[0]))
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "failed")
+            self.assertIsNone(persisted["active"])
+        finally:
+            for pid in process_ids:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    pass
+
+    def test_native_child_record_failure_preserves_active_when_cleanup_is_incomplete(self):
+        """A post-spawn journal fault cannot clear active when cleanup is unverified."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        process_ids: list[int] = []
+        children: list[subprocess.Popen[str]] = []
+        failed = False
+        original_store = executor._store_journal
+        original_popen = executor.subprocess.Popen
+
+        def capture_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not children:
+                children.append(child)
+            return child
+
+        def probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=60,
+            )
+            self.fail("native child unexpectedly completed")
+
+        def fail_first_child_record(run_dir, value):
+            nonlocal failed
+            active = value.get("active")
+            child = active.get("child") if isinstance(active, dict) else None
+            if isinstance(child, dict) and not failed:
+                failed = True
+                process_ids.append(child["pid"])
+                raise OSError("native child journal persistence failed")
+            return original_store(run_dir, value)
+
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=probe), \
+                 patch.object(executor, "_store_journal", side_effect=fail_first_child_record), \
+                 patch.object(executor.subprocess, "Popen", side_effect=capture_child), \
+                 patch.object(executor, "_bounded_timeout_cleanup",
+                              side_effect=OSError("bounded cleanup failed")), \
+                 patch.object(executor, "_emergency_reap_group",
+                              side_effect=OSError("emergency cleanup failed")), \
+                 self.assertRaises(executor.OwnedChildCleanupIncomplete):
+                executor._run_native(
+                    self.run_dir, journal, release, docs, config,
+                    self.cache, self.sources, subprocess.run,
+                )
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertIsNotNone(persisted["active"])
+        finally:
+            for pid in process_ids:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            for child in children:
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                for stream in (child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
+                executor._close_ownership_probe(child)
 
     def test_real_native_child_interrupt_reaps_owned_group_before_recovery(self):
         """The native runner owns the same interruption cleanup boundary."""
@@ -438,8 +678,9 @@ class ExecutorTests(unittest.TestCase):
 
         def interrupt_after_creation(*args, **kwargs):
             child = original_popen(*args, **kwargs)
-            created.append(child)
-            os.kill(os.getpid(), signal.SIGINT)
+            if not created:
+                created.append(child)
+                os.kill(os.getpid(), signal.SIGINT)
             return child
 
         try:
@@ -508,6 +749,45 @@ class ExecutorTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
                 child.wait(timeout=5)
+                executor._close_ownership_probe(child)
+
+    def test_creation_window_sigint_cleans_child_before_custom_system_exit(self):
+        """A non-KeyboardInterrupt handler outcome cannot strand the published child."""
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+        previous_handler = signal.getsignal(signal.SIGINT)
+
+        def custom_handler(_signum, _frame):
+            raise SystemExit("custom SIGINT exit")
+
+        def interrupt_after_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+                os.kill(os.getpid(), signal.SIGINT)
+            return child
+
+        try:
+            signal.signal(signal.SIGINT, custom_handler)
+            with patch.object(executor.subprocess, "Popen", side_effect=interrupt_after_creation), \
+                 self.assertRaisesRegex(SystemExit, "custom SIGINT exit"):
+                executor._run_record(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                )
+            self.assertEqual(len(created), 1)
+            self.assertFalse(executor._pid_live(created[0].pid))
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
                 executor._close_ownership_probe(child)
 
     def test_native_creation_defers_process_sigint_delivered_with_cadence_thread(self):
