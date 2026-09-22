@@ -384,11 +384,19 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
             return path;
         }
         let user = bytes.get(1..).expect("tilde prefix has a suffix");
+        // Python's Path.expanduser distinguishes an absent HOME from a present
+        // empty HOME: the latter expands bare `~` from the filesystem root.
         let home = (user
             .is_empty()
-            .then(|| env::var_os("HOME").filter(|value| !value.is_empty()))
+            .then(|| env::var_os("HOME"))
             .flatten()
-            .map(PathBuf::from))
+            .map(|home| {
+                if home.is_empty() {
+                    PathBuf::from(Path::new("/"))
+                } else {
+                    PathBuf::from(home)
+                }
+            }))
         .or_else(|| unix_home_dir(user))
         .unwrap_or_else(|| {
             panic!(
@@ -826,6 +834,7 @@ mod environment_tests {
                 "~/oxidex-review-path".to_owned(),
                 Some("/Users/allen/oxidex-review-home"),
             ),
+            ("empty", "~/oxidex-review-path".to_owned(), Some("")),
             ("current", "~/oxidex-review-path".to_owned(), None),
             (
                 "unsupported",
