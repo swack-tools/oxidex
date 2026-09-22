@@ -106,6 +106,13 @@ fn parser_for_make_prefix(
     if make.starts_with("pentax") || make.starts_with("asahi optical") {
         return Some(Box::new(pentax::PentaxParser::default()) as Box<dyn MakerNoteParser>);
     }
+    // MakerNotePanasonic2 is gated by `$$self{Make} =~ /^Panasonic/`
+    // (MakerNotes.pm:743-750), not by one exact vendor spelling. Keep this
+    // before the literal table so Panasonic Corporation reaches the same
+    // parser while the bare-Leica Type2 exclusion below remains distinct.
+    if make.starts_with("panasonic") {
+        return Some(Box::new(panasonic::PanasonicParser) as Box<dyn MakerNoteParser>);
+    }
     // `make` reaches here already lowercased, so this is ExifTool's
     // `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032) -- which the modern
     // "RICOH IMAGING COMPANY, LTD." Pentax bodies satisfy too.
@@ -390,7 +397,6 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
         "canon" => Some(Box::new(canon::CanonParser)),
         "nikon" | "nikon corporation" => Some(Box::new(nikon::NikonParser)),
         "sony" => Some(Box::new(sony::SonyParser)),
-        "panasonic" => Some(Box::new(panasonic::PanasonicParser)),
         "fujifilm" | "fuji photo film co., ltd." => Some(Box::new(fujifilm::FujifilmParser)),
         // The unnumbered `MakerNoteLeica` (bare `Make eq "LEICA"`, header
         // "LEICA\0\0\0", MakerNotes.pm:599-604) shares Panasonic's own
@@ -791,18 +797,34 @@ mod tests {
     fn leica_mke_payload_does_not_dispatch_panasonic_type2() {
         let mut tags = HashMap::new();
 
-        dispatch_makernote(
-            "LEICA",
-            b"MKEM\0\0\x88\0",
-            ByteOrder::BigEndian,
-            &mut tags,
-        )
-        .expect("unmatched Leica MakerNote is ignored");
+        dispatch_makernote("LEICA", b"MKEM\0\0\x88\0", ByteOrder::BigEndian, &mut tags)
+            .expect("unmatched Leica MakerNote is ignored");
 
         assert!(
             tags.is_empty(),
             "MakerNotes.pm requires a Panasonic Make before Type2 can emit tags"
         );
+    }
+
+    /// `MakerNotePanasonic2` accepts every Make beginning with Panasonic, not
+    /// only the exact vendor spelling (MakerNotes.pm:743-750).
+    #[test]
+    fn panasonic_prefixed_make_dispatches_type2() {
+        let mut tags = HashMap::new();
+
+        dispatch_makernote(
+            "Panasonic Corporation",
+            b"MKEM\0\0\x88\0",
+            ByteOrder::BigEndian,
+            &mut tags,
+        )
+        .expect("Panasonic-prefixed Type2 MakerNote dispatches");
+
+        assert_eq!(
+            tags.get("Panasonic:MakerNoteType").map(String::as_str),
+            Some("MKEM")
+        );
+        assert_eq!(tags.get("Panasonic:Gain").map(String::as_str), Some("136"));
     }
 
     #[test]
