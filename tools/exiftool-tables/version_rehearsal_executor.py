@@ -774,6 +774,15 @@ def _live_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
     return sorted(live)
 
 
+def _mark_catchable_termination_unverifiable(child: subprocess.Popen[str]) -> None:
+    """Remember that an owned handler had a chance to fork beyond our proofs."""
+    setattr(child, "_oxidex_catchable_termination_unverifiable", True)
+
+
+def _catchable_termination_unverifiable(child: subprocess.Popen[str]) -> bool:
+    return getattr(child, "_oxidex_catchable_termination_unverifiable", False) is True
+
+
 def _signal_owned_descendants(child: subprocess.Popen[str], signal_value: signal.Signals) -> None:
     identities = dict(getattr(child, "_oxidex_owned_descendants", {}))
     for pid, identity in sorted(identities.items(), reverse=True):
@@ -782,7 +791,18 @@ def _signal_owned_descendants(child: subprocess.Popen[str], signal_value: signal
         except ProcessLookupError:
             continue
         if current == identity:
+            if signal_value == signal.SIGTERM and _pid_live(pid):
+                _mark_catchable_termination_unverifiable(child)
             _signal_pid(pid, signal_value)
+
+
+def _signal_owned_group(child: subprocess.Popen[str], signal_value: signal.Signals) -> None:
+    if signal_value == signal.SIGTERM and _group_live(child.pid):
+        _mark_catchable_termination_unverifiable(child)
+    try:
+        os.killpg(child.pid, signal_value)
+    except ProcessLookupError:
+        pass
 
 
 def _wait_owned_descendants(child: subprocess.Popen[str]) -> list[int]:
@@ -836,6 +856,10 @@ def _require_ownership_release(child: subprocess.Popen[str], operation: str) -> 
         raise OwnedChildCleanupIncomplete(
             f"owned process lifetime ownership is still inherited after {operation}",
         )
+    if _catchable_termination_unverifiable(child):
+        raise OwnedChildCleanupIncomplete(
+            f"owned process lifetime cannot be verified after catchable termination during {operation}",
+        )
 
 
 def _close_ownership_probe(child: subprocess.Popen[str]) -> None:
@@ -860,10 +884,7 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
         try:
             stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            _signal_owned_group(child, signal.SIGTERM)
             try:
                 stdout, stderr = child.communicate(timeout=_TERMINATION_GRACE_SECONDS)
             except subprocess.TimeoutExpired:
@@ -879,10 +900,7 @@ def _bounded_timeout_cleanup(child: subprocess.Popen[str]) -> tuple[str, str]:
     # communicate() only proves the direct adapter has exited. Its late child
     # may have closed inherited pipes and may not have existed in either
     # snapshot, so always drain the owned group before releasing the lock.
-    try:
-        os.killpg(child.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    _signal_owned_group(child, signal.SIGTERM)
     deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
     while _group_live(child.pid) and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -948,6 +966,11 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
                 or _ownership_probe_live(child)):
             cleanup_failures.append("owned child process group is still live after bounded cleanup")
             emergency_needed = True
+        if _catchable_termination_unverifiable(child):
+            cleanup_failures.append(
+                "owned child cleanup cannot be verified after catchable termination",
+            )
+            emergency_needed = True
     except BaseException as inspection:
         cleanup_failures.append(f"owned child cleanup could not be verified: {inspection}")
         emergency_needed = True
@@ -961,6 +984,11 @@ def _cleanup_owned_child_after_interrupt(child: subprocess.Popen[str], interrupt
             if (child.poll() is None or _group_live(child.pid) or _live_owned_descendants(child)
                     or _ownership_probe_live(child)):
                 cleanup_failures.append("owned child process group is still live after emergency cleanup")
+                cleanup_incomplete = True
+            if _catchable_termination_unverifiable(child):
+                cleanup_failures.append(
+                    "owned child cleanup remains unverifiable after catchable termination",
+                )
                 cleanup_incomplete = True
         except BaseException as inspection:
             cleanup_failures.append(f"emergency owned-child cleanup could not be verified: {inspection}")

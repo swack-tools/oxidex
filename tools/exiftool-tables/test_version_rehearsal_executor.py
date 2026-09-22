@@ -79,18 +79,21 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("cleanup bridge failed", record["cleanup_error"])
 
     def test_postspawn_callback_oserror_reaps_owned_child(self):
-        """A callback failure follows spawn, so it must not orphan the child."""
-        def fail_after_start(_pid, _pgid):
+        """A post-spawn fault reaps the direct child but cannot certify escaped work."""
+        child_pid = None
+
+        def fail_after_start(pid, _pgid):
+            nonlocal child_pid
+            child_pid = pid
             raise OSError("journal callback failed")
-        record = executor._run_record(
-            [sys.executable, "-c", "import time; time.sleep(30)"], cwd=self.root,
-            env=dict(os.environ), run=subprocess.run, started=fail_after_start,
-        )
-        self.assertEqual(record["state"], "execution_failed")
-        self.assertEqual(record["operation"], "post_spawn")
-        self.assertIn("journal callback failed", record["stderr"])
-        self.assertEqual(record["pgid"], record["pid"])
-        self.assertFalse(executor._pid_live(record["pid"]))
+
+        with self.assertRaises(executor.OwnedChildCleanupIncomplete):
+            executor._run_record(
+                [sys.executable, "-c", "import time; time.sleep(30)"], cwd=self.root,
+                env=dict(os.environ), run=subprocess.run, started=fail_after_start,
+            )
+        self.assertIsNotNone(child_pid)
+        self.assertFalse(executor._pid_live(child_pid))
 
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
@@ -1027,6 +1030,90 @@ class ExecutorTests(unittest.TestCase):
                 except (subprocess.TimeoutExpired, ChildProcessError):
                     pass
 
+                executor._close_ownership_probe(child)
+
+    def test_interrupt_cleanup_fails_closed_when_term_handler_closes_marker_before_escape(self):
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        descendant_program = (
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import os, signal, subprocess, sys\n"
+            "ready_fd = int(sys.argv[1])\n"
+            "def terminate(_signum, _frame):\n"
+            "    fd_root = '/dev/fd' if os.path.isdir('/dev/fd') else '/proc/self/fd'\n"
+            "    for name in os.listdir(fd_root):\n"
+            "        if name.isdigit() and int(name) > 2 and int(name) != ready_fd:\n"
+            "            try:\n"
+            "                os.close(int(name))\n"
+            "            except OSError:\n"
+            "                pass\n"
+            "    descendant = subprocess.Popen([sys.executable, '-c', sys.argv[2]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+            "    os.write(ready_fd, f'{descendant.pid}\\n'.encode())\n"
+            "    os.close(ready_fd)\n"
+            "    raise SystemExit(0)\n"
+            "signal.signal(signal.SIGTERM, terminate)\n"
+            "os.write(ready_fd, b'ready\\n')\n"
+            "signal.pause()\n"
+        )
+
+        def read_line() -> bytes:
+            payload = b""
+            while not payload.endswith(b"\n"):
+                chunk = os.read(read_fd, 1)
+                if not chunk:
+                    raise AssertionError("owned child closed readiness pipe before reporting")
+                payload += chunk
+            return payload
+
+        owner: list[subprocess.Popen[str] | None] = [None]
+        child = None
+        try:
+            child = executor._spawn_with_deferred_sigint(
+                owner,
+                [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                text=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=False,
+            )
+            os.close(write_fd)
+            write_fd = -1
+            self.assertEqual(read_line(), b"ready\n")
+            interruption = KeyboardInterrupt("original interruption")
+            with patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.05):
+                executor._cleanup_owned_child_after_interrupt(child, interruption)
+            process_ids["descendant"] = int(read_line())
+            self.assertEqual(
+                getattr(interruption, "_oxidex_owned_child_cleanup", None),
+                "incomplete",
+            )
+            self.assertTrue(any("cannot be verified" in note for note in interruption.__notes__))
+            self.assertFalse(executor._group_live(child.pid))
+            self.assertTrue(executor._pid_live(process_ids["descendant"]))
+        finally:
+            if write_fd >= 0:
+                os.close(write_fd)
+            os.close(read_fd)
+            descendant = process_ids.get("descendant")
+            if descendant is not None:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if child is not None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
                 executor._close_ownership_probe(child)
 
     def test_interrupt_cleanup_failure_preserves_original_and_reaps_emergency_child(self):

@@ -556,8 +556,8 @@ class WrapperCallTests(unittest.TestCase):
         self.assertEqual(getattr(caught.exception, "_oxidex_durable_recovery"), "recovered")
         self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())["terminal_status"], "failed")
 
-    def test_real_child_interrupt_is_reaped_before_recovery_and_lock_release(self) -> None:
-        """A supervisor-only interrupt must not orphan its owned child group."""
+    def test_real_child_interrupt_is_reaped_but_catchable_cleanup_blocks_recovery(self) -> None:
+        """Reap the known group, but retain active state when late ownership is unprovable."""
         read_fd, write_fd = os.pipe()
         os.set_inheritable(write_fd, True)
         process_ids: dict[str, int] = {}
@@ -586,17 +586,6 @@ class WrapperCallTests(unittest.TestCase):
 
         interrupter = threading.Thread(target=interrupt_when_child_group_is_ready, daemon=True)
 
-        def recover(run_dir, _archive_cache, _source_root, **kwargs):
-            self.assertIsInstance(kwargs["host_lock_fd"], int)
-            for name in ("direct", "descendant"):
-                if qualification.executor._pid_live(process_ids[name]):
-                    raise qualification.executor.Refused(f"owned {name} is still live")
-            journal_path = run_dir / "execution-status.json"
-            journal = json.loads(journal_path.read_text())
-            journal["phase"], journal["active"] = "interrupted", None
-            journal_path.write_text(json.dumps(journal))
-            return journal
-
         def execute(run_dir, _repository, archive_cache, source_root, **kwargs):
             def started(pid: int, pgid: int) -> None:
                 process_ids.update(direct=pid, pgid=pgid)
@@ -617,16 +606,23 @@ class WrapperCallTests(unittest.TestCase):
             self.fail("real child command unexpectedly returned after supervisor interruption")
 
         try:
-            with patch.object(qualification.executor, "recover", side_effect=recover):
-                with self.assertRaises(KeyboardInterrupt):
+            with patch.object(qualification.executor, "recover") as recover:
+                with self.assertRaises(KeyboardInterrupt) as caught:
                     self.invoke(execute)
+            recover.assert_not_called()
+            self.assertEqual(
+                getattr(caught.exception, "_oxidex_durable_recovery", None),
+                "incomplete",
+            )
+            self.assertTrue(any("owned child cleanup is incomplete" in note
+                                for note in getattr(caught.exception, "__notes__", [])))
             interrupter.join(timeout=5)
             self.assertFalse(interrupter.is_alive(), "readiness thread did not observe the real child")
             if ready_error:
                 raise ready_error[0]
             journal = json.loads((self.row_output / "before" / "execution-status.json").read_text())
-            self.assertEqual(journal["phase"], "interrupted")
-            self.assertIsNone(journal["active"])
+            self.assertEqual(journal["phase"], "running")
+            self.assertIsNotNone(journal["active"])
             for name in ("direct", "descendant"):
                 with self.subTest(process=name):
                     self.assertFalse(qualification.executor._pid_live(process_ids[name]))
