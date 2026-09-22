@@ -1330,6 +1330,8 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
             except BaseException as persistence:
                 _cleanup_owned_child_after_interrupt(child, persistence)
                 if getattr(persistence, "_oxidex_owned_child_cleanup", None) != "verified":
+                    if isinstance(persistence, KeyboardInterrupt):
+                        raise
                     raise OwnedChildCleanupIncomplete(
                         "owned child cleanup remains incomplete after native child journal failure",
                     ) from persistence

@@ -1,6 +1,8 @@
 """Offline scheduler tests for the non-promoting version rehearsal executor."""
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +20,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import version_rehearsal_executor as executor
 import version_rehearsal_native_oracle as native
+import version_transition_qualification as qualification
 import test_version_rehearsal_native_oracle as fixture
 import artifacts
 import table_modules
@@ -490,6 +493,105 @@ class ExecutorTests(unittest.TestCase):
             persisted = json.loads((self.run_dir / "execution-status.json").read_text())
             self.assertEqual(persisted["phase"], "running")
             self.assertIsNotNone(persisted["active"])
+        finally:
+            for pid in process_ids:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            for child in children:
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                for stream in (child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
+                executor._close_ownership_probe(child)
+
+    def test_native_child_record_interrupt_preserves_interrupt_and_active_when_cleanup_is_incomplete(self):
+        """Incomplete cleanup annotates the real persistence interrupt without replacing it."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        process_ids: list[int] = []
+        children: list[subprocess.Popen[str]] = []
+        interrupted = False
+        original_store = executor._store_journal
+        original_popen = executor.subprocess.Popen
+
+        def capture_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not children:
+                children.append(child)
+            return child
+
+        def probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=60,
+            )
+            self.fail("native child unexpectedly completed")
+
+        def interrupt_first_child_record(run_dir, value):
+            nonlocal interrupted
+            active = value.get("active")
+            child = active.get("child") if isinstance(active, dict) else None
+            if isinstance(child, dict) and not interrupted:
+                interrupted = True
+                process_ids.append(child["pid"])
+                original_store(run_dir, value)
+                raise KeyboardInterrupt("native child journal persistence interrupted")
+            return original_store(run_dir, value)
+
+        failure = None
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=probe), \
+                 patch.object(executor, "_store_journal", side_effect=interrupt_first_child_record), \
+                 patch.object(executor.subprocess, "Popen", side_effect=capture_child), \
+                 patch.object(executor, "_bounded_timeout_cleanup",
+                              side_effect=OSError("bounded cleanup failed")), \
+                 patch.object(executor, "_emergency_reap_group",
+                              side_effect=OSError("emergency cleanup failed")):
+                try:
+                    executor._run_native(
+                        self.run_dir, journal, release, docs, config,
+                        self.cache, self.sources, subprocess.run,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            self.assertIsInstance(failure, KeyboardInterrupt)
+            self.assertEqual(str(failure), "native child journal persistence interrupted")
+            self.assertEqual(
+                getattr(failure, "_oxidex_owned_child_cleanup", None),
+                "incomplete",
+            )
+            notes = list(getattr(failure, "__notes__", []))
+            self.assertTrue(any("bounded cleanup failed" in note for note in notes))
+            self.assertTrue(any("emergency cleanup failed" in note for note in notes))
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertIsNotNone(persisted["active"])
+            self.assertEqual(len(process_ids), 1)
+            self.assertTrue(executor._pid_live(process_ids[0]))
+
+            arguments = [
+                "--matrix", "matrix", "--repository", "repository", "--output", "output",
+                "--target-root", "target", "--lease", "lease", "--run-id", "run",
+                "--owner-receipt", "owner", "--heartbeat-receipt", "heartbeat",
+                "--expiry-receipt", "expiry", "--release-receipt", "release",
+                "--handoff-receipt", "handoff",
+            ]
+            stderr = io.StringIO()
+            with patch.object(qualification, "run_qualification", side_effect=failure), \
+                 redirect_stderr(stderr):
+                self.assertEqual(qualification.main(arguments), 130)
+            rendered = stderr.getvalue()
+            self.assertIn("durable recovery incomplete or unverified", rendered)
+            self.assertIn("recovery detail: bounded owned-child cleanup failed", rendered)
+            self.assertIn("recovery detail: emergency owned-child cleanup failed", rendered)
         finally:
             for pid in process_ids:
                 try:
