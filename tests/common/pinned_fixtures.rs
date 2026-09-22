@@ -41,11 +41,18 @@ impl FixtureConfig {
     }
 
     pub fn from_environment(repo_pin: &str) -> Self {
+        let exiftool = env::var_os("EXIFTOOL");
+        let cache = env::var_os("EXIFTOOL_CACHE_DIR");
+        let fallback_cache = if cache.as_deref().and_then(normalized_path).is_some() {
+            PathBuf::new()
+        } else {
+            durable_cache_dir_from_environment(repo_pin)
+        };
         Self::from_explicit_environment_values(
             repo_pin,
-            env::var_os("EXIFTOOL").as_deref(),
-            env::var_os("EXIFTOOL_CACHE_DIR").as_deref(),
-            durable_cache_dir_from_environment(repo_pin),
+            exiftool.as_deref(),
+            cache.as_deref(),
+            fallback_cache,
             env::var(REQUIRED_ENV).is_ok_and(|value| value == "1"),
         )
     }
@@ -274,6 +281,47 @@ fn path_is_present(path: &Path) -> bool {
             "could not inspect pinned fixture {}: {error}",
             path.display()
         ),
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    const CHILD_ENV: &str = "OXIDEX_PINNED_FIXTURE_EXPLICIT_CACHE_CHILD";
+
+    #[test]
+    fn explicit_cache_does_not_require_fallback_environment() {
+        if env::var_os(CHILD_ENV).is_some() {
+            let cache = PathBuf::from(env::var_os("EXIFTOOL_CACHE_DIR").unwrap());
+            assert_eq!(
+                FixtureConfig::from_environment("13.59").cache_dir,
+                cache,
+                "a validated explicit cache must not consult HOME or OXIDEX_OPS_DIR"
+            );
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("temporary explicit cache");
+        let cache = temp.path().join("cache");
+        let version = cache.join("exiftool/lib/Image/ExifTool.pm");
+        std::fs::create_dir_all(version.parent().unwrap()).unwrap();
+        std::fs::write(&version, "$VERSION = '13.59';\n").unwrap();
+
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .arg("explicit_cache_does_not_require_fallback_environment")
+            .env(CHILD_ENV, "1")
+            .env("EXIFTOOL_CACHE_DIR", &cache)
+            .env_remove("HOME")
+            .env_remove("OXIDEX_OPS_DIR")
+            .env_remove("EXIFTOOL")
+            .env_remove(REQUIRED_ENV)
+            .status()
+            .expect("run isolated environment-selection control");
+        assert!(
+            status.success(),
+            "isolated environment-selection control failed"
+        );
     }
 }
 
