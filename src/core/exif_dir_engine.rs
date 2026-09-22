@@ -1824,17 +1824,19 @@ mod tests {
     #[test]
     fn output_rules_are_a_no_op_on_engine_exif_ifd_values() {
         use crate::parsers::tiff::ifd_parser::ByteOrder as Order;
-        let mut paths: Vec<std::path::PathBuf> =
-            std::fs::read_dir("/tmp/oxidex-exiftool-cache/exiftool/t/images")
-                .map(|dir| {
-                    dir.filter_map(|e| e.ok().map(|e| e.path()))
-                        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-                        .collect()
-                })
-                .unwrap_or_default();
+        let mut paths: Vec<std::path::PathBuf> = crate::test_support::pinned_t_images_dir()
+            .and_then(|root| std::fs::read_dir(root).ok())
+            .map(|dir| {
+                dir.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
+                    .collect()
+            })
+            .unwrap_or_default();
         // The spec's census-named and semantic-case JPEGs (`slices/exif-ifd/
         // work/named.txt`, `special.txt`), from the pinned corpus.
-        let root = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT);
+        let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
+            return;
+        };
         paths.extend(CORPUS_JPEGS.iter().map(|name| root.join(name)));
         paths.sort();
         let mut checked = 0;
@@ -1912,15 +1914,17 @@ mod tests {
     /// t/images JPEG and of [`CORPUS_JPEGS`], walked by [`ifd0_walk`].
     #[test]
     fn output_rules_are_a_no_op_on_engine_ifd0_values() {
-        let mut paths: Vec<std::path::PathBuf> =
-            std::fs::read_dir("/tmp/oxidex-exiftool-cache/exiftool/t/images")
-                .map(|dir| {
-                    dir.filter_map(|e| e.ok().map(|e| e.path()))
-                        .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-                        .collect()
-                })
-                .unwrap_or_default();
-        let root = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT);
+        let mut paths: Vec<std::path::PathBuf> = crate::test_support::pinned_t_images_dir()
+            .and_then(|root| std::fs::read_dir(root).ok())
+            .map(|dir| {
+                dir.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
+            return;
+        };
         paths.extend(CORPUS_JPEGS.iter().map(|name| root.join(name)));
         paths.sort();
         let mut checked = 0;

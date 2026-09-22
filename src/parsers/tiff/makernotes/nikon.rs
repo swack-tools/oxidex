@@ -2103,12 +2103,11 @@ mod tests {
 
     #[test]
     fn pinned_nef_preview_ifd_emits_the_paired_preview_image() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Nikon.nef") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/Nikon.nef");
+        };
         let metadata =
-            crate::core::operations::read_metadata(path).expect("read pinned Nikon NEF fixture");
+            crate::core::operations::read_metadata(&path).expect("read pinned Nikon NEF fixture");
 
         assert_eq!(
             metadata.get_string("Nikon:PreviewImage"),
@@ -2206,13 +2205,12 @@ mod tests {
     /// begins at file offset 1068, and 13843 + 1068 + 10 = 14921.
     #[test]
     fn pinned_coolpix3200_preview_image_start_is_the_absolute_file_offset() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Nikon/NikonCoolpix3200.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Nikon/NikonCoolpix3200.jpg",
-        );
-        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+        };
+        let Ok(metadata) = crate::core::operations::read_metadata(&path) else {
             return;
         };
         assert_eq!(

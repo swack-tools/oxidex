@@ -27,23 +27,22 @@
 //! keeps).
 
 use oxidex::core::MetadataMap;
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::core::operations::read_metadata;
 use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
-use std::path::Path;
 use std::process::Command;
 
-const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/FujiFilm";
+const T_IMAGES: &str = "t-images";
+const CORPUS: &str = "combined-fujifilm";
 
 fn carrier(dir: &str, name: &str) -> Option<MetadataMap> {
-    let path = Path::new(dir).join(name);
-    if !path.is_file() {
-        eprintln!(
-            "skipping: {} is not present (the pinned ExifTool 13.59 checkout or corpus is not on this machine)",
-            path.display()
-        );
-        return None;
-    }
+    let path = match dir {
+        T_IMAGES => fixtures::pinned_t_images_fixture_path(name),
+        CORPUS => fixtures::pinned_combined_fixture_path(&format!("FujiFilm/{name}")),
+        _ => panic!("unknown fixture population {dir}"),
+    }?;
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
@@ -178,11 +177,9 @@ fn fujifilm_raf_main_tags_match_the_pinned_oracle() {
 /// `Quality` have no PrintConv and print the same either way.
 #[test]
 fn no_print_conv_shows_the_engine_value_conv() {
-    let path = Path::new(T_IMAGES).join("FujiFilm.jpg");
-    if !path.is_file() {
-        eprintln!("skipping: {} is not present", path.display());
+    let Some(path) = fixtures::pinned_t_images_fixture_path("FujiFilm.jpg") else {
         return;
-    }
+    };
     let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
         .args(["--no-print-conv", "-j", "-G1", "-a"])
         .arg(&path)

@@ -36,9 +36,8 @@
 
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus";
+#[path = "common/fixtures.rs"]
+mod fixtures;
 
 fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
     let value = metadata.get(key)?;
@@ -49,7 +48,9 @@ fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
 }
 
 fn assert_tags(file: &str, expected: &[(&str, &str)]) {
-    let path = Path::new(CORPUS).join(file);
+    let Some(path) = fixtures::pinned_combined_fixture_path(&format!("Olympus/{file}")) else {
+        return;
+    };
     let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file} parses: {e}"));
     for (key, want) in expected {
         assert_eq!(

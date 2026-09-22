@@ -467,13 +467,12 @@ mod tests {
 
     #[test]
     fn fujifilm_sp_2500_legacy_exif_aliases_match_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("FujiFilm/FujiSP-2500.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/FujiFilm/FujiSP-2500.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("Fuji SP-2500 parses");
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("Fuji SP-2500 parses");
 
         assert_eq!(
             metadata.get_integer("ExifIFD:SpatialFrequencyResponse"),

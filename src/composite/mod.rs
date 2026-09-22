@@ -1258,30 +1258,7 @@ mod step22_bare_name_arbitration_regression {
 
     use std::path::Path;
 
-    /// Skip the calling test when its pinned fixture is absent.
-    ///
-    /// This used to be a sentinel STRING returned from `composite_string`, which
-    /// every caller had to remember to check -- and all but one did not, so a
-    /// missing corpus turned into `left: Some("<skipped: fixture absent>")` vs
-    /// `right: Some("8x8")`. That is indistinguishable from a real wrong value,
-    /// and it cost four branches a false RED when a container eviction removed
-    /// the corpus symlink: the code was fine, the fixtures were gone.
-    ///
-    /// A macro that `return`s cannot be silently ignored the way a sentinel can.
-    macro_rules! fixture_or_skip {
-        ($path:expr) => {
-            if !Path::new($path).is_file() {
-                eprintln!(
-                    "skip: pinned fixture {} not present -- not a failure",
-                    $path
-                );
-                return;
-            }
-        };
-    }
-
-    fn composite_string(path: &str, key: &str) -> Option<String> {
-        let path = Path::new(path);
+    fn composite_string(path: &Path, key: &str) -> Option<String> {
         let report = crate::core::operations::read_metadata_report(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         report
@@ -1289,8 +1266,6 @@ mod step22_bare_name_arbitration_regression {
             .get_string(key)
             .map(std::string::ToString::to_string)
     }
-
-    const EXIFTOOL_JPG: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images/ExifTool.jpg";
 
     /// `Composite:ImageSize`/`Megapixels` bare-resolve `ImageWidth`/
     /// `ImageHeight`, both ordinary (undeclared) priority in ExifTool
@@ -1306,17 +1281,21 @@ mod step22_bare_name_arbitration_regression {
     /// SPIFF's own (much larger, unrelated) declared dimensions.
     #[test]
     fn exiftool_jpg_image_size_prefers_the_later_scanned_sof_dimensions() {
-        fixture_or_skip!(EXIFTOOL_JPG);
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
+            return;
+        };
         assert_eq!(
-            composite_string(EXIFTOOL_JPG, "Composite:ImageSize"),
+            composite_string(&path, "Composite:ImageSize"),
             Some("8x8".to_string())
         );
     }
 
     #[test]
     fn exiftool_jpg_megapixels_matches_the_sof_dimensions_not_spiffs() {
-        fixture_or_skip!(EXIFTOOL_JPG);
-        let mp = composite_string(EXIFTOOL_JPG, "Composite:Megapixels");
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
+            return;
+        };
+        let mp = composite_string(&path, "Composite:Megapixels");
         let mp: f64 = mp.expect("Composite:Megapixels").parse().expect("numeric");
         assert!(
             (mp - 0.000064).abs() < 1e-9,
@@ -1336,13 +1315,15 @@ mod step22_bare_name_arbitration_regression {
     /// `Composite:Aperture` = `"3.5"`, `Composite:LightValue` = `"10.9"`.
     #[test]
     fn exiftool_jpg_aperture_defers_to_exif_over_the_priority_zero_app12_segment() {
-        fixture_or_skip!(EXIFTOOL_JPG);
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("ExifTool.jpg") else {
+            return;
+        };
         assert_eq!(
-            composite_string(EXIFTOOL_JPG, "Composite:Aperture"),
+            composite_string(&path, "Composite:Aperture"),
             Some("3.5".to_string())
         );
         assert_eq!(
-            composite_string(EXIFTOOL_JPG, "Composite:LightValue"),
+            composite_string(&path, "Composite:LightValue"),
             Some("10.9".to_string())
         );
     }
@@ -1360,30 +1341,7 @@ mod step29_generated_expression_regression {
 
     use std::path::Path;
 
-    /// Skip the calling test when its pinned fixture is absent.
-    ///
-    /// This used to be a sentinel STRING returned from `composite_string`, which
-    /// every caller had to remember to check -- and all but one did not, so a
-    /// missing corpus turned into `left: Some("<skipped: fixture absent>")` vs
-    /// `right: Some("8x8")`. That is indistinguishable from a real wrong value,
-    /// and it cost four branches a false RED when a container eviction removed
-    /// the corpus symlink: the code was fine, the fixtures were gone.
-    ///
-    /// A macro that `return`s cannot be silently ignored the way a sentinel can.
-    macro_rules! fixture_or_skip {
-        ($path:expr) => {
-            if !Path::new($path).is_file() {
-                eprintln!(
-                    "skip: pinned fixture {} not present -- not a failure",
-                    $path
-                );
-                return;
-            }
-        };
-    }
-
-    fn composite_string(path: &str, key: &str) -> Option<String> {
-        let path = Path::new(path);
+    fn composite_string(path: &Path, key: &str) -> Option<String> {
         let report = crate::core::operations::read_metadata_report(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         report
@@ -1391,9 +1349,6 @@ mod step29_generated_expression_regression {
             .get_string(key)
             .map(std::string::ToString::to_string)
     }
-
-    const FLIR_JPG: &str = "/tmp/oxidex-exiftool-cache/combined-samples/FLIR.jpg";
-    const PANASONIC_RW2: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Panasonic.rw2";
 
     /// FLIR.pm:1311-1315: `PeakSpectralSensitivity => { Require =>
     /// 'FLIR:PlanckB', ValueConv => '14387.6515/$val', PrintConv =>
@@ -1403,9 +1358,11 @@ mod step29_generated_expression_regression {
     /// Pinned oracle on `FLIR.jpg` (`PlanckB` = 1374.5): `"10.5 um"`.
     #[test]
     fn flir_peak_spectral_sensitivity_matches_the_pinned_oracle() {
-        fixture_or_skip!(FLIR_JPG);
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("FLIR.jpg") else {
+            return;
+        };
         assert_eq!(
-            composite_string(FLIR_JPG, "Composite:PeakSpectralSensitivity"),
+            composite_string(&path, "Composite:PeakSpectralSensitivity"),
             Some("10.5 um".to_string())
         );
     }
@@ -1418,23 +1375,18 @@ mod step29_generated_expression_regression {
     /// (SensorLeftBorder/Right/Top/Bottom = 8/3656/6/2742): `3648`/`2736`.
     #[test]
     fn panasonicraw_image_size_matches_the_pinned_oracle() {
-        fixture_or_skip!(PANASONIC_RW2);
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Panasonic.rw2") else {
+            return;
+        };
         assert_eq!(
-            composite_string(PANASONIC_RW2, "Composite:ImageWidth"),
+            composite_string(&path, "Composite:ImageWidth"),
             Some("3648".to_string())
         );
         assert_eq!(
-            composite_string(PANASONIC_RW2, "Composite:ImageHeight"),
+            composite_string(&path, "Composite:ImageHeight"),
             Some("2736".to_string())
         );
     }
-
-    const CANON_S110_JPG: &str =
-        "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonPowerShotS110-new.jpg";
-    const SONY_A100_JPG: &str =
-        "/tmp/oxidex-exiftool-cache/combined-samples/Sony/SonyDSLR-A100.jpg";
-    const CANON_EOS10D_JPG: &str =
-        "/tmp/oxidex-exiftool-cache/combined-samples/Canon/CanonEOS10D.jpg";
 
     /// The optics composites must consume ValueConv-level inputs, exactly as
     /// `BuildCompositeTags` reads `$$rawValue{...}` (the post-ValueConv
@@ -1446,13 +1398,17 @@ mod step29_generated_expression_regression {
     /// the rounded 11.1 instead prints 2.20 -- and FOV flips 38.4 -> 38.5.
     #[test]
     fn canon_s110_dof_and_fov_consume_the_exif_rational_not_the_xmp_print_form() {
-        fixture_or_skip!(CANON_S110_JPG);
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Canon/CanonPowerShotS110-new.jpg")
+        else {
+            return;
+        };
         assert_eq!(
-            composite_string(CANON_S110_JPG, "Composite:DOF"),
+            composite_string(&path, "Composite:DOF"),
             Some("2.19 m (1.45 - 3.64 m)".to_string())
         );
         assert_eq!(
-            composite_string(CANON_S110_JPG, "Composite:FOV"),
+            composite_string(&path, "Composite:FOV"),
             Some("38.4 deg".to_string())
         );
     }
@@ -1464,9 +1420,13 @@ mod step29_generated_expression_regression {
     /// prints 13.80.
     #[test]
     fn sony_a100_fov_consumes_the_focus_distance_value_conv() {
-        fixture_or_skip!(SONY_A100_JPG);
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Sony/SonyDSLR-A100.jpg")
+        else {
+            return;
+        };
         assert_eq!(
-            composite_string(SONY_A100_JPG, "Composite:FOV"),
+            composite_string(&path, "Composite:FOV"),
             Some("67.3 deg (13.81 m)".to_string())
         );
     }
@@ -1482,13 +1442,16 @@ mod step29_generated_expression_regression {
     /// sizes, and the fallback sensor-size path lands on 1.5886 instead.
     #[test]
     fn canon_eos10d_scale_factor_uses_the_focal_plane_sizes_gated_on_the_exif_model() {
-        fixture_or_skip!(CANON_EOS10D_JPG);
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Canon/CanonEOS10D.jpg")
+        else {
+            return;
+        };
         assert_eq!(
-            composite_string(CANON_EOS10D_JPG, "Composite:DOF"),
+            composite_string(&path, "Composite:DOF"),
             Some("0.42 m (12.59 - 13.01 m)".to_string())
         );
         assert_eq!(
-            composite_string(CANON_EOS10D_JPG, "Composite:FocalLength35efl"),
+            composite_string(&path, "Composite:FocalLength35efl"),
             Some("365.0 mm (35 mm equivalent: 565.8 mm)".to_string())
         );
     }

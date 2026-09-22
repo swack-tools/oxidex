@@ -48,6 +48,20 @@ pub fn pinned_combined_fixture_path(name: &str) -> Option<PathBuf> {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
+pub fn pinned_t_images_dir() -> Option<PathBuf> {
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    config
+        .t_images_dir_for_mode()
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn pinned_combined_corpus_dir() -> Option<PathBuf> {
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    config
+        .combined_dir_for_mode()
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
 fn fixture_path_in(name: &str, exiftool: Option<&Path>, cache: &Path) -> Option<PathBuf> {
     let cached_binary = exiftool_oracle::pinned_binary(cache);
     [exiftool, Some(cached_binary.as_path())]

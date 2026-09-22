@@ -32,14 +32,16 @@
 //! Every row is keyed `InteropIFD:`, ExifTool's `-G1` (the DCF rows since
 //! decision D-1).
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::core::MetadataMap;
 use oxidex::core::exiftool_compat::format_tag_value;
 use oxidex::core::operations::read_metadata;
 use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
-use std::path::Path;
 
-const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
+const T_IMAGES: &str = "t-images";
+const CORPUS: &str = "combined";
 
 /// The line is in force: without it the engine is `None` and the hand arms
 /// (the E-1 fallback) produce the Interop rows instead, so the carrier pins
@@ -65,14 +67,11 @@ fn exif_main_is_on_the_gate_b_allowlist() {
 }
 
 fn carrier(dir: &str, name: &str) -> Option<MetadataMap> {
-    let path = Path::new(dir).join(name);
-    if !path.is_file() {
-        eprintln!(
-            "skipping: {} is not present (the pinned ExifTool 13.59 checkout or corpus is not on this machine)",
-            path.display()
-        );
-        return None;
-    }
+    let path = match dir {
+        T_IMAGES => fixtures::pinned_t_images_fixture_path(name),
+        CORPUS => fixtures::pinned_combined_fixture_path(name),
+        _ => panic!("unknown fixture population {dir}"),
+    }?;
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
@@ -570,10 +569,10 @@ fn census_d2_an_unnumifiable_max_aperture_value_is_absent() {
 /// file: `THM - DCF thumbnail file`, 3072 x 2048).
 #[test]
 fn png_exif_chunk_reaches_the_interop_engine() {
-    let Ok(jpeg) = std::fs::read(Path::new(T_IMAGES).join("Canon.jpg")) else {
-        eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+    let Some(path) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
         return;
     };
+    let jpeg = std::fs::read(&path).expect("Canon.jpg should be readable");
     let png = png_with_exif(&tiff_block_of(&jpeg));
     let file = tempfile::Builder::new()
         .suffix(".png")
@@ -718,10 +717,10 @@ fn hex(text: &str) -> Vec<u8> {
 /// within one test run.
 #[test]
 fn a_jp2_exif_box_copies_its_winners_in_file_order() {
-    let Ok(jpeg) = std::fs::read(Path::new(T_IMAGES).join("Canon.jpg")) else {
-        eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+    let Some(path) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
         return;
     };
+    let jpeg = std::fs::read(&path).expect("Canon.jpg should be readable");
     let tiff = tiff_block_of(&jpeg);
     let mut jp2 = b"\0\0\0\x0cjP  \r\n\x87\n".to_vec();
     jp2.extend_from_slice(b"\0\0\0\x14ftypjp2 \0\0\0\0jp2 ");
@@ -760,11 +759,11 @@ fn a_jp2_exif_box_copies_its_winners_in_file_order() {
 /// prints for t/images Canon.jpg).
 #[test]
 fn a_pdf_dct_image_keeps_its_exif_ifd_forms() {
-    let Ok(jpeg) = std::fs::read(Path::new(T_IMAGES).join("Canon.jpg")) else {
-        eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+    let Some(path) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
         return;
     };
-    let direct = read_metadata(&Path::new(T_IMAGES).join("Canon.jpg")).expect("Canon.jpg");
+    let jpeg = std::fs::read(&path).expect("Canon.jpg should be readable");
+    let direct = read_metadata(&path).expect("Canon.jpg");
     let pdf = pdf_with_dct_image(&jpeg);
     let file = tempfile::Builder::new()
         .suffix(".pdf")
@@ -842,10 +841,10 @@ fn pdf_with_dct_image(jpeg: &[u8]) -> Vec<u8> {
 #[test]
 fn a_png_exif_rebuild_writes_stored_values() {
     use oxidex::core::TagValue;
-    let Ok(jpeg) = std::fs::read(Path::new(T_IMAGES).join("Canon.jpg")) else {
-        eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+    let Some(path) = fixtures::pinned_t_images_fixture_path("Canon.jpg") else {
         return;
     };
+    let jpeg = std::fs::read(&path).expect("Canon.jpg should be readable");
     let file = tempfile::Builder::new()
         .suffix(".png")
         .tempfile()
@@ -961,10 +960,10 @@ fn tiff_entries(tiff: &[u8]) -> Vec<(u16, u16, u32, Vec<u8>)> {
 /// SHORT (`-n` 1).
 #[test]
 fn copy_metadata_copies_stored_values() {
-    let Ok(dest_bytes) = std::fs::read(Path::new(T_IMAGES).join("Nikon.jpg")) else {
-        eprintln!("skipping: t/images/Nikon.jpg is not on this machine");
+    let Some(path) = fixtures::pinned_t_images_fixture_path("Nikon.jpg") else {
         return;
     };
+    let dest_bytes = std::fs::read(&path).expect("Nikon.jpg should be readable");
     // IFD0 at 8: Make "Canon", ExifOffset -> 38; ExifIFD: 0xa001 = 2 (SHORT),
     // 0xa40b = 01 02 03 04 (undef[4]).
     let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();

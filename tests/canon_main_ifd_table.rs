@@ -27,13 +27,15 @@
 //! at its entry) or `residual` (the hand arm `CANON_MAIN_RESIDUAL_IDS` keeps).
 
 use oxidex::core::MetadataMap;
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::core::operations::read_metadata;
 use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
-use std::path::Path;
 use std::process::Command;
 
-const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Canon";
+const T_IMAGES: &str = "t-images";
+const CORPUS: &str = "combined-canon";
 
 /// The allowlist line is the reviewable unit; this asserts the line is in
 /// force, so a revert of it -- or a regeneration that re-blocks gate A --
@@ -62,14 +64,11 @@ fn canon_main_is_on_the_gate_b_allowlist() {
 }
 
 fn carrier(dir: &str, name: &str) -> Option<MetadataMap> {
-    let path = Path::new(dir).join(name);
-    if !path.is_file() {
-        eprintln!(
-            "skipping: {} is not present (the pinned ExifTool 13.59 checkout or corpus is not on this machine)",
-            path.display()
-        );
-        return None;
-    }
+    let path = match dir {
+        T_IMAGES => fixtures::pinned_t_images_fixture_path(name),
+        CORPUS => fixtures::pinned_combined_fixture_path(&format!("Canon/{name}")),
+        _ => panic!("unknown fixture population {dir}"),
+    }?;
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
@@ -188,11 +187,9 @@ fn no_print_conv_shows_the_engine_value_conv() {
             ],
         ),
     ] {
-        let path = Path::new(T_IMAGES).join(file);
-        if !path.is_file() {
-            eprintln!("skipping: {} is not present", path.display());
+        let Some(path) = fixtures::pinned_t_images_fixture_path(file) else {
             return;
-        }
+        };
         let mut args = vec!["--no-print-conv".to_string(), "-s".to_string()];
         args.extend(expected.iter().map(|(tag, _)| format!("-Canon:{tag}")));
         args.push(path.to_string_lossy().into_owned());

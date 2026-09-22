@@ -13,12 +13,13 @@
 //! Expected values are the pinned oracle's (`exiftool -G0:1:4 -a -s -j`).
 
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Google";
+#[path = "common/fixtures.rs"]
+mod fixtures;
 
 fn assert_fields(file: &str, expected: &[(&str, &str)]) {
-    let path = Path::new(CORPUS).join(file);
+    let Some(path) = fixtures::pinned_combined_fixture_path(&format!("Google/{file}")) else {
+        return;
+    };
     let metadata = read_metadata(&path).unwrap_or_else(|e| panic!("{file}: {e}"));
     for (tag, value) in expected {
         assert_eq!(metadata.get_string(tag), Some(*value), "{file} {tag}");

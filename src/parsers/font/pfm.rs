@@ -220,13 +220,9 @@ mod tests {
     /// here. A synthetic 117-byte header assembled to produce these numbers
     /// would confirm its own arithmetic and could not observe a wrong offset,
     /// a wrong byte order or a missing `PrintConv`.
-    const CARRIER: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Font.pfm";
-
     fn carrier() -> Option<BufferedReader> {
-        if !crate::test_support::pinned_corpus_available() {
-            return None;
-        }
-        BufferedReader::new(std::path::Path::new(CARRIER)).ok()
+        let path = crate::test_support::pinned_combined_fixture_path("Font.pfm")?;
+        BufferedReader::new(&path).ok()
     }
 
     /// The whole `Font::PFM` table against the pinned oracle's output for the
@@ -299,11 +295,10 @@ mod tests {
     /// image tags to a silent misroute rather than to a visible error.
     #[test]
     fn the_floatmap_carrier_is_not_a_printer_font_metrics_file() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("PFM.pfm") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/combined-samples/PFM.pfm");
-        let reader = BufferedReader::new(path).expect("read pinned PFM.pfm fixture");
+        };
+        let reader = BufferedReader::new(&path).expect("read pinned PFM.pfm fixture");
         assert!(!PrinterFontMetricsParser::verify_signature(&reader));
         assert!(PrinterFontMetricsParser.parse(&reader).is_err());
     }

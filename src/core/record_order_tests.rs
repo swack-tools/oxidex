@@ -15,8 +15,6 @@
 use crate::core::operations::read_metadata_report;
 use std::path::Path;
 
-const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
-
 /// Reads per file. A path with only two hash-ordered entries repeats its
 /// first order by chance with probability 2^-(READS-1).
 const READS: usize = 12;
@@ -82,11 +80,10 @@ fn recorded_sequence(path: &Path) -> Vec<String> {
 
 #[test]
 fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
-    let root = Path::new(T_IMAGES);
-    if !root.is_dir() {
-        eprintln!("skip: {T_IMAGES} is absent");
+    let Some(root) = crate::test_support::pinned_t_images_dir() else {
+        eprintln!("skip: configured t/images is absent");
         return;
-    }
+    };
     let mut failures = Vec::new();
     for (file, exercises) in PATHS {
         let path = root.join(file);

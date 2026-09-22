@@ -132,31 +132,20 @@ pub fn assert_no_divergent_prefixed_duplicates(metadata: &MetadataMap) {
     );
 }
 
-/// Root of the pinned ExifTool sample corpus that a number of unit tests read
-/// real image files from.
-///
-/// This is a local developer cache (populated by `just compare-exiftool-full`),
-/// **not** a committed fixture, so it is absent on CI runners and in fresh
-/// clones. Tests that read from it must gate on [`pinned_corpus_available`].
-pub const PINNED_CORPUS_ROOT: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
-
 /// True when the pinned sample corpus is present on this machine.
 ///
-/// Tests reading real files out of [`PINNED_CORPUS_ROOT`] must call this and
-/// return early when it is false. Letting them panic instead turns every CI run
+/// Tests reading real files through [`pinned_combined_fixture_path`] may return
+/// early in ordinary optional mode. Letting them panic instead turns every CI run
 /// red -- and because the runner is fail-fast, the first such panic also stops
 /// the other ~3.9k tests from running at all, which is how a corpus-only
 /// dependency masqueraded as a repo-wide test failure.
 pub fn pinned_corpus_available() -> bool {
     use std::sync::Once;
     static NOTED: Once = Once::new();
-    let present = std::path::Path::new(PINNED_CORPUS_ROOT).is_dir();
+    let present = pinned_combined_corpus_dir().is_some();
     if !present {
         NOTED.call_once(|| {
-            eprintln!(
-                "note: skipping pinned-corpus tests -- {PINNED_CORPUS_ROOT} is absent \
-                 (populate it with `just compare-exiftool-full`)"
-            );
+            eprintln!("note: skipping pinned-corpus tests -- configured combined corpus is absent");
         });
     }
     present
