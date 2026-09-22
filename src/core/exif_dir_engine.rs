@@ -1849,10 +1849,10 @@ mod tests {
             };
         // The spec's census-named and semantic-case JPEGs (`slices/exif-ifd/
         // work/named.txt`, `special.txt`), from the pinned corpus.
-        let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
-            return;
-        };
-        paths.extend(CORPUS_JPEGS.iter().map(|name| (root.join(name), true)));
+        extend_named_corpus_paths(
+            &mut paths,
+            crate::test_support::pinned_combined_corpus_dir(),
+        );
         paths.sort_by(|(left, _), (right, _)| left.cmp(right));
         let mut checked = 0;
         let mut names = std::collections::BTreeSet::new();
@@ -1970,10 +1970,10 @@ mod tests {
                 },
                 None => Vec::new(),
             };
-        let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
-            return;
-        };
-        paths.extend(CORPUS_JPEGS.iter().map(|name| (root.join(name), true)));
+        extend_named_corpus_paths(
+            &mut paths,
+            crate::test_support::pinned_combined_corpus_dir(),
+        );
         paths.sort_by(|(left, _), (right, _)| left.cmp(right));
         let mut checked = 0;
         let mut names = std::collections::BTreeSet::new();
@@ -2112,6 +2112,23 @@ mod tests {
         "Sony/SonyILME-FX3.jpg",
         "Sony/SonyMVC-CD1000.jpg",
     ];
+
+    fn extend_named_corpus_paths(
+        paths: &mut Vec<(std::path::PathBuf, bool)>,
+        root: Option<std::path::PathBuf>,
+    ) {
+        if let Some(root) = root {
+            paths.extend(CORPUS_JPEGS.iter().map(|name| (root.join(name), true)));
+        }
+    }
+
+    #[test]
+    fn absent_optional_combined_corpus_keeps_collected_t_images_paths() {
+        let supplemental = std::path::PathBuf::from("t/images/supplemental.jpg");
+        let mut paths = vec![(supplemental.clone(), false)];
+        extend_named_corpus_paths(&mut paths, None);
+        assert_eq!(paths, vec![(supplemental, false)]);
+    }
 
     /// The TIFF block of a JPEG's first `Exif\0\0` APP1 segment.
     fn app1_tiff(jpeg: &[u8]) -> Option<Vec<u8>> {

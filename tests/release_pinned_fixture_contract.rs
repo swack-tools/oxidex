@@ -8,10 +8,7 @@ use oxidex::core::{TagValue, operations::read_metadata};
 #[test]
 #[ignore = "runs in the configured pinned-fixture qualification stage"]
 fn required_mode_executes_real_ra_and_swf_parsing_assertions() {
-    let Some(real) = fixtures::pinned_t_images_fixture_path("Real.ra") else {
-        eprintln!("release fixture contract skipped: Real.ra is optional outside required mode");
-        return;
-    };
+    let real = fixtures::required_t_images_fixture_path("Real.ra");
     let real_metadata = read_metadata(&real).expect("Real.ra must parse after resolution");
     assert_eq!(
         real_metadata.get_string("Real-RA4:Title"),
@@ -23,10 +20,7 @@ fn required_mode_executes_real_ra_and_swf_parsing_assertions() {
     );
     eprintln!("release-fixture-contract: Real.ra assertions executed");
 
-    let Some(flash) = fixtures::pinned_t_images_fixture_path("Flash.swf") else {
-        eprintln!("release fixture contract skipped: Flash.swf is optional outside required mode");
-        return;
-    };
+    let flash = fixtures::required_t_images_fixture_path("Flash.swf");
     let flash_metadata = read_metadata(&flash).expect("Flash.swf must parse after resolution");
     assert_eq!(
         flash_metadata.get("Flash:FlashVersion"),

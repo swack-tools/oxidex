@@ -67,12 +67,31 @@ fn exif_main_is_on_the_gate_b_allowlist() {
 }
 
 fn carrier(dir: &str, name: &str) -> Option<MetadataMap> {
-    let path = match dir {
-        T_IMAGES => fixtures::pinned_t_images_fixture_path(name),
-        CORPUS => fixtures::pinned_combined_fixture_path(name),
-        _ => panic!("unknown fixture population {dir}"),
+    let path = if dir == T_IMAGES {
+        fixtures::pinned_t_images_fixture_path(name)
+    } else if dir == CORPUS {
+        fixtures::pinned_combined_fixture_path(name)
+    } else if let Some(name) = combined_carrier_name(dir, name) {
+        fixtures::pinned_combined_fixture_path(&name)
+    } else {
+        panic!("unknown fixture population {dir}")
     }?;
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
+}
+
+fn combined_carrier_name(dir: &str, name: &str) -> Option<String> {
+    dir.strip_prefix(&format!("{CORPUS}/"))
+        .filter(|subdirectory| !subdirectory.is_empty())
+        .map(|subdirectory| format!("{subdirectory}/{name}"))
+}
+
+#[test]
+fn carrier_accepts_combined_subdirectory_call_shapes() {
+    assert_eq!(
+        combined_carrier_name("combined/Canon", "CanonHG20.jpg"),
+        Some("Canon/CanonHG20.jpg".to_owned())
+    );
+    assert_eq!(combined_carrier_name("combined/", "file.jpg"), None);
 }
 
 /// The value as the output layer shows it (`-s` / `-j` text).

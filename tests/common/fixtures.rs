@@ -47,6 +47,22 @@ pub fn pinned_combined_fixture_path(name: &str) -> Option<PathBuf> {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
+/// Resolve a named source fixture for an explicitly requested qualification.
+pub fn required_t_images_fixture_path(name: &str) -> PathBuf {
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    config
+        .resolve_required(name, FixturePopulation::TImages)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve a named combined fixture for an explicitly requested qualification.
+pub fn required_combined_fixture_path(name: &str) -> PathBuf {
+    let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
+    config
+        .resolve_required(name, FixturePopulation::Combined)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
 pub fn pinned_t_images_dir() -> Option<PathBuf> {
     let config = FixtureConfig::from_environment(exiftool_oracle::repo_pin());
     config
@@ -77,6 +93,76 @@ mod tests {
         assert_eq!(
             pinned_fixture_path_with_config("fixture.bin", &config),
             Some(path)
+        );
+    }
+
+    #[test]
+    fn explicit_qualification_resolution_ignores_optional_mode() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let config = FixtureConfig::new(None, temp.path().join("cache"), false);
+        let failure = std::panic::catch_unwind(|| {
+            config
+                .resolve_required("required.bin", FixturePopulation::Combined)
+                .unwrap_or_else(|error| panic!("{error}"));
+        });
+        assert!(
+            failure.is_err(),
+            "qualification must not become an optional skip"
+        );
+    }
+
+    #[test]
+    fn explicit_cache_must_identify_the_repo_pin() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let cache = temp.path().join("other-release");
+        let version = cache.join("exiftool/lib/Image/ExifTool.pm");
+        std::fs::create_dir_all(version.parent().unwrap()).unwrap();
+        std::fs::write(&version, "$VERSION = '0.00';\n").unwrap();
+        let failure = std::panic::catch_unwind(|| {
+            FixtureConfig::from_explicit_environment_values(
+                "13.59",
+                None,
+                Some(cache.as_os_str()),
+                temp.path().join("fallback"),
+                false,
+            )
+        });
+        assert!(
+            failure.is_err(),
+            "a mismatched explicit cache must be rejected"
+        );
+    }
+
+    #[test]
+    fn padded_exiftool_path_is_trimmed_and_blank_does_not_become_cwd() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let source = temp.path().join("source");
+        let version = source.join("lib/Image/ExifTool.pm");
+        std::fs::create_dir_all(version.parent().unwrap()).unwrap();
+        std::fs::write(&version, "$VERSION = '13.59';\n").unwrap();
+        let binary = source.join("exiftool");
+        let padded = format!("  {}  ", binary.display());
+        let config = FixtureConfig::from_explicit_environment_values(
+            "13.59",
+            Some(std::ffi::OsStr::new(&padded)),
+            None,
+            temp.path().join("fallback"),
+            false,
+        );
+        assert_eq!(
+            config.candidates("fixture.bin", FixturePopulation::TImages)[0],
+            source.join("t/images/fixture.bin")
+        );
+        let blank = FixtureConfig::from_explicit_environment_values(
+            "13.59",
+            Some(std::ffi::OsStr::new("   \t")),
+            None,
+            temp.path().join("fallback"),
+            false,
+        );
+        assert_eq!(
+            blank.candidates("fixture.bin", FixturePopulation::TImages)[0],
+            temp.path().join("fallback/exiftool/t/images/fixture.bin")
         );
     }
 

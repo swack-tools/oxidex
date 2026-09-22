@@ -80,13 +80,12 @@ fn recorded_sequence(path: &Path) -> Vec<String> {
 
 #[test]
 fn every_formerly_hash_ordered_path_records_the_same_sequence_on_every_read() {
-    let Some(root) = crate::test_support::pinned_t_images_dir() else {
-        eprintln!("skip: configured t/images is absent");
-        return;
-    };
     let mut failures = Vec::new();
     for (file, exercises) in PATHS {
-        let path = root.join(file);
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path(file) else {
+            eprintln!("skip: configured t/images fixture {file} is absent");
+            return;
+        };
         let first = recorded_sequence(&path);
         assert!(first.len() > 3, "{file}: read {} occurrences", first.len());
         if let Some(read) = (1..READS).find(|_| recorded_sequence(&path) != first) {

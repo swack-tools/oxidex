@@ -7,6 +7,7 @@
 #![allow(dead_code)] // Each test target imports only the population it exercises.
 
 use std::env;
+use std::ffi::OsStr;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -40,15 +41,36 @@ impl FixtureConfig {
     }
 
     pub fn from_environment(repo_pin: &str) -> Self {
-        let source_tree = env::var_os("EXIFTOOL")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
+        Self::from_explicit_environment_values(
+            repo_pin,
+            env::var_os("EXIFTOOL").as_deref(),
+            env::var_os("EXIFTOOL_CACHE_DIR").as_deref(),
+            durable_cache_dir_from_environment(repo_pin),
+            env::var(REQUIRED_ENV).is_ok_and(|value| value == "1"),
+        )
+    }
+
+    /// Test-only constructor for the environment boundary. It keeps path
+    /// trimming and pinned-tree validation observable without mutating the
+    /// process environment shared by parallel test targets.
+    pub fn from_explicit_environment_values(
+        repo_pin: &str,
+        exiftool: Option<&OsStr>,
+        cache: Option<&OsStr>,
+        fallback_cache: PathBuf,
+        required: bool,
+    ) -> Self {
+        let source_tree = exiftool
+            .and_then(normalized_path)
             .and_then(|binary| binary.parent().map(Path::to_path_buf));
-        let cache_dir = env::var_os("EXIFTOOL_CACHE_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| durable_cache_dir_from_environment(repo_pin));
-        let required = env::var(REQUIRED_ENV).is_ok_and(|value| value == "1");
+        if let Some(tree) = &source_tree {
+            assert_pinned_source_tree(tree, repo_pin, "EXIFTOOL");
+        }
+        let explicit_cache = cache.and_then(normalized_path);
+        if let Some(cache) = &explicit_cache {
+            assert_pinned_cache_dir(cache, repo_pin, "EXIFTOOL_CACHE_DIR");
+        }
+        let cache_dir = explicit_cache.unwrap_or(fallback_cache);
         Self::new(source_tree, cache_dir, required)
     }
 
@@ -163,6 +185,36 @@ impl FixtureConfig {
             Ok(None)
         }
     }
+}
+
+fn normalized_path(value: &OsStr) -> Option<PathBuf> {
+    let value = value.to_string_lossy();
+    let value = value.trim();
+    (!value.is_empty()).then(|| PathBuf::from(value))
+}
+
+fn assert_pinned_cache_dir(cache_dir: &Path, repo_pin: &str, variable: &str) {
+    assert_pinned_source_tree(&cache_dir.join("exiftool"), repo_pin, variable);
+}
+
+fn assert_pinned_source_tree(tree: &Path, repo_pin: &str, variable: &str) {
+    let version_file = tree.join("lib/Image/ExifTool.pm");
+    let contents = std::fs::read_to_string(&version_file).unwrap_or_else(|error| {
+        panic!(
+            "{variable} does not name a readable pinned ExifTool {repo_pin} tree ({}: {error})",
+            version_file.display()
+        )
+    });
+    let single = format!("$VERSION = '{repo_pin}'");
+    let double = format!("$VERSION = \"{repo_pin}\"");
+    assert!(
+        contents.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with("$VERSION") && (line.contains(&single) || line.contains(&double))
+        }),
+        "{variable} does not name pinned ExifTool {repo_pin}: {} has no matching $VERSION declaration",
+        version_file.display()
+    );
 }
 
 /// Test-only adapter for precedence tests that model an explicit ExifTool
