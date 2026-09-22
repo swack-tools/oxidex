@@ -5712,11 +5712,10 @@ mod exif_subifd_tests {
     /// under the same keys, with the engine on and off.
     #[test]
     fn replay_keeps_the_hand_walks_order_on_canon_jpg() {
-        let Ok(jpeg) = std::fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Canon.jpg")
-        else {
-            eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("Canon.jpg") else {
             return;
         };
+        let jpeg = std::fs::read(&path).expect("read pinned t/images/Canon.jpg fixture");
         let tiff = tiff_block_of(&jpeg).expect("Canon.jpg has an Exif APP1");
         let reader = TestReader::new(tiff.clone());
         let ifd0 = u64::from(u32::from_le_bytes(tiff[4..8].try_into().unwrap()));
@@ -5763,11 +5762,10 @@ mod exif_subifd_tests {
     /// bytes behind the placeholder.
     #[test]
     fn engine_rows_carry_the_hand_arms_stored_value() {
-        let Ok(jpeg) = std::fs::read("/tmp/oxidex-exiftool-cache/exiftool/t/images/Canon.jpg")
-        else {
-            eprintln!("skipping: t/images/Canon.jpg is not on this machine");
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("Canon.jpg") else {
             return;
         };
+        let jpeg = std::fs::read(&path).expect("read pinned t/images/Canon.jpg fixture");
         let tiff = tiff_block_of(&jpeg).expect("Canon.jpg has an Exif APP1");
         let reader = TestReader::new(tiff.clone());
         let ifd0 = u64::from(u32::from_le_bytes(tiff[4..8].try_into().unwrap()));
@@ -5920,13 +5918,11 @@ mod ifd1_tests {
 
     #[test]
     fn apple_qt_200_ifd1_strip_metadata_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("Apple/AppleQT-200.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Apple/AppleQT-200.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("AppleQT-200 parses");
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("AppleQT-200 parses");
 
         assert_eq!(metadata.get_integer("IFD1:StripOffsets"), Some(796));
         assert_eq!(metadata.get_integer("IFD1:RowsPerStrip"), Some(60));
@@ -6198,13 +6194,12 @@ mod ifd1_tests {
     /// `exiftool -b -ThumbnailTIFF` (47952 bytes), so pin its shape.
     #[test]
     fn leica_r9_dmr_thumbnail_tiff_matches_pinned_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Leica/LeicaR9-DigitalBackDMR.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Leica/LeicaR9-DigitalBackDMR.jpg",
-        );
-        let metadata = crate::core::operations::read_metadata(path).expect("Leica R9 DMR parses");
+        };
+        let metadata = crate::core::operations::read_metadata(&path).expect("Leica R9 DMR parses");
         let Some(TagValue::Binary(tiff)) = metadata.get("IFD1:ThumbnailTIFF") else {
             panic!("IFD1:ThumbnailTIFF must be emitted");
         };
@@ -6986,10 +6981,9 @@ mod ifd1_tests {
             "Canon/CanonXL_H1.jpg",
             "Samsung/SamsungGT-S5620.jpg",
         ] {
-            let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT).join(name);
-            if !path.exists() {
+            let Some(path) = crate::test_support::pinned_combined_fixture_path(name) else {
                 continue;
-            }
+            };
             let metadata = crate::core::operations::read_metadata(&path).expect("parses");
             assert_eq!(ifd1_keys(&metadata), Vec::<String>::new(), "{name}");
         }
@@ -7094,10 +7088,9 @@ mod ifd1_tests {
         ];
         let mut ran = 0;
         for (name, expected) in cases {
-            let Some(path) = crate::test_support::pinned_fixture_path(name).or_else(|| {
-                Some(std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT).join(name))
-                    .filter(|p| p.exists())
-            }) else {
+            let Some(path) = crate::test_support::pinned_fixture_path(name)
+                .or_else(|| crate::test_support::pinned_combined_fixture_path(name))
+            else {
                 continue;
             };
             let metadata = crate::core::operations::read_metadata(&path).expect("parses");
@@ -7134,11 +7127,11 @@ mod ifd1_tests {
     /// says 350 and IFD1 72 (ExifTool `-XResolution` -> 350).
     #[test]
     fn olympus_air_bare_requests_answer_ifd0() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Olympus/OlympusAIR-A01.jpg")
+        else {
             return;
-        }
-        let path = std::path::Path::new(crate::test_support::PINNED_CORPUS_ROOT)
-            .join("Olympus/OlympusAIR-A01.jpg");
+        };
         let metadata = crate::core::operations::read_metadata(&path).expect("parses");
         for (name, group) in [
             ("XResolution", "IFD0"),
@@ -8216,15 +8209,13 @@ mod makernote_preview_image_tests {
     /// extract)`.
     #[test]
     fn pinned_pentax_optio_rz10_reports_its_preview_image() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Pentax/PentaxOptioRZ10.jpg",
-        );
-        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Pentax/PentaxOptioRZ10.jpg")
+        else {
             return;
         };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned PentaxOptioRZ10.jpg fixture");
         let preview = metadata
             .get("Pentax:PreviewImage")
             .expect("Pentax PreviewImage");
@@ -8243,15 +8234,13 @@ mod makernote_preview_image_tests {
     /// `[File] PreviewImage`.
     #[test]
     fn pinned_samsung_digimax_370_reports_its_makernote_as_the_preview() {
-        if !crate::test_support::pinned_corpus_available() {
-            return;
-        }
-        let path = std::path::Path::new(
-            "/tmp/oxidex-exiftool-cache/combined-samples/Samsung/SamsungDigimax370.jpg",
-        );
-        let Ok(metadata) = crate::core::operations::read_metadata(path) else {
+        let Some(path) =
+            crate::test_support::pinned_combined_fixture_path("Samsung/SamsungDigimax370.jpg")
+        else {
             return;
         };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned SamsungDigimax370.jpg fixture");
         let preview = metadata
             .get(PREVIEW_IMAGE_FILE_TAG)
             .expect("File:PreviewImage");

@@ -18,12 +18,12 @@
 
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
+#[path = "common/fixtures.rs"]
+mod fixtures;
 
 fn carrier(relative: &str) -> MetadataMap {
-    let path = Path::new(CORPUS).join(relative);
+    let path = fixtures::pinned_combined_fixture_path(relative)
+        .unwrap_or_else(|| panic!("{relative} is part of the pinned corpus"));
     assert!(
         path.is_file(),
         "{} is part of the pinned corpus",

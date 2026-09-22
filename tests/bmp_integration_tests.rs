@@ -1,8 +1,8 @@
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::image::bmp::parse_bmp_metadata;
-use std::path::Path;
-
-const BMP_FIXTURE: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images/BMP.bmp";
 
 #[test]
 fn os2_bmp_extracts_planes_from_the_os2_dib_layout() {
@@ -23,7 +23,9 @@ fn os2_bmp_extracts_planes_from_the_os2_dib_layout() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn bmp_fixture_extracts_planes_from_the_dib_header() {
-    let reader = BufferedReader::new(Path::new(BMP_FIXTURE)).expect("open pinned BMP fixture");
+    let path =
+        fixtures::pinned_t_images_fixture_path("BMP.bmp").expect("open configured BMP fixture");
+    let reader = BufferedReader::new(&path).expect("open pinned BMP fixture");
     let metadata = parse_bmp_metadata(&reader).expect("parse pinned BMP fixture");
 
     assert_eq!(metadata.get_integer("File:Planes"), Some(1));

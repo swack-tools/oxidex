@@ -4123,11 +4123,10 @@ mod panasonic_rw2_tests {
 
     #[test]
     fn dng_primary_raw_subifd_compression_wins() {
-        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("DNG.dng") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned DNG fixture");
         let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
 
         assert_eq!(metadata.get_string("EXIF:Compression"), Some("JPEG"));
@@ -9297,11 +9296,10 @@ mod cr3_cmt1_artist_tests {
 
     #[test]
     fn extracts_thumbnail_image_from_cr3_thmb_box() {
-        let path = "/tmp/oxidex-exiftool-git-13.59-jjZp0q/exiftool/t/images/CanonRaw.cr3";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("CanonRaw.cr3") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned CR3 fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned CR3 fixture");
         let metadata = parse_cr3(&data, RawFormat::CanonCR3).expect("parse CR3 fixture");
 
         assert_eq!(
@@ -11155,11 +11153,10 @@ mod rational_array_tests {
 
     #[test]
     fn dng_primary_raw_subifd_bits_per_sample_wins() {
-        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/DNG.dng";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("DNG.dng") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned DNG fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned DNG fixture");
         let metadata = parse_raw_metadata(&data, RawFormat::AdobeDNG).expect("parse DNG fixture");
 
         assert_eq!(
@@ -11170,11 +11167,10 @@ mod rational_array_tests {
 
     #[test]
     fn cr2_cfa_pattern_uses_exif_group() {
-        let path = "/tmp/oxidex-exiftool-cache/exiftool/t/images/CanonRaw.cr2";
-        if !std::path::Path::new(path).exists() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("CanonRaw.cr2") else {
             return;
-        }
-        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned CR2 fixture");
         let metadata = parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse CR2 fixture");
 
         assert_eq!(
@@ -11235,14 +11231,10 @@ mod rational_array_tests {
 
     #[test]
     fn cr2_publishes_the_primary_ifd_dimensions_and_no_dummy_preview() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("CanonRaw.cr2") else {
             return;
-        }
-        let path = concat!(
-            "/tmp/oxidex-exiftool-cache/combined-samples/",
-            "CanonRaw.cr2"
-        );
-        let data = std::fs::read(path).expect("read pinned CR2 fixture");
+        };
+        let data = std::fs::read(&path).expect("read pinned CR2 fixture");
         let metadata =
             parse_raw_metadata(&data, RawFormat::CanonCR2).expect("parse pinned CR2 fixture");
 

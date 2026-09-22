@@ -18,6 +18,10 @@ use crate::core::{FileReader, MetadataMap, TagValue};
 use std::collections::BTreeMap;
 use std::io;
 
+#[path = "../tests/common/pinned_fixtures.rs"]
+mod pinned_fixtures;
+pub use pinned_fixtures::{FixtureConfig, FixturePopulation};
+
 /// In-memory FileReader implementation for unit testing.
 ///
 /// Wraps a `Vec<u8>` and implements the `FileReader` trait,
@@ -128,31 +132,20 @@ pub fn assert_no_divergent_prefixed_duplicates(metadata: &MetadataMap) {
     );
 }
 
-/// Root of the pinned ExifTool sample corpus that a number of unit tests read
-/// real image files from.
-///
-/// This is a local developer cache (populated by `just compare-exiftool-full`),
-/// **not** a committed fixture, so it is absent on CI runners and in fresh
-/// clones. Tests that read from it must gate on [`pinned_corpus_available`].
-pub const PINNED_CORPUS_ROOT: &str = "/tmp/oxidex-exiftool-cache/combined-samples";
-
 /// True when the pinned sample corpus is present on this machine.
 ///
-/// Tests reading real files out of [`PINNED_CORPUS_ROOT`] must call this and
-/// return early when it is false. Letting them panic instead turns every CI run
+/// Tests reading real files through [`pinned_combined_fixture_path`] may return
+/// early in ordinary optional mode. Letting them panic instead turns every CI run
 /// red -- and because the runner is fail-fast, the first such panic also stops
 /// the other ~3.9k tests from running at all, which is how a corpus-only
 /// dependency masqueraded as a repo-wide test failure.
 pub fn pinned_corpus_available() -> bool {
     use std::sync::Once;
     static NOTED: Once = Once::new();
-    let present = std::path::Path::new(PINNED_CORPUS_ROOT).is_dir();
+    let present = pinned_combined_corpus_dir().is_some();
     if !present {
         NOTED.call_once(|| {
-            eprintln!(
-                "note: skipping pinned-corpus tests -- {PINNED_CORPUS_ROOT} is absent \
-                 (populate it with `just compare-exiftool-full`)"
-            );
+            eprintln!("note: skipping pinned-corpus tests -- configured combined corpus is absent");
         });
     }
     present
@@ -162,48 +155,55 @@ pub fn pinned_corpus_available() -> bool {
 /// in its configured cache. Optional sample data is absent in fresh clones;
 /// metadata or read failures for a present sample must still fail the test.
 pub fn pinned_fixture_path(name: &str) -> Option<std::path::PathBuf> {
-    use crate::exiftool_oracle;
-    use std::path::Path;
-    let named = std::env::var(exiftool_oracle::BINARY_ENV).ok();
-    let binary = named
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(Path::new);
-    let cache = exiftool_oracle::cache_dir();
-    let path = fixture_path_in(name, binary, &cache);
+    let config = FixtureConfig::from_environment(crate::exiftool_oracle::repo_pin());
+    let path = pinned_fixture_path_with_config(name, &config);
     if path.is_none() {
         eprintln!(
-            "note: skipping pinned-fixture test -- {name} absent beside EXIFTOOL or under {}",
-            cache.display()
+            "note: skipping pinned-fixture test -- {name} absent from configured fixture roots"
         );
     }
     path
 }
 
-fn fixture_path_in(
+pub fn pinned_fixture_path_with_config(
     name: &str,
-    exiftool: Option<&std::path::Path>,
-    cache: &std::path::Path,
+    config: &FixtureConfig,
 ) -> Option<std::path::PathBuf> {
-    use std::path::Path;
-    let cached_binary = crate::exiftool_oracle::pinned_binary(cache);
-    let candidates = [exiftool, Some(cached_binary.as_path())]
-        .into_iter()
-        .flatten()
-        .filter_map(Path::parent)
-        .map(|tree| tree.join("t/images").join(name))
-        .chain([cache.join("combined-samples").join(name)]);
-    candidates
-        .into_iter()
-        .find(|path| match std::fs::symlink_metadata(path) {
-            Ok(_) => true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(error) => panic!(
-                "could not inspect pinned fixture {}: {error}",
-                path.display()
-            ),
-        })
+    config
+        .resolve_for_mode(name, FixturePopulation::Any)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve only an ExifTool source-tree `t/images` fixture.
+pub fn pinned_t_images_fixture_path(name: &str) -> Option<std::path::PathBuf> {
+    let config = FixtureConfig::from_environment(crate::exiftool_oracle::repo_pin());
+    config
+        .resolve_for_mode(name, FixturePopulation::TImages)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve only a combined-corpus fixture.
+pub fn pinned_combined_fixture_path(name: &str) -> Option<std::path::PathBuf> {
+    let config = FixtureConfig::from_environment(crate::exiftool_oracle::repo_pin());
+    config
+        .resolve_for_mode(name, FixturePopulation::Combined)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve the combined-corpus directory for directory-iteration tests.
+pub fn pinned_combined_corpus_dir() -> Option<std::path::PathBuf> {
+    let config = FixtureConfig::from_environment(crate::exiftool_oracle::repo_pin());
+    config
+        .combined_dir_for_mode()
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Resolve the first configured `t/images` directory for directory iteration.
+pub fn pinned_t_images_dir() -> Option<std::path::PathBuf> {
+    let config = FixtureConfig::from_environment(crate::exiftool_oracle::repo_pin());
+    config
+        .t_images_dir_for_mode()
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Open an optional pinned sample without hiding a present file's read error.
@@ -218,6 +218,178 @@ pub fn pinned_fixture_reader(name: &str) -> Option<crate::io::MMapReader> {
 #[cfg(test)]
 mod fixture_tests {
     use super::*;
+
+    #[test]
+    fn injected_configuration_prefers_source_then_cache_then_combined_per_file() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let config = FixtureConfig::new(Some(source.clone()), cache.clone(), false);
+
+        let combined = cache.join("combined-samples/fixture.bin");
+        std::fs::create_dir_all(combined.parent().unwrap()).unwrap();
+        std::fs::write(&combined, b"synthetic combined layout bytes").unwrap();
+        assert_eq!(
+            pinned_fixture_path_with_config("fixture.bin", &config),
+            Some(combined.clone())
+        );
+
+        let cached = cache.join("exiftool/t/images/fixture.bin");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, b"synthetic cached layout bytes").unwrap();
+        assert_eq!(
+            pinned_fixture_path_with_config("fixture.bin", &config),
+            Some(cached.clone())
+        );
+
+        let sourced = source.join("t/images/fixture.bin");
+        std::fs::create_dir_all(sourced.parent().unwrap()).unwrap();
+        std::fs::write(&sourced, b"synthetic source layout bytes").unwrap();
+        assert_eq!(
+            pinned_fixture_path_with_config("fixture.bin", &config),
+            Some(sourced)
+        );
+    }
+
+    #[test]
+    fn injected_configuration_keeps_t_images_and_combined_populations_separate() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let config = FixtureConfig::new(Some(source.clone()), cache.clone(), false);
+
+        let t_images = source.join("t/images");
+        let combined = cache.join("combined-samples");
+        std::fs::create_dir_all(&t_images).unwrap();
+        std::fs::create_dir_all(&combined).unwrap();
+        std::fs::write(t_images.join("only-source.bin"), b"synthetic source bytes").unwrap();
+        std::fs::write(
+            combined.join("only-combined.bin"),
+            b"synthetic combined bytes",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.resolve_optional("only-source.bin", FixturePopulation::TImages),
+            Some(t_images.join("only-source.bin"))
+        );
+        assert_eq!(
+            config.resolve_optional("only-source.bin", FixturePopulation::Combined),
+            None
+        );
+        assert_eq!(
+            config.resolve_optional("only-combined.bin", FixturePopulation::TImages),
+            None
+        );
+        assert_eq!(
+            config.resolve_optional("only-combined.bin", FixturePopulation::Combined),
+            Some(combined.join("only-combined.bin"))
+        );
+    }
+
+    #[test]
+    fn durable_cache_uses_nonempty_ops_dir_without_requiring_home() {
+        assert_eq!(
+            pinned_fixtures::durable_cache_dir_from_values(
+                Some(std::path::Path::new("/durable/ops")),
+                None,
+                "13.59",
+            ),
+            std::path::PathBuf::from("/durable/ops/cache/exiftool/13.59")
+        );
+    }
+
+    #[test]
+    fn durable_cache_treats_empty_ops_dir_as_home_fallback() {
+        assert_eq!(
+            pinned_fixtures::durable_cache_dir_from_values(
+                Some(std::path::Path::new("")),
+                Some(std::path::Path::new("/home/tester")),
+                "13.59",
+            ),
+            std::path::PathBuf::from("/home/tester/oxidex-ops/cache/exiftool/13.59")
+        );
+    }
+
+    #[test]
+    fn injected_required_mode_names_missing_fixture_and_checked_paths() {
+        let temp = tempfile::tempdir().expect("empty fixture layout");
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let optional = FixtureConfig::new(Some(source.clone()), cache.clone(), false);
+        let required = FixtureConfig::new(Some(source.clone()), cache.clone(), true);
+
+        assert_eq!(
+            optional.resolve_optional("missing.bin", FixturePopulation::Any),
+            None
+        );
+        let error = required
+            .resolve_required("missing.bin", FixturePopulation::Any)
+            .expect_err("required mode must reject an absent requested fixture")
+            .to_string();
+        assert!(error.contains("missing.bin"), "{error}");
+        assert!(error.contains(&source.join("t/images/missing.bin").display().to_string()));
+        assert!(
+            error.contains(
+                &cache
+                    .join("exiftool/t/images/missing.bin")
+                    .display()
+                    .to_string()
+            )
+        );
+        assert!(
+            error.contains(
+                &cache
+                    .join("combined-samples/missing.bin")
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn injected_broken_candidate_is_selected_so_open_failure_is_not_a_skip() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let config = FixtureConfig::new(Some(source.clone()), cache, true);
+        let path = source.join("t/images/broken.bin");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("missing-target"), &path).unwrap();
+
+        assert_eq!(
+            config
+                .resolve_required("broken.bin", FixturePopulation::TImages)
+                .expect("present broken candidate must not be reported missing"),
+            path.clone()
+        );
+        assert!(
+            std::fs::read(&path).is_err(),
+            "selected candidate must fail on open"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn required_broken_fixture_directory_is_not_an_optional_skip() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let broken = source.join("t/images");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("missing-directory"), &broken).unwrap();
+
+        let optional = FixtureConfig::new(Some(source.clone()), cache.clone(), false);
+        assert_eq!(optional.t_images_dir_for_mode().unwrap(), None);
+
+        let error = FixtureConfig::new(Some(source), cache, true)
+            .t_images_dir_for_mode()
+            .expect_err("required mode must surface the broken t/images directory")
+            .to_string();
+        assert!(error.contains("unusable"), "{error}");
+        assert!(error.contains(&broken.display().to_string()), "{error}");
+    }
 
     #[test]
     fn resolves_real_fixture_from_nondefault_source_and_cache_locations() {
@@ -237,7 +409,7 @@ mod fixture_tests {
             std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
             std::fs::write(&expected, &bytes).unwrap();
             assert_eq!(
-                fixture_path_in(
+                pinned_fixtures::resolve_optional_from_binary_and_cache(
                     "Real.ra",
                     Some(&temp.path().join("source/exiftool")),
                     &temp.path().join("cache")
@@ -264,7 +436,7 @@ mod fixture_tests {
             std::fs::write(target, &bytes).unwrap();
         }
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "Real.ra",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")
@@ -272,7 +444,11 @@ mod fixture_tests {
             Some(temp.path().join("source/t/images/Real.ra"))
         );
         assert_eq!(
-            fixture_path_in("Real.ra", None, &temp.path().join("cache")),
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
+                "Real.ra",
+                None,
+                &temp.path().join("cache"),
+            ),
             Some(temp.path().join("cache/exiftool/t/images/Real.ra"))
         );
     }
@@ -281,7 +457,7 @@ mod fixture_tests {
     fn missing_optional_fixture_has_no_reader_path() {
         let temp = tempfile::tempdir().expect("empty fixture layout");
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "Real.ra",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")
@@ -298,7 +474,7 @@ mod fixture_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(temp.path().join("missing-target"), &path).unwrap();
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "Real.ra",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")

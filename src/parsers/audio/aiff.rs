@@ -456,7 +456,7 @@ fn format_mac_time(mac_seconds: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{PINNED_CORPUS_ROOT, TestReader, pinned_corpus_available};
+    use crate::test_support::{TestReader, pinned_combined_fixture_path};
 
     /// Build a `FORM....AIF[FC]` wrapper around pre-built chunk bytes.
     fn aiff_file(form_type: &[u8; 4], chunks: &[u8]) -> Vec<u8> {
@@ -753,13 +753,10 @@ mod tests {
 
     #[test]
     fn matches_exiftool_on_the_pinned_aiff_sample() {
-        if !pinned_corpus_available() {
-            return;
-        }
-        let path = format!("{PINNED_CORPUS_ROOT}/AIFF.aif");
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Some(path) = pinned_combined_fixture_path("AIFF.aif") else {
             return;
         };
+        let bytes = std::fs::read(&path).expect("pinned AIFF sample should be readable");
         let reader = TestReader::new(bytes);
         let metadata = AiffParser
             .parse(&reader)
@@ -817,13 +814,10 @@ mod tests {
 
     #[test]
     fn derives_duration_from_the_pinned_sample() {
-        if !pinned_corpus_available() {
-            return;
-        }
-        let path = format!("{PINNED_CORPUS_ROOT}/AIFF.aif");
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Some(path) = pinned_combined_fixture_path("AIFF.aif") else {
             return;
         };
+        let bytes = std::fs::read(&path).expect("pinned AIFF sample should be readable");
         let reader = TestReader::new(bytes);
         let mut metadata = AiffParser
             .parse(&reader)

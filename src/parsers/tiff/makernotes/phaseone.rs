@@ -712,17 +712,13 @@ mod tests {
 
     #[test]
     fn test_real_iiq_fixture_matches_exiftool() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("PhaseOne.iiq") else {
             return;
-        }
+        };
         // Ground truth: `exiftool -G1 -s
         // /tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq`, ExifTool
         // 13.55 (byte-identical PhaseOne.pm to the 13.59 corpus checkout).
-        let path = "/tmp/oxidex-exiftool-cache/combined-samples/PhaseOne.iiq";
-        let Ok(file) = std::fs::read(path) else {
-            eprintln!("skipping: corpus fixture not present at {path}");
-            return;
-        };
+        let file = std::fs::read(&path).expect("PhaseOne.iiq should be readable");
         // MakerNote value starts right after the 8-byte TIFF header
         // (PutFirst => 1 places it there); this dummy fixture's directory
         // runs to the end of the small file.
