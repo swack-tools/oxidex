@@ -97,7 +97,10 @@ fn parser_for_make_prefix(
 ) -> Option<Box<dyn crate::parsers::tiff::makernotes::shared::MakerNoteParser>> {
     use crate::parsers::tiff::makernotes::shared::MakerNoteParser;
 
-    if make.starts_with("olympus") || make.starts_with("om digital solutions") {
+    if make.starts_with("olympus")
+        || make.starts_with("om digital solutions")
+        || make.starts_with("om system")
+    {
         return Some(Box::new(olympus::OlympusParser) as Box<dyn MakerNoteParser>);
     }
     if make.starts_with("pentax") || make.starts_with("asahi optical") {

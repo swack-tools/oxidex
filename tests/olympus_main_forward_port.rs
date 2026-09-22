@@ -79,8 +79,11 @@ fn stacked_note_pairs(pairs: &[(u32, u32)]) -> Vec<u8> {
 }
 
 fn orf_with_makernote(note: &[u8]) -> Vec<u8> {
+    orf_with_make_and_makernote(b"OLYMPUS CORPORATION\0", note)
+}
+
+fn orf_with_make_and_makernote(make: &[u8], note: &[u8]) -> Vec<u8> {
     let order = ByteOrder::LittleEndian;
-    let make = b"OLYMPUS CORPORATION\0";
     let make_offset = 8 + 2 + 2 * 12 + 4;
     let note_offset = make_offset + make.len();
     let mut bytes = b"IIRO".to_vec();
@@ -130,15 +133,30 @@ fn minolta2_note(
 }
 
 fn preview_note(start: u32, length: u32, order: ByteOrder) -> Vec<u8> {
-    let mut note = b"OLYMPUS\0".to_vec();
+    preview_entries_note(b"OLYMPUS\0", &[(0x0f04, start), (0x0f05, length)], order)
+}
+
+fn preview_entries_note(header: &[u8], entries: &[(u16, u32)], order: ByteOrder) -> Vec<u8> {
+    let mut note = header.to_vec();
     note.extend_from_slice(match order {
         ByteOrder::LittleEndian => b"II",
         ByteOrder::BigEndian => b"MM",
     });
     push_u16(&mut note, 3, order);
-    push_u16(&mut note, 2, order);
-    note.extend_from_slice(&entry(0x0f04, 4, 1, start, order));
-    note.extend_from_slice(&entry(0x0f05, 4, 1, length, order));
+    push_u16(&mut note, entries.len() as u16, order);
+    for &(tag, value) in entries {
+        note.extend_from_slice(&entry(tag, 4, 1, value, order));
+    }
+    push_u32(&mut note, 0, order);
+    note
+}
+
+fn type1_preview_note(entries: &[(u16, u32)], order: ByteOrder) -> Vec<u8> {
+    let mut note = b"OLYMP\0\x03\0".to_vec();
+    push_u16(&mut note, entries.len() as u16, order);
+    for &(tag, value) in entries {
+        note.extend_from_slice(&entry(tag, 4, 1, value, order));
+    }
     push_u32(&mut note, 0, order);
     note
 }
@@ -748,6 +766,183 @@ fn raw_reader_prefers_exif_ifd_and_last_surviving_duplicates_in_both_byte_orders
         assert_eq!(
             metadata.get("Olympus:ZoomedPreviewImage"),
             Some(&TagValue::Binary(expected))
+        );
+    }
+}
+
+#[test]
+fn zoomed_preview_scalars_do_not_require_their_missing_partner() {
+    for (tag, name, value) in [
+        (0x0f04, "ZoomedPreviewStart", 40_000),
+        (0x0f05, "ZoomedPreviewLength", 624),
+    ] {
+        let note = preview_entries_note(b"OLYMPUS\0", &[(tag, value)], ByteOrder::LittleEndian);
+        let (_tags, _values, rows, _members, _session) =
+            dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+        assert_eq!(
+            rows.iter()
+                .filter(|(key, _)| key == &format!("Olympus:{name}"))
+                .map(|(_, occurrence)| occurrence.project(ValueChannel::Stored).into_owned())
+                .collect::<Vec<_>>(),
+            [TagValue::Integer(value.into())]
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|(key, _)| key == "Olympus:ZoomedPreviewImage")
+        );
+    }
+}
+
+#[test]
+fn zoomed_preview_duplicate_scalars_keep_physical_order_and_later_winner() {
+    let note = preview_entries_note(
+        b"OLYMPUS\0",
+        &[
+            (0x0f04, 40_000),
+            (0x0f05, 512),
+            (0x0f04, 50_000),
+            (0x0f05, 624),
+        ],
+        ByteOrder::LittleEndian,
+    );
+    let (_tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    let scalars: Vec<_> = rows
+        .iter()
+        .filter(|(key, _)| key.starts_with("Olympus:ZoomedPreview"))
+        .map(|(key, occurrence)| (key.as_str(), occurrence.raw.clone()))
+        .collect();
+    assert_eq!(
+        scalars,
+        [
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(40_000)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(512)),
+            ("Olympus:ZoomedPreviewStart", TagValue::Integer(50_000)),
+            ("Olympus:ZoomedPreviewLength", TagValue::Integer(624)),
+        ]
+    );
+    let mut legacy = HashMap::new();
+    dispatch_makernote(
+        "OLYMPUS CORPORATION",
+        &note,
+        ByteOrder::LittleEndian,
+        &mut legacy,
+    )
+    .expect("duplicate preview scalars dispatch");
+    assert_eq!(
+        legacy.get("Olympus:ZoomedPreviewStart"),
+        Some(&"50000".to_string())
+    );
+    assert_eq!(
+        legacy.get("Olympus:ZoomedPreviewLength"),
+        Some(&"624".to_string())
+    );
+}
+
+#[test]
+fn zoomed_preview_in_bounds_non_jpeg_is_a_datatag() {
+    const NOTE_OFFSET: usize = 96;
+    let payload = b"not a JPEG";
+    let note_len = preview_note(0, payload.len() as u32, ByteOrder::LittleEndian).len();
+    let payload_start = NOTE_OFFSET + note_len;
+    let note = preview_note(
+        payload_start as u32,
+        payload.len() as u32,
+        ByteOrder::LittleEndian,
+    );
+    let mut tiff = vec![0u8; NOTE_OFFSET];
+    tiff.extend_from_slice(&note);
+    tiff.extend_from_slice(payload);
+    let (_tags, _values, rows, _members, _session) = dispatch_structured_in_tiff(
+        "OLYMPUS CORPORATION",
+        &tiff,
+        NOTE_OFFSET,
+        note.len(),
+        0,
+        ByteOrder::LittleEndian,
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|(key, _)| key == "Olympus:ZoomedPreviewImage")
+            .map(|(_, occurrence)| occurrence.project(ValueChannel::Stored).into_owned()),
+        Some(TagValue::Binary(payload.to_vec()))
+    );
+}
+
+#[test]
+fn zoomed_preview_zero_length_suppresses_only_the_datatag() {
+    let note = preview_note(40_000, 0, ByteOrder::LittleEndian);
+    let (_tags, _values, rows, _members, _session) =
+        dispatch_structured("OLYMPUS CORPORATION", &note, ByteOrder::LittleEndian);
+    assert!(
+        rows.iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewStart")
+    );
+    assert!(
+        rows.iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewLength")
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|(key, _)| key == "Olympus:ZoomedPreviewImage")
+    );
+}
+
+#[test]
+fn zoomed_preview_start_channels_remain_local_with_nonzero_tiff_base() {
+    const TIFF_BASE: u64 = 4_096;
+    const NOTE_OFFSET: usize = 96;
+    let payload = b"range-only";
+    let note_len = preview_note(0, payload.len() as u32, ByteOrder::LittleEndian).len();
+    let local_start = NOTE_OFFSET + note_len;
+    let note = preview_note(
+        local_start as u32,
+        payload.len() as u32,
+        ByteOrder::LittleEndian,
+    );
+    let mut tiff = vec![0u8; NOTE_OFFSET];
+    tiff.extend_from_slice(&note);
+    tiff.extend_from_slice(payload);
+    let (_tags, _values, rows, _members, _session) = dispatch_structured_in_tiff(
+        "OLYMPUS CORPORATION",
+        &tiff,
+        NOTE_OFFSET,
+        note.len(),
+        TIFF_BASE,
+        ByteOrder::LittleEndian,
+    );
+    let (_, start) = rows
+        .iter()
+        .find(|(key, _)| key == "Olympus:ZoomedPreviewStart")
+        .expect("preview start occurrence");
+    assert_eq!(start.raw, TagValue::Integer(local_start as i64));
+    assert_eq!(start.value, Some(TagValue::Integer(local_start as i64)));
+    assert_eq!(start.print, Some(TagValue::Integer(local_start as i64)));
+    assert_eq!(start.stored, Some(TagValue::Integer(local_start as i64)));
+}
+
+#[test]
+fn raw_reader_structurally_routes_om_makes_and_olymp_signature() {
+    let note = type1_preview_note(&[(0x0f04, 0), (0x0f05, 0)], ByteOrder::LittleEndian);
+    for make in [
+        b"OM Digital Solutions\0".as_slice(),
+        b"OM System\0".as_slice(),
+    ] {
+        let metadata = oxidex::parsers::raw::metadata::parse_raw_metadata(
+            &orf_with_make_and_makernote(make, &note),
+            oxidex::parsers::raw::RawFormat::OlympusORF,
+        )
+        .expect("OM raw dispatches through structured Olympus route");
+        assert!(
+            metadata
+                .project_occurrences(ValueChannel::Stored)
+                .any(|(key, occurrence, _)| {
+                    key == "Olympus:ZoomedPreviewStart"
+                        && occurrence.id == TagId::Numeric(0x0f04)
+                        && occurrence.origin.module == Some("Olympus")
+                })
         );
     }
 }

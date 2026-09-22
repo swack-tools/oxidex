@@ -817,15 +817,15 @@ impl OlympusParser {
             );
         }
 
+        let mut zoomed_preview = ZoomedPreviewState::default();
         append_zoomed_preview_rows(
             data,
-            data_base,
-            data_domain,
             &entries,
             base,
             effective_byte_order,
             tags,
             structured_rows.as_deref_mut(),
+            &mut zoomed_preview,
         );
 
         // Slice I-3 (design spec section 5): the seven sub-tables
@@ -990,15 +990,22 @@ impl OlympusParser {
         {
             append_zoomed_preview_rows(
                 data,
-                data_base,
-                data_domain,
                 &main_info_entries,
                 base,
                 order,
                 tags,
                 structured_rows.as_deref_mut(),
+                &mut zoomed_preview,
             );
         }
+
+        append_zoomed_preview_datatag(
+            data,
+            data_base,
+            data_domain,
+            zoomed_preview,
+            structured_rows.as_deref_mut(),
+        );
 
         // 0x0201 `Quality`, 0x0207 `CameraType` and 0x0208 `TextInfo` sit
         // wherever the body put them: the older bodies write them in the
@@ -1031,58 +1038,56 @@ impl OlympusParser {
 
 /// Materialize Olympus.pm:893-907's OffsetPair/DataTag contract without
 /// flattening its binary value through the residual string map.
+#[derive(Default)]
+struct ZoomedPreviewState {
+    start: Option<i64>,
+    length: Option<i64>,
+}
+
+/// Emit the source scalars in physical IFD-entry order and retain their
+/// independent later-wins values for the one composite DataTag, which is
+/// materialised after every Olympus::Main walk has completed.
 fn append_zoomed_preview_rows(
     data: &[u8],
-    data_base: Option<u32>,
-    data_domain: u64,
     entries: &[ifd::RawEntry],
     base: Option<i64>,
     order: ByteOrder,
     tags: &mut HashMap<String, String>,
-    rows: Option<&mut Vec<(String, TagOccurrence)>>,
+    mut rows: Option<&mut Vec<(String, TagOccurrence)>>,
+    state: &mut ZoomedPreviewState,
 ) {
     let pair = &tables::ZOOMED_PREVIEW_PAIR;
-    let scalar = |id| {
-        entries
-            .iter()
-            .find(|entry| entry.tag_id == id)
-            .and_then(|entry| ifd::decode_entry(data, entry, base, order, None))
-            .and_then(|value| value.first_int())
-    };
-    let (Some(start), Some(length)) = (scalar(pair.offset_id), scalar(pair.length_id)) else {
-        return;
-    };
-    let (Ok(start_u64), Ok(length_u64)) = (u64::try_from(start), u64::try_from(length)) else {
-        return;
-    };
+    for entry in entries {
+        let (name, value) = match entry.tag_id {
+            id if id == pair.offset_id => ("ZoomedPreviewStart", &mut state.start),
+            id if id == pair.length_id => ("ZoomedPreviewLength", &mut state.length),
+            _ => continue,
+        };
+        let Some(decoded) =
+            ifd::decode_entry(data, entry, base, order, None).and_then(|value| value.first_int())
+        else {
+            continue;
+        };
+        *value = Some(decoded);
 
-    let Some(rows) = rows else {
-        tags.insert("Olympus:ZoomedPreviewStart".to_string(), start.to_string());
-        tags.insert(
-            "Olympus:ZoomedPreviewLength".to_string(),
-            length.to_string(),
-        );
-        return;
-    };
-
-    for (id, name, value) in [
-        (pair.offset_id, "ZoomedPreviewStart", start),
-        (pair.length_id, "ZoomedPreviewLength", length),
-    ] {
-        let value = TagValue::Integer(value);
+        let Some(rows) = rows.as_deref_mut() else {
+            tags.insert(format!("Olympus:{name}"), decoded.to_string());
+            continue;
+        };
+        let stored = TagValue::Integer(decoded);
         rows.push((
             format!("Olympus:{name}"),
             TagOccurrence {
-                id: crate::core::TagId::Numeric(id),
+                id: crate::core::TagId::Numeric(entry.tag_id),
                 name: intern(name),
                 group0: intern("MakerNotes"),
                 group1: intern("Olympus"),
                 group2: Some(intern("Camera")),
                 instance: Instance::default(),
-                raw: value.clone(),
-                value: Some(value.clone()),
-                print: Some(value.clone()),
-                stored: Some(value),
+                raw: stored.clone(),
+                value: Some(stored.clone()),
+                print: Some(stored.clone()),
+                stored: Some(stored),
                 priority: 1,
                 is_list: false,
                 order: 0,
@@ -1094,6 +1099,32 @@ fn append_zoomed_preview_rows(
             },
         ));
     }
+}
+
+/// Olympus.pm's composite runs after its required tags are found, so the
+/// final Start and Length may originate in different physical directories.
+/// The eager typed path can retain a DataTag only when its declared range is
+/// readable; it never invents bytes for an unreadable carrier.
+fn append_zoomed_preview_datatag(
+    data: &[u8],
+    data_base: Option<u32>,
+    data_domain: u64,
+    state: ZoomedPreviewState,
+    rows: Option<&mut Vec<(String, TagOccurrence)>>,
+) {
+    let pair = &tables::ZOOMED_PREVIEW_PAIR;
+    let (Some(start), Some(length)) = (state.start, state.length) else {
+        return;
+    };
+    let (Ok(start_u64), Ok(length_u64)) = (u64::try_from(start), u64::try_from(length)) else {
+        return;
+    };
+    if length_u64 == 0 {
+        return;
+    }
+    let Some(rows) = rows else {
+        return;
+    };
 
     let Some(local_start) = data_base
         .map(u64::from)
@@ -1111,9 +1142,6 @@ fn append_zoomed_preview_rows(
     let Some(bytes) = data.get(local_start..local_end) else {
         return;
     };
-    if !bytes.starts_with(&[0xff, 0xd8]) || !bytes.ends_with(&[0xff, 0xd9]) {
-        return;
-    }
     let Some(byte_range) = u64::try_from(local_start)
         .ok()
         .and_then(|start| data_domain.checked_add(start))

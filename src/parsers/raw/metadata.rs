@@ -47,6 +47,19 @@ use crate::parsers::tiff::makernotes::canon::{
 use crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext;
 use crate::tag_db::lookup_tag_name;
 
+fn is_olympus_structured_makernote(data: &[u8]) -> bool {
+    (data.len() >= 8 && data.starts_with(b"OLYMP\0"))
+        || (data.len() >= 10 && data.starts_with(b"OLYMPUS\0"))
+        || (data.len() >= 16 && data.starts_with(b"OM SYSTEM\0"))
+}
+
+fn is_olympus_make(make: &str) -> bool {
+    let make = make.trim().to_ascii_lowercase();
+    make.starts_with("olympus")
+        || make.starts_with("om digital solutions")
+        || make.starts_with("om system")
+}
+
 /// Resolve RAW-specific tags using the names and groups assigned by ExifTool.
 ///
 /// Some physical RAW IFD tags correspond to standard EXIF concepts but use
@@ -1049,8 +1062,8 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             &mut value_forms,
                         )
                     } else if matches!(format, RawFormat::OlympusORF | RawFormat::OlympusORI)
-                        && make.trim().to_ascii_lowercase().contains("olympus")
-                        && mn_data.starts_with(b"OLYMPUS\0")
+                        && is_olympus_make(make)
+                        && is_olympus_structured_makernote(mn_data)
                         && let Some((payload_offset, payload_len)) = makernote_location
                     {
                         let ctx = MakerNoteContext::in_tiff(data, payload_offset, payload_len, 0);
