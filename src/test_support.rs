@@ -206,31 +206,6 @@ pub fn pinned_t_images_dir() -> Option<std::path::PathBuf> {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
-fn fixture_path_in(
-    name: &str,
-    exiftool: Option<&std::path::Path>,
-    cache: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    use std::path::Path;
-    let cached_binary = crate::exiftool_oracle::pinned_binary(cache);
-    let candidates = [exiftool, Some(cached_binary.as_path())]
-        .into_iter()
-        .flatten()
-        .filter_map(Path::parent)
-        .map(|tree| tree.join("t/images").join(name))
-        .chain([cache.join("combined-samples").join(name)]);
-    candidates
-        .into_iter()
-        .find(|path| match std::fs::symlink_metadata(path) {
-            Ok(_) => true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(error) => panic!(
-                "could not inspect pinned fixture {}: {error}",
-                path.display()
-            ),
-        })
-}
-
 /// Open an optional pinned sample without hiding a present file's read error.
 pub fn pinned_fixture_reader(name: &str) -> Option<crate::io::MMapReader> {
     pinned_fixture_path(name).map(|path| {
@@ -313,6 +288,30 @@ mod fixture_tests {
     }
 
     #[test]
+    fn durable_cache_uses_nonempty_ops_dir_without_requiring_home() {
+        assert_eq!(
+            pinned_fixtures::durable_cache_dir_from_values(
+                Some(std::path::Path::new("/durable/ops")),
+                None,
+                "13.59",
+            ),
+            std::path::PathBuf::from("/durable/ops/cache/exiftool/13.59")
+        );
+    }
+
+    #[test]
+    fn durable_cache_treats_empty_ops_dir_as_home_fallback() {
+        assert_eq!(
+            pinned_fixtures::durable_cache_dir_from_values(
+                Some(std::path::Path::new("")),
+                Some(std::path::Path::new("/home/tester")),
+                "13.59",
+            ),
+            std::path::PathBuf::from("/home/tester/oxidex-ops/cache/exiftool/13.59")
+        );
+    }
+
+    #[test]
     fn injected_required_mode_names_missing_fixture_and_checked_paths() {
         let temp = tempfile::tempdir().expect("empty fixture layout");
         let source = temp.path().join("source");
@@ -371,6 +370,27 @@ mod fixture_tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn required_broken_fixture_directory_is_not_an_optional_skip() {
+        let temp = tempfile::tempdir().expect("temporary fixture layout");
+        let source = temp.path().join("source");
+        let cache = temp.path().join("cache");
+        let broken = source.join("t/images");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("missing-directory"), &broken).unwrap();
+
+        let optional = FixtureConfig::new(Some(source.clone()), cache.clone(), false);
+        assert_eq!(optional.t_images_dir_for_mode().unwrap(), None);
+
+        let error = FixtureConfig::new(Some(source), cache, true)
+            .t_images_dir_for_mode()
+            .expect_err("required mode must surface the broken t/images directory")
+            .to_string();
+        assert!(error.contains("unusable"), "{error}");
+        assert!(error.contains(&broken.display().to_string()), "{error}");
+    }
+
     #[test]
     fn resolves_real_fixture_from_nondefault_source_and_cache_locations() {
         let Some(path) = pinned_fixture_path("Real.ra") else {
@@ -389,7 +409,7 @@ mod fixture_tests {
             std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
             std::fs::write(&expected, &bytes).unwrap();
             assert_eq!(
-                fixture_path_in(
+                pinned_fixtures::resolve_optional_from_binary_and_cache(
                     "Real.ra",
                     Some(&temp.path().join("source/exiftool")),
                     &temp.path().join("cache")
@@ -416,7 +436,7 @@ mod fixture_tests {
             std::fs::write(target, &bytes).unwrap();
         }
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "Real.ra",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")
@@ -424,7 +444,11 @@ mod fixture_tests {
             Some(temp.path().join("source/t/images/Real.ra"))
         );
         assert_eq!(
-            fixture_path_in("Real.ra", None, &temp.path().join("cache")),
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
+                "Real.ra",
+                None,
+                &temp.path().join("cache"),
+            ),
             Some(temp.path().join("cache/exiftool/t/images/Real.ra"))
         );
     }
@@ -433,7 +457,7 @@ mod fixture_tests {
     fn missing_optional_fixture_has_no_reader_path() {
         let temp = tempfile::tempdir().expect("empty fixture layout");
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "Real.ra",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")
@@ -450,7 +474,7 @@ mod fixture_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(temp.path().join("missing-target"), &path).unwrap();
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "Real.ra",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")

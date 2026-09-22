@@ -2210,9 +2210,8 @@ mod tests {
         else {
             return;
         };
-        let Ok(metadata) = crate::core::operations::read_metadata(&path) else {
-            return;
-        };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned NikonCoolpix3200.jpg fixture");
         assert_eq!(
             metadata.get_string("Nikon:PreviewImageStart"),
             Some("14921")

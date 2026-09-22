@@ -128,34 +128,90 @@ impl FixtureConfig {
         requested: &str,
         checked: Vec<PathBuf>,
     ) -> Result<Option<PathBuf>, MissingFixture> {
-        let found = checked.iter().find(|path| path.is_dir()).cloned();
+        for path in &checked {
+            match std::fs::symlink_metadata(path) {
+                Ok(_) if path.is_dir() => return Ok(Some(path.clone())),
+                Ok(_) if self.required => {
+                    return Err(MissingFixture {
+                        requested: format!("{requested} is unusable at {}", path.display()),
+                        checked,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) if self.required => {
+                    return Err(MissingFixture {
+                        requested: format!(
+                            "{requested} could not be inspected at {}: {error}",
+                            path.display()
+                        ),
+                        checked,
+                    });
+                }
+                Err(error) => panic!(
+                    "could not inspect pinned fixture directory {}: {error}",
+                    path.display()
+                ),
+            }
+        }
         if self.required {
-            found
-                .ok_or_else(|| MissingFixture {
-                    requested: requested.to_owned(),
-                    checked,
-                })
-                .map(Some)
+            Err(MissingFixture {
+                requested: requested.to_owned(),
+                checked,
+            })
         } else {
-            Ok(found)
+            Ok(None)
         }
     }
 }
 
+/// Test-only adapter for precedence tests that model an explicit ExifTool
+/// binary and a cache root. Both wrapper test suites use this instead of
+/// restating fixture search order.
+pub fn resolve_optional_from_binary_and_cache(
+    name: &str,
+    binary: Option<&Path>,
+    cache_dir: &Path,
+) -> Option<PathBuf> {
+    FixtureConfig::new(
+        binary.and_then(Path::parent).map(Path::to_path_buf),
+        cache_dir.to_path_buf(),
+        false,
+    )
+    .resolve_optional(name, FixturePopulation::Any)
+}
+
 pub fn durable_cache_dir(ops_dir: Option<&Path>, home_dir: &Path, repo_pin: &str) -> PathBuf {
+    durable_cache_dir_from_values(ops_dir, Some(home_dir), repo_pin)
+}
+
+pub fn durable_cache_dir_from_values(
+    ops_dir: Option<&Path>,
+    home_dir: Option<&Path>,
+    repo_pin: &str,
+) -> PathBuf {
     ops_dir
+        .filter(|path| !path.as_os_str().is_empty())
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| home_dir.join("oxidex-ops"))
+        .unwrap_or_else(|| {
+            home_dir
+                .expect("fixture resolution needs OXIDEX_OPS_DIR or HOME for its cache root")
+                .join("oxidex-ops")
+        })
         .join("cache/exiftool")
         .join(repo_pin.trim())
 }
 
 fn durable_cache_dir_from_environment(repo_pin: &str) -> PathBuf {
-    let ops_dir = env::var_os("OXIDEX_OPS_DIR").map(PathBuf::from);
-    let home_dir = env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| {
-        panic!("fixture resolution needs OXIDEX_OPS_DIR or HOME for its cache root")
-    });
-    durable_cache_dir(ops_dir.as_deref(), &home_dir, repo_pin)
+    let ops_dir = env::var_os("OXIDEX_OPS_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let home_dir = if ops_dir.is_some() {
+        None
+    } else {
+        env::var_os("HOME").map(PathBuf::from)
+    };
+    durable_cache_dir_from_values(ops_dir.as_deref(), home_dir.as_deref(), repo_pin)
 }
 
 fn path_is_present(path: &Path) -> bool {

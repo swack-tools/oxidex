@@ -6,8 +6,7 @@
 #![allow(dead_code)] // Standalone integration targets use different fixture routes.
 
 use oxidex::exiftool_oracle;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[path = "pinned_fixtures.rs"]
 mod pinned_fixtures;
@@ -62,24 +61,6 @@ pub fn pinned_combined_corpus_dir() -> Option<PathBuf> {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
-fn fixture_path_in(name: &str, exiftool: Option<&Path>, cache: &Path) -> Option<PathBuf> {
-    let cached_binary = exiftool_oracle::pinned_binary(cache);
-    [exiftool, Some(cached_binary.as_path())]
-        .into_iter()
-        .flatten()
-        .filter_map(Path::parent)
-        .map(|tree| tree.join("t/images").join(name))
-        .chain([cache.join("combined-samples").join(name)])
-        .find(|path| match std::fs::symlink_metadata(path) {
-            Ok(_) => true,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-            Err(error) => panic!(
-                "could not inspect pinned fixture {}: {error}",
-                path.display()
-            ),
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +103,11 @@ mod tests {
             std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
             std::fs::write(&expected, &bytes).unwrap();
             assert_eq!(
-                fixture_path_in("RIFF.avi", Some(&binary), &cache),
+                pinned_fixtures::resolve_optional_from_binary_and_cache(
+                    "RIFF.avi",
+                    Some(&binary),
+                    &cache,
+                ),
                 Some(expected)
             );
         }
@@ -132,7 +117,7 @@ mod tests {
     fn absent_optional_fixture_has_no_path() {
         let temp = tempfile::tempdir().expect("empty fixture layout");
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "RIFF.avi",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")
@@ -149,7 +134,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(temp.path().join("missing-target"), &path).unwrap();
         assert_eq!(
-            fixture_path_in(
+            pinned_fixtures::resolve_optional_from_binary_and_cache(
                 "RIFF.avi",
                 Some(&temp.path().join("source/exiftool")),
                 &temp.path().join("cache")

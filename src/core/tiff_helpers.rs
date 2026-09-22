@@ -7822,9 +7822,8 @@ mod makernote_preview_image_tests {
         else {
             return;
         };
-        let Ok(metadata) = crate::core::operations::read_metadata(&path) else {
-            return;
-        };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned PentaxOptioRZ10.jpg fixture");
         let preview = metadata
             .get("Pentax:PreviewImage")
             .expect("Pentax PreviewImage");
@@ -7848,9 +7847,8 @@ mod makernote_preview_image_tests {
         else {
             return;
         };
-        let Ok(metadata) = crate::core::operations::read_metadata(&path) else {
-            return;
-        };
+        let metadata = crate::core::operations::read_metadata(&path)
+            .expect("read pinned SamsungDigimax370.jpg fixture");
         let preview = metadata
             .get(PREVIEW_IMAGE_FILE_TAG)
             .expect("File:PreviewImage");

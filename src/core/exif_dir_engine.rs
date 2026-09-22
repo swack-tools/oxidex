@@ -1824,14 +1824,25 @@ mod tests {
     #[test]
     fn output_rules_are_a_no_op_on_engine_exif_ifd_values() {
         use crate::parsers::tiff::ifd_parser::ByteOrder as Order;
-        let mut paths: Vec<std::path::PathBuf> = crate::test_support::pinned_t_images_dir()
-            .and_then(|root| std::fs::read_dir(root).ok())
-            .map(|dir| {
-                dir.filter_map(|e| e.ok().map(|e| e.path()))
+        let required = crate::test_support::FixtureConfig::from_environment(
+            crate::exiftool_oracle::repo_pin(),
+        )
+        .required();
+        let mut paths: Vec<std::path::PathBuf> = match crate::test_support::pinned_t_images_dir() {
+            Some(root) => match std::fs::read_dir(&root) {
+                Ok(dir) => dir
+                    .filter_map(|entry| match entry {
+                        Ok(entry) => Some(entry.path()),
+                        Err(error) if required => panic!("read {}: {error}", root.display()),
+                        Err(_) => None,
+                    })
                     .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-                    .collect()
-            })
-            .unwrap_or_default();
+                    .collect(),
+                Err(error) if required => panic!("read {}: {error}", root.display()),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
         // The spec's census-named and semantic-case JPEGs (`slices/exif-ifd/
         // work/named.txt`, `special.txt`), from the pinned corpus.
         let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
@@ -1843,8 +1854,10 @@ mod tests {
         let mut names = std::collections::BTreeSet::new();
         let mut changed = Vec::new();
         for path in &paths {
-            let Ok(jpeg) = std::fs::read(path) else {
-                continue;
+            let jpeg = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) if required => panic!("read {}: {error}", path.display()),
+                Err(_) => continue,
             };
             let Some(tiff) = app1_tiff(&jpeg) else {
                 continue;
@@ -1914,14 +1927,25 @@ mod tests {
     /// t/images JPEG and of [`CORPUS_JPEGS`], walked by [`ifd0_walk`].
     #[test]
     fn output_rules_are_a_no_op_on_engine_ifd0_values() {
-        let mut paths: Vec<std::path::PathBuf> = crate::test_support::pinned_t_images_dir()
-            .and_then(|root| std::fs::read_dir(root).ok())
-            .map(|dir| {
-                dir.filter_map(|e| e.ok().map(|e| e.path()))
+        let required = crate::test_support::FixtureConfig::from_environment(
+            crate::exiftool_oracle::repo_pin(),
+        )
+        .required();
+        let mut paths: Vec<std::path::PathBuf> = match crate::test_support::pinned_t_images_dir() {
+            Some(root) => match std::fs::read_dir(&root) {
+                Ok(dir) => dir
+                    .filter_map(|entry| match entry {
+                        Ok(entry) => Some(entry.path()),
+                        Err(error) if required => panic!("read {}: {error}", root.display()),
+                        Err(_) => None,
+                    })
                     .filter(|p| p.extension().is_some_and(|x| x == "jpg"))
-                    .collect()
-            })
-            .unwrap_or_default();
+                    .collect(),
+                Err(error) if required => panic!("read {}: {error}", root.display()),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
         let Some(root) = crate::test_support::pinned_combined_corpus_dir() else {
             return;
         };
@@ -1931,8 +1955,10 @@ mod tests {
         let mut names = std::collections::BTreeSet::new();
         let mut changed = Vec::new();
         for path in &paths {
-            let Ok(jpeg) = std::fs::read(path) else {
-                continue;
+            let jpeg = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) if required => panic!("read {}: {error}", path.display()),
+                Err(_) => continue,
             };
             let Some(tiff) = app1_tiff(&jpeg) else {
                 continue;

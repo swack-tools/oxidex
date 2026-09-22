@@ -1316,10 +1316,6 @@ mod step19_duplicate_retention_regression {
     use std::path::Path;
 
     fn occurrence_count(path: &Path, key: &str) -> usize {
-        if !path.is_file() {
-            eprintln!("skip: pinned fixture {} not present", path.display());
-            return usize::MAX; // never equals an asserted expectation
-        }
         let report = crate::core::operations::read_metadata_report(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         report.metadata.occurrences_for(key).len()
@@ -1333,9 +1329,6 @@ mod step19_duplicate_retention_regression {
             return;
         };
         let n = occurrence_count(&path, "File:Comment");
-        if n == usize::MAX {
-            return;
-        }
         assert_eq!(n, 2);
     }
 
@@ -1347,9 +1340,6 @@ mod step19_duplicate_retention_regression {
             return;
         };
         let n = occurrence_count(&path, "QuickTime:TrackID");
-        if n == usize::MAX {
-            return;
-        }
         assert_eq!(n, 2);
     }
 
@@ -1359,9 +1349,6 @@ mod step19_duplicate_retention_regression {
             return;
         };
         let n = occurrence_count(&path, "QuickTime:TrackID");
-        if n == usize::MAX {
-            return;
-        }
         assert_eq!(n, 4);
     }
 
@@ -1374,9 +1361,6 @@ mod step19_duplicate_retention_regression {
         };
         let lens = occurrence_count(&root, "Pentax:LensType");
         let model = occurrence_count(&root, "Pentax:PentaxModelID");
-        if lens == usize::MAX {
-            return;
-        }
         assert_eq!(lens, 2);
         assert_eq!(model, 2);
     }
@@ -1388,9 +1372,6 @@ mod step19_duplicate_retention_regression {
         };
         let lens = occurrence_count(&root, "Pentax:LensType");
         let model = occurrence_count(&root, "Pentax:PentaxModelID");
-        if lens == usize::MAX {
-            return;
-        }
         assert_eq!(lens, 2);
         assert_eq!(model, 2);
     }

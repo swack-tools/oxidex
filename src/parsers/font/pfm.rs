@@ -222,7 +222,9 @@ mod tests {
     /// a wrong byte order or a missing `PrintConv`.
     fn carrier() -> Option<BufferedReader> {
         let path = crate::test_support::pinned_combined_fixture_path("Font.pfm")?;
-        BufferedReader::new(&path).ok()
+        Some(BufferedReader::new(&path).unwrap_or_else(|error| {
+            panic!("read pinned Font.pfm fixture {}: {error}", path.display())
+        }))
     }
 
     /// The whole `Font::PFM` table against the pinned oracle's output for the
