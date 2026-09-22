@@ -700,16 +700,29 @@ def _parse_print_conv(src, pc_start, pc_end, k, enums, bitmasks, other_ids, prin
                 f"{expected_pairs} entries -- the verifier's pair "
                 "pattern is out of date; fix it before trusting a PASS"
             )
-        for kk, vv in pairs:
+        decoded_pairs = [
+            (kk, unescape(vv)) if int_keys else (unescape(kk), unescape(vv))
+            for kk, vv in pairs
+        ]
+        if not int_keys and k == FIXED_ARRAY_PATTERN_ENUM_KEY:
+            markers = [
+                (index, value)
+                for index, (enum_key, value) in enumerate(decoded_pairs)
+                if enum_key == FIXED_ARRAY_PATTERN_MARKER
+            ]
+            if markers != [(0, "")]:
+                raise SystemExit(
+                    f"enum for {k}: fixed-array runtime marker must occur exactly "
+                    "once as the first entry with an empty value"
+                )
+        for index, (enum_key, enum_value) in enumerate(decoded_pairs):
             if int_keys:
-                enums[k][kk] = unescape(vv)
+                enums[k][enum_key] = enum_value
             else:
-                enum_key = unescape(kk)
-                enum_value = unescape(vv)
                 if (
                     k == FIXED_ARRAY_PATTERN_ENUM_KEY
+                    and index == 0
                     and enum_key == FIXED_ARRAY_PATTERN_MARKER
-                    and enum_value == ""
                 ):
                     continue
                 enums[k][enum_key] = enum_value

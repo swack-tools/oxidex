@@ -20,6 +20,7 @@ import re
 import types
 import tempfile
 import unittest
+from unittest import mock
 
 import reachability
 import verify
@@ -257,6 +258,36 @@ class ParseSample(unittest.TestCase):
             generated.enums[("Olympus", "Main", "519")]["\x1foxidex-fixed-array-pattern-v1"],
             "",
         )
+
+    def test_fixed_array_runtime_marker_is_required(self):
+        repo = HERE.parents[1]
+        path = repo / "src/exiftool_tables/ifd/mod.rs"
+        source = table_modules.read_logical(path)
+        marker = '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n'
+        self.assertEqual(source.count(marker), 1)
+        without_marker = source.replace(marker, "", 1)
+        with mock.patch.object(table_modules, "read_logical", return_value=without_marker):
+            with self.assertRaisesRegex(SystemExit, "fixed-array runtime marker"):
+                verify.parse_ifd_rust(path)
+
+    def test_fixed_array_runtime_marker_must_be_first(self):
+        repo = HERE.parents[1]
+        path = repo / "src/exiftool_tables/ifd/mod.rs"
+        source = table_modules.read_logical(path)
+        first_two = (
+            '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n'
+            '                ("0 0", "No"),\n'
+        )
+        self.assertEqual(source.count(first_two), 1)
+        misplaced = source.replace(
+            first_two,
+            '                ("0 0", "No"),\n'
+            '                ("\\u{1f}oxidex-fixed-array-pattern-v1", ""),\n',
+            1,
+        )
+        with mock.patch.object(table_modules, "read_logical", return_value=misplaced):
+            with self.assertRaisesRegex(SystemExit, "fixed-array runtime marker"):
+                verify.parse_ifd_rust(path)
 
 
 class BinaryIsTheUnsizedUndef(unittest.TestCase):
