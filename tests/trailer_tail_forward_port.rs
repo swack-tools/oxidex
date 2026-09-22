@@ -67,10 +67,30 @@ fn samsung_direct_seft_trailer() -> Vec<u8> {
     trailer
 }
 
+fn samsung_trailer_with_malformed_terminal_seft() -> Vec<u8> {
+    let mut trailer = samsung_soundshot_trailer();
+    // Put an invalid SEFH/SEFT block immediately before QDIO.  The valid
+    // directory is still farther back, so a reader that merely skips a bad
+    // terminal directory would incorrectly recover the older Sound & Shot.
+    let qdio_payload_at = trailer.len() - (20 + 4 + b"QDIOBS".len());
+    let mut malformed = b"SEFH\x65\0\0\0".to_vec();
+    malformed.extend_from_slice(&u32::MAX.to_le_bytes());
+    malformed.extend_from_slice(&(malformed.len() as u32).to_le_bytes());
+    malformed.extend_from_slice(b"SEFT");
+    trailer.splice(qdio_payload_at..qdio_payload_at, malformed);
+    trailer
+}
+
 fn vivo_trailer(json: &[u8]) -> Vec<u8> {
     let mut trailer = b"vivo".to_vec();
     trailer.extend_from_slice(json);
     trailer.push(0);
+    trailer.extend_from_slice(b"\xff\xff\xff\xff\x1b*9HWfu\x84\x93\xa2\xb1");
+    trailer
+}
+
+fn vivo_trailer_with_two_json_markers() -> Vec<u8> {
+    let mut trailer = b"vivo{\"first\":1}\0interstitialvivo{\"second\":2}\0".to_vec();
     trailer.extend_from_slice(b"\xff\xff\xff\xff\x1b*9HWfu\x84\x93\xa2\xb1");
     trailer
 }
@@ -132,6 +152,23 @@ fn samsung_inner_to_vivo_eof_suffix_matches_pinned_trailer_chain() {
         metadata.get_string("Vivo:JSONInfo"),
         Some("{\"version\":1000}")
     );
+}
+
+#[test]
+fn vivo_uses_first_marker_for_json_and_samsung_trailer_boundary() {
+    let mut jpeg = base_jpeg();
+    finish_jpeg(&mut jpeg);
+    jpeg.extend_from_slice(&samsung_soundshot_trailer());
+    jpeg.extend_from_slice(&vivo_trailer_with_two_json_markers());
+    let metadata = public_metadata(&jpeg);
+
+    // Trailer.pm's first marker supplies both the trailer boundary and the
+    // first `}\0`-bounded JSON value; it does not select the last marker.
+    assert_eq!(
+        metadata.get_string("Samsung:EmbeddedAudioFileName"),
+        Some("SoundShot_000")
+    );
+    assert_eq!(metadata.get_string("Vivo:JSONInfo"), Some("{\"first\":1}"));
 }
 
 #[test]
@@ -227,4 +264,17 @@ fn samsung_direct_seft_footer_is_bounded_and_publicly_readable() {
         public_metadata(&jpeg).get_string("Samsung:EmbeddedAudioFileName"),
         Some("SoundShot_000")
     );
+}
+
+#[test]
+fn malformed_terminal_samsung_seft_does_not_fall_back_to_earlier_directory() {
+    let mut jpeg = base_jpeg();
+    finish_jpeg(&mut jpeg);
+    jpeg.extend_from_slice(&samsung_trailer_with_malformed_terminal_seft());
+    let metadata = public_metadata(&jpeg);
+
+    // Samsung.pm stops the backward walk when `12 + 12 * count` exceeds the
+    // terminal SEFT block. It must not continue to an older valid-looking one.
+    assert!(metadata.get("Samsung:EmbeddedAudioFileName").is_none());
+    assert!(metadata.get("Samsung:EmbeddedAudioFile").is_none());
 }

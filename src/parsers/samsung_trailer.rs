@@ -89,14 +89,14 @@ pub fn parse_samsung_trailer(file: &[u8]) -> MetadataMap {
             return MetadataMap::new();
         }
         let Some(count) = read_u32(block, 8).map(|value| value as usize) else {
-            continue;
+            return MetadataMap::new();
         };
         let Some(directory_len) = 12usize.checked_add(count.checked_mul(12).unwrap_or(usize::MAX))
         else {
-            continue;
+            return MetadataMap::new();
         };
         if directory_len > block.len() {
-            continue;
+            return MetadataMap::new();
         }
         let mut metadata = MetadataMap::new();
         for index in 0..count {
