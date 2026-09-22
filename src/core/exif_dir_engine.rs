@@ -1896,6 +1896,7 @@ mod tests {
                 "ExifIFD",
                 &MetadataMap::new(),
             );
+            require_named_fixture_rows(required, *named_required, path, "ExifIFD", rows.rows.len());
             for row in &rows.rows {
                 let key = format!("ExifIFD:{}", row.name);
                 let shown =
@@ -2020,6 +2021,8 @@ mod tests {
                 eprintln!("skipping: Exif::Main is not in force");
                 return;
             };
+            let relevant_rows = rows.rows.iter().filter(|row| !row.consumed).count();
+            require_named_fixture_rows(required, *named_required, path, "IFD0", relevant_rows);
             for row in rows.rows.iter().filter(|row| !row.consumed) {
                 let key = format!("IFD0:{}", row.name);
                 let shown =
@@ -2159,6 +2162,20 @@ mod tests {
         );
     }
 
+    fn require_named_fixture_rows(
+        required: bool,
+        named_required: bool,
+        path: &std::path::Path,
+        directory: &str,
+        rows: usize,
+    ) {
+        assert!(
+            !required || !named_required || rows != 0,
+            "required pinned fixture {} yielded no verified {directory} values",
+            path.display()
+        );
+    }
+
     /// IFD0's 0x8769 ExifOffset in a TIFF block.
     fn exif_ifd_offset(tiff: &[u8], order: ByteOrder) -> Option<u64> {
         let io = order.to_io_byte_order();
@@ -2234,6 +2251,25 @@ mod tests {
             .is_err()
         );
         require_fixture_census(false, "IFD0", 0);
+    }
+
+    #[test]
+    fn required_named_fixture_rows_are_not_masked_by_another_fixture() {
+        let empty = std::path::Path::new(CORPUS_JPEGS[0]);
+        let successful = std::path::Path::new(CORPUS_JPEGS[1]);
+        let rows_by_fixture = [(empty, 0usize), (successful, 1usize)];
+
+        let checked = rows_by_fixture.iter().map(|(_, rows)| rows).sum();
+        require_fixture_census(true, "ExifIFD", checked);
+        assert!(
+            std::panic::catch_unwind(|| {
+                require_named_fixture_rows(true, true, empty, "ExifIFD", 0);
+            })
+            .is_err()
+        );
+        require_named_fixture_rows(true, true, successful, "ExifIFD", 1);
+        require_named_fixture_rows(true, false, empty, "ExifIFD", 0);
+        require_named_fixture_rows(false, true, empty, "ExifIFD", 0);
     }
 
     #[test]
