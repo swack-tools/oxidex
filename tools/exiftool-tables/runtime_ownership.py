@@ -282,10 +282,15 @@ def _validate_source_binding(root: Path, row: dict, identity: StableFieldId) -> 
     if not ledger_path.is_file():
         raise Refused(f"invalid provenance for {identity.text()}: source ledger")
     ledger = json.loads(ledger_path.read_text())
-    if ledger.get("schema") != "oxidex_ifd_identity_ledger_v1" or not isinstance(ledger.get("rows"), list):
+    ownership_rows = ledger.get("ownership_rows", [])
+    if (
+        ledger.get("schema") != "oxidex_ifd_identity_ledger_v1"
+        or not isinstance(ledger.get("rows"), list)
+        or not isinstance(ownership_rows, list)
+    ):
         raise Refused(f"invalid provenance for {identity.text()}: source ledger schema")
     matches = [
-        entry for entry in ledger.get("rows", [])
+        entry for entry in [*ledger.get("rows", []), *ownership_rows]
         if all(entry.get(key) == binding[key] for key in ("full_name", "raw_key", "name", "variant_path"))
     ]
     if len(matches) != 1:
@@ -548,19 +553,28 @@ def write_inventory(root: Path, ops_root: Path | None = None) -> None:
     root = root.resolve()
     fragment = root / "tools/exiftool-tables/runtime_ownership.d/exif_main_residuals.json"
     fragment.write_text(json.dumps(_expected_residual_rows(root), indent=2, sort_keys=True) + "\n")
+    refresh_aggregate(root, ops_root)
+
+
+def refresh_aggregate(root: Path, ops_root: Path | None = None) -> None:
+    """Rebuild only the aggregate from already producer-owned fragments."""
+    root = root.resolve()
+    inventory = build_inventory(root, ops_root)
     output = root / "tools/exiftool-tables/runtime_ownership.json"
-    output.write_text(json.dumps(build_inventory(root, ops_root), indent=2, sort_keys=True) + "\n")
+    output.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("verify", "write"))
+    parser.add_argument("command", choices=("verify", "write", "refresh-aggregate"))
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--ops-root", type=Path)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.command == "write":
         write_inventory(root, args.ops_root)
+    elif args.command == "refresh-aggregate":
+        refresh_aggregate(root, args.ops_root)
     else:
         verification = verify_rows(load_rows(root, args.ops_root))
         print(f"runtime ownership verified: {verification.rows} rows; {verification.totals}")

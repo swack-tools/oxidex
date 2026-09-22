@@ -279,6 +279,7 @@ class TypedFragmentTests(unittest.TestCase):
             {
                 "schema": "oxidex_ifd_identity_ledger_v1",
                 "exiftool_version": "13.59",
+                "ownership_rows": [],
                 "rows": [
                     {
                         "full_name": "Image::ExifTool::Vendor::Main",
@@ -517,6 +518,75 @@ class TypedFragmentTests(unittest.TestCase):
         with self.assertRaisesRegex(self.ownership.Refused, "unique source binding"):
             self.ownership.build_inventory(root)
 
+    def test_source_binding_accepts_fractional_binary_and_named_raw_keys(self):
+        root = self.temporary_root()
+        ledger_path = root / "tools/exiftool-tables/ifd_identity_ledger.json"
+        ledger = json.loads(ledger_path.read_text())
+        fractional = {
+            "full_name": "Image::ExifTool::Nikon::MakerNotes0x56",
+            "module": "Nikon",
+            "table": "MakerNotes0x56",
+            "raw_key": "4.1",
+            "name": "BurstStartSlotNumber",
+            "variant_path": [],
+            "source_sha256": "3" * 64,
+            "source_kind": "binary",
+        }
+        ledger["ownership_rows"].append(fractional)
+        named = {
+            "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+            "module": "JPEG",
+            "table": "MediaJukebox",
+            "raw_key": "Tool_Name",
+            "name": "Tool_Name",
+            "variant_path": [],
+            "source_sha256": "4" * 64,
+            "source_kind": "named-raw-key",
+        }
+        ledger["ownership_rows"].append(named)
+        self.write_json(ledger_path, ledger)
+
+        fractional_row = self.vendor_row()
+        fractional_row.update(
+            module="Nikon",
+            table="MakerNotes0x56",
+            field={"kind": "index", "value": "4.1"},
+            source_sha256="3" * 64,
+        )
+        fractional_row["source_binding"] = {
+            "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+            "full_name": fractional["full_name"],
+            "raw_key": fractional["raw_key"],
+            "name": fractional["name"],
+            "variant_path": [],
+        }
+        named_row = self.vendor_row()
+        named_row.update(
+            module="JPEG",
+            table="MediaJukebox",
+            field={"kind": "name", "value": "Tool_Name"},
+            source_sha256="4" * 64,
+        )
+        named_row["source_binding"] = {
+            "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+            "full_name": named["full_name"],
+            "raw_key": named["raw_key"],
+            "name": named["name"],
+            "variant_path": [],
+        }
+        vendor = root / "tools/exiftool-tables/runtime_ownership.d/vendor.json"
+        self.write_json(vendor, [fractional_row, named_row])
+        self.ownership.build_inventory(root)
+
+        for index, (row, message) in enumerate(
+            ((fractional_row, "stable identity"), (named_row, "stable identity"))
+        ):
+            bad = copy.deepcopy(row)
+            bad["field"]["value"] += "-wrong"
+            self.write_json(vendor, [bad])
+            with self.subTest(index=index), self.assertRaisesRegex(self.ownership.Refused, message):
+                self.ownership.build_inventory(root)
+
     def test_source_binding_requires_the_committed_ledger_schema(self):
         root = self.temporary_root()
         ledger_path = root / "tools/exiftool-tables/ifd_identity_ledger.json"
@@ -687,6 +757,31 @@ class TypedFragmentTests(unittest.TestCase):
         self.assertEqual(candidate_path.read_bytes(), candidate_bytes)
         self.assertEqual((root / "tools/exiftool-tables/runtime_ownership.d/exif_main_residuals.json").read_bytes(), first_exif)
         self.assertEqual((root / "tools/exiftool-tables/runtime_ownership.json").read_bytes(), first_inventory)
+
+    def test_aggregate_refresher_preserves_every_fragment_and_is_deterministic(self):
+        root = self.temporary_root()
+        _, _, vendor_path, candidate_path = self.seed_documents(root)
+        fragment_dir = root / "tools/exiftool-tables/runtime_ownership.d"
+        before = {path.name: path.read_bytes() for path in fragment_dir.glob("*.json")}
+
+        self.ownership.refresh_aggregate(root)
+        aggregate = root / "tools/exiftool-tables/runtime_ownership.json"
+        first = aggregate.read_bytes()
+        self.ownership.load_rows(root)
+        self.ownership.refresh_aggregate(root)
+
+        self.assertEqual({path.name: path.read_bytes() for path in fragment_dir.glob("*.json")}, before)
+        self.assertEqual(vendor_path.read_bytes(), before[vendor_path.name])
+        self.assertEqual(candidate_path.read_bytes(), before[candidate_path.name])
+        self.assertEqual(aggregate.read_bytes(), first)
+
+        self.write_json(fragment_dir / "exif_main_residuals.json", [])
+        with self.assertRaisesRegex(
+            self.ownership.Refused,
+            "residual fragments differ from live Rust residual arrays",
+        ):
+            self.ownership.refresh_aggregate(root)
+        self.assertEqual(aggregate.read_bytes(), first)
 
 
 if __name__ == "__main__":
