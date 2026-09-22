@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -567,6 +568,91 @@ class ExecutorTests(unittest.TestCase):
                 except (subprocess.TimeoutExpired, ChildProcessError):
                     pass
                 executor._close_ownership_probe(child)
+
+    def test_native_timeout_marker_bypass_preserves_active_journal(self):
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        process_ids: dict[str, int] = {}
+        descendant_program = (
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import os, signal, subprocess, sys\n"
+            "ready_fd = int(sys.argv[1])\n"
+            "def terminate(_signum, _frame):\n"
+            "    fd_root = '/dev/fd' if os.path.isdir('/dev/fd') else '/proc/self/fd'\n"
+            "    for name in os.listdir(fd_root):\n"
+            "        if name.isdigit() and int(name) > 2 and int(name) != ready_fd:\n"
+            "            try:\n"
+            "                os.close(int(name))\n"
+            "            except OSError:\n"
+            "                pass\n"
+            "    descendant = subprocess.Popen([sys.executable, '-c', sys.argv[2]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+            "    os.write(ready_fd, f'{descendant.pid}\\n'.encode())\n"
+            "    os.close(ready_fd)\n"
+            "    raise SystemExit(0)\n"
+            "signal.signal(signal.SIGTERM, terminate)\n"
+            "os.write(ready_fd, b'ready\\n')\n"
+            "signal.pause()\n"
+        )
+
+        def read_line() -> bytes:
+            payload = b""
+            while not payload.endswith(b"\n"):
+                readable, _, _ = select.select([read_fd], [], [], 5)
+                if not readable:
+                    raise AssertionError("timed out waiting for native child readiness")
+                chunk = os.read(read_fd, 1)
+                if not chunk:
+                    raise AssertionError("native child closed readiness pipe before reporting")
+                payload += chunk
+            return payload
+
+        def timed_out_probe(*_args, run, **_kwargs):
+            run(
+                [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                cwd=str(self.root), env=dict(os.environ), text=True,
+                capture_output=True, timeout=0.05,
+            )
+            self.fail("native timeout child unexpectedly returned")
+
+        failure = None
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native",
+                              side_effect=timed_out_probe), \
+                 patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.05):
+                try:
+                    executor._run_native(
+                        self.run_dir, journal, release, docs, config,
+                        self.cache, self.sources, subprocess.run,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            self.assertEqual(read_line(), b"ready\n")
+            process_ids["descendant"] = int(read_line())
+            self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertEqual(persisted["releases"][release]["stages"]["native"], "running")
+            self.assertIsInstance(persisted["active"]["child"]["pid"], int)
+            self.assertFalse(executor._group_live(persisted["active"]["child"]["pgid"]))
+            self.assertTrue(executor._pid_live(process_ids["descendant"]))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+            descendant = process_ids.get("descendant")
+            if descendant is not None:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_timeout_cleanup_normalizes_byte_output_before_journal_rendering(self):
         self.assertEqual(executor._text_output(b"stdout\xff"), "stdout�")

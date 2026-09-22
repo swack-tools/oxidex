@@ -1016,7 +1016,7 @@ def _emergency_cleanup_after_timeout_failure(
     try:
         _refresh_owned_descendants(child)
         incomplete = (child.poll() is None or _group_live(child.pid) or bool(_live_owned_descendants(child))
-                      or _ownership_probe_live(child))
+                      or _ownership_probe_live(child) or _catchable_termination_unverifiable(child))
     except BaseException as inspection:
         failures.append(f"owned child cleanup could not be verified: {inspection}")
         incomplete = True
