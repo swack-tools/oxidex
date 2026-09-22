@@ -4193,10 +4193,6 @@ fn parse_makernote_with_session(
     // self-describing (Nikon AFInfo's byte order, for one).
     let model = metadata.get_string("IFD0:Model").map(str::to_string);
 
-    if make.is_empty() {
-        return;
-    }
-
     // `MakerNoteGoogle` is selected by its `HDRP\x02`/`HDRP\x03` signature
     // (see `claimed_before_samsung1a`), not by a numeric TIFF directory. Its
     // encrypted/gzipped envelope is the one GCamera's XMP HDRP property uses,
@@ -4911,6 +4907,42 @@ mod makernote_structured_tests {
         note.extend_from_slice(&1i32.to_le_bytes());
         note.extend_from_slice(&3i32.to_le_bytes());
         note
+    }
+
+    #[test]
+    fn signature_only_minolta2_routes_without_ifd0_make() {
+        const NOTE_OFFSET: usize = 96;
+        const PAYLOAD_OFFSET: usize = 32;
+        let payload = b"camera-parameters\0\xff";
+        for signature in [b"CAMER\0", b"MINOL\0"] {
+            let mut note = signature.to_vec();
+            note.extend_from_slice(&[0, 0]);
+            note.extend_from_slice(&1u16.to_le_bytes());
+            note.extend_from_slice(&0x2050u16.to_le_bytes());
+            note.extend_from_slice(&7u16.to_le_bytes());
+            note.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            note.extend_from_slice(&((NOTE_OFFSET + PAYLOAD_OFFSET) as u32).to_le_bytes());
+            note.extend_from_slice(&0u32.to_le_bytes());
+            note.resize(PAYLOAD_OFFSET, 0);
+            note.extend_from_slice(payload);
+
+            let mut tiff = vec![0; NOTE_OFFSET];
+            tiff.extend_from_slice(&note);
+            let ctx = MakerNoteContext::in_tiff(&tiff, NOTE_OFFSET, note.len(), 0);
+            let mut metadata = MetadataMap::new();
+            parse_makernote(&ctx, ByteOrder::BigEndian, &mut metadata);
+
+            let rows = metadata.occurrences_for("Olympus:CameraParameters");
+            assert_eq!(
+                rows.len(),
+                1,
+                "signature-only routing must not require Make"
+            );
+            assert_eq!(
+                rows[0].project(ValueChannel::Stored).as_ref(),
+                &TagValue::Binary(payload.to_vec())
+            );
+        }
     }
 
     #[test]
