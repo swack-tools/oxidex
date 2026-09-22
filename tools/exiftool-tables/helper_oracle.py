@@ -46,12 +46,26 @@ from pathlib import Path
 # The fold #805/#818 select ConvertUnixTime and AF-point ports with.
 from exprs import sub_source
 import codegen_charsets
+import conv_codegen
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 HARNESS = HERE / "helper_oracle.pl"
 CAPTURE = HERE / "testdata" / "helper_oracle_outputs.json"
 PINNED_PERL_VERSION = "v5.38.2"
+
+# Exif::Main conversion rows kept on the hand residual path. A residual is
+# admitted only when dump_tables.pl projects this exact source body hash, and
+# every probe below is executed by the pinned table through FoundTag/GetValue.
+RESIDUAL_PORTS = {
+    "0x8298": "038cd9fc244cc07f43a2047668344ca425ffa7c0010a1540f91e22ed01ddc9cd",
+    "0x9287": "e6a9f51b8f8ab554eeaa6e18c266064605a5b859f2785bfd23cad0887f351d7c",
+    "0xa462": "c0bc35f4a1d0bdd77a22eb4038e87ba9ed0d614d79aa28aec2df1424540ff953",
+    "0xc740": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    "0xc741": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    "0xc74e": "45bb086b3a8fc85c1f18f55858f8abb4a600ce2dfb48b7d4af61096b7e1eea1f",
+    "0xc763": "0bf58b0a75d26b1c3f205392918e8c50e13f114864d7b6251f4b27c783ad12c5",
+}
 
 # ---------------------------------------------------------------------------
 # The registry. Order and use counts are the spike's (PR #817,
@@ -684,6 +698,43 @@ def cases():
     return out
 
 
+def residual_cases():
+    def case(tag_id, value, **extra):
+        return {"residual_id": tag_id, "input": value, **extra}
+
+    opcode = (2).to_bytes(4, "big") + (1).to_bytes(4, "big") + (1).to_bytes(4, "big") \
+        + (0).to_bytes(4, "big") + (0).to_bytes(4, "big") \
+        + (99).to_bytes(4, "big") + (1).to_bytes(4, "big") \
+        + (0).to_bytes(4, "big") + (2).to_bytes(4, "big") + b"\xaa\xbb"
+    truncated = (2).to_bytes(4, "big") + (14).to_bytes(4, "big") \
+        + (1).to_bytes(4, "big") + (0).to_bytes(4, "big") + (0).to_bytes(4, "big")
+    composite = b"".join((0).to_bytes(4, "big") + (1).to_bytes(4, "big") for _ in range(7)) \
+        + (2).to_bytes(2, "big") + (3).to_bytes(2, "big") \
+        + (1).to_bytes(4, "big") + (2).to_bytes(4, "big")
+    out = [
+        case("0x8298", Bx(b"Photographer \0Editor \0")),
+        case("0x8298", Bx(b"Photographer \0Editor ")),
+        case("0x9287", S("3 0 1 4 2 99 9")),
+        case("0xa462", Bx(composite), byte_order="MM"),
+        case("0xa462", Bx(composite[:57]), byte_order="MM"),
+    ]
+    for tag_id in ("0xc740", "0xc741", "0xc74e"):
+        out.extend((case(tag_id, Bx(opcode)), case(tag_id, Bx(truncated))))
+    for raw in (
+        [1, 2, 3, 4, 0, 0, 0, 0],
+        [1, 2, 3, 4, 5, 6, 7],
+        [1, 2, 3, 0x84, 0x15, 0x09, 0x26, 0],
+        [1, 2, 3, 0x84, 0x87, 0x05, 0x04, 0xa8],
+        [0, 0, 0, 0x81, 0x87, 0x05, 0x04, 0x8b],
+        [0, 0, 0, 0x80, 1, 1, 0x7a, 0],
+        [0, 0, 0, 0x80, 0x01, 0x00, 0x1e, 0x80],
+        [0, 0, 0, 0x80, 0x15, 0x00, 0x1e, 0x80],
+        [0, 0, 0, 0x80, 0x99, 0x99, 0x9e, 0x80],
+    ):
+        out.append(case("0xc763", S(" ".join(map(str, raw)))))
+    return out
+
+
 # Options whose `Image::ExifTool->new` value Session::new must reproduce.
 OPTION_DEFAULTS = ["ByteUnit", "Charset", "CharsetEXIF", "CharsetFileName", "CharsetID3",
                    "CharsetIPTC", "CharsetPhotoshop", "CharsetQuickTime", "CharsetRIFF",
@@ -702,6 +753,8 @@ def instrument(perl, et_dir):
     """Assert the pinned interpreter and tree before producing any number."""
     pinned = (REPO / ".exiftool-version").read_text().strip()
     env = oracle_env()
+    perl_path = Path(perl).resolve()
+    perl_sha256 = hashlib.sha256(perl_path.read_bytes()).hexdigest()
     pv = subprocess.run([perl, "-e", "print $^V"], capture_output=True, text=True,
                         env=env, check=True).stdout.strip()
     if pv != PINNED_PERL_VERSION:
@@ -717,7 +770,8 @@ def instrument(perl, et_dir):
     if ft != "DOCX":
         sys.exit(f"capability probe: OOXML.docx -> {ft!r}, not DOCX (degraded perl)")
     print(f"=== instrument: helper_oracle ===\n"
-          f"perl      {perl} ({pv})\nexiftool  {exiftool} -ver {ver} (pinned {pinned}); "
+          f"perl      {perl_path} ({pv}); sha256 {perl_sha256}\n"
+          f"exiftool  {exiftool} -ver {ver} (pinned {pinned}); "
           f"OOXML.docx -> {ft}\nTZ        UTC")
     return pv, ver
 
@@ -737,6 +791,27 @@ def run_perl(perl, et_lib, payload):
     return json.loads(proc.stdout)
 
 
+def pinned_residual_sources(perl, et_lib):
+    proc = subprocess.run(
+        [perl, str(HERE / "dump_tables.pl"), "--reader-only", str(et_lib), "Exif"],
+        capture_output=True, text=True, env=oracle_env(), check=True,
+    )
+    doc = json.loads(proc.stdout)
+    tags = doc["modules"]["Exif"]["tables"]["Main"]["tags"]
+    selected = {}
+    for tag_id, admitted in RESIDUAL_PORTS.items():
+        tag = tags[str(int(tag_id, 16))]
+        body = conv_codegen.refusal_source_body(tag)
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        if digest != admitted:
+            sys.exit(
+                f"Exif::Main residual {tag_id} source {digest} is not admitted; "
+                f"expected {admitted}"
+            )
+        selected[tag_id] = {"source_body": body, "source_sha256": digest, "cases": []}
+    return selected
+
+
 def build(perl, et_dir):
     pv, ver = instrument(perl, et_dir)
     et_lib = Path(et_dir) / "lib"
@@ -754,6 +829,15 @@ def build(perl, et_dir):
     if missing:
         sys.exit(f"dependency subs absent from the pinned tree: {missing}")
     helpers = {}
+    residuals = pinned_residual_sources(perl, et_lib)
+    r_cases = residual_cases()
+    r_results = run_perl(perl, et_lib, r_cases)
+    for case, result in zip(r_cases, r_results):
+        entry = {"input": case["input"]}
+        if "byte_order" in case:
+            entry["byte_order"] = case["byte_order"]
+        entry.update(result)
+        residuals[case["residual_id"]]["cases"].append(entry)
     for h in HELPERS:
         src, digest = sources[h["perl"]]
         helpers[h["perl"]] = {
@@ -772,7 +856,15 @@ def build(perl, et_dir):
     return {
         "capture": {
             "tool": "tools/exiftool-tables/helper_oracle.py",
-            "perl": perl, "perl_version": pv, "exiftool_version": ver, "tz": "UTC",
+            "perl": str(Path(perl).resolve()),
+            "perl_sha256": hashlib.sha256(Path(perl).resolve().read_bytes()).hexdigest(),
+            "perl_version": pv,
+            "exiftool_version": ver,
+            # `instrument` refuses before returning unless this exact probe
+            # succeeded. Keep the portable result in the tracked identity;
+            # the external instrument log retains the probed file and paths.
+            "capability_probe": {"OOXML.docx": "DOCX"},
+            "tz": "UTC",
             "note": "each case is the pinned sub called directly on `args` (prototypes "
                     "bypassed), `options` set in $$et{OPTIONS} and mirrored into "
                     "%static_vars as ExifTool::Init does; `out` is Perl's stringified "
@@ -783,12 +875,27 @@ def build(perl, et_dir):
         "charset_sources": codegen_charsets.charset_sources(et_lib),
         "perl_sources": codegen_charsets.perl_sources(codegen_charsets.perl_core(perl, oracle_env())),
         "helpers": helpers,
+        "residuals": residuals,
     }
+
+
+def portable_capture(capture):
+    """Project out only installation-specific interpreter provenance."""
+    portable = {**capture, "capture": {**capture["capture"]}}
+    portable["capture"].pop("perl", None)
+    portable["capture"].pop("perl_sha256", None)
+    return portable
+
+
+def capture_matches(expected, actual):
+    """Compare all portable identity, source, capability, and output data."""
+    return portable_capture(expected) == portable_capture(actual)
 
 
 def render(capture):
     """Deterministic text: the envelope indented, each case on one line, so
     a re-capture diffs case by case and the file stays reviewable."""
+    capture = portable_capture(capture)
     lines = ["{", '"capture": ' + json.dumps(capture["capture"], sort_keys=True) + ",",
              '"charset_sources": ' + json.dumps(capture["charset_sources"], sort_keys=True)
              + ",",
@@ -806,6 +913,7 @@ def render(capture):
                   for j, c in enumerate(cases)]
         lines.append("]}" + ("," if i < len(names) - 1 else ""))
     lines.append("},")
+    lines.append('"residuals": ' + json.dumps(capture["residuals"], sort_keys=True) + ",")
     lines.append('"truthiness": [')
     t = capture["truthiness"]
     lines += [json.dumps(x, sort_keys=True) + ("," if j < len(t) - 1 else "")
@@ -829,13 +937,14 @@ def main():
     capture = build(args.perl, args.exiftool_dir)
     text = render(capture)
     n = sum(len(h["cases"]) for h in capture["helpers"].values())
+    rn = sum(len(r["cases"]) for r in capture["residuals"].values())
     if args.write:
         CAPTURE.write_text(text, encoding="utf-8")
-        print(f"wrote {CAPTURE.relative_to(REPO)}: {n} helper cases, "
+        print(f"wrote {CAPTURE.relative_to(REPO)}: {n} helper cases, {rn} residual cases, "
               f"{len(capture['truthiness'])} truthiness cases")
         return 0
-    committed = CAPTURE.read_text(encoding="utf-8")
-    if committed != text:
+    committed = json.loads(CAPTURE.read_text(encoding="utf-8"))
+    if not capture_matches(committed, capture):
         print(f"MISMATCH: re-running the pinned Perl does not reproduce "
               f"{CAPTURE.relative_to(REPO)}", file=sys.stderr)
         return 1
@@ -845,8 +954,9 @@ def main():
         print(f"MISMATCH: the pinned tree does not regenerate "
               f"{codegen_charsets.OUT.relative_to(REPO)}", file=sys.stderr)
         return 1
-    print(f"PASS: pinned Perl reproduces {CAPTURE.relative_to(REPO)} byte for byte "
-          f"({n} helper cases, {len(capture['truthiness'])} truthiness cases), and the "
+    print(f"PASS: pinned Perl reproduces {CAPTURE.relative_to(REPO)} portable capture "
+          f"({n} helper cases, {rn} residual cases, "
+          f"{len(capture['truthiness'])} truthiness cases), and the "
           f"pinned tree regenerates {codegen_charsets.OUT.relative_to(REPO)}")
     return 0
 

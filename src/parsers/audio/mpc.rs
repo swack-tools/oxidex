@@ -323,14 +323,10 @@ mod tests {
     /// 263) still reaches its own audio header and APE trailer.
     #[test]
     fn ape_mpc_matches_pinned_oracle_shape() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_t_images_fixture_path("APE.mpc") else {
             return;
-        }
-        let path = std::path::Path::new("/tmp/oxidex-exiftool-cache/exiftool/t/images/APE.mpc");
-        if !path.is_file() {
-            return;
-        }
-        let reader = crate::io::MMapReader::new(path).expect("mmap APE.mpc");
+        };
+        let reader = crate::io::MMapReader::new(&path).expect("mmap APE.mpc");
         let metadata = MpcParser.parse(&reader).expect("parse APE.mpc");
 
         assert_eq!(text(&metadata, "MPC:TotalFrames"), "102");

@@ -745,11 +745,14 @@ mod tests {
             group1,
             group2: "Camera",
             name: "FocalLength",
+            source_id: oxidex_tags::TagId::Numeric(0x001a),
+            stored: TagValue::Integer(1),
             value: TagValue::Integer(1),
             value_conv: None,
             low_priority: false,
             avoid: false,
             rational: None,
+            is_list: false,
         }
     }
 

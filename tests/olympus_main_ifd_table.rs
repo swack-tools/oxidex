@@ -37,14 +37,13 @@
 //! raw` row of the hand table has no PrintConv/ValueConv in Olympus.pm
 //! either, so that class the brief asked to pin does not exist in this table.
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::cli::tag_resolution::{family1_label, resolve_requested_tags};
 use oxidex::core::MetadataMap;
 use oxidex::core::operations::read_metadata;
 use oxidex::exiftool_tables::{ENABLED_IFD, find_ifd_table};
-use std::path::Path;
-
-const T_IMAGES: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
-const CORPUS: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Olympus";
 
 /// The allowlist line is the reviewable unit; this asserts the line is in
 /// force, so a revert of it fails loudly here rather than silently switching
@@ -98,14 +97,7 @@ fn olympus_focus_info_line_is_in_force_with_its_residual() {
 /// `None` -- never silently -- when the pinned ExifTool checkout is not
 /// present on this machine.
 fn t_images_carrier(name: &str) -> Option<MetadataMap> {
-    let path = Path::new(T_IMAGES).join(name);
-    if !path.is_file() {
-        eprintln!(
-            "skipping: {} is not present (the pinned ExifTool 13.59 checkout's t/images is not on this machine)",
-            path.display()
-        );
-        return None;
-    }
+    let path = fixtures::pinned_t_images_fixture_path(name)?;
     Some(read_metadata(&path).unwrap_or_else(|e| panic!("{name} parses: {e}")))
 }
 
@@ -118,6 +110,7 @@ fn shown(metadata: &MetadataMap, key: &str) -> Option<String> {
         .as_string()
         .map(str::to_string)
         .or_else(|| value.as_integer().map(|i| i.to_string()))
+        .or_else(|| value.as_float().map(|f| f.to_string()))
 }
 
 fn assert_tags(metadata: &MetadataMap, file: &str, expected: &[(&str, &str)]) {
@@ -355,7 +348,8 @@ fn olympus_e1_jpg_main_tags_match_the_pinned_oracle() {
 #[test]
 #[ignore = "requires the combined-samples corpus"]
 fn corpus_carriers_gain_the_rows_the_hand_table_lacked_in_exiftools_order() {
-    let sp510 = Path::new(CORPUS).join("OlympusSP510UZ.jpg");
+    let sp510 = fixtures::pinned_combined_fixture_path("Olympus/OlympusSP510UZ.jpg")
+        .expect("configured Olympus SP510 fixture");
     let metadata = read_metadata(&sp510).expect("OlympusSP510UZ.jpg parses");
     assert_tags(
         &metadata,
@@ -369,7 +363,8 @@ fn corpus_carriers_gain_the_rows_the_hand_table_lacked_in_exiftools_order() {
         ],
     );
 
-    let fe370 = Path::new(CORPUS).join("OlympusFE370.jpg");
+    let fe370 = fixtures::pinned_combined_fixture_path("Olympus/OlympusFE370.jpg")
+        .expect("configured Olympus FE370 fixture");
     let metadata = read_metadata(&fe370).expect("OlympusFE370.jpg parses");
     assert_tags(
         &metadata,

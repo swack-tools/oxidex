@@ -30,12 +30,12 @@
 //! file corpus, which is exactly why it is wired but NOT on the gate B
 //! allowlist (see `src/exiftool_tables/enabled.rs`).
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::exiftool_tables::find_table;
 use oxidex::io::buffered_reader::BufferedReader;
 use oxidex::parsers::audio::ape::parse_ape_metadata;
-use std::path::Path;
-
-const APE_FIXTURE: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images/APE.ape";
 
 /// The allowlist line is the reviewable unit; this asserts the line is
 /// actually in force, so a revert of it fails loudly here rather than
@@ -75,7 +75,9 @@ fn ape_old_header_is_reached_but_deliberately_unmeasured() {
 #[test]
 #[ignore = "requires the pinned ExifTool fixture cache"]
 fn reads_every_mac_new_header_field_the_pinned_oracle_reports() {
-    let reader = BufferedReader::new(Path::new(APE_FIXTURE)).expect("open APE fixture");
+    let path =
+        fixtures::pinned_t_images_fixture_path("APE.ape").expect("open configured APE fixture");
+    let reader = BufferedReader::new(&path).expect("open APE fixture");
     let metadata = parse_ape_metadata(&reader).expect("parse APE fixture");
 
     // The seven `APE::NewHeader` keys, in the Perl's own order.

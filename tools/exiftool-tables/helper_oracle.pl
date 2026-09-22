@@ -72,6 +72,17 @@ sub out {
     return { hex => unpack('H*', $s) };
 }
 
+sub channel_out {
+    my $v = shift;
+    return { t => 'undef' } unless defined $v;
+    my $kind = ref $v;
+    $v = $$v if $kind eq 'SCALAR';
+    die "unsupported residual channel reference $kind\n" if ref $v;
+    my $o = out($v);
+    $$o{ref} = 'SCALAR' if $kind eq 'SCALAR';
+    return $o;
+}
+
 # Every call bypasses prototypes (&sub(...)) so the argument list is passed
 # exactly as given -- including trailing undefs -- and @_ aliases @a, which
 # is how IsFloat's in-place `tr/,/./` becomes visible.
@@ -109,6 +120,7 @@ my $json = JSON::PP->new->canonical;
 local $/;
 my $cases = $json->decode(<STDIN>);
 my @results;
+Image::ExifTool::SetupTagTable(\%Image::ExifTool::Exif::Main);
 for my $case (@$cases) {
     if (exists $$case{truthy}) {
         my $v = arg($$case{truthy});
@@ -118,6 +130,25 @@ for my $case (@$cases) {
     if (exists $$case{option_defaults}) {
         my $et = Image::ExifTool->new;
         push @results, { out => [ map { out($$et{OPTIONS}{$_}) } @{$$case{option_defaults}} ] };
+        next;
+    }
+    if (exists $$case{residual_id}) {
+        my $id = hex $$case{residual_id};
+        my $tag_info = $Image::ExifTool::Exif::Main{$id}
+            or die "no Exif::Main tag $$case{residual_id}\n";
+        my $stored = arg($$case{input});
+        my $et = Image::ExifTool->new;
+        Image::ExifTool::SetByteOrder($$case{byte_order} || 'MM');
+        $et->FoundTag($tag_info, $stored);
+        my $name = $$tag_info{Name};
+        die "residual $$case{residual_id} did not publish $name\n"
+            unless exists $$et{VALUE}{$name};
+        my $raw = $$et{VALUE}{$name};
+        my ($value, $print) = $et->GetValue($name, 'Both');
+        push @results, {
+            stored => channel_out($stored), raw => channel_out($raw),
+            value => channel_out($value), print => channel_out($print),
+        };
         next;
     }
     my $fn = $CALL{$$case{helper}} or die "no call for $$case{helper}\n";

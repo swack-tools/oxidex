@@ -1,17 +1,16 @@
 //! Real-carrier regressions for newly dispatched formats.
 
-use oxidex::core::operations::read_metadata;
-use std::path::Path;
+#[path = "common/fixtures.rs"]
+mod fixtures;
 
-const IMAGE_DIR: &str = "/tmp/oxidex-exiftool-cache/exiftool/t/images";
+use oxidex::core::operations::read_metadata;
 
 #[test]
 fn tnef_correlation_keys_are_read_from_the_real_carrier() {
-    let path = Path::new(IMAGE_DIR).join("TNEF.tnef");
-    if !path.is_file() {
-        eprintln!("skipping: pinned fixture not present at {}", path.display());
+    let Some(path) = fixtures::pinned_t_images_fixture_path("TNEF.tnef") else {
+        eprintln!("skipping: pinned fixture TNEF.tnef is absent");
         return;
-    }
+    };
 
     let metadata = read_metadata(&path).expect("TNEF parses");
     assert_eq!(
@@ -22,11 +21,10 @@ fn tnef_correlation_keys_are_read_from_the_real_carrier() {
 
 #[test]
 fn jpeg2000_codestream_comments_are_read_from_the_real_carrier() {
-    let path = Path::new(IMAGE_DIR).join("Jpeg2000.j2c");
-    if !path.is_file() {
-        eprintln!("skipping: pinned fixture not present at {}", path.display());
+    let Some(path) = fixtures::pinned_t_images_fixture_path("Jpeg2000.j2c") else {
+        eprintln!("skipping: pinned fixture Jpeg2000.j2c is absent");
         return;
-    }
+    };
 
     let metadata = read_metadata(&path).expect("J2C parses");
     let comment = metadata

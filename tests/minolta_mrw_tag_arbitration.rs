@@ -33,13 +33,13 @@
 //! `FoundTag` will not let a 0 displace a value already present
 //! (ExifTool.pm:9564, :9585).
 
+#[path = "common/fixtures.rs"]
+mod fixtures;
+
 use oxidex::cli::tag_resolution::{
     family0_label, family1_label, resolve_requested_tags, resolved_display_value,
 };
 use oxidex::core::operations::read_metadata;
-use std::path::Path;
-
-const MINOLTA_MRW: &str = "/tmp/oxidex-exiftool-cache/combined-samples/Minolta.mrw";
 
 /// The one-line form ExifTool's `-s` prints. `BWFilter`/`Sharpness` are stored
 /// as integers, everything else here as an already-formatted string.
@@ -64,11 +64,11 @@ const ORACLE_DEFAULT_PROJECTION: &[(&str, &str, &str, &str)] = &[
 
 #[test]
 fn minolta_mrw_default_projection_matches_the_pinned_oracle() {
-    if !Path::new(MINOLTA_MRW).is_file() {
-        eprintln!("skipping: corpus fixture not present at {MINOLTA_MRW}");
+    let Some(path) = fixtures::pinned_combined_fixture_path("Minolta.mrw") else {
+        eprintln!("skipping: combined corpus fixture Minolta.mrw is absent");
         return;
-    }
-    let metadata = read_metadata(Path::new(MINOLTA_MRW)).expect("Minolta.mrw parses");
+    };
+    let metadata = read_metadata(&path).expect("Minolta.mrw parses");
 
     for (tag, group0, group1, value) in ORACLE_DEFAULT_PROJECTION {
         let resolved = resolve_requested_tags(&metadata, &[(*tag).to_string()], false);
@@ -101,11 +101,11 @@ fn minolta_mrw_default_projection_matches_the_pinned_oracle() {
 /// ```
 #[test]
 fn minolta_mrw_retains_the_losing_occurrences() {
-    if !Path::new(MINOLTA_MRW).is_file() {
-        eprintln!("skipping: corpus fixture not present at {MINOLTA_MRW}");
+    let Some(path) = fixtures::pinned_combined_fixture_path("Minolta.mrw") else {
+        eprintln!("skipping: combined corpus fixture Minolta.mrw is absent");
         return;
-    }
-    let metadata = read_metadata(Path::new(MINOLTA_MRW)).expect("Minolta.mrw parses");
+    };
+    let metadata = read_metadata(&path).expect("Minolta.mrw parses");
 
     // `all_occurrences = true` is the `-a` in the oracle command above.
     let all = |tag: &str| -> Vec<(String, String)> {

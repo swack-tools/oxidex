@@ -691,11 +691,68 @@ class SkillMirrorTests(unittest.TestCase):
             self.assertIn(required, report)
         self.assertIn("Never revert", text)
 
-    def test_parity_generated_table_recipe_is_explicitly_blocked(self):
-        text = canonical("exiftool-parity", "references/harnesses.md")
-        self.assertNotIn("Run `just verify-tables`", text)
-        for required in ("Generated-table verification is blocked", "verify_subdirs.py", "/usr/bin/perl", "shebang"):
-            self.assertIn(required, text)
+    def test_parity_generated_table_recipe_is_canonical_and_scoped(self):
+        relative = "exiftool-parity/references/harnesses.md"
+        paths = (
+            REPO / ".claude/skills" / relative,
+            REPO / ".agents/skills" / relative,
+        )
+        lock_command = (
+            "python3",
+            "$PARITY_LOCK",
+            "$PARITY_TABLE_LOG",
+            "--",
+            "just",
+            "verify-tables",
+        )
+        for path in paths:
+            with self.subTest(path=path.relative_to(REPO)):
+                text = path.read_text(encoding="utf-8")
+                prose = " ".join(text.split())
+                snippet = next(
+                    (
+                        candidate
+                        for candidate in re.findall(
+                            r"```bash\n(.*?)```", text, re.DOTALL
+                        )
+                        if "just verify-tables" in candidate
+                    ),
+                    "",
+                )
+                self.assertTrue(snippet, "canonical aggregate recipe is absent")
+                aggregate_commands = [
+                    command
+                    for command in active_shell_commands([snippet])
+                    if command[-2:] == ("just", "verify-tables")
+                ]
+                self.assertEqual(aggregate_commands, [lock_command])
+                self.assertNotIn("--shared", aggregate_commands[0])
+                self.assertEqual(
+                    snippet.count(
+                        'test "$(git rev-parse \'HEAD^{commit}\')" = "$PARITY_SHA"'
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    snippet.count('test -z "$(git status --porcelain)"'), 2
+                )
+                for required in (
+                    '"$PARITY_TABLE_LOG.status.jsonl"',
+                    '"$PARITY_TABLE_RUN/release-oracle.json"',
+                    '"$PARITY_TABLE_RUN/serial-verify-$PARITY_PIN.json"',
+                    ".exiftool_version == $pin and .perl_path == $perl and .tree_path == $tree",
+                    'shasum -a 256 "$PARITY_TABLE_LOG"',
+                ):
+                    self.assertIn(required, snippet)
+                for required in (
+                    "declaration verification, not native serial processor execution",
+                    "None of these checks demonstrates observed extraction from files",
+                    "modeled SubDirectory",
+                    "does not inherit that measurement",
+                ):
+                    self.assertIn(required, prose)
+                self.assertNotIn("Generated-table verification is blocked", text)
+                self.assertNotIn("Do not invoke the aggregate recipe", text)
 
     def test_parity_rename_votes_are_provisional_heuristics(self):
         text = canonical("exiftool-parity", "references/release-metrics.md")

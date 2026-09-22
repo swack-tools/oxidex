@@ -4,7 +4,7 @@ use tempfile::NamedTempFile;
 /// ExifTool 13.59's Exif.pm 0x9287 PrintConv reads the first `int16u` as the
 /// number of usage/choice pairs, then renders each pair in order.
 #[test]
-fn jpeg_exif_learning_opt_out_in_matches_exiftool_13_59() {
+fn learning_opt_out_in_shift_semantics_match_exiftool() {
     let mut jpeg = vec![0xff, 0xd8, 0xff, 0xe1, 0x00, 0x3e];
     jpeg.extend_from_slice(b"Exif\0\0");
     jpeg.extend_from_slice(b"II\x2a\0\x08\0\0\0");

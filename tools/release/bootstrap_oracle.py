@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -899,11 +900,13 @@ def _materialize_corpus(
         if not base.is_dir():
             raise Refused(f"ExifTool t/images missing: {base}")
         shutil.copytree(base, staging, dirs_exist_ok=True, symlinks=True)
+        _normalize_corpus_base_modes(staging)
         for name, archive in sorted(archives.items()):
             if not name.startswith("samples_"):
                 continue
             with tarfile.open(archive) as source:
                 _extract_safe_members(source, staging)
+        _normalize_corpus_directories(staging)
         count = sum(item.is_file() for item in staging.rglob("*"))
         if count < MIN_CORPUS_FILES:
             raise Refused(
@@ -911,6 +914,27 @@ def _materialize_corpus(
             )
 
     install_immutable_tree(root, destination, populate, _verify_corpus_tree)
+
+
+def _normalize_corpus_base_modes(staging: Path) -> None:
+    """Canonicalize copied ExifTool base modes without following symlinks."""
+    for item in staging.rglob("*"):
+        if item.is_symlink():
+            continue
+        mode = item.stat(follow_symlinks=False).st_mode
+        if stat.S_ISDIR(mode):
+            item.chmod(0o755, follow_symlinks=False)
+        elif stat.S_ISREG(mode):
+            item.chmod(0o755 if mode & 0o111 else 0o644, follow_symlinks=False)
+
+
+def _normalize_corpus_directories(staging: Path) -> None:
+    """Canonicalize extracted directories without changing archive file modes."""
+    for item in staging.rglob("*"):
+        if item.is_symlink():
+            continue
+        if stat.S_ISDIR(item.stat(follow_symlinks=False).st_mode):
+            item.chmod(0o755, follow_symlinks=False)
 
 
 def _verify_corpus_tree(candidate: Path) -> None:

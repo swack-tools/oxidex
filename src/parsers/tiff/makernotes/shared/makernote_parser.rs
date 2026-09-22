@@ -1,3 +1,4 @@
+use crate::core::TagOccurrence;
 use crate::exiftool_tables::Ctx;
 use crate::exiftool_tables::session::Session;
 use crate::parsers::tiff::ifd_parser::ByteOrder;
@@ -142,6 +143,36 @@ pub trait MakerNoteParser {
     ) -> Result<(), String> {
         let _ = (session, cond_ctx);
         self.parse_with_context_and_values(ctx, byte_order, model, tags, value_forms)
+    }
+
+    /// Session-aware parsing with an optional canonical occurrence channel.
+    ///
+    /// Existing parsers keep their legacy map behavior through this default.
+    /// A parser that can retain source identity and all value forms overrides
+    /// it and appends `(public lookup key, occurrence)` rows in traversal
+    /// order without also projecting those rows into `tags`.
+    #[allow(clippy::too_many_arguments)]
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        let _ = occurrences;
+        self.parse_with_context_and_values_and_session(
+            ctx,
+            byte_order,
+            model,
+            session,
+            cond_ctx,
+            tags,
+            value_forms,
+        )
     }
 
     /// Optional: Validate that this data belongs to this manufacturer

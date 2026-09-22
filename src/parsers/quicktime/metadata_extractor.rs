@@ -3463,15 +3463,14 @@ mod tests {
 
     #[test]
     fn quicktime_fixture_prefers_media_info_data_handler_class() {
-        if !crate::test_support::pinned_corpus_available() {
+        let Some(path) = crate::test_support::pinned_combined_fixture_path("QuickTime.mov") else {
             return;
-        }
+        };
         // QuickTime.pm Handler: its `dhlr` PrintConv is "Data Handler".
         // The first track in QuickTime.mov has mdia/hdlr=mhlr but its
         // minf/hdlr=dhlr; ExifTool's unsuffixed reported HandlerClass is the
         // latter.
-        let data = std::fs::read("/tmp/oxidex-exiftool-cache/combined-samples/QuickTime.mov")
-            .expect("pinned QuickTime fixture must be available");
+        let data = std::fs::read(&path).expect("pinned QuickTime fixture must be available");
         let metadata = crate::parsers::quicktime::parse_quicktime_metadata_from_bytes(&data)
             .expect("pinned QuickTime fixture must parse");
 
