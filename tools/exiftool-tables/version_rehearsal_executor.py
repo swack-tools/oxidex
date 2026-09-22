@@ -1103,7 +1103,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
             _require_ownership_release(child, "successful command completion")
-        except KeyboardInterrupt as interruption:
+        except (KeyboardInterrupt, SystemExit) as interruption:
             if (owner[0] is not None
                     and getattr(interruption, "_oxidex_owned_child_cleanup", None) is None):
                 _cleanup_owned_child_after_interrupt(owner[0], interruption)

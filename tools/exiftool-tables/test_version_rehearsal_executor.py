@@ -247,6 +247,161 @@ class ExecutorTests(unittest.TestCase):
             "release": release, "stage": "generate", "child": child_identity,
         })
 
+    def test_postspawn_system_exit_reaps_owned_child_and_preserves_identity(self):
+        """SystemExit after child publication is re-raised only after verified cleanup."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        outcome = SystemExit("post-spawn system exit")
+        child_identity = None
+        failure = None
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+        child_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), b'ready\\n')\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+
+        def exit_after_child_started(pid, pgid):
+            nonlocal child_identity
+            child_identity = {"pid": pid, "pgid": pgid}
+            self.assertEqual(os.read(read_fd, 64), b"ready\n")
+            raise outcome
+
+        def capture_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+            return child
+
+        try:
+            with patch.object(executor.subprocess, "Popen", side_effect=capture_child):
+                try:
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd)],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                        started=exit_after_child_started,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            self.assertIs(failure, outcome)
+            self.assertEqual(
+                getattr(failure, "_oxidex_owned_child_cleanup", None), "verified",
+            )
+            self.assertIsNotNone(child_identity)
+            self.assertFalse(executor._pid_live(child_identity["pid"]))
+            self.assertFalse(executor._group_live(child_identity["pgid"]))
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if child_identity is not None:
+                try:
+                    os.killpg(child_identity["pgid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            for child in created:
+                try:
+                    child.communicate(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                executor._close_ownership_probe(child)
+
+    def test_stage_retains_active_child_for_incomplete_system_exit_cleanup(self):
+        """Incomplete SystemExit cleanup preserves the original outcome and active journal."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(
+            self.run_dir, self.cache, self.sources,
+        )
+        release = self.releases[0]
+        checkout = self.checkout(
+            self.repository, self.plan["repository_commit"],
+            self.run_dir / "checkouts" / executor._safe_name(release), self.command,
+        )
+        target = self.run_dir / "targets" / executor._safe_name(release)
+        target.mkdir(parents=True)
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        outcome = SystemExit("post-spawn system exit")
+        original_store = executor._store_journal
+        original_popen = executor.subprocess.Popen
+        created: list[subprocess.Popen[str]] = []
+        raised = False
+        failure = None
+        child_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), b'ready\\n')\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        config["commands"]["generate"] = {
+            "argv": [sys.executable, "-c", child_program, str(write_fd)],
+        }
+
+        def capture_child(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+            return child
+
+        def persist_then_exit(run_dir, current):
+            nonlocal raised
+            if (not raised and isinstance(current.get("active"), dict)
+                    and isinstance(current["active"].get("child"), dict)):
+                self.assertEqual(os.read(read_fd, 64), b"ready\n")
+                original_store(run_dir, current)
+                raised = True
+                raise outcome
+            return original_store(run_dir, current)
+
+        try:
+            with patch.object(executor.subprocess, "Popen", side_effect=capture_child), \
+                 patch.object(executor, "_store_journal", side_effect=persist_then_exit), \
+                 patch.object(executor, "_verify_checkout_head"), \
+                 patch.object(executor, "_bounded_timeout_cleanup",
+                              side_effect=OSError("bounded cleanup failed")), \
+                 patch.object(executor, "_emergency_reap_group",
+                              side_effect=OSError("emergency cleanup failed")):
+                try:
+                    executor._run_stage(
+                        self.run_dir, journal, release, "generate", checkout, target,
+                        (self.sources / "native", self.sources / "lib", self.sources / "program"),
+                        sys.executable, ready_probe(release), config, subprocess.run,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            self.assertIs(failure, outcome)
+            self.assertEqual(
+                getattr(failure, "_oxidex_owned_child_cleanup", None), "incomplete",
+            )
+            self.assertEqual(len(created), 1)
+            self.assertTrue(executor._pid_live(created[0].pid))
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertEqual(persisted["releases"][release]["stages"]["generate"], "running")
+            self.assertEqual(persisted["active"]["child"], {
+                "pid": created[0].pid, "pgid": created[0].pid,
+            })
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.communicate(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+                executor._close_ownership_probe(child)
+
     def test_successful_command_refuses_detached_descendant_retaining_ownership(self):
         """A zero exit cannot become ok while detached owned work retains its proof."""
         read_fd, write_fd = os.pipe()
