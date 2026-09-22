@@ -14,6 +14,7 @@ import copy
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -55,6 +56,10 @@ SIDES = ("before", "after")
 
 class Refused(ValueError):
     """The requested qualification cannot produce attributable evidence."""
+
+
+class OutcomeUnknown(Refused):
+    """A final marker exists, but publication could not be confirmed or refused."""
 
 
 def _sha_file(file_path: Path) -> str:
@@ -558,6 +563,7 @@ class TransitionLease:
                 "acquired_at": self.acquired_at, "lock_path": str(self.lease), "lock_realpath": real,
                 "lease_mode": "nonblocking-exclusive", "lease_expires_at": self.expires_at,
                 "expiry_policy": "stop-before-next-stage-cleanup-journal-release",
+                "qualification_outcome": "pending",
             }
             self.file.seek(0)
             self.file.truncate()
@@ -580,6 +586,7 @@ class TransitionLease:
                     "release_status": "released-after-acquire-failure", "terminal_status": "failed",
                     "release_reason": "lease-acquisition-receipt-failure",
                     "flock_release_confirmed": True, "receipt_failures": [str(acquire_error)],
+                    "qualification_outcome": "pending",
                 })
             except BaseException as receipt_error:
                 if hasattr(acquire_error, "add_note"):
@@ -595,6 +602,7 @@ class TransitionLease:
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
                 "sequence": self.sequence, "timestamp": time.time(), "event": event,
                 "row": row, "stage": stage,
+                "qualification_outcome": "pending",
             })
 
     def guard(self) -> None:
@@ -615,14 +623,17 @@ class TransitionLease:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         expired = time.time() >= self.expires_at
         terminal = "failed" if exc_type is not None or expired else self.terminal_status
-        expiry_status = "expired" if expired else ("aborted" if terminal != "complete" else "not-expired")
+        expiry_status = "expired" if expired else (
+            "aborted" if terminal != "body-validated" else "not-expired"
+        )
         receipt_failures: list[str] = []
         try:
             _atomic_json(self.expiry_receipt, {
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
                 "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
-                "expired_at": time.time() if expired else None, "expiry_status": expiry_status,
-                "terminal_status": terminal,
+                "observed_at": time.time(), "expired_at": time.time() if expired else None,
+                "expiry_status": expiry_status, "terminal_status": terminal,
+                "qualification_outcome": "pending",
             })
         except BaseException as receipt_error:
             receipt_failures.append(f"expiry receipt: {receipt_error}")
@@ -643,6 +654,8 @@ class TransitionLease:
                     receipt_failures.append(f"lock close: {close_error}")
                 finally:
                     self.file = None
+        if not confirmed:
+            receipt_failures.append("lock release was not confirmed")
         try:
             _atomic_json(self.release_receipt, {
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
@@ -650,38 +663,14 @@ class TransitionLease:
                 "release_status": release_status, "terminal_status": terminal,
                 "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
                 "receipt_failures": receipt_failures,
+                "qualification_outcome": "pending",
             })
         except BaseException as receipt_error:
             receipt_failures.append(f"release receipt: {receipt_error}")
-        # Receipt I/O and descriptor cleanup can outlast the last guard. Latch
-        # expiry after that work, and correct both terminal receipts before
-        # refusing publication. Cleanup above must run even for expired leases.
-        if not expired and time.time() >= self.expires_at:
-            expired = True
-            for target, record in (
-                (self.expiry_receipt, {
-                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-                    "lock_realpath": str(self.lease.resolve()), "lease_expires_at": self.expires_at,
-                    "expired_at": time.time(), "expiry_status": "expired",
-                    "terminal_status": "failed",
-                }),
-                (self.release_receipt, {
-                    "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-                    "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
-                    "release_status": release_status, "terminal_status": "failed",
-                    "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
-                    "receipt_failures": receipt_failures,
-                }),
-            ):
-                try:
-                    # Keep the ordinary publisher's stale-receipt refusal:
-                    # only this invocation's terminal records are superseded.
-                    corrected = target.with_name(f"{target.name}.expired")
-                    _atomic_json(corrected, record)
-                    os.replace(corrected, target)
-                except BaseException as receipt_error:
-                    receipt_failures.append(f"expired terminal receipt {target}: {receipt_error}")
-        if expired:
+        # Operational receipts never assert qualification success, so a late
+        # expiry needs only to refuse the single final outcome commit. No
+        # fallible successful-to-failed rewrite is required here.
+        if time.time() >= self.expires_at:
             receipt_failures.insert(0, "transition lease expired during final cleanup")
         if receipt_failures:
             detail = "; ".join(receipt_failures)
@@ -725,6 +714,7 @@ class ReceiptCadence:
                     "run_id": self.lease.run_id, "owner": self.lease.owner,
                     "timestamp": time.time(), "state": "periodic",
                     "row": self.row, "stage": self.stage, "lease": str(self.lease.lease),
+                    "qualification_outcome": "pending",
                 })
             except BaseException as exc:
                 self.failure = exc
@@ -733,6 +723,13 @@ class ReceiptCadence:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         self.stop.set()
         self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            failure = Refused("receipt cadence remains running after shutdown")
+            if exc is not None:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(str(failure))
+                return None
+            raise failure
         if exc_type is None:
             self.check()
 
@@ -769,6 +766,103 @@ def _validate_receipt_contract(*, output_root: Path, run_id: str, lease_path: Pa
             raise Refused(f"{basename} must be emitted beneath the run output directory")
         if receipt.exists() or receipt.is_symlink():
             raise Refused(f"stale receipt reuse is forbidden: {receipt}")
+
+
+def _bind_receipt(path: Path) -> dict[str, str]:
+    if path.is_symlink() or not path.is_file():
+        raise Refused(f"required receipt is not a regular file: {path}")
+    return {"path": str(path.resolve()), "sha256": _sha_file(path)}
+
+
+def _receipt_manifest(*, owner_receipt: Path, heartbeat_receipt: Path,
+                      expiry_receipt: Path, release_receipt: Path,
+                      handoff_receipt: Path, row_results: list[Path]) -> dict[str, Any]:
+    return {
+        "owner_receipt": _bind_receipt(owner_receipt),
+        "heartbeat_receipt": _bind_receipt(heartbeat_receipt),
+        "expiry_receipt": _bind_receipt(expiry_receipt),
+        "release_receipt": _bind_receipt(release_receipt),
+        "handoff_receipt": _bind_receipt(handoff_receipt),
+        "row_results": [_bind_receipt(path) for path in row_results],
+    }
+
+
+def load_committed_result(final_path: Path) -> dict[str, Any]:
+    """Accept qualification only through its final marker and exact pending inputs."""
+    final = _read_object(final_path, "qualification result")
+    run_id = final.get("run_id")
+    if (final_path.name != "qualification-result.json" or not isinstance(run_id, str)
+            or final_path.parent.name != run_id or not RUN_ID.fullmatch(run_id)
+            or final.get("schema") != SCHEMA or final.get("kind") != RESULT_KIND
+            or final.get("status") != "tooling-executed-nonpromoting"
+            or final.get("promotion") != "forbidden"
+            or final.get("caller_restored") is not True):
+        raise Refused("qualification final marker has invalid identity or outcome")
+    root = final_path.parent
+    manifest = final.get("receipt_manifest")
+    names = {
+        "owner_receipt": "lease-owner.json",
+        "heartbeat_receipt": "lease-heartbeat.jsonl",
+        "expiry_receipt": "lease-expiry.json",
+        "release_receipt": "lease-release.json",
+        "handoff_receipt": "handoff.jsonl",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != {*names, "row_results"}:
+        raise Refused("qualification final marker lacks the exact receipt manifest")
+    for name, basename in names.items():
+        path = root / basename
+        if manifest[name] != _bind_receipt(path):
+            raise Refused(f"qualification receipt digest or path mismatch: {name}")
+        if basename.endswith(".jsonl"):
+            try:
+                records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            except (OSError, json.JSONDecodeError) as exc:
+                raise Refused(f"qualification receipt is unreadable: {name}") from exc
+            if not records or any(not isinstance(record, dict) or
+                                  record.get("run_id") != run_id or
+                                  record.get("qualification_outcome") != "pending"
+                                  for record in records):
+                raise Refused(f"qualification receipt is not pending for this run: {name}")
+        else:
+            record = _read_object(path, name)
+            if record.get("run_id") != run_id or record.get("qualification_outcome") != "pending":
+                raise Refused(f"qualification receipt is not pending for this run: {name}")
+    owner = _read_object(root / names["owner_receipt"], "lease owner")
+    expiry = _read_object(root / names["expiry_receipt"], "lease expiry")
+    release = _read_object(root / names["release_receipt"], "lease release")
+    observed = final.get("deadline_observed_at")
+    deadline = final.get("lease_expires_at")
+    if (not isinstance(observed, (int, float)) or not isinstance(deadline, (int, float))
+            or not math.isfinite(observed) or not math.isfinite(deadline)
+            or observed >= deadline or owner.get("lease_expires_at") != deadline
+            or expiry.get("lease_expires_at") != deadline or expiry.get("expiry_status") != "not-expired"
+            or expiry.get("terminal_status") != "body-validated"
+            or release.get("release_status") != "released"
+            or release.get("terminal_status") != "body-validated"
+            or release.get("flock_release_confirmed") is not True
+            or release.get("receipt_failures") != []):
+        raise Refused("qualification final marker has invalid cleanup or deadline evidence")
+    rows = final.get("rows")
+    bound_rows = manifest["row_results"]
+    if (not isinstance(rows, list) or not rows or not isinstance(bound_rows, list)
+            or len(rows) != len(bound_rows)):
+        raise Refused("qualification final marker has invalid row receipts")
+    seen_rows: set[str] = set()
+    for row, bound in zip(rows, bound_rows, strict=True):
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            raise Refused("qualification final marker has invalid row identity")
+        if row["id"] in seen_rows:
+            raise Refused("qualification final marker repeats a row identity")
+        seen_rows.add(row["id"])
+        row_path = root / row["id"] / "transition-result.json"
+        if row_path.resolve().parent.parent != root.resolve() or bound != _bind_receipt(row_path):
+            raise Refused("qualification row receipt digest or path mismatch")
+        if (_read_object(row_path, "row result") != row
+                or row.get("qualification_outcome") != "pending"
+                or row.get("caller_restored") is not True
+                or row.get("promotion") != "forbidden"):
+            raise Refused("qualification row receipt is not pending or differs from final")
+    return final
 
 
 def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
@@ -808,7 +902,8 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                          release_receipt=release_receipt) as host_lease:
         _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                         "state": "preflight", "rows": [row["id"] for row in rows],
-                                        "lease": str(lease_path)})
+                                        "lease": str(lease_path),
+                                        "qualification_outcome": "pending"})
         cadence = ReceiptCadence(host_lease, handoff_receipt)
         cadence.__enter__()
         try:
@@ -874,6 +969,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         "run_id": run_id, "timestamp": time.time(), "state": "side-complete",
                         "row": row["id"], "stage": side, "lease": str(lease_path),
                         "execution_journal": str(side_run / "execution-status.json"),
+                        "qualification_outcome": "pending",
                     })
                 delta = _compare_sides(row, sides["before"], sides["after"])
                 host_lease.guard()
@@ -882,7 +978,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                     _verify_frozen_side(frozen)
                 result = {"id": row["id"], "before": sides["before"], "after": sides["after"],
                           "artifact_delta": delta, "caller_restored": True,
-                          "promotion": "forbidden"}
+                          "promotion": "forbidden", "qualification_outcome": "pending"}
                 _atomic_json(row_output / "transition-result.json", result)
                 results.append(result)
                 verify_caller(caller)
@@ -898,10 +994,11 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
             }
             _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                             "state": "final-validation-complete",
-                                            "lease": str(lease_path)})
+                                            "lease": str(lease_path),
+                                            "qualification_outcome": "pending"})
             host_lease.heartbeat("final-validation-complete", None, "final")
             verify_caller(caller)
-            host_lease.finish("complete")
+            host_lease.finish("body-validated")
         finally:
             active_exception = sys.exc_info()
             try:
@@ -910,8 +1007,49 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                 cadence.__exit__(*active_exception)
     if final is None:
         raise Refused("qualification ended without a validated final result")
-    _atomic_json(final_path, final)
-    return final
+    verify_caller(caller)
+    final["receipt_manifest"] = _receipt_manifest(
+        owner_receipt=owner_receipt, heartbeat_receipt=heartbeat_receipt,
+        expiry_receipt=expiry_receipt, release_receipt=release_receipt,
+        handoff_receipt=handoff_receipt,
+        row_results=[Path(row["durable_output_directory"]) / "transition-result.json"
+                     for row in rows],
+    )
+    # This is the sole eligibility decision after cadence shutdown, lock
+    # release/close and all prerequisite receipt I/O. Publication follows it;
+    # arbitrary later filesystem latency is not promised to fit the lease.
+    final["deadline_observed_at"] = time.time()
+    final["lease_expires_at"] = host_lease.expires_at
+    if final["deadline_observed_at"] >= host_lease.expires_at:
+        raise Refused("transition lease expired before final outcome commit")
+    try:
+        _atomic_json(final_path, final)
+    except BaseException as publication_error:
+        # The replacement may have succeeded before a subsequent I/O/reporting
+        # error surfaced. Inspect the exact marker rather than guessing that a
+        # committed result was refused or that an absent result succeeded.
+        if final_path.exists() or final_path.is_symlink():
+            try:
+                committed = load_committed_result(final_path)
+            except (Refused, OSError, ValueError) as inspection_error:
+                raise OutcomeUnknown(
+                    f"final publication outcome uncertain: {inspection_error}"
+                ) from publication_error
+            if committed == final:
+                return committed
+            raise OutcomeUnknown("final publication outcome uncertain: marker differs") from publication_error
+        raise
+    try:
+        committed = load_committed_result(final_path)
+    except (Refused, OSError, ValueError) as inspection_error:
+        # The publisher returned after replacing the marker. A later read or
+        # validation failure cannot be called an uncommitted refusal.
+        raise OutcomeUnknown(
+            f"postpublication final marker validation is uncertain: {inspection_error}"
+        ) from inspection_error
+    if committed != final:
+        raise OutcomeUnknown("postpublication final marker differs from this invocation")
+    return committed
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -942,16 +1080,27 @@ def main(argv: list[str] | None = None) -> int:
             expiry_receipt=Path(args.expiry_receipt), release_receipt=Path(args.release_receipt),
             handoff_receipt=Path(args.handoff_receipt), only=args.only,
         )
-        print(json.dumps({"run_id": result["run_id"], "status": result["status"],
-                          "promotion": result["promotion"]}, sort_keys=True))
-        return 0
     except KeyboardInterrupt:
-        print("version transition qualification interrupted after durable recovery", file=sys.stderr)
+        print("version transition qualification interrupted; inspect the durable execution "
+              "journal and recovery receipts before retrying", file=sys.stderr)
         return 130
+    except OutcomeUnknown as exc:
+        print(f"version transition qualification outcome unknown: {exc}", file=sys.stderr)
+        return 4
     except (Refused, executor.Refused, rehearsal.Refused, catalog_stage.Refused,
             native_oracle.Refused, stage_adapter.Refused, OSError, ValueError) as exc:
         print(f"version transition qualification refused: {exc}", file=sys.stderr)
         return 2
+    # `run_qualification` returns only after validating the committed marker.
+    # Reporting failure is distinct from an uncommitted/refused qualification.
+    try:
+        print(json.dumps({"run_id": result["run_id"], "status": result["status"],
+                          "promotion": result["promotion"]}, sort_keys=True))
+    except OSError as exc:
+        print(f"version transition qualification committed for {result['run_id']}, "
+              f"but stdout reporting failed: {exc}", file=sys.stderr)
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

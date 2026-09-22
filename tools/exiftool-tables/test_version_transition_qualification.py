@@ -265,6 +265,23 @@ class SideAndRecoveryTests(unittest.TestCase):
 
 
 class LeaseTests(unittest.TestCase):
+    def test_live_receipt_cadence_cannot_be_treated_as_shutdown(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease_path = root / "transition.host.lock"
+            lease_path.touch()
+            with qualification.TransitionLease(
+                lease=lease_path, run_id="cadence", owner_receipt=root / "owner.json",
+                heartbeat_receipt=root / "heartbeat.jsonl", expiry_receipt=root / "expiry.json",
+                release_receipt=root / "release.json",
+            ) as lease:
+                cadence = qualification.ReceiptCadence(lease, root / "handoff.jsonl")
+                cadence.__enter__()
+                with patch.object(cadence.thread, "join", return_value=None), \
+                     patch.object(cadence.thread, "is_alive", return_value=True):
+                    with self.assertRaisesRegex(qualification.Refused, "cadence.*running"):
+                        cadence.__exit__(None, None, None)
+
     def test_nonblocking_lease_emits_all_receipts(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -473,6 +490,272 @@ class WrapperCallTests(unittest.TestCase):
                 })
         self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
 
+    def test_release_receipt_replace_failure_leaves_no_committed_result(self) -> None:
+        original_replace = qualification.os.replace
+
+        def refuse_release_replace(source, target):
+            if target == self.receipts["release_receipt"]:
+                raise OSError("simulated release replacement failure")
+            return original_replace(source, target)
+
+        with patch.object(qualification.os, "replace", side_effect=refuse_release_replace):
+            with self.assertRaisesRegex(qualification.Refused, "release receipt"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
+        self.assertEqual(json.loads(self.receipts["expiry_receipt"].read_text())[
+            "qualification_outcome"], "pending")
+        self.assertFalse(self.receipts["release_receipt"].exists())
+        with qualification.executor._HostLock(self.lease):
+            pass
+
+    def test_handoff_write_failure_leaves_no_committed_result(self) -> None:
+        original_append = qualification._append_jsonl
+
+        def refuse_handoff(target, value):
+            if target == self.receipts["handoff_receipt"]:
+                raise OSError("simulated handoff write failure")
+            return original_append(target, value)
+
+        with patch.object(qualification, "_append_jsonl", side_effect=refuse_handoff):
+            with self.assertRaisesRegex(OSError, "handoff write failure"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
+        self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())[
+            "qualification_outcome"], "pending")
+
+    def test_owner_receipt_open_failure_leaves_no_committed_result(self) -> None:
+        original_open = Path.open
+
+        def refuse_owner_open(path, *args, **kwargs):
+            if path.name.startswith(".lease-owner.json.") and path.name.endswith(".tmp"):
+                raise OSError("simulated owner open failure")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", new=refuse_owner_open):
+            with self.assertRaisesRegex(OSError, "owner open failure"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
+        self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())[
+            "qualification_outcome"], "pending")
+        with qualification.executor._HostLock(self.lease):
+            pass
+
+    def test_operational_receipts_never_assert_qualification_success(self) -> None:
+        self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        final = json.loads((self.output / self.run_id / "qualification-result.json").read_text())
+        self.assertEqual(final["status"], "tooling-executed-nonpromoting")
+        for path in (self.receipts["expiry_receipt"], self.receipts["release_receipt"]):
+            receipt = json.loads(path.read_text())
+            self.assertNotEqual(receipt.get("terminal_status"), "complete")
+            self.assertEqual(receipt.get("qualification_outcome"), "pending")
+        self.assertEqual(json.loads(self.receipts["owner_receipt"].read_text())[
+            "qualification_outcome"], "pending")
+        for name in ("heartbeat_receipt", "handoff_receipt"):
+            for line in self.receipts[name].read_text().splitlines():
+                self.assertEqual(json.loads(line)["qualification_outcome"], "pending")
+        self.assertEqual(json.loads((self.row_output / "transition-result.json").read_text())[
+            "qualification_outcome"], "pending")
+
+    def test_final_result_binds_exact_operational_receipts(self) -> None:
+        self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        final = json.loads((self.output / self.run_id / "qualification-result.json").read_text())
+        self.assertEqual(final["run_id"], self.run_id)
+        self.assertLess(final["deadline_observed_at"], final["lease_expires_at"])
+        manifest = final["receipt_manifest"]
+        for name, path in self.receipts.items():
+            self.assertEqual(manifest[name], {
+                "path": str(path.resolve()), "sha256": qualification._sha_file(path),
+            })
+        row_result = self.row_output / "transition-result.json"
+        self.assertEqual(manifest["row_results"], [{
+            "path": str(row_result.resolve()), "sha256": qualification._sha_file(row_result),
+        }])
+        self.assertEqual(qualification.load_committed_result(
+            self.output / self.run_id / "qualification-result.json"
+        )["run_id"], self.run_id)
+
+    def test_final_marker_is_not_accepted_after_bound_receipt_changes(self) -> None:
+        self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        final_path = self.output / self.run_id / "qualification-result.json"
+        with self.receipts["release_receipt"].open("a", encoding="utf-8") as stream:
+            stream.write(" ")
+        with self.assertRaisesRegex(qualification.Refused, "receipt.*digest"):
+            qualification.load_committed_result(final_path)
+
+    def test_marker_cannot_make_a_complete_operational_receipt_authoritative(self) -> None:
+        self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        release_path = self.receipts["release_receipt"]
+        release = json.loads(release_path.read_text())
+        release["terminal_status"] = "complete"
+        release_path.write_text(json.dumps(release))
+        final_path = self.output / self.run_id / "qualification-result.json"
+        final = json.loads(final_path.read_text())
+        final["receipt_manifest"]["release_receipt"]["sha256"] = qualification._sha_file(
+            release_path
+        )
+        final_path.write_text(json.dumps(final))
+        with self.assertRaisesRegex(qualification.Refused, "cleanup or deadline"):
+            qualification.load_committed_result(final_path)
+
+    def test_failed_final_publication_leaves_only_pending_operational_receipts(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        original_write = qualification._atomic_json
+
+        def refuse_final(target, value):
+            if target == final_path:
+                raise OSError("simulated final publication failure")
+            return original_write(target, value)
+
+        with patch.object(qualification, "_atomic_json", side_effect=refuse_final):
+            with self.assertRaisesRegex(OSError, "final publication failure"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse(final_path.exists())
+        for path in (self.receipts["expiry_receipt"], self.receipts["release_receipt"]):
+            receipt = json.loads(path.read_text())
+            self.assertEqual(receipt.get("qualification_outcome"), "pending")
+            self.assertNotEqual(receipt.get("terminal_status"), "complete")
+
+    def test_interrupt_before_final_commit_cannot_promote_operational_receipts(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        original_write = qualification._atomic_json
+
+        def interrupt_before_replace(target, value):
+            if target == final_path:
+                raise KeyboardInterrupt("simulated pre-commit interrupt")
+            return original_write(target, value)
+
+        with patch.object(qualification, "_atomic_json", side_effect=interrupt_before_replace):
+            with self.assertRaisesRegex(KeyboardInterrupt, "pre-commit interrupt"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse(final_path.exists())
+        for path in (self.receipts["expiry_receipt"], self.receipts["release_receipt"]):
+            self.assertEqual(json.loads(path.read_text())["qualification_outcome"], "pending")
+
+    def test_uncertain_final_publication_inspects_committed_marker(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        original_write = qualification._atomic_json
+
+        def committed_then_error(target, value):
+            original_write(target, value)
+            if target == final_path:
+                raise OSError("simulated error after final replacement")
+
+        with patch.object(qualification, "_atomic_json", side_effect=committed_then_error):
+            result, _configs = self.invoke(lambda *_args, **_kwargs: {
+                "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+            })
+        self.assertEqual(result["status"], "tooling-executed-nonpromoting")
+        self.assertTrue(final_path.is_file())
+
+    def test_unreadable_post_replace_marker_reports_unknown_not_refused(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        original_write = qualification._atomic_json
+
+        def damaged_after_replace(target, value):
+            original_write(target, value)
+            if target == final_path:
+                target.write_text("{damaged")
+                raise OSError("simulated error after damaged replacement")
+
+        with patch.object(qualification, "_atomic_json", side_effect=damaged_after_replace):
+            with self.assertRaisesRegex(qualification.OutcomeUnknown, "publication outcome uncertain"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertTrue(final_path.is_file())
+
+    def test_postpublication_validation_io_failure_reports_unknown(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        with patch.object(qualification, "load_committed_result",
+                          side_effect=OSError("simulated marker read failure")):
+            with self.assertRaisesRegex(qualification.OutcomeUnknown, "postpublication"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertTrue(final_path.is_file())
+
+    def test_postpublication_validation_must_match_this_invocation(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        with patch.object(qualification, "load_committed_result",
+                          return_value={"run_id": self.run_id, "status": "other-result"}):
+            with self.assertRaisesRegex(qualification.OutcomeUnknown, "marker differs"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertTrue(final_path.is_file())
+
+
+    def test_deadline_is_rechecked_after_receipt_binding_before_success(self) -> None:
+        original_exit = qualification.TransitionLease.__exit__
+        original_sha = qualification._sha_file
+        released_lease = []
+        row_result = self.row_output / "transition-result.json"
+
+        def capture_exit(lease, *args):
+            released_lease.append(lease)
+            return original_exit(lease, *args)
+
+        def expire_after_binding(path):
+            digest = original_sha(path)
+            if path == row_result:
+                released_lease[0].expires_at = 0
+            return digest
+
+        with patch.object(qualification.TransitionLease, "__exit__", capture_exit), \
+             patch.object(qualification, "_sha_file", side_effect=expire_after_binding):
+            with self.assertRaisesRegex(qualification.Refused, "lease expired"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+        self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
+
+    def test_failed_expiry_correction_cannot_leave_authoritative_success(self) -> None:
+        original_exit = qualification.TransitionLease.__exit__
+        original_write = qualification._atomic_json
+        active_lease = []
+
+        def capture_exit(lease, *args):
+            active_lease.append(lease)
+            return original_exit(lease, *args)
+
+        def expire_then_refuse_correction(target, value):
+            if target.name.endswith(".expired"):
+                raise OSError("simulated ENOSPC correcting expired receipt")
+            original_write(target, value)
+            if target == self.receipts["release_receipt"]:
+                active_lease[0].expires_at = 0
+
+        with patch.object(qualification.TransitionLease, "__exit__", capture_exit), \
+             patch.object(qualification, "_atomic_json", side_effect=expire_then_refuse_correction):
+            with self.assertRaisesRegex(qualification.Refused, "lease expired|cleanup failed"):
+                self.invoke(lambda *_args, **_kwargs: {
+                    "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+                })
+
+        self.assertFalse((self.output / self.run_id / "qualification-result.json").exists())
+        for path in (self.receipts["expiry_receipt"], self.receipts["release_receipt"]):
+            receipt = json.loads(path.read_text())
+            self.assertNotEqual(receipt.get("terminal_status"), "complete")
+            self.assertEqual(receipt.get("qualification_outcome"), "pending")
+
     def test_final_lease_expiry_refuses_success_and_releases_lock(self) -> None:
         self._check_terminal_cleanup(expire="before")
 
@@ -482,7 +765,7 @@ class WrapperCallTests(unittest.TestCase):
     def test_final_expiry_preserves_existing_execution_exception(self) -> None:
         self._check_terminal_cleanup(expire="before", fail=True)
 
-    def test_successful_final_cleanup_records_complete_and_releases_lock(self) -> None:
+    def test_successful_final_cleanup_records_pending_and_releases_lock(self) -> None:
         self._check_terminal_cleanup()
 
     def _check_terminal_cleanup(self, *, expire=None, fail=False) -> None:
@@ -522,9 +805,14 @@ class WrapperCallTests(unittest.TestCase):
                          not (expire or fail))
         expiry = json.loads(self.receipts["expiry_receipt"].read_text())
         release = json.loads(self.receipts["release_receipt"].read_text())
-        self.assertEqual(expiry["expiry_status"], "expired" if expire else "not-expired")
+        # The expiry receipt reports its own observation; a deadline crossed
+        # later during release I/O is refused at the final commit boundary.
+        self.assertEqual(expiry["expiry_status"],
+                         "expired" if expire == "before" else "not-expired")
         for receipt in (expiry, release):
-            self.assertEqual(receipt["terminal_status"], "failed" if expire or fail else "complete")
+            self.assertEqual(receipt["terminal_status"],
+                             "failed" if expire == "before" or fail else "body-validated")
+            self.assertEqual(receipt["qualification_outcome"], "pending")
         self.assertEqual(release["release_status"], "released")
         self.assertTrue(release["flock_release_confirmed"])
         self.assertIsNone(captured[0][0].file)
@@ -629,6 +917,67 @@ class WrapperCallTests(unittest.TestCase):
         with self.assertRaisesRegex(qualification.Refused, "stale reuse"):
             self.invoke(execute)
         execute.assert_not_called()
+
+
+class MainOutcomeTests(unittest.TestCase):
+    def test_interrupt_message_does_not_claim_recovery_without_proof(self) -> None:
+        args = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--lease", "lease", "--run-id", "interrupted", "--owner-receipt", "owner",
+            "--heartbeat-receipt", "heartbeat", "--expiry-receipt", "expiry",
+            "--release-receipt", "release", "--handoff-receipt", "handoff",
+        ]
+        messages = []
+
+        def reporting(*parts, **_kwargs):
+            messages.append(" ".join(str(part) for part in parts))
+
+        with patch.object(qualification, "run_qualification", side_effect=KeyboardInterrupt()), \
+             patch("builtins.print", side_effect=reporting):
+            self.assertEqual(qualification.main(args), 130)
+        self.assertIn("inspect", messages[-1])
+        self.assertNotIn("after durable recovery", messages[-1])
+
+    def test_unknown_publication_is_not_reported_as_refusal(self) -> None:
+        args = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--lease", "lease", "--run-id", "uncertain", "--owner-receipt", "owner",
+            "--heartbeat-receipt", "heartbeat", "--expiry-receipt", "expiry",
+            "--release-receipt", "release", "--handoff-receipt", "handoff",
+        ]
+        messages = []
+
+        def reporting(*parts, **_kwargs):
+            messages.append(" ".join(str(part) for part in parts))
+
+        with patch.object(qualification, "run_qualification",
+                          side_effect=qualification.OutcomeUnknown("marker unreadable")), \
+             patch("builtins.print", side_effect=reporting):
+            self.assertEqual(qualification.main(args), 4)
+        self.assertIn("outcome unknown", messages[-1])
+        self.assertNotIn("refused", messages[-1])
+
+    def test_reporting_failure_after_commit_is_not_called_a_refusal(self) -> None:
+        args = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--lease", "lease", "--run-id", "committed", "--owner-receipt", "owner",
+            "--heartbeat-receipt", "heartbeat", "--expiry-receipt", "expiry",
+            "--release-receipt", "release", "--handoff-receipt", "handoff",
+        ]
+        messages = []
+
+        def reporting(*parts, **_kwargs):
+            messages.append(" ".join(str(part) for part in parts))
+            if len(messages) == 1:
+                raise OSError("simulated stdout failure")
+
+        result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
+                  "promotion": "forbidden"}
+        with patch.object(qualification, "run_qualification", return_value=result), \
+             patch("builtins.print", side_effect=reporting):
+            self.assertEqual(qualification.main(args), 3)
+        self.assertIn("committed", messages[-1])
+        self.assertNotIn("refused", messages[-1])
 
 
 if __name__ == "__main__":
