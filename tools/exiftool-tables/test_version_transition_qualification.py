@@ -589,11 +589,7 @@ class WrapperCallTests(unittest.TestCase):
         def recover(run_dir, _archive_cache, _source_root, **kwargs):
             self.assertIsInstance(kwargs["host_lock_fd"], int)
             for name in ("direct", "descendant"):
-                try:
-                    os.kill(process_ids[name], 0)
-                except ProcessLookupError:
-                    pass
-                else:
+                if qualification.executor._pid_live(process_ids[name]):
                     raise qualification.executor.Refused(f"owned {name} is still live")
             journal_path = run_dir / "execution-status.json"
             journal = json.loads(journal_path.read_text())
@@ -632,8 +628,8 @@ class WrapperCallTests(unittest.TestCase):
             self.assertEqual(journal["phase"], "interrupted")
             self.assertIsNone(journal["active"])
             for name in ("direct", "descendant"):
-                with self.subTest(process=name), self.assertRaises(ProcessLookupError):
-                    os.kill(process_ids[name], 0)
+                with self.subTest(process=name):
+                    self.assertFalse(qualification.executor._pid_live(process_ids[name]))
             with qualification.executor._HostLock(self.lease):
                 pass
         finally:

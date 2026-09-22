@@ -860,8 +860,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                         cadence.check()
                     except BaseException as execution_error:
                         try:
-                            if (isinstance(execution_error, KeyboardInterrupt)
-                                    and getattr(execution_error, "_oxidex_owned_child_cleanup", None) == "incomplete"):
+                            if getattr(execution_error, "_oxidex_owned_child_cleanup", None) == "incomplete":
                                 raise executor.Refused(
                                     "owned child cleanup is incomplete; refusing durable interruption recovery",
                                 )

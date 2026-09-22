@@ -90,8 +90,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(record["operation"], "post_spawn")
         self.assertIn("journal callback failed", record["stderr"])
         self.assertEqual(record["pgid"], record["pid"])
-        with self.assertRaises(ProcessLookupError):
-            os.kill(record["pid"], 0)
+        self.assertFalse(executor._pid_live(record["pid"]))
 
     def config(self, *, write=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
@@ -315,8 +314,8 @@ class ExecutorTests(unittest.TestCase):
                         self.cache, self.sources, subprocess.run,
                     )
                 for name in ("direct", "descendant"):
-                    with self.subTest(process=name), self.assertRaises(ProcessLookupError):
-                        os.kill(process_ids[name], 0)
+                    with self.subTest(process=name):
+                        self.assertFalse(executor._pid_live(process_ids[name]))
                 recovered = executor.recover(
                     self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
                 )
@@ -376,12 +375,82 @@ class ExecutorTests(unittest.TestCase):
                         self.cache, self.sources, subprocess.run,
                     )
                 self.assertEqual(len(created), 1)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(created[0].pid, 0)
+                self.assertFalse(executor._pid_live(created[0].pid))
                 recovered = executor.recover(
                     self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
                 )
                 self.assertEqual(recovered["phase"], "interrupted")
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+
+    def test_standard_creation_window_interrupt_reaps_created_child(self):
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+
+        def interrupt_after_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+                os.kill(os.getpid(), signal.SIGINT)
+            return child
+
+        try:
+            with patch.object(executor.subprocess, "Popen", side_effect=interrupt_after_creation):
+                with self.assertRaises(KeyboardInterrupt):
+                    executor._run_record(
+                        [sys.executable, "-c", "import time; time.sleep(60)"],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                    )
+            self.assertEqual(len(created), 1)
+            self.assertFalse(executor._pid_live(created[0].pid))
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+
+    def test_native_creation_defers_process_sigint_delivered_with_cadence_thread(self):
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+
+        def interrupt_from_unblocked_thread_after_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+                sender = threading.Thread(target=os.kill, args=(os.getpid(), signal.SIGINT))
+                sender.start()
+                sender.join(timeout=5)
+                self.assertFalse(sender.is_alive())
+            return child
+
+        def interrupted_probe(*_args, run, **_kwargs):
+            run([sys.executable, "-c", "import time; time.sleep(60)"], cwd=str(self.root),
+                env=dict(os.environ), text=True, capture_output=True, timeout=60)
+
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=interrupted_probe), \
+                 patch.object(executor.subprocess, "Popen", side_effect=interrupt_from_unblocked_thread_after_creation):
+                with self.assertRaises(KeyboardInterrupt):
+                    executor._run_native(self.run_dir, journal, release, docs, config,
+                                         self.cache, self.sources, subprocess.run)
+            self.assertEqual(len(created), 1)
+            self.assertFalse(executor._pid_live(created[0].pid))
         finally:
             for child in created:
                 try:
@@ -437,8 +506,7 @@ class ExecutorTests(unittest.TestCase):
                     )
                 self.assertEqual(cleanup_calls, 2)
                 self.assertEqual(len(created), 1)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(created[0].pid, 0)
+                self.assertFalse(executor._pid_live(created[0].pid))
                 recovered = executor.recover(
                     self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
                 )
@@ -451,6 +519,47 @@ class ExecutorTests(unittest.TestCase):
                     pass
                 try:
                     child.wait(timeout=5)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+
+    def test_native_timeout_cleanup_failure_preserves_active_journal(self):
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(self.run_dir, self.cache, self.sources)
+        release = self.releases[0]
+        created: list[subprocess.Popen[str]] = []
+        original_popen = executor.subprocess.Popen
+
+        def track_creation(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            if not created:
+                created.append(child)
+            return child
+
+        def timed_out_probe(*_args, run, **_kwargs):
+            run([sys.executable, "-c", "import time; time.sleep(60)"], cwd=str(self.root),
+                env=dict(os.environ), text=True, capture_output=True, timeout=0.01)
+
+        try:
+            with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=timed_out_probe), \
+                 patch.object(executor.subprocess, "Popen", side_effect=track_creation), \
+                 patch.object(executor, "_bounded_timeout_cleanup", side_effect=OSError("bounded failed")), \
+                 patch.object(executor, "_emergency_reap_group", side_effect=OSError("emergency failed")), \
+                 patch.object(executor, "_group_live", return_value=True):
+                with self.assertRaisesRegex(OSError, "cleanup remains incomplete"):
+                    executor._run_native(self.run_dir, journal, release, docs, config,
+                                         self.cache, self.sources, subprocess.run)
+            persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+            self.assertEqual(persisted["phase"], "running")
+            self.assertEqual(persisted["releases"][release]["stages"]["native"], "running")
+            self.assertIsInstance(persisted["active"]["child"]["pid"], int)
+        finally:
+            for child in created:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.communicate(timeout=5)
                 except (subprocess.TimeoutExpired, ChildProcessError):
                     pass
 
@@ -559,6 +668,48 @@ class ExecutorTests(unittest.TestCase):
             (proc_root / str(pgid + 1) / "stat").write_text("malformed\n")
             self.assertTrue(executor._group_live(pgid, proc_root=proc_root))
 
+    def test_descendants_fall_back_to_procfs_scan_and_refuse_untrusted_enumeration(self):
+        proc_root = self.root / "proc"
+        proc_root.mkdir()
+
+        def stat(pid: int, ppid: int, start: int) -> None:
+            directory = proc_root / str(pid)
+            directory.mkdir()
+            fields = ["S", str(ppid), str(pid), str(pid)] + ["0"] * 15 + [str(start)]
+            (directory / "stat").write_text(f"{pid} (worker) " + " ".join(fields) + "\n")
+
+        stat(4100, 1, 101)
+        stat(4101, 4100, 102)
+        with patch.object(executor.sys, "platform", "linux"):
+            self.assertEqual(executor._descendants(4100, proc_root=proc_root), [4101])
+            with self.assertRaisesRegex(OSError, "enumerat"):
+                executor._descendants(4100, proc_root=self.root / "missing-proc")
+
+    def test_descendant_identity_mismatch_is_not_signalled_as_owned(self):
+        child = type("Child", (), {"pid": 4100})()
+        child._oxidex_owned_descendants = {4101: "start-101"}
+        with patch.object(executor, "_process_identity", return_value="start-202"), \
+             patch.object(executor, "_signal_pid") as signal_pid:
+            self.assertEqual(executor._live_owned_descendants(child), [])
+            executor._signal_owned_descendants(child, signal.SIGKILL)
+        signal_pid.assert_not_called()
+
+    def test_unverifiable_descendant_identity_fails_closed(self):
+        child = type("Child", (), {"pid": 4100})()
+        child._oxidex_owned_descendants = {4101: "start-101"}
+        with patch.object(executor, "_process_identity", side_effect=OSError("identity unavailable")):
+            with self.assertRaisesRegex(OSError, "identity unavailable"):
+                executor._live_owned_descendants(child)
+
+    def test_untrusted_descendant_enumeration_marks_interrupt_cleanup_incomplete(self):
+        child = type("Child", (), {"pid": 4100, "poll": lambda self: None})()
+        interruption = KeyboardInterrupt("stop")
+        with patch.object(executor, "_bounded_timeout_cleanup", side_effect=OSError("untrusted")), \
+             patch.object(executor, "_emergency_reap_group", side_effect=OSError("untrusted")), \
+             patch.object(executor, "_refresh_owned_descendants", side_effect=OSError("untrusted")):
+            executor._cleanup_owned_child_after_interrupt(child, interruption)
+        self.assertEqual(interruption._oxidex_owned_child_cleanup, "incomplete")
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux procfs")
     def test_recovery_accepts_real_zombie_only_group(self):
         self.initialize(self.config())
@@ -651,8 +802,8 @@ class ExecutorTests(unittest.TestCase):
                 if ready_error:
                     raise ready_error[0]
                 for name in ("direct", "descendant"):
-                    with self.subTest(process=name), self.assertRaises(ProcessLookupError):
-                        os.kill(process_ids[name], 0)
+                    with self.subTest(process=name):
+                        self.assertFalse(executor._pid_live(process_ids[name]))
                 recovered = executor.recover(
                     self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno(),
                 )
@@ -782,8 +933,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertTrue(any("bounded cleanup failed" in note
                             for note in getattr(caught.exception, "__notes__", [])))
         self.assertIsNotNone(child_pid)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child_pid, 0)
+        self.assertFalse(executor._pid_live(child_pid))
 
     def test_interrupt_surviving_group_triggers_emergency_and_blocks_recovery(self):
         """A reaped leader must not hide its still-live owned process group."""
