@@ -154,6 +154,99 @@ class ExecutorTests(unittest.TestCase):
         self.assertIsNotNone(child_pid)
         self.assertFalse(executor._pid_live(child_pid))
 
+    def test_postspawn_callback_cleanup_failure_is_owned_child_incomplete(self):
+        """An unverified post-spawn cleanup cannot degrade to a plain OSError."""
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        descendant_pid = None
+        descendant_program = (
+            "import os, sys, time\n"
+            "os.write(int(sys.argv[1]), f'{os.getpid()}\\n'.encode())\n"
+            "os.close(int(sys.argv[1]))\n"
+            "time.sleep(60)\n"
+        )
+        child_program = (
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1]], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, "
+            "start_new_session=True, close_fds=False)\n"
+            "time.sleep(60)\n"
+        )
+
+        def fail_after_descendant_started(_pid, _pgid):
+            nonlocal descendant_pid
+            descendant_pid = int(os.read(read_fd, 64))
+            raise OSError("journal persistence failed")
+
+        def reap_direct_only(child):
+            child.kill()
+            child.communicate(timeout=5)
+            raise OSError("bounded descendant verification failed")
+
+        failure = None
+        try:
+            with patch.object(executor, "_bounded_timeout_cleanup", side_effect=reap_direct_only), \
+                 patch.object(executor, "_emergency_reap_group",
+                              side_effect=OSError("emergency verification failed")):
+                try:
+                    executor._run_record(
+                        [sys.executable, "-c", child_program, str(write_fd), descendant_program],
+                        cwd=self.root, env=dict(os.environ), run=subprocess.run,
+                        started=fail_after_descendant_started,
+                    )
+                except BaseException as exc:
+                    failure = exc
+            self.assertIsInstance(failure, executor.OwnedChildCleanupIncomplete)
+            self.assertIn("cleanup remains incomplete", str(failure))
+            self.assertIsNotNone(descendant_pid)
+            self.assertTrue(executor._pid_live(descendant_pid))
+        finally:
+            for descriptor in (write_fd, read_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if descendant_pid is not None:
+                try:
+                    os.kill(descendant_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_stage_preserves_active_child_for_incomplete_postspawn_cleanup(self):
+        """The stage journal stays recoverable when post-spawn cleanup is incomplete."""
+        self.initialize(self.config())
+        journal, docs, config = executor._load_journal(
+            self.run_dir, self.cache, self.sources,
+        )
+        release = self.releases[0]
+        checkout = self.checkout(
+            self.repository, self.plan["repository_commit"],
+            self.run_dir / "checkouts" / executor._safe_name(release), self.command,
+        )
+        target = self.run_dir / "targets" / executor._safe_name(release)
+        target.mkdir(parents=True)
+        child_identity = {"pid": 4242, "pgid": 4242}
+
+        def incomplete_record(*_args, started, **_kwargs):
+            started(child_identity["pid"], child_identity["pgid"])
+            raise executor.OwnedChildCleanupIncomplete("post-spawn cleanup unverified")
+
+        with patch.object(executor, "_run_record", side_effect=incomplete_record), \
+             self.assertRaisesRegex(executor.OwnedChildCleanupIncomplete,
+                                    "post-spawn cleanup unverified"):
+            executor._run_stage(
+                self.run_dir, journal, release, "generate", checkout, target,
+                (self.sources / "native", self.sources / "lib", self.sources / "program"),
+                sys.executable, ready_probe(release), config, self.command,
+            )
+
+        persisted = json.loads((self.run_dir / "execution-status.json").read_text())
+        self.assertEqual(persisted["phase"], "running")
+        self.assertEqual(persisted["releases"][release]["stages"]["generate"], "running")
+        self.assertEqual(persisted["active"], {
+            "release": release, "stage": "generate", "child": child_identity,
+        })
+
     def test_successful_command_refuses_detached_descendant_retaining_ownership(self):
         """A zero exit cannot become ok while detached owned work retains its proof."""
         read_fd, write_fd = os.pipe()

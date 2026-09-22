@@ -1119,7 +1119,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                 stdout, stderr = _bounded_timeout_cleanup(child)
                 cleanup_error = None
             except OSError as cleanup:
-                stdout, stderr = _emergency_reap_group(child)
+                stdout, stderr = _emergency_cleanup_after_timeout_failure(child, cleanup)
                 cleanup_error = str(cleanup)
             record = {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc),
                       "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
