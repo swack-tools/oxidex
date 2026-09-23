@@ -30,7 +30,7 @@ use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::lookup_tag_name;
-use chrono::{Duration, NaiveDate};
+use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::{Reader, events::Event};
 
 /// Processes JFIF APP0 segments and extracts version and resolution metadata.
@@ -1446,6 +1446,7 @@ pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) 
 pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut MetadataMap) {
     const APP9: u16 = 0xffe9;
     const IDENTIFIER: &[u8] = b"Media Jukebox\0";
+    const DIRECTORY_START: usize = 22;
     const FIELDS: [&str; 9] = [
         "Caption",
         "Keywords",
@@ -1458,33 +1459,84 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
         "Date",
     ];
     for segment in segments.iter().filter(|segment| segment.marker == APP9) {
-        let Some(xml) = segment.data.strip_prefix(IDENTIFIER) else {
+        if !segment.data.starts_with(IDENTIFIER) {
+            continue;
+        }
+        // JPEG.pm recognizes the 14-byte identifier, then begins its table
+        // directory at byte 22 after the envelope and `<MJMD>` root.
+        let Some(xml) = segment.data.get(DIRECTORY_START..) else {
             continue;
         };
         let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
+        // XMP.pm keeps an element's text verbatim (it trims whitespace only
+        // for rdf:Description), so no trimming here; `Rock &amp; Roll` also
+        // arrives as text/reference/text events and must keep its spaces.
+        reader.config_mut().trim_text(false);
         let mut buffer = Vec::new();
-        let mut current: Option<String> = None;
+        // (field, value, every byte decoded). A field with bytes that do not
+        // decode is withheld rather than published with a gap in it.
+        let mut current: Option<(String, String, bool)> = None;
         loop {
             match reader.read_event_into(&mut buffer) {
                 Ok(Event::Start(element)) => {
                     let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
-                    current = FIELDS.contains(&name.as_str()).then_some(name);
+                    current =
+                        FIELDS
+                            .contains(&name.as_str())
+                            .then_some((name, String::new(), true));
                 }
                 Ok(Event::Text(text)) => {
-                    if let Some(field) = current.as_deref()
-                        && let Ok(value) = text.decode()
-                    {
+                    if let Some((_, value, valid)) = current.as_mut() {
+                        match text.decode() {
+                            Ok(decoded) => value.push_str(&decoded),
+                            Err(_) => *valid = false,
+                        }
+                    }
+                }
+                Ok(Event::CData(data)) => {
+                    // FoundXMP copies CDATA content through unescaped.
+                    if let Some((_, value, valid)) = current.as_mut() {
+                        match data.decode() {
+                            Ok(decoded) => value.push_str(&decoded),
+                            Err(_) => *valid = false,
+                        }
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    // UnescapeXML: numeric and predefined references resolve;
+                    // an unknown `&name;` is kept as written.
+                    if let Some((_, value, valid)) = current.as_mut() {
+                        match reference.xml10_content() {
+                            Ok(name) => {
+                                if let Ok(Some(character)) = reference.resolve_char_ref() {
+                                    value.push(character);
+                                } else if let Some(entity) = resolve_predefined_entity(&name) {
+                                    value.push_str(entity);
+                                } else {
+                                    value.push('&');
+                                    value.push_str(&name);
+                                    value.push(';');
+                                }
+                            }
+                            Err(_) => *valid = false,
+                        }
+                    }
+                }
+                Ok(Event::End(_)) => {
+                    if let Some((field, value, valid)) = current.take() {
+                        if !valid {
+                            continue;
+                        }
                         let value = if field == "Date" {
                             // JPEG.pm routes Date through ConvertUnixTime and
-                            // ConvertDateTime.  Do not turn an invalid float
-                            // into a plausible epoch/saturated timestamp.
-                            let Some(date) = format_media_jukebox_date(value.as_ref()) else {
+                            // ConvertDateTime.  Do not turn a non-finite or
+                            // unsupported float into a plausible timestamp.
+                            let Some(date) = format_media_jukebox_date(&value) else {
                                 continue;
                             };
                             date
                         } else {
-                            value.into_owned()
+                            value
                         };
                         metadata.insert_with_group1(
                             format!("XML:{field}"),
@@ -1493,7 +1545,6 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
                         );
                     }
                 }
-                Ok(Event::End(_)) => current = None,
                 Ok(Event::Eof) | Err(_) => break,
                 _ => {}
             }
@@ -1503,19 +1554,21 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
 }
 
 fn format_media_jukebox_date(value: &str) -> Option<String> {
-    let days = value.parse::<f64>().ok()?;
+    // Perl numifies around leading and trailing whitespace.
+    let days = value.trim().parse::<f64>().ok()?;
     if !days.is_finite() {
         return None;
     }
-    let seconds = (days * 86_400.0).round();
-    if !seconds.is_finite() || !(i64::MIN as f64..i64::MAX as f64).contains(&seconds) {
+    // JPEG.pm:577: ConvertUnixTime(($val - (70 * 365 + 17 + 2)) * 24 * 3600),
+    // multiplied in Perl's left-to-right order so the f64 rounding matches.
+    // Reuse the pinned helper for zero and half-second rounding semantics.
+    let seconds = (days - 25_569.0) * 24.0 * 3600.0;
+    if !seconds.is_finite() || seconds.abs() >= 9.2e18 {
         return None;
     }
-    let seconds = seconds as i64;
-    let epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?.and_hms_opt(0, 0, 0)?;
-    epoch
-        .checked_add_signed(Duration::seconds(seconds))
-        .map(|date| date.format("%Y:%m:%d %H:%M:%S").to_string())
+    Some(crate::exiftool_tables::exprs::convert_unix_time(
+        seconds, false,
+    ))
 }
 
 /// Processes JPEG COM (comment) segments, and the APP10 "UNICODE" comment

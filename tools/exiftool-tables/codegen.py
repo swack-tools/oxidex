@@ -3047,6 +3047,7 @@ def ownership_identity_counts(rows):
     return {
         "binary_rows": sum(row["source_kind"] == "binary" for row in rows),
         "named_raw_key_rows": sum(row["source_kind"] == "named-raw-key" for row in rows),
+        "samsung_trailer_rows": sum(row["source_kind"] == "samsung-trailer" for row in rows),
     }
 
 

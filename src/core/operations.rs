@@ -1503,10 +1503,23 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
         for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
         }
+        // ExifTool.pm sets TrailerStart just after the main image's EOI, which
+        // ProcessJPEG reaches by walking on from SOS; ProcessVivo scans for
+        // its start from there. The segment list itself stops at SOS.
+        let trailer_start = segments
+            .iter()
+            .find(|segment| matches!(segment.marker, 0xFFD9 | 0xFFDA))
+            .and_then(|segment| {
+                let after_marker = usize::try_from(segment.offset).ok()?.checked_add(2)?;
+                if segment.is_eoi() {
+                    Some(after_marker)
+                } else {
+                    crate::parsers::vivo::jpeg_trailer_start(file, after_marker)
+                }
+            });
         metadata.merge_winners_keeping_group1(
-            &crate::parsers::samsung_trailer::parse_samsung_trailer(file),
+            &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
         );
-        metadata.merge_winners_keeping_group1(&crate::parsers::vivo::parse_vivo_trailer(file));
     }
 
     // Process HDR and manufacturer-specific APP segments

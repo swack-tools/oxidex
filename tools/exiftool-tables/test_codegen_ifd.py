@@ -290,6 +290,10 @@ class IdentityLedger(unittest.TestCase):
             {row["source_kind"] for row in rows},
             {"binary", "named-raw-key", "samsung-trailer"},
         )
+        self.assertEqual(
+            codegen.ownership_identity_counts(rows),
+            {"binary_rows": 3, "named_raw_key_rows": 12, "samsung_trailer_rows": 2},
+        )
         self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]) for row in rows))
         self.assertFalse(any(
             row["full_name"] == "Image::ExifTool::Samsung::Trailer"
@@ -314,7 +318,11 @@ class IdentityLedger(unittest.TestCase):
                                                 "reader_eligible": 2, "reader_omitted": 1})
             self.assertEqual(
                 report["ownership_counts"],
-                {"binary_rows": 0, "named_raw_key_rows": 0},
+                {
+                    "binary_rows": 0,
+                    "named_raw_key_rows": 0,
+                    "samsung_trailer_rows": 0,
+                },
             )
             self.assertEqual(report["ownership_rows"], [])
             self.assertEqual(

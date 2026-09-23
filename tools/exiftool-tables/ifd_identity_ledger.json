@@ -10,7 +10,8 @@
   "instrument": "tools/exiftool-tables/codegen.py --ifd-out --ifd-identity-ledger-out",
   "ownership_counts": {
     "binary_rows": 8295,
-    "named_raw_key_rows": 674
+    "named_raw_key_rows": 674,
+    "samsung_trailer_rows": 2
   },
   "ownership_rows": [
     {
