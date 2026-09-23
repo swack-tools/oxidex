@@ -1212,3 +1212,56 @@ fn flir_form_or_unreadable_fff_reads_no_trailers() {
     vivo_chain.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
     assert_no_trailer_tags("carrier.fff", &vivo_chain);
 }
+
+#[test]
+fn tiff_family_raw_with_a_broken_ifd_still_walks_trailers() {
+    // DoProcessTIFF ignores ProcessDirectory's result and walks trailers once
+    // the header (II/MM, IFD0 offset >= 8) is accepted. Pinned 13.59 reports
+    // Samsung:EmbeddedAudioFileName, with a "Bad IFD0/IFD1 directory" or
+    // "Error reading value" warning, for every carrier below.
+    let entry = |tag: u16| {
+        let mut bytes = tag.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes
+    };
+    let offset_past_eof = [&b"II*\0"[..], &0x10_0000_u32.to_le_bytes()].concat();
+    let count_past_eof = [
+        &b"II*\0\x08\0\0\0"[..],
+        &500_u16.to_le_bytes(),
+        &entry(0x100),
+    ]
+    .concat();
+    let truncated_entry = [
+        &b"II*\0\x08\0\0\0"[..],
+        &2_u16.to_le_bytes(),
+        &entry(0x100),
+        b"\x01\x01\x03",
+    ]
+    .concat();
+    let bad_next_ifd = [
+        &b"II*\0\x08\0\0\0"[..],
+        &1_u16.to_le_bytes(),
+        &entry(0x100),
+        &0x7fff_ffff_u32.to_le_bytes(),
+    ]
+    .concat();
+    for body in [
+        offset_past_eof,
+        count_past_eof,
+        truncated_entry,
+        bad_next_ifd,
+    ] {
+        let mut carrier = body.clone();
+        carrier.extend_from_slice(&samsung_soundshot_trailer());
+        for name in ["carrier.fff", "carrier.raw", "carrier.nef", "carrier.dng"] {
+            assert_eq!(
+                public_metadata_named(name, &carrier)
+                    .get_string("MakerNotes:EmbeddedAudioFileName"),
+                Some("SoundShot_000"),
+                "{name}"
+            );
+        }
+    }
+}
