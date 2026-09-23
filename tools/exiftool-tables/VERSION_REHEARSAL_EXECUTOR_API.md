@@ -28,7 +28,11 @@ The config supplied to `init` is JSON with this shape:
 
 `generate`, `build`, and `read` are required. `write` is optional only so an
 unimplemented generated writer remains a visible `unsupported` state; its
-absence cannot yield parity. Each selected release gets a private Git worktree
+absence cannot yield parity. `test` (run after `build`, before `read`) runs
+the regenerated checkout's own test suite; when it is absent the stage is
+`unsupported` and `scope.release_tests` says so. A test result passes only
+with a `test_suite` whose totals count at least one passed test, zero
+failures and every command exiting 0. Each selected release gets a private Git worktree
 at `execution_source_commit` and a separate `CARGO_TARGET_DIR` under the run
 directory. This source commit is immutable config evidence; it is deliberately
 separate from the preserved release-selection plan commit and the executor
@@ -38,6 +42,24 @@ checks the actual checkout `HEAD`. The runner supplies `{release}`, `{checkout}`
 `OXIDEX_REHEARSAL_*` environment variables, including
 `OXIDEX_REHEARSAL_READ_FIXTURE_MANIFEST`. `{native_probe_sha256}`, `{source_commit}` and
 `OXIDEX_REHEARSAL_SOURCE_COMMIT` bind wrappers to the immutable OxiDex source.
+
+The stage adapter's `test` subcommand runs, in the owned checkout with its
+own `CARGO_TARGET_DIR` (`<target>/test-suite`, so the build's proven CLI and
+writer driver are never replaced):
+
+```bash
+cargo test --workspace --all-features --no-fail-fast --tests
+cargo test --workspace --all-features --no-fail-fast --doc
+```
+
+Doc tests are a separate invocation for the reason given at the doc-test step
+in `.github/workflows/ci.yml`. Each invocation's output is parsed strictly:
+every target cargo announces must have one `running N tests` line and one
+libtest summary that accounts for N and agrees with its own status, and the
+exit status must agree with the failure count. Anything else refuses. The
+result records each command, exit, duration and per-command and total
+passed/failed/ignored/measured/filtered-out/target counts, plus the raw
+output log path and hash; failures produce a `failed` result, never a pass.
 
 The example commands are wrappers: a raw `cargo build` does not itself write
 the required stage result. `native_cases` use the constrained case schema from

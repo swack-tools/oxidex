@@ -9,7 +9,13 @@ It wraps the existing catalog/materialization, planner, native oracle,
 executor, and stage adapter. Each side requires fresh generation, an isolated
 target, immutable read fixtures, mandatory native write/readback fixtures, a
 live generated-artifact manifest, zero silent EXTRA retention, explicit
-generated-refusal counts, interruption recovery, and caller restoration.
+generated-refusal counts, interruption recovery, and caller restoration. Each
+side must also pass the regenerated checkout's own test suite
+(`cargo test --workspace --all-features --no-fail-fast --tests`, then `--doc`,
+in a dedicated target) with zero failures; a missing, failed or unparsable
+test receipt refuses the side. Until the plan's release-aware test rewrite
+lands, the historical 113 (11.78) and 79 (12.64) lib-test failures mean those
+rows will refuse at this stage, which is the intended outcome.
 
 This is not transition qualification. Canonical 11.78 and 12.64 source bundles
 and fixture manifests are not present, and the final runs must use the

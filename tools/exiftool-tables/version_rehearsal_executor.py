@@ -32,7 +32,8 @@ import artifacts
 SCHEMA = 1
 KIND = "oxidex_exiftool_version_rehearsal_execution"
 RESULT_KIND = "oxidex_version_rehearsal_stage_result"
-STAGES = ("native", "generate", "build", "read", "write")
+STAGES = ("native", "generate", "build", "test", "read", "write")
+OPTIONAL_COMMANDS = ("test", "write")
 REQUIRED_COMMANDS = ("generate", "build", "read")
 _SAFE_RELEASE = __import__("re").compile(r"^[0-9]+\.[0-9]+$")
 COMMAND_TIMEOUT_SECONDS = 3600
@@ -141,7 +142,7 @@ def _config(value: Any, releases: list[str], *, allow_legacy_recovery: bool = Fa
     if not isinstance(commands, dict) or any(stage not in commands for stage in REQUIRED_COMMANDS):
         raise Refused("generate, build, and read commands are required")
     for stage, spec in commands.items():
-        if stage not in {"generate", "build", "read", "write"}:
+        if stage not in {"generate", "build", "test", "read", "write"}:
             raise Refused("execution config has an unknown command stage")
         if not isinstance(spec, dict) or not isinstance(spec.get("argv"), list) or not spec["argv"]:
             raise Refused(f"{stage} command requires a nonempty argv array")
@@ -261,6 +262,7 @@ def _journal_payload(plan: dict[str, Any], materialization: dict[str, Any], conf
             "selected_releases": releases,
             "untested_eligible_releases": plan["untested_eligible_releases"],
             "write_acceptance": "pending_or_unsupported",
+            "release_tests": "pending_or_unsupported",
             "parity": "unproven_until_each_release_has_passed_read_and_write_reports",
         },
     }
@@ -459,6 +461,21 @@ def _require_native_identity(result: Mapping[str, Any], release: str, native: tu
         raise Refused("stage result is not bound to the selected native identity")
 
 
+def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
+    """A release test stage passes only with counted, zero-failure results."""
+    suite = result.get("test_suite")
+    keys = ("passed", "failed", "ignored", "measured", "filtered_out", "targets")
+    totals = suite.get("totals") if isinstance(suite, dict) else None
+    commands = suite.get("commands") if isinstance(suite, dict) else None
+    if (not isinstance(totals, dict) or not isinstance(commands, list) or not commands
+            or any(type(totals.get(key)) is not int or totals[key] < 0 for key in keys)
+            or totals["failed"] != 0 or totals["passed"] < 1 or totals["targets"] < 1
+            or result.get("denominator") != totals["passed"] + totals["failed"]
+            or suite.get("log") != result.get("raw_report")
+            or any(not isinstance(row, dict) or row.get("exit") != 0 for row in commands)):
+        raise Refused("test result lacks a counted zero-failure release test suite")
+
+
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,
                   checkout: Path | None = None, source_commit: str | None = None,
                   source_tree: Mapping[str, Any] | None = None, target: Path | None = None,
@@ -496,6 +513,8 @@ def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | 
             _require_binary_proof(result, target, "writer_binary")
         if stage in {"read", "write"}:
             _require_fixture_proof(result)
+        if stage == "test":
+            _require_test_suite_proof(result)
         if stage == "write":
             mode = result.get("write_mode")
             if (not isinstance(mode, dict) or mode.get("kind") != "selected-release-live-native"
@@ -926,14 +945,15 @@ def _run_stage(run_dir: Path, journal: dict[str, Any], release: str, stage: str,
                native: tuple[Path, Path, Path], perl: str, native_probe: dict[str, Any], config: dict[str, Any],
                run: Callable[..., subprocess.CompletedProcess[str]],
                stage_guard: Callable[[str, str, str], None] | None = None) -> bool:
-    state = journal["releases"][release]["stages"][stage]
+    # Journals initialized before the release-test stage existed lack its slot.
+    state = journal["releases"][release]["stages"].setdefault(stage, "pending")
     if state == "passed" or state == "unsupported":
         return True
     if state != "pending":
         raise Refused(f"{release} {stage} is not safely runnable after interruption or failure")
-    if stage == "write" and stage not in config["commands"]:
+    if stage in OPTIONAL_COMMANDS and stage not in config["commands"]:
         journal["releases"][release]["stages"][stage] = "unsupported"
-        journal["releases"][release]["reports"][stage] = {"reason": "no generated write acceptance command configured"}
+        journal["releases"][release]["reports"][stage] = {"reason": f"no {stage} command configured"}
         _event(journal, "stage_unsupported", release=release, stage=stage)
         _store_journal(run_dir, journal)
         return True
@@ -1223,7 +1243,7 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
                 native = _run_native(run_dir, journal, release, docs, config, archive_cache, source_root, run,
                                      stage_guard)
                 if native is None: return journal
-                for stage in ("generate", "build", "read", "write"):
+                for stage in ("generate", "build", "test", "read", "write"):
                     if not _run_stage(run_dir, journal, release, stage, owned, target, _native_identity(materialization, source_root, release),
                                       config["perls"][release], native, config, run, stage_guard): return journal
                 statuses = journal["releases"][release]["stages"]
@@ -1245,6 +1265,8 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
         journal["phase"] = "complete"
         journal["scope"]["write_acceptance"] = "unsupported_for_one_or_more_releases" if any(
             row["stages"]["write"] == "unsupported" for row in journal["releases"].values()) else "passed_per_release"
+        journal["scope"]["release_tests"] = "unsupported_for_one_or_more_releases" if any(
+            row["stages"].get("test") != "passed" for row in journal["releases"].values()) else "passed_per_release"
         journal["scope"]["parity"] = "unproven_without_all_per-release_read_and_write_acceptance" if any(
             row["stages"]["write"] != "passed" for row in journal["releases"].values()) else "per-version-read-write-rehearsed; no-promotion"
         _event(journal, "execution_complete", promotion="forbidden")

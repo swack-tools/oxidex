@@ -462,6 +462,7 @@ def _commands() -> dict[str, Any]:
     return {
         "generate": {"argv": [sys.executable, adapter, "generate", *common]},
         "build": {"argv": [sys.executable, adapter, "build", *common]},
+        "test": {"argv": [sys.executable, adapter, "test", *common]},
         "read": {"argv": [sys.executable, adapter, "read", *common,
                             "--fixture-manifest", "{read_fixture_manifest}",
                             "--native-probe-sha256", "{native_probe_sha256}"]},
@@ -525,6 +526,7 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             or str(docx.get("stdout", "")).strip() != "DOCX"
             or not isinstance(perl_capability, dict) or perl_capability.get("available") is not True):
         raise Refused(f"{release} native capability probe is not the ready probe used by read")
+    release_tests = _release_test_receipt(run_dir, journal, release)
     checkout = run_dir / "checkouts" / executor._safe_name(release)
     refusals = stage_adapter.generated_refusal_counts(checkout)
     if not isinstance(refusals.get("total"), int) or refusals["total"] < 0:
@@ -545,6 +547,7 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             "capability_probe": {"state": "ready", "version": release, "docx_filetype": "DOCX",
                                  "perl_modules_available": True},
         },
+        "release_tests": release_tests,
         "generated_artifacts": generate.get("generated_artifacts"),
         "classification_counts": classification,
         "generated_refusals": refusals,
@@ -552,6 +555,49 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
         "write_report_sha256": rehearsal.sha256_json(write),
         "execution_journal_sha256": _sha_file(run_dir / "execution-status.json"),
     }
+
+
+def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """Require the regenerated checkout's own suite: exact commands, zero failures."""
+    if journal.get("scope", {}).get("release_tests") != "passed_per_release":
+        raise Refused(f"{release} release test suite did not pass for this side")
+    report = _report_for(run_dir, journal, release, "test")
+    suite = report.get("test_suite")
+    keys = ("passed", "failed", "ignored", "measured", "filtered_out", "targets")
+
+    def counts(value: Any) -> bool:
+        return isinstance(value, dict) and all(type(value.get(key)) is int and value[key] >= 0 for key in keys)
+
+    commands = suite.get("commands") if isinstance(suite, dict) else None
+    totals = suite.get("totals") if isinstance(suite, dict) else None
+    log = suite.get("log") if isinstance(suite, dict) else None
+    expected = [list(argv) for argv in stage_adapter.TEST_COMMANDS]
+    if (report.get("state") != "passed" or not isinstance(commands, list) or not counts(totals)
+            or not all(counts(row) for row in commands)
+            or [row.get("argv") for row in commands] != expected
+            or any(row.get("exit") != 0 or type(row.get("duration_seconds")) is not float for row in commands)
+            or any(totals[key] != sum(row[key] for row in commands) for key in keys)
+            or totals["failed"] != 0 or totals["passed"] < 1
+            or report.get("denominator") != totals["passed"]
+            or not isinstance(log, dict) or log != report.get("raw_report")
+            or not isinstance(log.get("path"), str) or not isinstance(suite.get("target_directory"), str)):
+        raise Refused(f"{release} release test suite is not a counted zero-failure run of the required commands")
+    try:
+        log_sha = _sha_file(_regular_receipt(Path(log["path"])))
+    except (OSError, Refused) as exc:
+        raise Refused(f"{release} release test suite log is unavailable") from exc
+    if log_sha != log.get("sha256"):
+        raise Refused(f"{release} release test suite log differs from its report")
+    return {"commands": expected, "exits": [row["exit"] for row in commands],
+            **{key: totals[key] for key in keys},
+            "duration_seconds": round(sum(row["duration_seconds"] for row in commands), 3),
+            "target_directory": suite["target_directory"], "log": log}
+
+
+def _regular_receipt(path: Path) -> Path:
+    if path.is_symlink() or not path.is_file():
+        raise Refused(f"receipt must be an existing regular file: {path}")
+    return path
 
 
 def _compare_sides(row: Mapping[str, Any], before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
@@ -1174,6 +1220,7 @@ def _instrument_header(result: Mapping[str, Any]) -> str:
             native = proof["native_identity"]
             binary = proof["binary"]
             capability = proof["capability_probe"]
+            tests = entry["release_tests"]
             label = f"{row['id']}/{side}"
             lines.extend((
                 f"{label}: OxiDex {binary['path']} sha256={binary['sha256']} source={proof['source_commit']}",
@@ -1183,6 +1230,8 @@ def _instrument_header(result: Mapping[str, Any]) -> str:
                 f"{label}: capability {capability['state']} -ver={capability['version']} "
                 f"OOXML.docx={capability['docx_filetype']} perl-modules="
                 f"{'available' if capability['perl_modules_available'] else 'missing'}",
+                f"{label}: tests passed={tests['passed']} failed={tests['failed']} "
+                f"ignored={tests['ignored']} targets={tests['targets']} log={tests['log']['path']}",
                 f"{label}: corpus {proof['read_fixture_manifest']} "
                 f"manifest_sha256={proof['read_fixture_manifest_sha256']} "
                 f"files={proof['read_fixture_count']}",

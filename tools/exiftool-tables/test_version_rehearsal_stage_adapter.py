@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, time
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess, sys
+import shutil, subprocess, sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -47,6 +47,53 @@ def fixture_text(artifact) -> str:
     return artifact.key
 
 
+
+# Captured from real `cargo test --workspace --all-features --no-fail-fast --tests`
+# and `--doc` runs; the strict parser must accept exactly this shape.
+SUITE_TESTS_STDOUT = """
+running 3 tests
+test t::b ... ignored
+test t::a ... ok
+test t::c ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test m ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test i ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+"""
+SUITE_TESTS_STDERR = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)
+     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)
+     Running tests/it.rs (target/debug/deps/it-50a268676428d270)
+"""
+SUITE_FAILED_STDOUT = SUITE_TESTS_STDOUT.replace(
+    "test t::c ... ok\n\ntest result: ok. 2 passed; 0 failed;",
+    "test t::c ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed;")
+SUITE_FAILED_STDERR = SUITE_TESTS_STDERR.replace(
+    "(target/debug/deps/tiny-63dad69917d0d146)\n",
+    "(target/debug/deps/tiny-63dad69917d0d146)\nerror: test failed, to rerun pass `--lib`\n") + "error: 1 target failed:\n    `--lib`\n"
+SUITE_DOC_STDOUT = """
+running 1 test
+test src/lib.rs - one (line 1) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+"""
+SUITE_DOC_STDERR = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+   Doc-tests tiny
+"""
+
+
 class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(); self.addCleanup(self.temp.cleanup); self.root = Path(self.temp.name)
@@ -65,7 +112,7 @@ class AdapterTests(unittest.TestCase):
         self.manifest = self.root / "fixtures.json"; self.manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [{"path": str(self.fixture), "sha256": adapter._sha(self.fixture), "bytes": self.fixture.stat().st_size}]}))
         self.jpeg = self.root / "write.jpg"; self.jpeg.write_bytes(b"\xff\xd8fixture")
         self.write_manifest = self.root / "write-fixtures.json"; self.write_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.jpeg), "sha256": adapter._sha(self.jpeg), "bytes": self.jpeg.stat().st_size}]}))
-        self.seen = []; self.diff_output = ".exiftool-version\n"
+        self.seen = []; self.suite_calls = []; self.diff_output = ".exiftool-version\n"
         self.source_targets = tuple(
             V4Target(0x013c + index, f"StringTarget{index}", "EXIF", "IFD0", "string")
             for index in range(13)
@@ -110,6 +157,11 @@ class AdapterTests(unittest.TestCase):
             if argv[-2:] == ["status", "--porcelain=v1"]: return subprocess.CompletedProcess(argv, 0, "", "")
             if argv[-2:] == ["diff", "--name-only"]: return subprocess.CompletedProcess(argv, 0, self.diff_output, "")
         if argv[0] == "bash": return subprocess.CompletedProcess(argv, 0, "regen", "")
+        if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
+            self.suite_calls.append((argv, kwargs["env"]))
+            if "--doc" in argv:
+                return subprocess.CompletedProcess(argv, 0, SUITE_DOC_STDOUT, SUITE_DOC_STDERR)
+            return subprocess.CompletedProcess(argv, 0, SUITE_TESTS_STDOUT, SUITE_TESTS_STDERR)
         if argv[0] == "cargo":
             test = argv[1] == "test"
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
@@ -257,6 +309,83 @@ class AdapterTests(unittest.TestCase):
         })
         self.assertEqual(read["fixtures"]["entries"][0]["sha256"], adapter._sha(self.fixture))
         self.assertTrue(any(row[0][0] == sys.executable and "conformance.py" in row[0][1] for row in self.seen))
+
+    def test_release_test_suite_runs_in_isolated_target_and_counts_strictly(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(result["state"], "passed")
+        self.assertEqual([argv for argv, _env in self.suite_calls], [list(row) for row in adapter.TEST_COMMANDS])
+        suite_target = self.target.resolve() / "test-suite"
+        self.assertTrue(all(env["CARGO_TARGET_DIR"] == str(suite_target) and env["CARGO_TERM_COLOR"] == "never"
+                            for _argv, env in self.suite_calls))
+        suite = result["test_suite"]
+        self.assertEqual(suite["totals"], {"passed": 5, "failed": 0, "ignored": 1, "measured": 0,
+                                           "filtered_out": 0, "targets": 4})
+        self.assertEqual(result["denominator"], 5)
+        self.assertEqual([row["exit"] for row in suite["commands"]], [0, 0])
+        self.assertEqual([row["targets"] for row in suite["commands"]], [3, 1])
+        self.assertTrue(all(type(row["duration_seconds"]) is float for row in suite["commands"]))
+        self.assertEqual(suite["target_directory"], str(suite_target))
+        self.assertEqual(suite["log"], result["raw_report"])
+        log = json.loads(Path(suite["log"]["path"]).read_text())
+        self.assertEqual([row["stdout"] for row in log["commands"]], [SUITE_TESTS_STDOUT, SUITE_DOC_STDOUT])
+        # The suite's own target keeps the build's CLI and writer driver intact.
+        adapter.executor._require_binary_proof(built, self.target)
+        adapter.executor._require_binary_proof(built, self.target, "writer_binary")
+        with self.assertRaisesRegex(adapter.Refused, "stale reuse"):
+            adapter.run_release_tests(self.args("test", report=str(self.reports / "again" / "test.json")),
+                                      run=self.fake_run)
+
+    def test_release_test_failures_publish_a_failed_report_not_a_pass(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        def failing(argv, **kwargs):
+            result = self.fake_run(argv, **kwargs)
+            if argv[:2] == ["cargo", "test"] and "--tests" in argv:
+                return subprocess.CompletedProcess(argv, 101, SUITE_FAILED_STDOUT, SUITE_FAILED_STDERR)
+            return result
+        result = adapter.run_release_tests(self.args("test"), run=failing)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["test_suite"]["totals"]["failed"], 1)
+        self.assertEqual(result["test_suite"]["commands"][0]["exit"], 101)
+        with self.assertRaisesRegex(adapter.executor.Refused, "passed state"):
+            adapter.executor._stage_result(self.reports / "test.json", "11.78", "test", None)
+
+    def test_unparsable_or_incomplete_test_output_refuses(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        broken = {
+            "garbled result": (0, SUITE_TESTS_STDOUT.replace("0 measured; ", ""), SUITE_TESTS_STDERR),
+            "crashed target": (101, SUITE_TESTS_STDOUT.rsplit("running 1 test", 1)[0],
+                               SUITE_TESTS_STDERR),
+            "count mismatch": (0, SUITE_TESTS_STDOUT.replace("running 3 tests", "running 4 tests"),
+                               SUITE_TESTS_STDERR),
+            "exit disagrees": (101, SUITE_TESTS_STDOUT, SUITE_TESTS_STDERR),
+            "status disagrees": (0, SUITE_TESTS_STDOUT.replace("test result: ok. 2 passed; 0 failed",
+                                                               "test result: ok. 1 passed; 1 failed"),
+                                 SUITE_TESTS_STDERR),
+            "nothing ran": (101, "", "error[E0599]: no variant named `ValBpm`\n"),
+        }
+        for label, (code, stdout, stderr) in broken.items():
+            with self.subTest(label=label):
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                def output(argv, **kwargs):
+                    if argv[:2] == ["cargo", "test"] and "--tests" in argv:
+                        return subprocess.CompletedProcess(argv, code, stdout, stderr)
+                    return self.fake_run(argv, **kwargs)
+                with self.assertRaisesRegex(adapter.Refused, "cargo test"):
+                    adapter.run_release_tests(self.args("test", report=str(report)), run=output)
+                self.assertFalse(report.exists())
+
+    def test_release_test_suite_requires_the_passed_build(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        with self.assertRaises((adapter.Refused, OSError)):
+            adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(self.suite_calls, [])
 
     def test_build_records_distinct_cli_and_writer_driver(self):
         adapter.generate(self.args("generate"), run=self.fake_run)

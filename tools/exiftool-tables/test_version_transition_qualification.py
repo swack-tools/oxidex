@@ -319,17 +319,76 @@ class SideAndRecoveryTests(unittest.TestCase):
                       "version": {"state": "ok", "stdout": "13.59\n"},
                       "perl_capability": {"available": True},
                       "docx_capability": {"state": "ok", "stdout": "DOCX\n"}}
-            reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}, "native": native}
+            log = run_dir / "test-command.json"
+            log.write_text('{"commands": []}')
+            log_binding = {"path": str(log), "sha256": qualification._sha_file(log)}
+            suite_commands = [
+                {"argv": list(argv), "exit": 0, "duration_seconds": 1.5, "passed": 4, "failed": 0,
+                 "ignored": 1, "measured": 0, "filtered_out": 0, "targets": 2}
+                for argv in qualification.stage_adapter.TEST_COMMANDS
+            ]
+            release_tests = {
+                "state": "passed", "denominator": 8, "raw_report": log_binding,
+                "test_suite": {"commands": suite_commands, "log": log_binding,
+                               "target_directory": "/isolated/target/test-suite",
+                               "totals": {"passed": 8, "failed": 0, "ignored": 2, "measured": 0,
+                                          "filtered_out": 0, "targets": 4}},
+            }
+            reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}, "native": native,
+                       "test": release_tests}
             identity = {name: "identity" for name in (
                 "release", "tag_object", "peeled_commit", "source_directory",
                 "source_tree_sha256", "materialization_sha256",
             )}
+            journal = {"phase": "complete", "scope": {"write_acceptance": "passed_per_release",
+                                                      "release_tests": "passed_per_release"}}
             with patch.object(qualification, "_report_for", side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
                  patch.object(qualification.stage_adapter, "generated_refusal_counts", return_value={"total": 0, "counters": []}):
-                side = qualification._side_receipt(
-                    run_dir, {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}},
-                    "13.59", identity,
-                )
+                side = qualification._side_receipt(run_dir, journal, "13.59", identity)
+            self.assertEqual(side.get("release_tests"), {
+                "commands": [list(argv) for argv in qualification.stage_adapter.TEST_COMMANDS],
+                "exits": [0, 0], "passed": 8, "failed": 0, "ignored": 2, "measured": 0,
+                "filtered_out": 0, "targets": 4, "duration_seconds": 3.0,
+                "target_directory": "/isolated/target/test-suite", "log": log_binding,
+            })
+
+            def refused(label, mutate, pattern="release test suite"):
+                broken = json.loads(json.dumps(release_tests))
+                mutate(broken)
+                reports["test"] = broken
+                with self.subTest(label=label), \
+                     patch.object(qualification, "_report_for",
+                                  side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
+                     patch.object(qualification.stage_adapter, "generated_refusal_counts",
+                                  return_value={"total": 0, "counters": []}):
+                    with self.assertRaisesRegex(qualification.Refused, pattern):
+                        qualification._side_receipt(run_dir, journal, "13.59", identity)
+
+            refused("failed tests", lambda r: r["test_suite"]["totals"].update(failed=1))
+            refused("failed command", lambda r: r["test_suite"]["commands"][1].update(exit=101))
+            refused("failed state", lambda r: r.update(state="failed"))
+            refused("no tests", lambda r: r["test_suite"]["totals"].update(passed=0))
+            refused("totals disagree", lambda r: r["test_suite"]["totals"].update(ignored=3))
+            refused("weaker command", lambda r: r["test_suite"]["commands"][0].update(argv=["cargo", "test", "--lib"]))
+            refused("missing doc command", lambda r: r["test_suite"]["commands"].pop())
+            refused("string count", lambda r: r["test_suite"]["totals"].update(passed="8"))
+            refused("log differs", lambda r: r["test_suite"].update(log={"path": str(log), "sha256": "0" * 64}))
+            refused("malformed", lambda r: r.pop("test_suite"))
+            reports["test"] = release_tests
+            log.write_text("changed")
+            with patch.object(qualification, "_report_for", side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
+                 patch.object(qualification.stage_adapter, "generated_refusal_counts", return_value={"total": 0, "counters": []}):
+                with self.assertRaisesRegex(qualification.Refused, "release test suite"):
+                    qualification._side_receipt(run_dir, journal, "13.59", identity)
+            log.write_text('{"commands": []}')
+            for scope in ({"write_acceptance": "passed_per_release"},
+                          {"write_acceptance": "passed_per_release",
+                           "release_tests": "unsupported_for_one_or_more_releases"}):
+                with self.subTest(scope=scope), \
+                     patch.object(qualification, "_report_for", side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
+                     patch.object(qualification.stage_adapter, "generated_refusal_counts", return_value={"total": 0, "counters": []}):
+                    with self.assertRaisesRegex(qualification.Refused, "release test suite"):
+                        qualification._side_receipt(run_dir, {"phase": "complete", "scope": scope}, "13.59", identity)
             self.assertEqual(side.get("instrument"), {
                 "source_commit": source_commit,
                 "binary": read["binary"],
@@ -351,10 +410,7 @@ class SideAndRecoveryTests(unittest.TestCase):
                      patch.object(qualification.stage_adapter, "generated_refusal_counts",
                                   return_value={"total": 0, "counters": []}):
                     with self.assertRaisesRegex(qualification.Refused, "capability probe"):
-                        qualification._side_receipt(
-                            run_dir, {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}},
-                            "13.59", identity,
-                        )
+                        qualification._side_receipt(run_dir, journal, "13.59", identity)
 
     def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -383,6 +439,9 @@ class SideAndRecoveryTests(unittest.TestCase):
             self.assertEqual(normalized["execution_releases"], ["11.78"])
             self.assertIn("write", normalized["commands"])
             self.assertEqual(set(normalized["write_fixture_bindings"]), {"11.78"})
+            argv = normalized["commands"]["test"]["argv"]
+            self.assertEqual(argv[1:3], ["{checkout}/tools/exiftool-tables/version_rehearsal_stage_adapter.py",
+                                         "test"])
 
     def test_same_pin_tampering_and_reverse_without_removal_are_refused(self) -> None:
         artifact = [{"path": "generated", "sha256": "a" * 64, "bytes": 1}]
@@ -1405,11 +1464,16 @@ class MainOutcomeTests(unittest.TestCase):
             "capability_probe": {"state": "ready", "version": "13.59", "docx_filetype": "DOCX",
                                  "perl_modules_available": True},
         }
+        release_tests = {"commands": [["cargo", "test", "--workspace"]], "exits": [0], "passed": 8,
+                         "failed": 0, "ignored": 2, "measured": 0, "filtered_out": 0, "targets": 4,
+                         "duration_seconds": 3.0, "target_directory": "/isolated/test-suite",
+                         "log": {"path": "/isolated/test-command.json", "sha256": "a" * 64}}
         result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
                   "promotion": "forbidden",
                   "caller": {"head": "0" * 40, "pin_version": "13.59", "status": "clean"},
-                  "rows": [{"id": "same-pin-13.59", "before": {"release": "13.59", "instrument": instrument},
-                            "after": {"release": "13.59", "instrument": instrument}}]}
+                  "rows": [{"id": "same-pin-13.59",
+                            "before": {"release": "13.59", "instrument": instrument, "release_tests": release_tests},
+                            "after": {"release": "13.59", "instrument": instrument, "release_tests": release_tests}}]}
         output = io.StringIO()
         with patch.object(qualification, "run_qualification", return_value=result), redirect_stdout(output):
             self.assertEqual(qualification.main(args), 0)
@@ -1417,6 +1481,8 @@ class MainOutcomeTests(unittest.TestCase):
         self.assertEqual(lines[0], "=== instrument: version_transition_qualification.py ===")
         self.assertIn("tree clean", lines[1])
         self.assertTrue(any("capability ready -ver=13.59 OOXML.docx=DOCX perl-modules=available" in line
+                            for line in lines), lines)
+        self.assertTrue(any("tests passed=8 failed=0 ignored=2 targets=4 log=/isolated/test-command.json" in line
                             for line in lines), lines)
         self.assertIn("/isolated/oxidex", output.getvalue())
         self.assertIn("/pinned/exiftool", output.getvalue())

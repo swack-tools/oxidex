@@ -90,8 +90,10 @@ class ExecutorTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(record["pid"], 0)
 
-    def config(self, *, write=True):
+    def config(self, *, write=True, tests=True):
         commands = {stage: {"argv": [stage]} for stage in ("generate", "build", "read")}
+        if tests:
+            commands["test"] = {"argv": ["test"]}
         if write:
             commands["write"] = {"argv": ["write"]}
         result = {"schema": executor.SCHEMA, "commands": commands, "host_lock": str(self.lock),
@@ -157,6 +159,15 @@ class ExecutorTests(unittest.TestCase):
                         native_probe_sha256=ready_probe(env["OXIDEX_REHEARSAL_RELEASE"])["probe_sha256"],
                         comparison={"kind": "oxidex_vs_native", "native_release": env["OXIDEX_REHEARSAL_RELEASE"],
                                     "matched": 3, "mismatched": 0})
+        if stage == "test":
+            body["test_suite"] = {
+                "commands": [{"argv": ["cargo", "test"], "exit": 0, "duration_seconds": 0.5,
+                              "passed": 3, "failed": 0, "ignored": 1, "measured": 0,
+                              "filtered_out": 0, "targets": 2}],
+                "totals": {"passed": 3, "failed": 0, "ignored": 1, "measured": 0,
+                           "filtered_out": 0, "targets": 2},
+                "log": body["raw_report"], "target_directory": env["CARGO_TARGET_DIR"] + "/test-suite",
+            }
         if stage == "read":
             body["classification_counts"] = {
                 "matched": 3, "value_diff": 0, "missing": 0, "renames": 0, "extra": 0,
@@ -218,6 +229,57 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(self.native_calls, [selected])
         self.assertEqual({target for _, _, target in self.calls}, {str(explicit_target)})
         self.assertTrue(explicit_target.is_dir())
+
+    def test_release_tests_run_after_build_and_before_read(self):
+        self.initialize(self.config())
+        journal = self.execute()
+        self.assertEqual(journal["phase"], "complete")
+        self.assertEqual(journal["scope"]["release_tests"], "passed_per_release")
+        per_release = [argv[0] for argv, _, _ in self.calls]
+        self.assertEqual(per_release, ["generate", "build", "test", "read", "write"] * len(self.releases))
+        for release in self.releases:
+            self.assertEqual(journal["releases"][release]["stages"]["test"], "passed")
+            self.assertEqual(journal["releases"][release]["reports"]["test"]["denominator"], 3)
+
+    def test_failed_release_tests_stop_the_release_before_read(self):
+        self.initialize(self.config())
+        original = self.command
+        def failing_tests(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "test":
+                return subprocess.CompletedProcess(argv, 2, "tests failed", "")
+            return result
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                       run=failing_tests, checkout=self.checkout)
+        self.assertEqual(journal["phase"], "failed")
+        release = next(name for name, row in journal["releases"].items() if row["failure"])
+        self.assertEqual(journal["releases"][release]["failure"]["stage"], "test")
+        self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+
+    def test_test_report_with_failures_cannot_pass_even_after_exit_zero(self):
+        self.initialize(self.config())
+        original = self.command
+        def forged(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if argv[0] == "test":
+                report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                body = json.loads(report.read_text())
+                body["test_suite"]["totals"]["failed"] = 1
+                report.write_text(json.dumps(body))
+            return result
+        with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                       run=forged, checkout=self.checkout)
+        self.assertEqual(journal["phase"], "failed")
+        self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+
+    def test_absent_test_command_is_visible_as_unsupported(self):
+        self.initialize(self.config(tests=False))
+        journal = self.execute()
+        self.assertEqual(journal["scope"]["release_tests"], "unsupported_for_one_or_more_releases")
+        self.assertTrue(all(row["stages"]["test"] == "unsupported" for row in journal["releases"].values()))
+        self.assertNotIn("test", [argv[0] for argv, _, _ in self.calls])
 
     def test_absent_write_command_is_visible_not_parity(self):
         self.initialize(self.config(write=False))

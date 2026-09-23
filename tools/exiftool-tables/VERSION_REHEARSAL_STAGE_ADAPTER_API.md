@@ -32,7 +32,12 @@ from this checkout's Cargo manifest, inside the isolated target directory.
 The two identities are recorded as `binary` and `writer_binary`; the executor
 rechecks their hashes. Neither a CLI executable substituted for the test driver
 nor a failed second compilation can produce a passing build report. The build
-denominator of two counts executables, not tests or tag coverage. Read copies an immutable, hash-verified fixture manifest into
+denominator of two counts executables, not tests or tag coverage; the
+`--no-run` compile proves only that the driver builds. `test` then actually
+runs the checkout's suite, `cargo test --workspace --all-features
+--no-fail-fast --tests` followed by `--doc`, in `<target>/test-suite`, parses
+every target's libtest summary strictly, and reports `passed` only with zero
+failures (see `VERSION_REHEARSAL_EXECUTOR_API.md`). Read copies an immutable, hash-verified fixture manifest into
 the isolated target and invokes the checkout's `conformance.py` against that
 release's selected native source and the Cargo-announced binary. A nonzero
 VALUE, MISSING, RENAME or EXTRA count produces a `failed` report; it never
@@ -70,7 +75,7 @@ python3 tools/exiftool-tables/version_rehearsal_stage_adapter.py generate
   --native-lib {native_lib} --native-perl {native_perl}
 ```
 
-`build` takes the same arguments. `read` additionally takes
+`build` and `test` take the same arguments. `read` additionally takes
 `--fixture-manifest fixtures/manifest.json --native-probe-sha256
 {native_probe_sha256}`.
 The executor exposes `{source_commit}` and the equivalent

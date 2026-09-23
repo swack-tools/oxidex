@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any, Callable
 
 import artifacts
@@ -29,6 +30,21 @@ import version_rehearsal_executor as executor
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
+# The release's own test suite, run in the regenerated checkout. `--tests`
+# covers lib, bin and integration test targets; doc tests run separately
+# because one combined invocation races the FFI test's nested lib build on the
+# shared rlib (see the doc-test step in .github/workflows/ci.yml). All features
+# match the adapter build and CI; --no-fail-fast counts every target.
+TEST_COMMANDS = (
+    ("cargo", "test", "--workspace", "--all-features", "--no-fail-fast", "--tests"),
+    ("cargo", "test", "--workspace", "--all-features", "--no-fail-fast", "--doc"),
+)
+TEST_TARGET_SUBDIRECTORY = "test-suite"
+_TEST_RESULT = re.compile(
+    r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; "
+    r"(\d+) filtered out; finished in \d+(?:\.\d+)?s")
+_TEST_RUNNING = re.compile(r"running (\d+) tests?")
+_TEST_TARGET = re.compile(r"\s+(?:Running (?:unittests )?\S+ \(.+\)|Doc-tests \S+)")
 READ_FIXTURE_KIND = "oxidex_version_rehearsal_fixture_manifest"
 WRITE_FIXTURE_KIND = "oxidex_version_rehearsal_write_fixture_manifest"
 
@@ -417,6 +433,87 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     _atomic(report, result); return result
 
 
+def parse_test_output(stdout: str, stderr: str) -> dict[str, int]:
+    """Strictly count one cargo test invocation; anything unrecognized refuses.
+
+    Every test target cargo announces on stderr must have exactly one
+    ``running N tests`` line and one libtest summary on stdout, in order, and
+    each summary must account for its N and agree with its own status.
+    """
+    running: list[int] = []
+    results: list[tuple[str, int, int, int, int, int]] = []
+    for line in stdout.splitlines():
+        text = line.strip()
+        if text.startswith("test result:"):
+            match = _TEST_RESULT.fullmatch(text)
+            if match is None:
+                raise Refused(f"cargo test summary line is unparsable: {text!r}")
+            results.append((match.group(1), *(int(match.group(index)) for index in range(2, 7))))
+        elif text.startswith("running "):
+            match = _TEST_RUNNING.fullmatch(text)
+            if match is None:
+                raise Refused(f"cargo test running line is unparsable: {text!r}")
+            running.append(int(match.group(1)))
+    targets = sum(1 for line in stderr.splitlines() if _TEST_TARGET.fullmatch(line))
+    if not results or len(results) != len(running) or len(results) != targets:
+        raise Refused(f"cargo test output is incomplete: {targets} target(s), {len(running)} started, "
+                      f"{len(results)} summarized")
+    totals = {"passed": 0, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0, "targets": targets}
+    for started, (status, passed, failed, ignored, measured, filtered) in zip(running, results, strict=True):
+        if started != passed + failed + ignored + measured or (status == "ok") != (failed == 0):
+            raise Refused("cargo test summary disagrees with its own test count or status")
+        for key, value in zip(("passed", "failed", "ignored", "measured", "filtered_out"),
+                              (passed, failed, ignored, measured, filtered), strict=True):
+            totals[key] += value
+    return totals
+
+
+def run_release_tests(args: argparse.Namespace, *,
+                      run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
+    """Run the regenerated checkout's own test suite in a dedicated target."""
+    checkout, target, report, perl, _source, native_lib, identity = _common(args, run)
+    if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
+        raise Refused("test checkout is not pinned to selected release")
+    # A separate target keeps the build's proven CLI and writer driver intact;
+    # a default- or differently-featured test build would replace them.
+    suite_target = target / TEST_TARGET_SUBDIRECTORY
+    if suite_target.exists() or suite_target.is_symlink():
+        raise Refused("release test target already exists; stale reuse is forbidden")
+    previous = _prior(report, "build", args, identity, checkout)
+    generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
+    suite_target.mkdir()
+    env = _environment(perl, native_lib, suite_target)
+    env["CARGO_TERM_COLOR"] = "never"
+    records = []
+    for argv in TEST_COMMANDS:
+        began = time.monotonic()
+        record = _run(list(argv), cwd=checkout, env=env, run=run)
+        record["duration_seconds"] = round(time.monotonic() - began, 3)
+        records.append(record)
+    raw = _raw(report, "test", {"commands": records})
+    commands = []
+    for record in records:
+        if record["state"] not in {"ok", "exit_failed"}:
+            raise Refused(f"cargo test command {record['state']}")
+        counts = parse_test_output(record["stdout"], record["stderr"])
+        if (record["exit"] == 0) != (counts["failed"] == 0):
+            raise Refused("cargo test exit status disagrees with its parsed results")
+        commands.append({"argv": record["argv"], "exit": record["exit"],
+                         "duration_seconds": float(record["duration_seconds"]), **counts})
+    totals = {key: sum(row[key] for row in commands)
+              for key in ("passed", "failed", "ignored", "measured", "filtered_out", "targets")}
+    # Tests may not rewrite the generated inputs whose identity they claim.
+    _validate_artifacts(checkout, generated)
+    passed = totals["failed"] == 0 and totals["passed"] > 0 and all(row["exit"] == 0 for row in commands)
+    result = {**_base("test", args, checkout, identity), "state": "passed" if passed else "failed",
+              "denominator": totals["passed"] + totals["failed"], "generated_artifacts": generated,
+              "raw_report": raw,
+              "test_suite": {"commands": commands, "totals": totals, "log": raw,
+                             "target_directory": str(suite_target), "features": "all"}}
+    _atomic(report, result)
+    return result
+
+
 def _fixtures(manifest: Path, target: Path, *, kind: str, subtarget: str) -> tuple[list[dict[str, Any]], str, Path]:
     source = _json(manifest)
     if source.get("schema") != 1 or source.get("kind") != kind or not isinstance(source.get("fixtures"), list) or not source["fixtures"]:
@@ -772,7 +869,7 @@ def write(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest="stage", required=True)
-    for name in ("generate", "build", "read", "write"):
+    for name in ("generate", "build", "test", "read", "write"):
         command = sub.add_parser(name)
         for option in ("checkout", "target", "report", "release", "source-commit", "native-source", "native-lib", "native-perl"):
             command.add_argument("--" + option, required=True)
@@ -783,7 +880,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        result = write(args) if args.stage == "write" else globals()[args.stage](args)
+        stage = {"generate": generate, "build": build, "test": run_release_tests,
+                 "read": read, "write": write}[args.stage]
+        result = stage(args)
         print(json.dumps(result, sort_keys=True)); return 0 if result["state"] == "passed" else 2
     except (Refused, OSError, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr); return 2
