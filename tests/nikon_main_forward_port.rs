@@ -72,8 +72,13 @@ fn tiff_with_nikon_0x56(record: &[u8], order: ByteOrder) -> tempfile::NamedTempF
     put_u16(&mut tiff, EMBEDDED_TIFF + 10, 0x0056, order);
     put_u16(&mut tiff, EMBEDDED_TIFF + 12, 7, order);
     put_u32(&mut tiff, EMBEDDED_TIFF + 14, record.len() as u32, order);
-    put_u32(&mut tiff, EMBEDDED_TIFF + 18, 26, order);
-    tiff[RECORD..].copy_from_slice(record);
+    if record.len() <= 4 {
+        // TIFF stores a value of four bytes or fewer inline in the entry.
+        tiff[EMBEDDED_TIFF + 18..EMBEDDED_TIFF + 18 + record.len()].copy_from_slice(record);
+    } else {
+        put_u32(&mut tiff, EMBEDDED_TIFF + 18, 26, order);
+        tiff[RECORD..].copy_from_slice(record);
+    }
 
     let file = tempfile::Builder::new()
         .suffix(".tif")
@@ -159,4 +164,57 @@ fn nikon_z8_0x56_corpus_carrier_is_required_and_matches_the_pinned_values() {
         Some("01.00")
     );
     assert_eq!(metadata.get_string("Nikon:PixelShiftActive"), Some("No"));
+}
+
+#[test]
+fn nikon_main_0x56_burst_condition_reads_only_the_int8u_burst_flag_byte() {
+    // Pinned Nikon.pm: `BurstFlag` (offset 4) has the table's default int8u
+    // format, so `Condition => '$$self{BurstFlag}'` tests only byte 4, not the
+    // int32u word the masked Burst* fields decode. Pinned ExifTool 13.59 emits
+    // no Burst* tags for either record below (bit set outside byte 4).
+    for (record, order) in [
+        (
+            &[b'0', b'1', b'0', b'0', 0, 1, 0, 0, 5, 0, 0, 0, 0][..],
+            ByteOrder::LittleEndian,
+        ),
+        (
+            &[b'0', b'1', b'0', b'0', 0, 0, 0, 2, 0, 0, 0, 5, 1][..],
+            ByteOrder::BigEndian,
+        ),
+    ] {
+        let file = tiff_with_nikon_0x56(record, order);
+        let metadata = read_metadata(file.path()).expect("synthetic Nikon TIFF parses");
+        assert_eq!(
+            metadata.get_string("Nikon:FirmwareVersion56"),
+            Some("01.00")
+        );
+        for key in [
+            "Nikon:BurstStartSlotNumber",
+            "Nikon:BurstStartFolderNumber",
+            "Nikon:BurstStartImageNumber",
+            "Nikon:BurstStartImageType",
+            "Nikon:BurstShotNumber",
+        ] {
+            assert!(
+                metadata.get(key).is_none(),
+                "{key} must be withheld when BurstFlag byte is 0 ({order:?})"
+            );
+        }
+        assert!(metadata.get("Nikon:PixelShiftActive").is_some());
+    }
+}
+
+#[test]
+fn nikon_main_0x56_short_record_reads_the_available_firmware_bytes() {
+    // Pinned ExifTool 13.59 reads `string[4]` from whatever bytes remain:
+    // inline 2- and 3-byte records report `01.` and `01.2`.
+    for (record, expected) in [(&b"01"[..], "01."), (&b"012"[..], "01.2")] {
+        let file = tiff_with_nikon_0x56(record, ByteOrder::LittleEndian);
+        let metadata = read_metadata(file.path()).expect("short Nikon TIFF parses");
+        assert_eq!(
+            metadata.get_string("Nikon:FirmwareVersion56"),
+            Some(expected)
+        );
+        assert!(metadata.get("Nikon:PixelShiftActive").is_none());
+    }
 }

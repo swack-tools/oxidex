@@ -337,7 +337,9 @@ pub fn parse_maker_notes_0x56(
     tags: &mut HashMap<String, String>,
     value_forms: &mut HashMap<String, String>,
 ) {
-    if let Some(firmware) = data.get(..4).map(ascii_value) {
+    // `string[4]`: ExifTool's ReadValue shortens the count to the bytes that
+    // remain, so a 1-3 byte record still reports a (shorter) firmware string.
+    if let Some(firmware) = (!data.is_empty()).then(|| ascii_value(&data[..data.len().min(4)])) {
         // Nikon.pm: `$val =~ s/(\d{2})/$1./; $val`. The substitution is not
         // limited to all-numeric firmware strings.
         let mut rendered = firmware.clone();
@@ -351,7 +353,11 @@ pub fn parse_maker_notes_0x56(
         tags.insert("Nikon:FirmwareVersion56".to_string(), rendered);
     }
 
-    if let Some(burst) = read_u32(data, 4, order).filter(|value| *value != 0) {
+    // `BurstFlag` has the table's default int8u format, so the Burst*
+    // `Condition => '$$self{BurstFlag}'` tests byte 4 alone, not the int32u
+    // word the masked fields below decode.
+    let burst_flag = data.get(4).is_some_and(|&flag| flag != 0);
+    if let Some(burst) = read_u32(data, 4, order).filter(|_| burst_flag) {
         tags.insert(
             "Nikon:BurstStartSlotNumber".to_string(),
             (((burst & 0x2000_0000) >> 29) + 1).to_string(),
