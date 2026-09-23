@@ -336,7 +336,7 @@ pub fn dispatch_format_parser(
     // finds such a candidate; unknown/identity-only fallbacks never reach this
     // successful dispatch path, and JPEG walks its trailers in
     // parse_jpeg_metadata.
-    if exiftool_processes_trailers(format) && has_recognized_trailer_candidate(reader) {
+    if exiftool_processes_trailers(format, reader) && has_recognized_trailer_candidate(reader) {
         if let Ok(length) = usize::try_from(reader.size())
             && let Ok(file) = reader.read(0, length)
         {
@@ -351,12 +351,14 @@ pub fn dispatch_format_parser(
 /// Non-JPEG carriers whose pinned ExifTool reader walks trailers: the
 /// `%fileTypeLookup` TIFF-module types read by DoProcessTIFF (plus ORF/ORI,
 /// whose ProcessORF is ProcessTIFF), CRW (CanonRaw.pm) and PSD/PSB
-/// (Photoshop.pm). FFF (`['TIFF','FLIR']`), CR3, RAF, MRW, X3F and the rest
-/// are left out rather than assumed.
-fn exiftool_processes_trailers(format: FileFormat) -> bool {
+/// (Photoshop.pm), plus a `.raw` whose bytes select the TIFF reader. FFF
+/// (`['TIFF','FLIR']`), CR3, RAF, MRW, X3F and the rest are left out rather
+/// than assumed.
+fn exiftool_processes_trailers(format: FileFormat, reader: &dyn FileReader) -> bool {
     use crate::parsers::raw::RawFormat as R;
     match format {
         FileFormat::TIFF | FileFormat::PSD => true,
+        FileFormat::CameraRaw(R::GenericRAW) => raw_selects_tiff_reader(reader),
         FileFormat::CameraRaw(raw) => matches!(
             raw,
             R::CanonCR2
@@ -385,6 +387,31 @@ fn exiftool_processes_trailers(format: FileFormat) -> bool {
         ),
         _ => false,
     }
+}
+
+/// `RAW => [['RAW','TIFF'], ...]` with magic `(.{25}ARECOYK|II|MM)`:
+/// KyoceraRaw::ProcessRAW (which never walks trailers) claims a Kyocera
+/// header first; otherwise DoProcessTIFF runs, and reaches its trailer pass
+/// only with an `II`/`MM` byte order and an IFD0 offset of at least 8.
+fn raw_selects_tiff_reader(reader: &dyn FileReader) -> bool {
+    const KYOCERA_HEADER: u64 = 156;
+    let Ok(head) = reader.read(0, reader.size().min(KYOCERA_HEADER) as usize) else {
+        return false;
+    };
+    if crate::parsers::raw::looks_like_kyocera_raw(head) {
+        return false;
+    }
+    let Some(offset) = head.get(4..8).map(|bytes| {
+        let bytes: [u8; 4] = bytes.try_into().expect("four bytes");
+        match head.get(..2) {
+            Some(b"II") => Some(u32::from_le_bytes(bytes)),
+            Some(b"MM") => Some(u32::from_be_bytes(bytes)),
+            _ => None,
+        }
+    }) else {
+        return false;
+    };
+    offset.is_some_and(|offset| offset >= 8)
 }
 
 /// Mirrors IdentifyTrailer's bounded EOF recognition for the trailers a

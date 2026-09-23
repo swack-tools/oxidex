@@ -976,3 +976,104 @@ fn media_jukebox_empty_field_with_default_xmlns_is_withheld() {
         Some("real"),
     );
 }
+
+#[test]
+fn tiff_backed_raw_carrier_uses_the_trailer_chain() {
+    // `RAW => [['RAW','TIFF'], ...]` with magic `(.{25}ARECOYK|II|MM)`: a
+    // `.raw` that is not Kyocera is read by DoProcessTIFF, which walks
+    // trailers. Pinned 13.59 reports Samsung:EmbeddedAudioFileName for the
+    // II, MM and Panasonic (0x55) headers below.
+    let mut little = tiff_carrier();
+    little.extend_from_slice(&samsung_soundshot_trailer());
+    let mut big = b"MM\0*\0\0\0\x08".to_vec();
+    big.extend_from_slice(&1_u16.to_be_bytes());
+    big.extend_from_slice(&0x0100_u16.to_be_bytes());
+    big.extend_from_slice(&3_u16.to_be_bytes());
+    big.extend_from_slice(&1_u32.to_be_bytes());
+    big.extend_from_slice(&(1_u32 << 16).to_be_bytes());
+    big.extend_from_slice(&0_u32.to_be_bytes());
+    big.extend_from_slice(&samsung_soundshot_trailer());
+    let mut panasonic = tiff_carrier();
+    panasonic[2] = 0x55;
+    panasonic.extend_from_slice(&samsung_soundshot_trailer());
+    for carrier in [little, big, panasonic] {
+        assert_eq!(
+            public_metadata_named("carrier.raw", &carrier)
+                .get_string("MakerNotes:EmbeddedAudioFileName"),
+            Some("SoundShot_000")
+        );
+    }
+}
+
+#[test]
+fn kyocera_or_unreadable_raw_carrier_reads_no_trailers() {
+    // KyoceraRaw::ProcessRAW never walks trailers, a header without II/MM
+    // and an IFD0 offset >= 8 never reaches DoProcessTIFF's trailer pass, and
+    // Vivo still ends the TIFF chain. Pinned 13.59: no Samsung tags for any.
+    let mut kyocera = vec![0_u8; 156];
+    kyocera[0x19..0x19 + 7].copy_from_slice(b"ARECOYK");
+    kyocera.extend_from_slice(&samsung_soundshot_trailer());
+    let mut bad_offset = b"II*\0\x04\0\0\0".to_vec();
+    bad_offset.extend_from_slice(&samsung_soundshot_trailer());
+    let mut junk = b"JUNKJUNKJUNKJUNK".to_vec();
+    junk.extend_from_slice(&samsung_soundshot_trailer());
+    let mut vivo_chain = tiff_carrier();
+    vivo_chain.extend_from_slice(&samsung_soundshot_trailer());
+    vivo_chain.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
+    for carrier in [kyocera, bad_offset, junk, vivo_chain] {
+        let dir = tempfile::tempdir().expect("create carrier directory");
+        let path = dir.path().join("carrier.raw");
+        std::fs::write(&path, &carrier).expect("write carrier");
+        // An unrecognized carrier is an error, which reads no trailers either.
+        if let Ok(metadata) = Metadata::from_path(&path) {
+            assert!(metadata.get("MakerNotes:EmbeddedAudioFileName").is_none());
+            assert!(metadata.get("Trailer:JSONInfo").is_none());
+        }
+    }
+}
+
+/// A two-scan JPEG whose second SOS header carries component selector
+/// `cs` and table selector `tables`, followed by `trailer`.
+fn multiscan_jpeg(cs: u8, tables: u8, trailer: &[u8]) -> Vec<u8> {
+    let mut jpeg = base_jpeg();
+    push_segment(
+        &mut jpeg,
+        0xc0,
+        &[0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0xff, 0x11, 0x00],
+    );
+    push_segment(&mut jpeg, 0xda, &[0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]);
+    jpeg.extend_from_slice(b"\x12\x34");
+    let mut dht = vec![0x10];
+    dht.extend_from_slice(&[0; 16]);
+    push_segment(&mut jpeg, 0xc4, &dht);
+    push_segment(&mut jpeg, 0xda, &[0x01, cs, tables, 0x00, 0x3f, 0x00]);
+    jpeg.extend_from_slice(b"\x56\xff\xd9");
+    jpeg.extend_from_slice(trailer);
+    jpeg
+}
+
+#[test]
+fn later_sos_headers_are_scanned_as_exiftool_scans_them() {
+    // ProcessJPEG treats SOS as a stand-alone marker (`%markerLenBytes`
+    // 0xda => 0) and scans on from right after it, header bytes included.
+    // Pinned 13.59 for Samsung + Vivo: selector `ff 00` -> both tags;
+    // `ff 11` -> "JPEG format error", neither; `ff d9` -> an early EOI whose
+    // TrailerStart still finds both.
+    let mut trailer = samsung_soundshot_trailer();
+    trailer.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
+    for (tables, reads_trailers) in [(0x00, true), (0x11, false), (0xd9, true)] {
+        let metadata = public_metadata(&multiscan_jpeg(0xff, tables, &trailer));
+        let expected_name = reads_trailers.then_some("SoundShot_000");
+        let expected_json = reads_trailers.then_some("{\"a\":1}");
+        assert_eq!(
+            metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
+            expected_name,
+            "{tables:#x}"
+        );
+        assert_eq!(
+            metadata.get_string("Trailer:JSONInfo"),
+            expected_json,
+            "{tables:#x}"
+        );
+    }
+}
