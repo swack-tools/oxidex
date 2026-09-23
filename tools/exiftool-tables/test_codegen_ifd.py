@@ -206,10 +206,19 @@ class IdentityLedger(unittest.TestCase):
                     "meta": {"VARS": {"ID_FMT": "none"}},
                     "tags": {"HDRImage": {}, "HiddenData": {}, "JSONInfo": {}},
                 }}},
+                "Samsung": {"tables": {"Trailer": {
+                    "meta": {"PROCESS_PROC": {"__name": "Image::ExifTool::Samsung::ProcessSamsung"}, "VARS": {"ID_FMT": "none"}},
+                    "tags": {
+                        "0x0001": {"Name": "EmbeddedImage"},
+                        "0x0100-name": {"Name": "EmbeddedAudioFileName", "_shorthand": True},
+                        "0x0100": {"Name": "EmbeddedAudioFile", "Binary": "1"},
+                        "0x0201": {"Name": "SurroundShotVideo"},
+                    },
+                }}},
             },
         }
         rows = codegen.gen_ownership_identities(
-            doc, ["JPEG", "Kodak", "Lookup", "Nikon", "Trailer"]
+            doc, ["JPEG", "Kodak", "Lookup", "Nikon", "Samsung", "Trailer"]
         )
         by_identity = {
             (row["full_name"], row["raw_key"], tuple(row["variant_path"])): row
@@ -259,6 +268,15 @@ class IdentityLedger(unittest.TestCase):
             ("Image::ExifTool::Lookup::Values", "OTHER", ()),
             by_identity,
         )
+        self.assertEqual(
+            {
+                (raw_key, name)
+                for full_name, raw_key, variant_path in by_identity
+                if full_name == "Image::ExifTool::Samsung::Trailer" and not variant_path
+                for name in [by_identity[(full_name, raw_key, variant_path)]["name"]]
+            },
+            {("0x0100-name", "EmbeddedAudioFileName"), ("0x0100", "EmbeddedAudioFile")},
+        )
         self.assertNotIn(
             ("Image::ExifTool::Lookup::ValuesWithIdFormat", "OTHER", ()),
             by_identity,
@@ -270,9 +288,17 @@ class IdentityLedger(unittest.TestCase):
             )
         self.assertEqual(
             {row["source_kind"] for row in rows},
-            {"binary", "named-raw-key"},
+            {"binary", "named-raw-key", "samsung-trailer"},
+        )
+        self.assertEqual(
+            codegen.ownership_identity_counts(rows),
+            {"binary_rows": 3, "named_raw_key_rows": 12, "samsung_trailer_rows": 2},
         )
         self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]) for row in rows))
+        self.assertFalse(any(
+            row["full_name"] == "Image::ExifTool::Samsung::Trailer"
+            for row in codegen.gen_ownership_identities(doc, ["JPEG", "Trailer"])
+        ))
 
     def test_cli_binds_ledger_to_input_and_emitted_ifd_rust(self):
         doc = self._doc()
@@ -292,7 +318,11 @@ class IdentityLedger(unittest.TestCase):
                                                 "reader_eligible": 2, "reader_omitted": 1})
             self.assertEqual(
                 report["ownership_counts"],
-                {"binary_rows": 0, "named_raw_key_rows": 0},
+                {
+                    "binary_rows": 0,
+                    "named_raw_key_rows": 0,
+                    "samsung_trailer_rows": 0,
+                },
             )
             self.assertEqual(report["ownership_rows"], [])
             self.assertEqual(

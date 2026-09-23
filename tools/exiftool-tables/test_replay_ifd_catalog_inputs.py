@@ -39,7 +39,8 @@ class IfdCatalogReplayTests(unittest.TestCase):
                       "counts": {"rows": 2, "emitted": 2, "refused": 0,
                                  "reader_eligible": 1, "reader_omitted": 1},
                       "ownership_rows": [],
-                      "ownership_counts": {"binary_rows": 0, "named_raw_key_rows": 0}}
+                      "ownership_counts": {"binary_rows": 0, "named_raw_key_rows": 0,
+                                           "samsung_trailer_rows": 0}}
 
     def fresh(self, document=None):
         document = copy.deepcopy(self.document if document is None else document)

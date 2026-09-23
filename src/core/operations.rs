@@ -13,8 +13,9 @@ use crate::core::jpeg_helpers::{
     process_app15_segments, process_com_segments, process_dji_dbg_segments,
     process_dji_thermal_segments, process_dqt_segments_with_options,
     process_exif_segments_with_options, process_icc_segments, process_infiray_segments,
-    process_iptc_segments, process_jfif_segments, process_mpf_segments, process_photoshop_segments,
-    process_qualcomm_segments, process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
+    process_iptc_segments, process_jfif_segments, process_media_jukebox_segments,
+    process_mpf_segments, process_photoshop_segments, process_qualcomm_segments,
+    process_ricoh_rmeta_segments, process_samsung_unique_id_segments,
     process_sof_segments_with_options, process_spiff_segments,
     process_uniform_resource_name_segments, process_xmp_segments,
 };
@@ -1477,6 +1478,7 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
     process_com_segments(&segments, &mut metadata);
     process_dqt_segments_with_options(&segments, &mut metadata, options);
     process_ricoh_rmeta_segments(&segments, &mut metadata);
+    process_media_jukebox_segments(&segments, &mut metadata);
 
     // Canon VRD sits after the JPEG's EOI, so it needs the whole file rather
     // than the parsed segment list, which stops at the EOI marker. It carries
@@ -1500,6 +1502,22 @@ pub(crate) fn parse_jpeg_metadata_with_diagnostics(
         }
         for (key, value) in crate::parsers::mie::parse_mie_trailer(file).iter() {
             metadata.insert(key.clone(), value.clone());
+        }
+        // ProcessJPEG identifies and walks trailers only once it reaches SOS
+        // (ExifTool.pm:7627-7634); a JPEG whose marker walk ends first (EOI
+        // before SOS, a format error) has none read. TrailerStart, which
+        // ProcessVivo scans from, is the byte after the EOI that the walk
+        // reaches from that SOS (ExifTool.pm:7464-7468,7547-7552).
+        if let Some(sos) = segments.iter().find(|segment| segment.marker == 0xFFDA) {
+            let trailer_start = usize::try_from(sos.offset)
+                .ok()
+                .and_then(|offset| offset.checked_add(2))
+                .and_then(|after_marker| {
+                    crate::parsers::vivo::jpeg_trailer_start(file, after_marker)
+                });
+            metadata.merge_winners_keeping_group1(
+                &crate::parsers::samsung_trailer::parse_trailer_chain(file, trailer_start),
+            );
         }
     }
 
