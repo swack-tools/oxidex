@@ -1105,7 +1105,9 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             &mut structured_occurrences,
                         )
                     } else if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(
-                        make, mn_data,
+                        make,
+                        camera_model.as_deref(),
+                        mn_data,
                     ) {
                         // Same detached context and fresh session as the
                         // legacy entry below; the only difference is the
@@ -3607,7 +3609,7 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
     let mut tags = std::collections::HashMap::new();
     let mut forms = std::collections::HashMap::new();
     let mut structured_occurrences = Vec::new();
-    let result = if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(make, &rebuilt)
+    let result = if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(make, None, &rebuilt)
     {
         // Pentax emits its CAF point and flash guide-number fields as
         // canonical occurrences so `--no-print-conv` keeps their ValueConv;
