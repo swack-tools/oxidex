@@ -3,10 +3,10 @@
     "generated": 563,
     "not-applicable": 29,
     "refused": 18,
-    "residual": 59,
+    "residual": 64,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "7a4921c84663c8467229564968c17c8cea8e8e82275a56ccc524da01586b73a9",
+  "fragment_inputs_sha256": "a197d74a5e514a8c45a6d7240cd6903eb5b88f05bf1226030979c6315e63a64f",
   "rows": [
     {
       "field": {
@@ -87,6 +87,136 @@
       "source_sha256": "74422d1d42012ba275c520d168a8820b92a9383bd721c78c842a71aa779eb72c",
       "symbol": "src/parsers/tiff/makernotes/casio.rs::record_casio_type2_u16",
       "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "GPSLatitude"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/DJI/DJI_FC2204.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "a3988c6cf6693636420881af9743859e44a5e355a721a8e93405109fd0689a54"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "GPSLatitude",
+        "raw_key": "GpsLatitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "3cbfcaa072bbec8719a1223b4513befe3052337e1f85cf4bd66177215c9e1aa9",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "GPSLongitude"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/DJI/DJI_FC2204.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "a3988c6cf6693636420881af9743859e44a5e355a721a8e93405109fd0689a54"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "GPSLongitude",
+        "raw_key": "GpsLongitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "c154add7d20e13ccc44fb53bb5aef104033d3630ca3afe9c5f6ce0950c9a913f",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "GPSLongtitude"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task14/fixtures/drone-dji-coordinates.xmp",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "758e6513a82f5fd1f002ca0b05c0fc125e0ed61393c0fb63b5cd07af3538e232"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "GPSLongtitude",
+        "raw_key": "GpsLongtitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "992d01cbf27b8bf2c861bdc81cc064f402ce33b7613c1a101c0abe9178767cbd",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Latitude"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task14/fixtures/drone-dji-coordinates.xmp",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "758e6513a82f5fd1f002ca0b05c0fc125e0ed61393c0fb63b5cd07af3538e232"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Latitude",
+        "raw_key": "Latitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "be52a20e9e35ca97279a1710b4a3b1ef1f45e9c570dfa2c15bc9079e3c836998",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Longitude"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task14/fixtures/drone-dji-coordinates.xmp",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "758e6513a82f5fd1f002ca0b05c0fc125e0ed61393c0fb63b5cd07af3538e232"
+      },
+      "module": "DJI",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::DJI::XMP",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Longitude",
+        "raw_key": "Longitude",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "7feb5dd1084141bb567809362950680437d3aab13593391916b284cd7d6cf3a3",
+      "symbol": "src/parsers/xmp/rdf_parser.rs::format_drone_dji_dms",
+      "table": "XMP"
     },
     {
       "field": {

@@ -217,93 +217,166 @@ fn extract_string(entry: &IfdEntry, data: &[u8]) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-/// Description of one bracketed diagnostic block in newer DJI MakerNotes.
-///
-/// The payload lengths and names correspond to `Image::ExifTool::DJI::Main`.
-/// Keeping the lengths here is important because the payload is arbitrary
-/// binary data and may itself contain `]` bytes.
-struct DebugPacket {
-    prefix: &'static [u8],
-    tag_name: &'static str,
-    payload_len: usize,
+/// One `DJI::Info` record value, as `ProcessDJIInfo` (DJI.pm:960-983,
+/// pinned 13.59) hands it to `HandleTag`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DjiInfoValue {
+    /// `$val =~ /^([\x20-\x7e]+)\0*$/` matched: the printable run, with the
+    /// trailing NULs (and a final newline `$` allows) dropped.
+    Text(String),
+    /// Anything else stays a binary scalar reference, printed by ExifTool as
+    /// `(Binary data N bytes, use -b option to extract)`.
+    Binary(Vec<u8>),
 }
 
-const DEBUG_PACKETS: &[DebugPacket] = &[
-    DebugPacket {
-        prefix: b"adj_dbg_info:",
-        tag_name: "ADJDebugInfo",
-        payload_len: 1024,
-    },
-    DebugPacket {
-        prefix: b"ae_dbg_info:",
-        tag_name: "AEDebugInfo",
-        payload_len: 256,
-    },
-    DebugPacket {
-        prefix: b"ae_histogram_info:",
-        tag_name: "AEHistogramInfo",
-        payload_len: 4096,
-    },
-    DebugPacket {
-        prefix: b"ae_liveview_histogram_info:",
-        tag_name: "AELiveViewHistogramInfo",
-        payload_len: 4096,
-    },
-    DebugPacket {
-        prefix: b"ae_liveview_local_histogram:",
-        tag_name: "AELiveViewLocalHistogram",
-        payload_len: 2048,
-    },
+impl DjiInfoValue {
+    /// ExifTool's printed form of the value.
+    pub fn print(&self) -> String {
+        match self {
+            Self::Text(text) => text.clone(),
+            Self::Binary(bytes) => format!(
+                "(Binary data {} bytes, use -b option to extract)",
+                bytes.len()
+            ),
+        }
+    }
+}
+
+/// `%Image::ExifTool::DJI::Info` (DJI.pm:74-92, pinned 13.59): the record
+/// names ExifTool knows. Anything else is named by `HandleTag`'s
+/// `MakeTagInfo` path -- see [`make_tag_info_name`].
+const DJI_INFO_TAGS: &[(&[u8], &str)] = &[
+    (b"ae_dbg_info", "AEDebugInfo"),
+    (b"ae_histogram_info", "AEHistogramInfo"),
+    (b"ae_local_histogram", "AELocalHistogram"),
+    (b"ae_liveview_histogram_info", "AELiveViewHistogramInfo"),
+    (b"ae_liveview_local_histogram", "AELiveViewLocalHistogram"),
+    (b"awb_dbg_info", "AWBDebugInfo"),
+    (b"af_dbg_info", "AFDebugInfo"),
+    (b"hiso", "Histogram"),
+    (b"xidiri", "Xidiri"),
+    (b"GimbalDegree(Y,P,R)", "GimbalDegree"),
+    (b"FlightDegree(Y,P,R)", "FlightDegree"),
+    (b"adj_dbg_info", "ADJDebugInfo"),
+    (b"sensor_id", "SensorID"),
+    (b"FlightSpeed(X,Y,Z)", "FlightSpeed"),
+    (b"hyperlapse_dbg_info", "HyperlapsDebugInfo"),
 ];
 
-/// Parse the packet stream used as the complete MakerNote value by newer DJI
-/// cameras.
-///
-/// Records are `[name:<fixed-size binary payload>]`. This only searches the
-/// bounded MakerNote slice supplied by the TIFF parser, never the enclosing
-/// JPEG, and validates the closing delimiter at the table-defined payload
-/// boundary before exposing a tag.
-fn parse_debug_packets(data: &[u8], tags: &mut HashMap<String, String>) -> bool {
-    let mut found = false;
-    let mut search_from = 0usize;
-
-    while let Some(relative_start) = data
-        .get(search_from..)
-        .and_then(|remaining| remaining.iter().position(|&byte| byte == b'['))
-    {
-        let content_start = search_from + relative_start + 1;
-        let mut next_search = content_start;
-
-        for packet in DEBUG_PACKETS {
-            let Some(after_prefix) = content_start.checked_add(packet.prefix.len()) else {
-                continue;
-            };
-            if data.get(content_start..after_prefix) != Some(packet.prefix) {
-                continue;
-            }
-            let Some(payload_end) = after_prefix.checked_add(packet.payload_len) else {
-                continue;
-            };
-            if data.get(payload_end) != Some(&b']') {
-                continue;
-            }
-
-            tags.insert(
-                format!("DJI:{}", packet.tag_name),
-                format!(
-                    "(Binary data {} bytes, use -b option to extract)",
-                    packet.payload_len
-                ),
-            );
-            found = true;
-            next_search = payload_end + 1;
-            break;
+/// The tag name `HandleTag($tagTbl, $tag, $val, MakeTagInfo => 1)` gives a
+/// record ID the table does not declare (ExifTool.pm:9310-9318, then
+/// `AddTagToTable`'s own clean-up at ExifTool.pm:9254-9265). DJI_FC9313.jpg's
+/// `awb_dbg_data_v2` becomes `Awb_Dbg_Data_V2`.
+fn make_tag_info_name(tag: &[u8]) -> String {
+    // s/([A-Z]) ([A-Z][ A-Z])/${1}_$2/g -- underline between acronyms.
+    let mut step1 = Vec::with_capacity(tag.len());
+    let mut i = 0;
+    while i < tag.len() {
+        if i + 3 < tag.len()
+            && tag[i].is_ascii_uppercase()
+            && tag[i + 1] == b' '
+            && tag[i + 2].is_ascii_uppercase()
+            && (tag[i + 3] == b' ' || tag[i + 3].is_ascii_uppercase())
+        {
+            step1.extend_from_slice(&[tag[i], b'_', tag[i + 2], tag[i + 3]]);
+            i += 4;
+        } else {
+            step1.push(tag[i]);
+            i += 1;
         }
-
-        search_from = next_search;
     }
+    // s/([^A-Za-z])([a-z])/$1\u$2/g -- capitalize words.
+    let mut step2 = Vec::with_capacity(step1.len());
+    let mut i = 0;
+    while i < step1.len() {
+        if i + 1 < step1.len()
+            && !step1[i].is_ascii_alphabetic()
+            && step1[i + 1].is_ascii_lowercase()
+        {
+            step2.extend_from_slice(&[step1[i], step1[i + 1].to_ascii_uppercase()]);
+            i += 2;
+        } else {
+            step2.push(step1[i]);
+            i += 1;
+        }
+    }
+    // tr/-_a-zA-Z0-9//dc -- remove illegal characters.
+    let mut name: String = step2
+        .into_iter()
+        .filter(|byte| *byte == b'-' || *byte == b'_' || byte.is_ascii_alphanumeric())
+        .map(char::from)
+        .collect();
+    if name.len() < 2 || name.starts_with(|c: char| c == '-' || c.is_ascii_digit()) {
+        name.insert_str(0, "Tag");
+    }
+    // ucfirst, then AddTagToTable's "must start with a letter" rule.
+    if let Some(first) = name.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    if name.len() < 2 || !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        name.insert_str(0, "Tag");
+    }
+    name
+}
 
-    found
+/// Whether a record's closing `]` at `close` satisfies `(?=(\[|$))`: the
+/// next byte opens another record, or the string ends there -- Perl's `$`
+/// also matches just before one final newline.
+fn closes_record(data: &[u8], close: usize) -> bool {
+    match data.get(close + 1) {
+        None | Some(b'[') => true,
+        Some(b'\n') => close + 2 == data.len(),
+        Some(_) => false,
+    }
+}
+
+/// `ProcessDJIInfo` (DJI.pm:960-983, pinned 13.59) over one directory:
+/// `while ($$dataPt =~ /\G\[(.*?)\](?=(\[|$))/sg)`. Records must be
+/// contiguous from the start; each is the shortest `[...]` whose `]` is
+/// followed by the next `[` or the end, so a payload may itself contain `]`
+/// and its length is never assumed. Each record splits once at `:` into the
+/// tag ID and its value; a record with no `:` is skipped.
+///
+/// Returns `(tag name, value)` in record order.
+pub fn process_dji_info(data: &[u8]) -> Vec<(String, DjiInfoValue)> {
+    let mut records = Vec::new();
+    let mut pos = 0;
+    while data.get(pos) == Some(&b'[') {
+        let Some(close) =
+            (pos + 1..data.len()).find(|&index| data[index] == b']' && closes_record(data, index))
+        else {
+            break;
+        };
+        let record = &data[pos + 1..close];
+        pos = close + 1;
+
+        // my ($tag, $val) = split /:/, $1, 2; next unless defined $val;
+        let Some(colon) = record.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        let (tag, value) = (&record[..colon], &record[colon + 1..]);
+
+        let name = DJI_INFO_TAGS
+            .iter()
+            .find(|(id, _)| *id == tag)
+            .map_or_else(|| make_tag_info_name(tag), |(_, name)| (*name).to_string());
+        records.push((name, dji_info_value(value)));
+    }
+    records
+}
+
+/// `$val =~ /^([\x20-\x7e]+)\0*$/ ? $1 : \$val` (DJI.pm:974-979).
+fn dji_info_value(value: &[u8]) -> DjiInfoValue {
+    let body = value.strip_suffix(b"\n").unwrap_or(value);
+    let printable_end = body
+        .iter()
+        .position(|byte| !(0x20..=0x7e).contains(byte))
+        .unwrap_or(body.len());
+    if printable_end > 0 && body[printable_end..].iter().all(|byte| *byte == 0) {
+        DjiInfoValue::Text(String::from_utf8_lossy(&body[..printable_end]).into_owned())
+    } else {
+        DjiInfoValue::Binary(value.to_vec())
+    }
 }
 
 // ============================================================================
@@ -428,10 +501,13 @@ impl MakerNoteParser for DjiParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        // Mavic 2 Enterprise and other recent models store a diagnostic packet
-        // stream here rather than a TIFF-style IFD. Detect it before treating
-        // the first two bytes as an entry count.
-        if parse_debug_packets(data, tags) {
+        // MakerNotes.pm:93-98 `MakerNoteDJIInfo`: a note starting
+        // `[ae_dbg_info:` is the whole `DJI::Info` record stream (FC2204,
+        // Mavic 2 Enterprise), not a TIFF-style IFD.
+        if data.starts_with(b"[ae_dbg_info:") {
+            for (name, value) in process_dji_info(data) {
+                tags.insert(format!("DJI:{name}"), value.print());
+            }
             return Ok(());
         }
 
@@ -641,6 +717,77 @@ mod tests {
             Some("(Binary data 1024 bytes, use -b option to extract)")
         );
         assert_eq!(tags.len(), 5);
+    }
+
+    /// ExifTool.pm:9310-9318 + AddTagToTable: names for record IDs the
+    /// `DJI::Info` table does not declare. Each expectation was checked
+    /// against the same substitutions run by the pinned perl 5.38.2.
+    #[test]
+    fn make_tag_info_names_follow_handle_tag() {
+        assert_eq!(make_tag_info_name(b"awb_dbg_data_v2"), "Awb_Dbg_Data_V2");
+        assert_eq!(make_tag_info_name(b"scap_info"), "Scap_Info");
+        assert_eq!(make_tag_info_name(b"sisr_info"), "Sisr_Info");
+        assert_eq!(make_tag_info_name(b"A B CD"), "A_BCD");
+        assert_eq!(make_tag_info_name(b"x(y)z"), "XYZ");
+        assert_eq!(make_tag_info_name(b"9lives"), "Tag9Lives");
+        assert_eq!(make_tag_info_name(b"_abc"), "Tag_Abc");
+        assert_eq!(make_tag_info_name(b""), "Tag");
+        assert_eq!(make_tag_info_name(b"q"), "Tagq");
+    }
+
+    /// DJI.pm:971-980: contiguous records only, shortest `]` followed by `[`
+    /// or the end (or a final newline), split once at `:`, printable values
+    /// keep text with trailing NULs dropped. `AB]x` is closed by the `]`
+    /// before the final newline, not the one inside it.
+    #[test]
+    fn process_dji_info_follows_the_record_regex() {
+        let records = process_dji_info(
+            b"[FlightSpeed(X,Y,Z):53,-55,0][hiso:disable, ][nocolon][sensor_id:AB]x]\n",
+        );
+        assert_eq!(
+            records,
+            vec![
+                (
+                    "FlightSpeed".to_string(),
+                    DjiInfoValue::Text("53,-55,0".to_string())
+                ),
+                (
+                    "Histogram".to_string(),
+                    DjiInfoValue::Text("disable, ".to_string())
+                ),
+                (
+                    "SensorID".to_string(),
+                    DjiInfoValue::Text("AB]x".to_string())
+                ),
+            ]
+        );
+        // Not contiguous from the start: nothing (`\G` anchors at 0).
+        assert!(process_dji_info(b" [sensor_id:AB]").is_empty());
+        // An unterminated record ends the loop but keeps earlier records.
+        assert_eq!(process_dji_info(b"[sensor_id:AB][xidiri:1").len(), 1);
+        // A printable value followed by NULs and a final newline is text.
+        assert_eq!(
+            process_dji_info(b"[sensor_id:AB\0\0\n]"),
+            vec![("SensorID".to_string(), DjiInfoValue::Text("AB".to_string()))]
+        );
+        // An empty value is a zero-length binary scalar.
+        assert_eq!(
+            process_dji_info(b"[xidiri:]")[0].1.print(),
+            "(Binary data 0 bytes, use -b option to extract)"
+        );
+    }
+
+    /// Only a note starting `[ae_dbg_info:` is `DJI::Info`
+    /// (MakerNotes.pm:93-98); records elsewhere in an IFD note are not.
+    #[test]
+    fn dji_info_makernote_requires_the_ae_dbg_info_prefix() {
+        let mut tags = HashMap::new();
+        let mut data = vec![0u8; 8];
+        data.extend_from_slice(b"[sensor_id:AB]");
+        DjiParser
+            .parse(&data, ByteOrder::LittleEndian, &mut tags)
+            .expect("parses");
+        assert!(tags.get("DJI:SensorID").is_none());
     }
 
     #[test]

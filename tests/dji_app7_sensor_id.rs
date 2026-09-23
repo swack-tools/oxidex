@@ -16,3 +16,17 @@ fn dji_m30t_app7_sensor_id_matches_exiftool() {
 
     assert_eq!(metadata.get_string("APP7:SensorID"), Some("4XAGJCP02AA007"));
 }
+
+/// DJI_M3T.jpg's APP7 `DJI-DBG\0` carries only `sensor_id`; pinned 13.59
+/// `exiftool -j -G1 -a -APP7:all` reports `DJI:SensorID` = 5L4SK7A02AA00Q.
+#[test]
+fn dji_m3t_app7_sensor_id_matches_exiftool() {
+    let Some(path) = fixtures::pinned_combined_fixture_path("DJI/DJI_M3T.jpg") else {
+        eprintln!("skipping: combined corpus fixture DJI/DJI_M3T.jpg is absent");
+        return;
+    };
+
+    let metadata = read_metadata(&path).expect("DJI M3T parses");
+
+    assert_eq!(metadata.get_string("APP7:SensorID"), Some("5L4SK7A02AA00Q"));
+}
