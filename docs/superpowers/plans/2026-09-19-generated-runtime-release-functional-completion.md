@@ -2762,11 +2762,22 @@ target directory, and durable result path.
 `version_transition_qualification.py` is the single non-promoting entry point:
 
 ```bash
+OUT="$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification"
+RUN=same-pin-r1
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
 python3 tools/exiftool-tables/version_transition_qualification.py \
   --matrix tools/exiftool-tables/version_transition_matrix.json \
   --repository "$OXIDEX_WORKTREE_ROOT/oxidex-beta1-version-transition-qualification" \
-  --output "$OXIDEX_OPS_DIR/evidence/20260919-beta1-functional/version-transition-qualification"
+  --output "$OUT" --lease "$OUT/transition.host.lock" \
+  --run-id "$RUN" --only "same-pin-$(cat .exiftool-version)" \
+  --owner-receipt "$OUT/$RUN/lease-owner.json" \
+  --heartbeat-receipt "$OUT/$RUN/lease-heartbeat.jsonl" \
+  --expiry-receipt "$OUT/$RUN/lease-expiry.json" \
+  --release-receipt "$OUT/$RUN/lease-release.json" \
+  --handoff-receipt "$OUT/$RUN/handoff.jsonl"
 ```
+
+Run each matrix row once per unique run ID (see `docs/UPGRADE-NEXT-STEPS.md`).
 
 It calls the existing planner/executor/stage adapter, refuses an unclean
 caller, runs all three matrix rows, and restores/verifies the caller without a

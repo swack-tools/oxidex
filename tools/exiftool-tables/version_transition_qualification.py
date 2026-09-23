@@ -62,6 +62,14 @@ class OutcomeUnknown(Refused):
     """A final marker exists, but publication could not be confirmed or refused."""
 
 
+class LeaseRetained(Refused):
+    """The lease is deliberately still held: an owned child was not proven gone."""
+
+    def __init__(self, message: str, survivors: list[dict[str, Any]]):
+        super().__init__(message)
+        self.survivors = survivors
+
+
 def _sha_file(file_path: Path) -> str:
     digest = hashlib.sha256()
     with file_path.open("rb") as stream:
@@ -70,10 +78,25 @@ def _sha_file(file_path: Path) -> str:
     return digest.hexdigest()
 
 
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _make_parent(file_path: Path) -> list[Path]:
+    """Create the receipt directory; return directories whose entries changed."""
+    missing = [parent for parent in (file_path.parent, *file_path.parent.parents) if not parent.exists()]
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    return [file_path.parent, *(directory.parent for directory in missing)]
+
+
 def _atomic_json(file_path: Path, value: Mapping[str, Any]) -> None:
     if file_path.exists() or file_path.is_symlink():
         raise Refused(f"receipt already exists: {file_path}")
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    changed = _make_parent(file_path)
     temporary = file_path.with_name(f".{file_path.name}.{os.getpid()}.tmp")
     try:
         with temporary.open("x", encoding="utf-8") as stream:
@@ -84,16 +107,21 @@ def _atomic_json(file_path: Path, value: Mapping[str, Any]) -> None:
         os.replace(temporary, file_path)
     finally:
         temporary.unlink(missing_ok=True)
+    # Persist the new directory entries too, not only the file contents.
+    for directory in dict.fromkeys(changed):
+        _fsync_directory(directory)
 
 
 def _append_jsonl(file_path: Path, value: Mapping[str, Any]) -> None:
     if file_path.is_symlink():
         raise Refused(f"JSONL receipt must not be a symbolic link: {file_path}")
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    changed = _make_parent(file_path) if not file_path.exists() else []
     with file_path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(value, sort_keys=True) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+    for directory in dict.fromkeys(changed):
+        _fsync_directory(directory)
 
 
 def _read_object(file_path: Path, label: str) -> dict[str, Any]:
@@ -487,6 +515,16 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             or any(type(classification.get(name)) is not int or classification[name] < 0
                    for name in ("matched", "value_diff", "missing", "renames", "extra"))):
         raise Refused("read proof lacks the explicit zero-EXTRA hand-behavior retention control")
+    native = _report_for(run_dir, journal, release, "native")
+    version, docx = native.get("version"), native.get("docx_capability")
+    perl_capability = native.get("perl_capability")
+    if (native.get("state") != "ready" or native.get("probe_sha256") != read.get("native_probe_sha256")
+            or not isinstance(version, dict) or version.get("state") != "ok"
+            or str(version.get("stdout", "")).strip() != release
+            or not isinstance(docx, dict) or docx.get("state") != "ok"
+            or str(docx.get("stdout", "")).strip() != "DOCX"
+            or not isinstance(perl_capability, dict) or perl_capability.get("available") is not True):
+        raise Refused(f"{release} native capability probe is not the ready probe used by read")
     checkout = run_dir / "checkouts" / executor._safe_name(release)
     refusals = stage_adapter.generated_refusal_counts(checkout)
     if not isinstance(refusals.get("total"), int) or refusals["total"] < 0:
@@ -504,6 +542,8 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             "read_fixture_manifest": read["fixtures"]["manifest"],
             "read_fixture_manifest_sha256": read["fixtures"]["manifest_sha256"],
             "read_fixture_count": len(read["fixtures"]["entries"]),
+            "capability_probe": {"state": "ready", "version": release, "docx_filetype": "DOCX",
+                                 "perl_modules_available": True},
         },
         "generated_artifacts": generate.get("generated_artifacts"),
         "classification_counts": classification,
@@ -549,7 +589,10 @@ class TransitionLease:
         self.expires_at = 0.0
         self.sequence = 0
         self.terminal_status = "aborted"
-        self._heartbeat_lock = threading.Lock()
+        # Guards every liveness record; release waits for an in-flight one and
+        # then forbids more, so none can follow the lock release.
+        self._heartbeat_lock = threading.RLock()
+        self._closing = False
         self._host_lock_capability: executor._HeldHostLock | None = None
 
     def __enter__(self) -> "TransitionLease":
@@ -609,6 +652,8 @@ class TransitionLease:
 
     def heartbeat(self, event: str, row: str | None, stage: str | None) -> None:
         with self._heartbeat_lock:
+            if self._closing or self.file is None or self.file.closed:
+                raise Refused("transition lease is not held; no liveness record may follow release")
             if time.time() >= self.expires_at:
                 raise Refused("transition lease expired before the next stage")
             self.sequence += 1
@@ -645,6 +690,8 @@ class TransitionLease:
         self.terminal_status = terminal_status
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        with self._heartbeat_lock:
+            self._closing = True
         expired = time.time() >= self.expires_at
         terminal = "failed" if exc_type is not None or expired else self.terminal_status
         expiry_status = "expired" if expired else (
@@ -663,35 +710,51 @@ class TransitionLease:
             receipt_failures.append(f"expiry receipt: {receipt_error}")
         release_status = "released"
         confirmed = False
+        survivors: list[dict[str, Any]] = []
         if self.file is not None:
+            stream, self.file = self.file, None
             try:
-                self._host_lock_capability.deactivate()
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-                confirmed = True
+                # Children inherit this open file description. LOCK_UN would
+                # release it for a still-live child too, so unlock only after
+                # every owned child is proven gone; otherwise keep it held.
+                survivors = executor.release_or_retain(stream, self._host_lock_capability)
+                if survivors:
+                    release_status = "retained-unproven-child"
+                else:
+                    confirmed = True
             except OSError as release_error:
                 release_status = "release-failed"
                 receipt_failures.append(f"lock release: {release_error}")
             finally:
-                try:
-                    self.file.close()
-                except OSError as close_error:
-                    release_status = "release-failed"
-                    receipt_failures.append(f"lock close: {close_error}")
-                finally:
-                    self.file = None
-        if not confirmed:
+                if not survivors:
+                    try:
+                        stream.close()
+                    except OSError as close_error:
+                        release_status = "release-failed"
+                        receipt_failures.append(f"lock close: {close_error}")
+        if not confirmed and not survivors:
             receipt_failures.append("lock release was not confirmed")
         try:
             _atomic_json(self.release_receipt, {
                 "run_id": self.run_id, "owner": self.owner, "lock_path": str(self.lease),
-                "lock_realpath": str(self.lease.resolve()), "released_at": time.time(),
+                "lock_realpath": str(self.lease.resolve()), "released_at": None if survivors else time.time(),
                 "release_status": release_status, "terminal_status": terminal,
                 "release_reason": "qualification-terminal", "flock_release_confirmed": confirmed,
+                "surviving_children": survivors,
                 "receipt_failures": receipt_failures,
                 "qualification_outcome": "pending",
             })
         except BaseException as receipt_error:
             receipt_failures.append(f"release receipt: {receipt_error}")
+        if survivors:
+            retained = LeaseRetained(
+                "transition lease " + executor.retained_lock_message(self.lease, survivors), survivors,
+            )
+            if receipt_failures:
+                retained.add_note("transition lease receipt failures: " + "; ".join(receipt_failures))
+            if exc is not None:
+                retained.add_note(f"original exception: {exc!r}")
+            raise retained
         # Operational receipts never assert qualification success, so a late
         # expiry needs only to refuse the single final outcome commit. No
         # fallible successful-to-failed rewrite is required here.
@@ -734,13 +797,14 @@ class ReceiptCadence:
     def _run(self) -> None:
         while not self.stop.wait(self.interval_seconds):
             try:
-                self.lease.heartbeat("periodic", self.row, self.stage)
-                _append_jsonl(self.handoff_receipt, {
-                    "run_id": self.lease.run_id, "owner": self.lease.owner,
-                    "timestamp": time.time(), "state": "periodic",
-                    "row": self.row, "stage": self.stage, "lease": str(self.lease.lease),
-                    "qualification_outcome": "pending",
-                })
+                with self.lease._heartbeat_lock:
+                    self.lease.heartbeat("periodic", self.row, self.stage)
+                    _append_jsonl(self.handoff_receipt, {
+                        "run_id": self.lease.run_id, "owner": self.lease.owner,
+                        "timestamp": time.time(), "state": "periodic",
+                        "row": self.row, "stage": self.stage, "lease": str(self.lease.lease),
+                        "qualification_outcome": "pending",
+                    })
             except BaseException as exc:
                 self.failure = exc
                 self.stop.set()
@@ -791,6 +855,9 @@ def _validate_receipt_contract(*, output_root: Path, run_id: str, lease_path: Pa
             raise Refused(f"{basename} must be emitted beneath the run output directory")
         if receipt.exists() or receipt.is_symlink():
             raise Refused(f"stale receipt reuse is forbidden: {receipt}")
+    final_marker = receipt_root / "qualification-result.json"
+    if final_marker.exists() or final_marker.is_symlink():
+        raise Refused(f"stale receipt reuse is forbidden: {final_marker}")
 
 
 def _bind_receipt(path: Path) -> dict[str, str]:
@@ -865,6 +932,7 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
             or release.get("release_status") != "released"
             or release.get("terminal_status") != "body-validated"
             or release.get("flock_release_confirmed") is not True
+            or release.get("surviving_children") != []
             or release.get("receipt_failures") != []):
         raise Refused("qualification final marker has invalid cleanup or deadline evidence")
     rows = final.get("rows")
@@ -1098,19 +1166,23 @@ def _instrument_header(result: Mapping[str, Any]) -> str:
     """Attribute every reported comparison to its validated build and oracle."""
     caller = result["caller"]
     lines = ["=== instrument: version_transition_qualification.py ===",
-             f"caller:  {caller['head']}  pin {caller['pin_version']}"]
+             f"caller:  {caller['head']}  pin {caller['pin_version']}  tree {caller['status']}"]
     for row in result["rows"]:
         for side in SIDES:
             entry = row[side]
             proof = entry["instrument"]
             native = proof["native_identity"]
             binary = proof["binary"]
+            capability = proof["capability_probe"]
             label = f"{row['id']}/{side}"
             lines.extend((
                 f"{label}: OxiDex {binary['path']} sha256={binary['sha256']} source={proof['source_commit']}",
                 f"{label}: ExifTool {native['release']} source={native['source']['path']} "
                 f"lib_sha256={native['lib']['exiftool_pm_sha256']} perl={native['perl']['path']} "
                 f"probe_sha256={proof['native_probe_sha256']}",
+                f"{label}: capability {capability['state']} -ver={capability['version']} "
+                f"OOXML.docx={capability['docx_filetype']} perl-modules="
+                f"{'available' if capability['perl_modules_available'] else 'missing'}",
                 f"{label}: corpus {proof['read_fixture_manifest']} "
                 f"manifest_sha256={proof['read_fixture_manifest_sha256']} "
                 f"files={proof['read_fixture_count']}",
@@ -1129,6 +1201,9 @@ def main(argv: list[str] | None = None) -> int:
             expiry_receipt=Path(args.expiry_receipt), release_receipt=Path(args.release_receipt),
             handoff_receipt=Path(args.handoff_receipt), only=args.only,
         )
+    except LeaseRetained as exc:
+        print(f"version transition qualification stopped fail-closed: {exc}", file=sys.stderr)
+        return 5
     except KeyboardInterrupt:
         print("version transition qualification interrupted; inspect the durable execution "
               "journal and recovery receipts before retrying", file=sys.stderr)

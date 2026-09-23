@@ -51,6 +51,14 @@ class Refused(ValueError):
     """The requested execution cannot be attributed safely."""
 
 
+class LockRetained(Refused):
+    """A host lock was deliberately left held because an owned child may be live."""
+
+    def __init__(self, message: str, survivors: list[dict[str, Any]]):
+        super().__init__(message)
+        self.survivors = survivors
+
+
 def _sha_json(value: Any) -> str:
     return rehearsal.sha256_json(value)
 
@@ -540,6 +548,159 @@ def _descendants(pid: int) -> list[int]:
     return found
 
 
+class _OwnedChildren:
+    """Every child spawned with inherited host-lock descriptors, until proven gone.
+
+    Children run with ``close_fds=False`` so a live child keeps the host lock's
+    open file description referenced. flock(2) is per description: an explicit
+    LOCK_UN by the owner would release it for the child too, while closing only
+    the owner's descriptor would not. A lock owner therefore unlocks only once
+    each registered child has been reaped and its process group is empty.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.children: dict[int, subprocess.Popen[Any]] = {}
+        self.spawns_in_flight = 0
+
+
+_OWNED = _OwnedChildren()
+# Lock streams deliberately neither unlocked nor closed because an owned
+# child could not be proven gone; see release_retained_locks().
+_RETAINED_LOCKS: list[Any] = []
+
+
+def _spawn(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
+    """Popen that registers the child before any interruption can lose its PID."""
+    owned = _OWNED
+    with owned.lock:
+        owned.spawns_in_flight += 1
+    try:
+        child = subprocess.Popen(argv, **kwargs)
+    except OSError:
+        with owned.lock:
+            owned.spawns_in_flight -= 1
+        raise
+    # Any other interruption above deliberately leaves the in-flight count
+    # raised: a child may exist whose PID was never observed, so every later
+    # lock release in this process must fail closed.
+    with owned.lock:
+        owned.children[child.pid] = child
+        owned.spawns_in_flight -= 1
+    return child
+
+
+def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
+    """None only when the child is reaped and its whole process group is gone."""
+    try:
+        if child.poll() is None:
+            return "running"
+    except OSError as exc:
+        return f"exit status cannot be observed: {exc}"
+    try:
+        os.killpg(child.pid, 0)
+    except ProcessLookupError:
+        return None
+    except OSError as exc:
+        return f"exited; process group {child.pid} cannot be inspected: {exc}"
+    return f"exited; process group {child.pid} still has live members"
+
+
+def _settle(child: subprocess.Popen[Any]) -> None:
+    owned = _OWNED
+    with owned.lock:
+        if owned.children.get(child.pid) is child and _unproven_state(child) is None:
+            del owned.children[child.pid]
+
+
+def unproven_children() -> list[dict[str, Any]]:
+    """Owned children not proven gone; proven ones are pruned."""
+    owned = _OWNED
+    survivors: list[dict[str, Any]] = []
+    with owned.lock:
+        for pid, child in list(owned.children.items()):
+            state = _unproven_state(child)
+            if state is None:
+                del owned.children[pid]
+            else:
+                survivors.append({"pid": pid, "pgid": pid, "state": state})
+        if owned.spawns_in_flight:
+            survivors.append({"pid": None, "pgid": None,
+                              "state": "spawn interrupted before its PID was recorded"})
+    return survivors
+
+
+def describe_survivors(survivors: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        f"PID {item['pid']} (process group {item['pgid']}, {item['state']})" if item["pid"] is not None
+        else f"PID unknown ({item['state']})"
+        for item in survivors
+    )
+
+
+def release_or_retain(stream: Any, capability: "_HeldHostLock | None") -> list[dict[str, Any]]:
+    """Unlock only when every owned child is proven gone; otherwise retain.
+
+    Retention means no LOCK_UN and no close: the stream is parked for the rest
+    of this process so the lock stays held even if a surviving child has
+    closed its inherited copy. Returns the survivors (empty after release).
+    """
+    if capability is not None:
+        capability.deactivate()
+    survivors = unproven_children()
+    if survivors:
+        _RETAINED_LOCKS.append(stream)
+        return survivors
+    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return []
+
+
+def release_retained_locks() -> list[dict[str, Any]]:
+    """Release retained locks once every owned child is proven gone."""
+    survivors = unproven_children()
+    if survivors:
+        return survivors
+    while _RETAINED_LOCKS:
+        stream = _RETAINED_LOCKS.pop()
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+    return []
+
+
+def retained_lock_message(path: Path, survivors: list[dict[str, Any]]) -> str:
+    return (f"{path} is intentionally still held (no unlock, descriptor retained) because owned "
+            f"child process(es) could not be proven gone: {describe_survivors(survivors)}. The lock is "
+            "released only when they exit; inspect or terminate them, then recover the execution "
+            "journal before retrying")
+
+
+def _tracked_run(argv: list[str], *, timeout: float | None = None, capture_output: bool = False,
+                 started: Callable[[int, int], None] | None = None,
+                 **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    """subprocess.run for an owned child; interruption leaves it registered."""
+    if capture_output:
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    child = _spawn(argv, **kwargs)
+    try:
+        if started is not None:
+            try:
+                started(child.pid, child.pid)
+            except OSError:
+                _bounded_timeout_cleanup(child)
+                raise
+        try:
+            stdout, stderr = child.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = _bounded_timeout_cleanup(child)
+            exc.output, exc.stderr = stdout, stderr
+            raise
+        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+    finally:
+        _settle(child)
+
+
 def _signal_pid(pid: int, signal_value: signal.Signals) -> None:
     try:
         os.kill(pid, signal_value)
@@ -637,12 +798,14 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
     The production branch deliberately leaves inherited descriptors open. The
     host-lock descriptor is inheritable, so a supervisor dying while this child
     is live cannot let another rehearsal acquire the shared lock prematurely.
+    The child stays registered in ``_OWNED`` until it is proven gone, so the
+    lock owner never explicitly unlocks while it may still be live.
     """
     if run is subprocess.run:
         try:
-            child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace",
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     start_new_session=True, close_fds=False)
+            child = _spawn(argv, cwd=str(cwd), env=env, text=True, errors="replace",
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           start_new_session=True, close_fds=False)
         except OSError as exc:
             return {"argv": argv, "exit": None, "stdout": "", "stderr": str(exc),
                     "state": "spawn_failed", "operation": "spawn"}
@@ -666,12 +829,14 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
                         stdout = partial_stdout
                     if not stderr:
                         stderr = partial_stderr
+                _settle(child)
                 record = {"argv": argv, "exit": None, "stdout": stdout,
                           "stderr": stderr + str(exc), "state": "timeout",
                           "pid": child.pid, "pgid": child.pid}
                 if cleanup_error is not None:
                     record.update(cleanup_error=cleanup_error, cleanup_operation="timeout_cleanup")
                 return record
+            _settle(child)
             result = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process_identity = {"pid": child.pid, "pgid": child.pid}
         except OSError as exc:
@@ -681,6 +846,7 @@ def _run_record(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callabl
             except OSError as cleanup:
                 stdout, stderr = _emergency_reap_group(child)
                 cleanup_error = str(cleanup)
+            _settle(child)
             record = {"argv": argv, "exit": None, "stdout": stdout, "stderr": stderr + str(exc),
                       "state": "execution_failed", "operation": "post_spawn", "pid": child.pid, "pgid": child.pid}
             if cleanup_error is not None:
@@ -746,9 +912,10 @@ def _native_identity(materialization: Mapping[str, Any], source_root: Path, rele
 
 def _verify_checkout_head(checkout: Path, expected_commit: str,
                           run: Callable[..., subprocess.CompletedProcess[str]]) -> None:
+    runner = _tracked_run if run is subprocess.run else run
     try:
-        result = run(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
-                     text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
+        result = runner(["git", "-C", str(checkout), "rev-parse", "HEAD"], cwd=str(checkout), env=dict(os.environ),
+                        text=True, capture_output=True, timeout=30, start_new_session=True, close_fds=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Refused("cannot verify owned checkout HEAD") from exc
     if result.returncode != 0 or (result.stdout or "").strip() != expected_commit:
@@ -880,19 +1047,12 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     def native_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if run is not subprocess.run:
             return run(argv, **kwargs)
-        timeout = kwargs.pop("timeout", None)
         kwargs.pop("capture_output", None)
-        child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True, close_fds=False, **kwargs)
-        journal["active"]["child"] = {"pid": child.pid, "pgid": child.pid}
-        _store_journal(run_dir, journal)
-        try:
-            stdout, stderr = child.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            stdout, stderr = _bounded_timeout_cleanup(child)
-            exc.output, exc.stderr = stdout, stderr
-            raise
-        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+        def started(pid: int, pgid: int) -> None:
+            journal["active"]["child"] = {"pid": pid, "pgid": pgid}
+            _store_journal(run_dir, journal)
+        return _tracked_run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True, close_fds=False, started=started, **kwargs)
     try:
         if stage_guard is not None:
             stage_guard(release, "native", "before")
@@ -1003,9 +1163,12 @@ class _HostLock:
         return self
     def __exit__(self, *_):
         if self.file:
-            self.capability.deactivate()
-            fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-            self.file.close()
+            stream, self.file = self.file, None
+            survivors = release_or_retain(stream, self.capability)
+            if survivors:
+                raise LockRetained("version rehearsal host lock "
+                                   + retained_lock_message(self.path, survivors), survivors)
+            stream.close()
 
 
 def _external_host_lock(config: Mapping[str, Any], descriptor: _HeldHostLock | None):

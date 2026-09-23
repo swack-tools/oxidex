@@ -20,6 +20,36 @@ forward, then reverse through the entry point's single nonblocking
 expiry, release, and handoff receipts. Do not use the old fleet-controller or
 outer `locked.py` Task19 examples.
 
+One row per invocation, from a clean caller checkout at the converged
+candidate. The lease is a pre-created regular file directly beneath the output
+root, shared by every run; each run ID is new and its receipt paths must not
+exist yet:
+
+```bash
+OUT="$OXIDEX_OPS_DIR/evidence/<date>/version-transition-qualification"
+RUN=same-pin-r1        # then e.g. forward-r1 with --only 11.78-to-12.64, reverse-r1 with --only 12.64-to-11.78
+mkdir -p "$OUT" && touch "$OUT/transition.host.lock"
+python3 tools/exiftool-tables/version_transition_qualification.py \
+  --matrix tools/exiftool-tables/version_transition_matrix.json \
+  --repository "$(git rev-parse --show-toplevel)" \
+  --output "$OUT" --lease "$OUT/transition.host.lock" \
+  --run-id "$RUN" --only "same-pin-$(cat .exiftool-version)" \
+  --owner-receipt "$OUT/$RUN/lease-owner.json" \
+  --heartbeat-receipt "$OUT/$RUN/lease-heartbeat.jsonl" \
+  --expiry-receipt "$OUT/$RUN/lease-expiry.json" \
+  --release-receipt "$OUT/$RUN/lease-release.json" \
+  --handoff-receipt "$OUT/$RUN/handoff.jsonl"
+```
+
+`--target-root` defaults to `$OXIDEX_TARGET_ROOT` (or
+`$OXIDEX_WORKTREE_ROOT/oxidex-beta1-targets`); output and target roots must be
+durable, not temporary. Only `$OUT/$RUN/qualification-result.json`, validated by
+`load_committed_result`, is a success marker. Exit status: 0 committed, 2
+refused, 3 committed but stdout reporting failed, 4 outcome unknown (inspect
+the marker), 5 lease intentionally still held because an owned stage child
+could not be proven gone (the named PIDs keep it held until they exit), 130
+interrupted.
+
 Historical 11.78/12.64 Rust-test failures still identify release-specific facts
 outside the Task19 tooling lease. Exact current locations and correction
 proposals are recorded in

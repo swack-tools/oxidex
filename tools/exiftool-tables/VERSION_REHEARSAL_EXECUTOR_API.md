@@ -99,6 +99,15 @@ both comparisons. Standalone `execute` and `recover` acquire it themselves;
 the in-process transition wrapper borrows only a live capability issued by
 its owning lease. An arbitrary matching file descriptor is refused because
 probing it with `flock` could acquire a previously unlocked descriptor.
+Stage children inherit the lock's open file description (`close_fds=False`).
+Because `flock` is per description, an owner's `LOCK_UN` would release the lock
+for a still-live child as well, so the owner unlocks only after every child it
+spawned has been reaped and its process group is empty. Otherwise the lock
+fails closed: no unlock, the descriptor is retained, and the owner exits
+non-zero naming each surviving PID (`LockRetained`; the transition wrapper
+reports it as `LeaseRetained`, exit 5). The lock then frees only when the last
+holder of the description exits. Descendants that leave their process group
+are not tracked.
 An interruption leaves the active stage `running`; `recover`
 changes it to `interrupted` and records the unknown completion state. The run is
 terminal afterward, so the executor never reselects or duplicates an

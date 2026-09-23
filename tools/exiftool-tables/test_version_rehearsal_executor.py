@@ -371,6 +371,32 @@ class ExecutorTests(unittest.TestCase):
                 with executor._external_host_lock({"host_lock": str(other)}, capability):
                     pass
 
+    def test_standalone_host_lock_is_retained_while_owned_child_is_live(self):
+        """No explicit unlock may release the OFD a live child inherited."""
+        contender = ("import fcntl, sys\nwith open(sys.argv[1], 'r+') as s:\n"
+                     "    try: fcntl.flock(s.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                     "    except BlockingIOError: print('blocked')\n    else: print('acquired')\n")
+        def contend():
+            return subprocess.run([sys.executable, "-c", contender, str(self.lock)], capture_output=True,
+                                  text=True, timeout=20, check=True).stdout.strip()
+        self.lock.touch()
+        child = None
+        with patch.object(executor, "_OWNED", executor._OwnedChildren()):
+            try:
+                with self.assertRaisesRegex(executor.LockRetained, "intentionally still held") as raised:
+                    with executor._HostLock(self.lock):
+                        child = executor._spawn([sys.executable, "-c", "import time; time.sleep(60)"],
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                start_new_session=True, close_fds=False)
+                self.assertIn(f"PID {child.pid}", str(raised.exception))
+                self.assertEqual(contend(), "blocked")
+            finally:
+                if child is not None:
+                    child.kill()
+                    child.wait(10)
+            self.assertEqual(executor.release_retained_locks(), [])
+        self.assertEqual(contend(), "acquired")
+
     def test_live_child_cannot_be_recovered_as_interrupted(self):
         self.initialize(self.config())
         status = self.run_dir / "execution-status.json"

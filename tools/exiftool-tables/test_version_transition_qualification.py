@@ -6,10 +6,14 @@ from __future__ import annotations
 import json
 import io
 import os
+import signal
 import subprocess
+import stat
 import sys
+import threading
 import time
 from contextlib import redirect_stdout
+from functools import partial
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -22,6 +26,150 @@ if str(HERE) not in sys.path:
 
 import version_transition_qualification as qualification
 import test_version_rehearsal_native_oracle as native_fixture
+
+LIVE_CHILD_EXIT = 5
+CONTENDER = (
+    "import fcntl, sys\n"
+    "with open(sys.argv[1], 'r+') as stream:\n"
+    "    try:\n"
+    "        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+    "    except BlockingIOError:\n"
+    "        print('blocked')\n"
+    "    else:\n"
+    "        print('acquired')\n"
+)
+
+
+def _contend(lease: Path) -> str:
+    """Ask an independent process whether it can take the transition lease now."""
+    probe = subprocess.run([sys.executable, "-c", CONTENDER, str(lease)],
+                           capture_output=True, text=True, timeout=20)
+    if probe.returncode != 0:
+        raise AssertionError(f"contender probe failed: {probe.stderr}")
+    return probe.stdout.strip()
+
+
+def _pid_live(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _kill_own_session_child(pid: int) -> None:
+    """Kill only the session-leader child this test's wrapper spawned, then await its exit."""
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 10
+    while _pid_live(pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def _interrupted_live_child_wrapper(root_text: str) -> int:
+    """Subprocess entry: the real CLI, lease, recovery and executor spawn.
+
+    Only preflight inputs are substituted. The body spawns a real stage child
+    through the executor's production ``Popen(close_fds=False)`` branch while
+    borrowing the lease, then waits on it until the test interrupts this
+    process with SIGINT.
+    """
+    root = Path(root_text)
+    temporary, capture, catalog, plan, resolution, materialization, cache, sources, release = (
+        native_fixture.make_state()
+    )
+    try:
+        output, target = root / "output", root / "target"
+        output.mkdir()
+        target.mkdir()
+        lease = output / "transition.host.lock"
+        lease.touch()
+        run_id = "live-child"
+        receipt_root = output / run_id
+        fixture = root / "fixture.jpg"
+        fixture.write_bytes(b"\xff\xd8fixture")
+        binding = {"path": str(fixture), "sha256": qualification._sha_file(fixture),
+                   "bytes": fixture.stat().st_size}
+        (root / "read.json").write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [binding],
+        }))
+        (root / "write.json").write_text(json.dumps({
+            "schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [binding],
+        }))
+        (root / "cases.json").write_text(json.dumps([{
+            "name": "case", "fixture": str(fixture),
+            "read": {"query": "Comment", "expectation": "native_unsupported"},
+            "write": {"tag": "Comment", "operation": "delete", "readback": None},
+        }]))
+        row_id = f"same-pin-{release}"
+        row = {
+            "id": row_id, "before_version": release, "after_version": release,
+            "immutable_source_identities": {
+                side: {"expected_release": release, "input_bundle": str(root / "bundle")}
+                for side in qualification.SIDES
+            },
+            "fixtures": {
+                side: {"read_manifest": str(root / "read.json"), "write_manifest": str(root / "write.json"),
+                       "native_cases": str(root / "cases.json")}
+                for side in qualification.SIDES
+            },
+            "artifact_manifest": {"comparison": "identical"},
+            "target_directory": str(target / run_id / row_id),
+            "durable_output_directory": str(output / run_id / row_id),
+        }
+        identity = {
+            "release": release, "tag_object": "b" * 40, "peeled_commit": "c" * 40,
+            "source_directory": "source", "source_tree_sha256": "d" * 64,
+            "materialization_sha256": "e" * 64, "bundle": str(root / "bundle"),
+            "archive_cache": str(cache), "source_root": str(sources),
+            "documents": {"capture": capture, "catalog": catalog, "plan": plan,
+                          "resolution": resolution, "materialization": materialization},
+        }
+        caller = {"pin_version": release, "head": plan["repository_commit"]}
+
+        def execute(run_dir, _repository, _archive_cache, _source_root, *, host_lock_fd, stage_guard):
+            journal = json.loads((run_dir / "execution-status.json").read_text())
+            journal["phase"] = "running"
+            journal["active"] = {"release": release, "stage": "generate"}
+            journal["releases"][release]["stages"]["generate"] = "running"
+            qualification.executor._store_journal(run_dir, journal)
+
+            def started(pid, pgid):
+                journal["active"]["child"] = {"pid": pid, "pgid": pgid}
+                qualification.executor._store_journal(run_dir, journal)
+                (root / "child.pid").write_text(str(pid))
+
+            with host_lock_fd.borrow(lease):
+                stage_guard(release, "generate", "before")
+                qualification.executor._run_record(
+                    [sys.executable, "-c", "import time; time.sleep(60)"], cwd=root,
+                    env=dict(os.environ), run=subprocess.run, started=started,
+                )
+            raise AssertionError("the wrapper must be interrupted while its stage child is live")
+
+        arguments = [
+            "--matrix", str(root / "matrix.json"), "--repository", str(root), "--output", str(output),
+            "--target-root", str(target), "--lease", str(lease), "--run-id", run_id,
+            "--owner-receipt", str(receipt_root / "lease-owner.json"),
+            "--heartbeat-receipt", str(receipt_root / "lease-heartbeat.jsonl"),
+            "--expiry-receipt", str(receipt_root / "lease-expiry.json"),
+            "--release-receipt", str(receipt_root / "lease-release.json"),
+            "--handoff-receipt", str(receipt_root / "handoff.jsonl"),
+        ]
+        with patch.object(qualification, "snapshot_caller", return_value=caller), \
+             patch.object(qualification, "verify_caller"), \
+             patch.object(qualification, "load_matrix", return_value={"rows": [row]}), \
+             patch.object(qualification, "materialize_matrix", return_value={"rows": [row]}), \
+             patch.object(qualification, "_perl", return_value=Path(sys.executable).resolve()), \
+             patch.object(qualification, "resolve_source_identity", return_value=identity), \
+             patch.object(qualification, "run_qualification",
+                          partial(qualification.run_qualification, execute=execute)):
+            return qualification.main(arguments)
+    finally:
+        temporary.cleanup()
 
 
 class MatrixContractTests(unittest.TestCase):
@@ -167,7 +315,11 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "fixtures": {"manifest": "/pinned/read-fixtures.json", "manifest_sha256": "f" * 64,
                              "entries": [{"source": "/pinned/sample.jpg"}]},
             }
-            reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}}
+            native = {"state": "ready", "probe_sha256": "e" * 64,
+                      "version": {"state": "ok", "stdout": "13.59\n"},
+                      "perl_capability": {"available": True},
+                      "docx_capability": {"state": "ok", "stdout": "DOCX\n"}}
+            reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}, "native": native}
             identity = {name: "identity" for name in (
                 "release", "tag_object", "peeled_commit", "source_directory",
                 "source_tree_sha256", "materialization_sha256",
@@ -186,7 +338,23 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "read_fixture_manifest": "/pinned/read-fixtures.json",
                 "read_fixture_manifest_sha256": "f" * 64,
                 "read_fixture_count": 1,
+                "capability_probe": {"state": "ready", "version": "13.59", "docx_filetype": "DOCX",
+                                     "perl_modules_available": True},
             })
+            for broken in ({"docx_capability": {"state": "ok", "stdout": "ZIP\n"}},
+                           {"probe_sha256": "0" * 64}, {"state": "failed"},
+                           {"version": {"state": "ok", "stdout": "13.55\n"}}):
+                reports["native"] = {**native, **broken}
+                with self.subTest(broken=broken), \
+                     patch.object(qualification, "_report_for",
+                                  side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
+                     patch.object(qualification.stage_adapter, "generated_refusal_counts",
+                                  return_value={"total": 0, "counters": []}):
+                    with self.assertRaisesRegex(qualification.Refused, "capability probe"):
+                        qualification._side_receipt(
+                            run_dir, {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}},
+                            "13.59", identity,
+                        )
 
     def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -389,6 +557,85 @@ class LeaseTests(unittest.TestCase):
                     time.sleep(0.05)
             else:
                 self.fail("inherited descriptor did not release after child exit")
+
+    def test_no_liveness_record_can_follow_lease_release(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease_path = root / "transition.host.lock"; lease_path.touch()
+            heartbeat = root / "heartbeat.jsonl"
+            lease = qualification.TransitionLease(
+                lease=lease_path, run_id="late", owner_receipt=root / "owner.json",
+                heartbeat_receipt=heartbeat, expiry_receipt=root / "expiry.json",
+                release_receipt=root / "release.json",
+            )
+            with lease:
+                lease.finish("body-validated")
+            recorded = heartbeat.read_text()
+            with self.assertRaisesRegex(qualification.Refused, "not held"):
+                lease.heartbeat("late", None, None)
+            self.assertEqual(heartbeat.read_text(), recorded)
+
+    def test_lease_release_waits_for_an_in_flight_periodic_record(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease_path = root / "transition.host.lock"; lease_path.touch()
+            handoff, release = root / "handoff.jsonl", root / "release.json"
+            lease = qualification.TransitionLease(
+                lease=lease_path, run_id="cadence-order", owner_receipt=root / "owner.json",
+                heartbeat_receipt=root / "heartbeat.jsonl", expiry_receipt=root / "expiry.json",
+                release_receipt=release,
+            )
+            entered, proceed = threading.Event(), threading.Event()
+            original = qualification._append_jsonl
+
+            def blocking_handoff(target, value):
+                if target == handoff and value.get("state") == "periodic" and not proceed.is_set():
+                    entered.set()
+                    proceed.wait(10)
+                return original(target, value)
+
+            with patch.object(qualification, "_append_jsonl", side_effect=blocking_handoff):
+                lease.__enter__()
+                cadence = qualification.ReceiptCadence(lease, handoff, interval_seconds=0.01)
+                cadence.__enter__()
+                try:
+                    self.assertTrue(entered.wait(5))
+                    lease.finish("body-validated")
+                    exiting = threading.Thread(target=lease.__exit__, args=(None, None, None))
+                    exiting.start()
+                    time.sleep(0.3)
+                    self.assertFalse(release.exists(), "lease released during an in-flight liveness record")
+                finally:
+                    proceed.set()
+                    exiting.join(10)
+                    cadence.stop.set()
+                    cadence.thread.join(10)
+            released_at = json.loads(release.read_text())["released_at"]
+            self.assertTrue(all(json.loads(line)["timestamp"] <= released_at
+                                for line in handoff.read_text().splitlines()))
+
+    def test_atomic_and_new_jsonl_receipts_fsync_their_directory(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            events = []
+            original_fsync, original_replace = os.fsync, os.replace
+
+            def fsync(descriptor):
+                events.append("fsync-dir" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "fsync-file")
+                return original_fsync(descriptor)
+
+            def replace(source, target):
+                events.append("replace")
+                return original_replace(source, target)
+
+            with patch.object(qualification.os, "fsync", side_effect=fsync), \
+                 patch.object(qualification.os, "replace", side_effect=replace):
+                qualification._atomic_json(root / "new" / "receipt.json", {"run_id": "durable"})
+                self.assertIn("fsync-dir", events[events.index("replace"):])
+                events.clear()
+                qualification._append_jsonl(root / "log" / "records.jsonl", {"run_id": "durable"})
+                self.assertEqual(events[0], "fsync-file")
+                self.assertIn("fsync-dir", events[1:])
 
     def test_receipt_failures_always_release_and_preserve_body_error(self) -> None:
         for failure_kind in ("owner", "heartbeat", "expiry"):
@@ -878,6 +1125,17 @@ class WrapperCallTests(unittest.TestCase):
         with qualification.executor._HostLock(self.lease):
             pass
 
+    def test_stale_final_marker_is_refused_before_lease(self) -> None:
+        final_path = self.output / self.run_id / "qualification-result.json"
+        final_path.parent.mkdir(parents=True)
+        final_path.write_text("{}")
+        execute = unittest.mock.Mock()
+        with self.assertRaisesRegex(qualification.Refused, "stale.*qualification-result"):
+            self.invoke(execute)
+        execute.assert_not_called()
+        self.assertFalse(self.receipts["owner_receipt"].exists())
+        self.assertEqual(final_path.read_text(), "{}")
+
     def test_contending_invocation_writes_no_handoff_before_lease(self) -> None:
         with qualification.executor._HostLock(self.lease):
             with self.assertRaisesRegex(qualification.Refused, "transition lease is held"):
@@ -977,7 +1235,156 @@ class WrapperCallTests(unittest.TestCase):
         execute.assert_not_called()
 
 
+class FailClosedLeaseTests(unittest.TestCase):
+    """A lease is released only after every owned child is proven gone."""
+
+    def test_interrupted_live_child_keeps_lease_from_independent_contender(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease = root / "output" / "transition.host.lock"
+            child_file = root / "child.pid"
+            entry = (f"import sys; sys.path.insert(0, {str(HERE)!r}); "
+                     "import test_version_transition_qualification as t; "
+                     f"raise SystemExit(t._interrupted_live_child_wrapper({str(root)!r}))")
+            wrapper = subprocess.Popen([sys.executable, "-c", entry], cwd=root, text=True,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.addCleanup(lambda: wrapper.poll() is None and (wrapper.kill(), wrapper.wait(10)))
+            deadline = time.monotonic() + 60
+            while not child_file.is_file() and wrapper.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not child_file.is_file():
+                wrapper.kill()
+                _stdout, stderr = wrapper.communicate(timeout=10)
+                self.fail(f"wrapper never spawned its stage child: {stderr}")
+            time.sleep(0.05)
+            child_pid = int(child_file.read_text())
+            self.addCleanup(_kill_own_session_child, child_pid)
+
+            os.kill(wrapper.pid, signal.SIGINT)
+            _stdout, stderr = wrapper.communicate(timeout=30)
+
+            self.assertTrue(_pid_live(child_pid), "the stage child must outlive the interrupted wrapper")
+            self.assertEqual(
+                _contend(lease), "blocked",
+                f"independent contender acquired the transition lease while stage child "
+                f"PID {child_pid} is still live; wrapper exit {wrapper.returncode}, stderr:\n{stderr}",
+            )
+            self.assertEqual(wrapper.returncode, LIVE_CHILD_EXIT, stderr)
+            self.assertIn(f"PID {child_pid}", stderr)
+            self.assertIn("intentionally still held", stderr)
+            release = json.loads((root / "output/live-child/lease-release.json").read_text())
+            self.assertEqual(release["release_status"], "retained-unproven-child")
+            self.assertFalse(release["flock_release_confirmed"])
+            self.assertEqual([child["pid"] for child in release["surviving_children"]], [child_pid])
+            self.assertEqual(release["qualification_outcome"], "pending")
+            self.assertFalse((root / "output/live-child/qualification-result.json").exists())
+
+            # Proof that the child is gone is the only thing that frees the lease.
+            _kill_own_session_child(child_pid)
+            deadline = time.monotonic() + 10
+            while _contend(lease) != "acquired":
+                if time.monotonic() >= deadline:
+                    self.fail("lease stayed held after the surviving child exited")
+                time.sleep(0.05)
+
+    def _lease(self, root: Path) -> qualification.TransitionLease:
+        lease_path = root / "transition.host.lock"
+        lease_path.touch()
+        return qualification.TransitionLease(
+            lease=lease_path, run_id="fail-closed", owner_receipt=root / "owner.json",
+            heartbeat_receipt=root / "heartbeat.jsonl", expiry_receipt=root / "expiry.json",
+            release_receipt=root / "release.json",
+        )
+
+    def test_unproven_child_is_neither_unlocked_nor_closed_in_process(self) -> None:
+        with TemporaryDirectory() as temporary, \
+             patch.object(qualification.executor, "_OWNED", qualification.executor._OwnedChildren()):
+            root = Path(temporary)
+            lease = self._lease(root)
+            child = None
+            try:
+                with self.assertRaises(qualification.LeaseRetained) as raised:
+                    with lease:
+                        child = qualification.executor._spawn(
+                            [sys.executable, "-c", "import time; time.sleep(60)"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True, close_fds=True,
+                        )
+                        lease.finish("body-validated")
+                self.assertIn(f"PID {child.pid}", str(raised.exception))
+                self.assertIsNone(lease.file)
+                # The child here holds no inherited descriptor: only the
+                # parent's deliberately retained descriptor keeps the lease.
+                self.assertEqual(_contend(root / "transition.host.lock"), "blocked")
+                self.assertTrue(qualification.executor.release_retained_locks())
+                self.assertEqual(_contend(root / "transition.host.lock"), "blocked")
+            finally:
+                if child is not None:
+                    child.kill()
+                    child.wait(10)
+            self.assertEqual(qualification.executor.release_retained_locks(), [])
+            self.assertEqual(_contend(root / "transition.host.lock"), "acquired")
+
+    def test_spawn_interrupted_before_pid_is_known_fails_closed(self) -> None:
+        owned = qualification.executor._OwnedChildren()
+        with TemporaryDirectory() as temporary, \
+             patch.object(qualification.executor, "_OWNED", owned):
+            root = Path(temporary)
+            lease = self._lease(root)
+            with patch.object(qualification.executor.subprocess, "Popen",
+                              side_effect=KeyboardInterrupt("interrupted inside spawn")):
+                with self.assertRaises(qualification.LeaseRetained) as raised:
+                    with lease:
+                        qualification.executor._spawn([sys.executable, "-c", "pass"])
+            self.assertIn("PID unknown", str(raised.exception))
+            self.assertIsInstance(raised.exception.__context__, KeyboardInterrupt)
+            self.assertEqual(_contend(root / "transition.host.lock"), "blocked")
+            owned.spawns_in_flight = 0
+            self.assertEqual(qualification.executor.release_retained_locks(), [])
+            self.assertEqual(_contend(root / "transition.host.lock"), "acquired")
+
+    def test_reaped_child_releases_the_lease_normally(self) -> None:
+        with TemporaryDirectory() as temporary, \
+             patch.object(qualification.executor, "_OWNED", qualification.executor._OwnedChildren()):
+            root = Path(temporary)
+            lease = self._lease(root)
+            with lease:
+                record = qualification.executor._run_record(
+                    [sys.executable, "-c", "pass"], cwd=root, env=dict(os.environ), run=subprocess.run,
+                )
+                self.assertEqual(record["state"], "ok")
+                lease.finish("body-validated")
+            release = json.loads((root / "release.json").read_text())
+            self.assertEqual(release["release_status"], "released")
+            self.assertTrue(release["flock_release_confirmed"])
+            self.assertEqual(release["surviving_children"], [])
+            self.assertEqual(_contend(root / "transition.host.lock"), "acquired")
+
+
 class MainOutcomeTests(unittest.TestCase):
+    def test_retained_lease_exit_names_survivors_and_is_not_a_refusal(self) -> None:
+        args = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--lease", "lease", "--run-id", "retained", "--owner-receipt", "owner",
+            "--heartbeat-receipt", "heartbeat", "--expiry-receipt", "expiry",
+            "--release-receipt", "release", "--handoff-receipt", "handoff",
+        ]
+        messages = []
+
+        def reporting(*parts, **_kwargs):
+            messages.append(" ".join(str(part) for part in parts))
+
+        retained = qualification.LeaseRetained(
+            "transition lease lease is intentionally still held: PID 4242 (process group 4242, running)",
+            [{"pid": 4242, "pgid": 4242, "state": "running"}],
+        )
+        with patch.object(qualification, "run_qualification", side_effect=retained), \
+             patch("builtins.print", side_effect=reporting):
+            self.assertEqual(qualification.main(args), LIVE_CHILD_EXIT)
+        self.assertIn("PID 4242", messages[-1])
+        self.assertIn("intentionally still held", messages[-1])
+        self.assertNotIn("refused", messages[-1])
+
     def test_success_prints_instrument_before_status(self) -> None:
         args = [
             "--matrix", "matrix", "--repository", "repository", "--output", "output",
@@ -995,9 +1402,12 @@ class MainOutcomeTests(unittest.TestCase):
             "read_fixture_manifest": "/pinned/read-fixtures.json",
             "read_fixture_manifest_sha256": "f" * 64,
             "read_fixture_count": 1,
+            "capability_probe": {"state": "ready", "version": "13.59", "docx_filetype": "DOCX",
+                                 "perl_modules_available": True},
         }
         result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
-                  "promotion": "forbidden", "caller": {"head": "0" * 40, "pin_version": "13.59"},
+                  "promotion": "forbidden",
+                  "caller": {"head": "0" * 40, "pin_version": "13.59", "status": "clean"},
                   "rows": [{"id": "same-pin-13.59", "before": {"release": "13.59", "instrument": instrument},
                             "after": {"release": "13.59", "instrument": instrument}}]}
         output = io.StringIO()
@@ -1005,6 +1415,9 @@ class MainOutcomeTests(unittest.TestCase):
             self.assertEqual(qualification.main(args), 0)
         lines = output.getvalue().splitlines()
         self.assertEqual(lines[0], "=== instrument: version_transition_qualification.py ===")
+        self.assertIn("tree clean", lines[1])
+        self.assertTrue(any("capability ready -ver=13.59 OOXML.docx=DOCX perl-modules=available" in line
+                            for line in lines), lines)
         self.assertIn("/isolated/oxidex", output.getvalue())
         self.assertIn("/pinned/exiftool", output.getvalue())
         self.assertIn("/pinned/read-fixtures.json", output.getvalue())
