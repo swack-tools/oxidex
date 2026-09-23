@@ -20,12 +20,18 @@
 
 #![allow(dead_code)]
 
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence};
+use crate::exiftool_tables::session::Session;
+use crate::exiftool_tables::{Ctx, Dir, find_table, process_binary_data};
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::makernote_context::MakerNoteContext;
 use super::registries::hp::hp_registry;
 use super::shared::MakerNoteParser;
+use super::shared::engine_value::engine_value_text;
 use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
 use super::shared::tag_registry::TagRegistry;
 
@@ -35,6 +41,14 @@ use super::shared::tag_registry::TagRegistry;
 
 // Lazy-initialized tag registry using centralized registry function
 static TAG_REGISTRY: Lazy<TagRegistry> = Lazy::new(hp_registry);
+
+/// MakerNotes.pm:206-214: HP Type4 is selected by its bytes, independent of
+/// EXIF Make. The source's character class includes the literal `|` byte.
+pub(crate) fn is_type4(data: &[u8]) -> bool {
+    data.get(..4) == Some(b"IIII")
+        && matches!(data.get(4), Some(4 | 5 | b'|'))
+        && data.get(5) == Some(&0)
+}
 
 // Extracts a u16 value from an IFD entry's value_offset field
 // This handles the case where the value is stored inline in the offset field
@@ -65,6 +79,23 @@ impl HpParser {
     /// Creates a new HP parser instance
     pub fn new() -> Self {
         HpParser
+    }
+
+    fn type4_rows(
+        &self,
+        data: &[u8],
+        cond_ctx: &mut Ctx<'_>,
+    ) -> Vec<crate::exiftool_tables::Emitted> {
+        let mut rows = Vec::new();
+        if let Some(table) = find_table("HP", "Type4") {
+            process_binary_data(
+                table,
+                Dir::whole(data, ByteOrder::LittleEndian.to_io_byte_order()),
+                cond_ctx,
+                &mut rows,
+            );
+        }
+        rows
     }
 
     /// Parses a single HP MakerNote IFD entry and extracts its tag value
@@ -119,6 +150,16 @@ impl MakerNoteParser for HpParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
+        if is_type4(data) {
+            let mut members = HashMap::new();
+            let mut cond_ctx = Ctx::new(&mut members);
+            for row in self.type4_rows(data, &mut cond_ctx) {
+                if let Some(text) = engine_value_text(&row.value) {
+                    tags.insert(format!("{}:{}", row.group1, row.name), text);
+                }
+            }
+            return Ok(());
+        }
         let config = IfdParserConfig {
             signature: None,
             signature_offset: 0,
@@ -128,6 +169,57 @@ impl MakerNoteParser for HpParser {
         parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
             self.parse_entry(entry, parse_data, byte_order, tags);
         })?;
+        Ok(())
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut Session,
+        cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        if !is_type4(ctx.payload()) {
+            return self.parse_with_model(ctx.payload(), byte_order, model, tags);
+        }
+        for row in self.type4_rows(ctx.payload(), cond_ctx) {
+            let key = format!("{}:{}", row.group1, row.name);
+            let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+            occurrences.push((
+                key,
+                TagOccurrence {
+                    id: row.source_id,
+                    name: intern(row.name),
+                    group0: intern(row.group0),
+                    group1: intern(row.group1),
+                    // HP.pm:65-69 overrides Type4's Camera group for this
+                    // field. Binary engine rows currently carry the table
+                    // group2, so retain the field override at this adapter.
+                    group2: Some(intern(if row.name == "CameraDateTime" {
+                        "Time"
+                    } else {
+                        row.group2
+                    })),
+                    instance: Instance::default(),
+                    raw: row.stored.clone(),
+                    value: Some(value),
+                    print: Some(row.value),
+                    stored: Some(row.stored),
+                    priority: u8::from(!(row.low_priority || row.avoid)),
+                    is_list: row.is_list,
+                    order: 0,
+                    origin: Provenance {
+                        module: Some(row.module),
+                        table: Some(row.table),
+                        byte_range: None,
+                    },
+                },
+            ));
+        }
         Ok(())
     }
 }

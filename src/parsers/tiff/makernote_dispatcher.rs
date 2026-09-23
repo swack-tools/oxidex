@@ -87,6 +87,77 @@ pub fn dispatch_makernote_with_model_and_values(
 /// the Make string).
 const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
 
+/// Whether this Make/payload pair dispatches to [`pentax::PentaxParser`].
+///
+/// Mirrors the dispatcher's own route order: the source-condition routes
+/// (HP4, Kodak2, Minolta2, Phase One, Ricoh2) win before any Make prefix is
+/// consulted. For Pentax the occurrence-aware entry differs from the legacy
+/// map entry only by also returning canonical occurrences (the CAF point and
+/// flash guide-number fields whose ValueConv and PrintConv differ), so
+/// callers that record occurrences can opt in on this predicate without
+/// changing any other vendor's route.
+pub fn dispatches_to_pentax(make: &str, model: Option<&str>, data: &[u8]) -> bool {
+    !source_condition_claims(make, model, data)
+        && parser_for_make_prefix(&make.trim().to_lowercase(), data)
+            .is_some_and(|parser| parser.manufacturer_name() == "Pentax")
+}
+
+/// Whether the source-condition chain in
+/// `dispatch_makernote_with_context_and_values_and_session_impl` selects a
+/// parser for this note before the Make fallback runs. Keep the two in step,
+/// including which conditions see the trimmed Make and which the raw one
+/// (ExifTool strips only trailing blanks from Make, Exif.pm:585).
+fn source_condition_claims(make: &str, model: Option<&str>, data: &[u8]) -> bool {
+    let source_make = make.trim();
+    if claimed_before_hp4(source_make, data) {
+        return false;
+    }
+    hp::is_type4(data)
+        || (!claimed_between_hp4_and_kodak2(source_make, data)
+            && (kodak::is_type2(data)
+                || data.starts_with(b"MINOL\0")
+                || data.starts_with(b"CAMER\0")
+                || phaseone::is_phaseone_makernote(data)
+                || ricoh::is_type2_selector(make, model, data)))
+}
+
+/// Conditions before HP4 in pinned MakerNotes.pm:38-205. An earlier match
+/// owns the note even if its payload also happens to have the HP4/Kodak2
+/// signature; leave its existing Make route (or omission) untouched.
+fn claimed_before_hp4(make: &str, data: &[u8]) -> bool {
+    data.starts_with(b"Apple iOS\0")
+        || data.starts_with(b"Nikon\0\x02")
+        || make.starts_with("Canon")
+        || make.starts_with("CASIO")
+        || data.starts_with(b"QVC\0")
+        || data.starts_with(b"DCI\0")
+        || data.starts_with(b"[ae_dbg_info:")
+        || (make == "DJI" && data.get(3..8) != Some(&b"@AMBA"[..]) && !data.starts_with(b"DJI"))
+        || make.starts_with("FLIR Systems")
+        || make.starts_with("Teledyne FLIR")
+        || data.starts_with(b"FUJIFILM")
+        || data.starts_with(b"GENERALE")
+        || data.starts_with(b"GE\0\0")
+        || data.starts_with(b"GENIC\0")
+        || data.starts_with(b"GE\x0c\0\0\0\x16\0\0\0")
+        || data.starts_with(b"HDRP\x02")
+        || data.starts_with(b"HDRP\x03")
+        || make == "Hasselblad"
+        || data.starts_with(b"Hewlett-Packard")
+        || data.starts_with(b"Vivitar")
+        || (data.starts_with(b"610") && data.get(3).is_some_and(|byte| *byte <= 4))
+}
+
+/// Conditions after HP4 but before Kodak2 in MakerNotes.pm:216-274. HP4
+/// itself must win before these are considered.
+fn claimed_between_hp4_and_kodak2(make: &str, data: &[u8]) -> bool {
+    data.starts_with(b"IIII\x06\0")
+        || data.starts_with(b"ISLMAKERNOTE000\0")
+        || data.starts_with(b"JVC ")
+        || ((make.starts_with("JVC") || make.starts_with("Victor")) && data.starts_with(b"VER:"))
+        || (make.starts_with("EASTMAN KODAK") && data.starts_with(b"KDK"))
+}
+
 /// Match the vendors whose Make string varies too much for a literal list.
 ///
 /// Returns `None` for everything else so the caller falls through to the
@@ -105,6 +176,13 @@ fn parser_for_make_prefix(
     }
     if make.starts_with("pentax") || make.starts_with("asahi optical") {
         return Some(Box::new(pentax::PentaxParser::default()) as Box<dyn MakerNoteParser>);
+    }
+    // MakerNotePanasonic2 is gated by `$$self{Make} =~ /^Panasonic/`
+    // (MakerNotes.pm:743-750), not by one exact vendor spelling. Keep this
+    // before the literal table so Panasonic Corporation reaches the same
+    // parser while the bare-Leica Type2 exclusion below remains distinct.
+    if make.starts_with("panasonic") {
+        return Some(Box::new(panasonic::PanasonicParser) as Box<dyn MakerNoteParser>);
     }
     // `make` reaches here already lowercased, so this is ExifTool's
     // `$$self{Make} =~ /^RICOH/` (Pentax.pm:3032) -- which the modern
@@ -265,48 +343,23 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
 
-    // Phase One's MakerNote is dispatched by ExifTool purely on its own
-    // signature (MakerNotes.pm's `MakerNotePhaseOne` Condition has no Make
-    // check at all), because the format is OEMed under multiple brand names.
-    // Leaf -- acquired by Phase One -- writes the identical directory shape
-    // under `Make: Leaf`; matching only "phase one"/"phase one a/s" left
-    // every Leaf-branded .IIQ unreachable (`Make=="Leaf"` matched nothing in
-    // the table below, so it silently produced zero PhaseOne: tags for real
-    // Leaf/Phase One IIQ files). Check the signature before the Make-keyed
-    // table so it wins regardless of brand.
-    if phaseone::is_phaseone_makernote(data) {
-        let parser = phaseone::PhaseOneMakerNoteParser;
-        if let Some(rows) = occurrences.as_deref_mut() {
-            parser.parse_with_context_and_values_and_session_and_occurrences(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-                rows,
-            )?;
-        } else {
-            parser.parse_with_context_and_values_and_session(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-            )?;
-        }
-        return Ok(());
-    }
-
-    // MakerNotes.pm:505-515's MakerNoteMinolta2 routes literal `MINOL\0` and
-    // `CAMER\0` signatures to Olympus::Main independently of the file Make.
-    // The same condition sets OlympusCAMER, selecting Main 0x2050's binary
-    // CameraParameters alternative. Seed both condition stores used by the
-    // generated IFD path before parsing.
-    if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+    // Preserve the first matching source condition before any Make fallback:
+    // HP4 (:206), Kodak2 (:275), Minolta2 (:508), PhaseOne (:841), Ricoh2
+    // (:924) in pinned MakerNotes.pm. Kodak2 permits arbitrary leading bytes,
+    // so its payload can also match either later signature. The selected
+    // decoder must own a real table before this route consumes the note.
+    let source_make = make.trim();
+    let source_parser: Option<Box<dyn MakerNoteParser>> = if claimed_before_hp4(source_make, data) {
+        None
+    } else if hp::is_type4(data) {
+        Some(Box::new(hp::HpParser))
+    } else if claimed_between_hp4_and_kodak2(source_make, data) {
+        None
+    } else if kodak::is_type2(data) {
+        Some(Box::new(kodak::KodakParser))
+    } else if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+        // Minolta2's condition sets OlympusCAMER, selecting Olympus::Main
+        // 0x2050's binary CameraParameters alternative. Seed both stores.
         cond_ctx
             .members
             .insert("OlympusCAMER", crate::exiftool_tables::MemberValue::Num(1));
@@ -316,7 +369,16 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
                 crate::exiftool_tables::session::MemberVal::Int(1),
             )
             .expect("OlympusCAMER is an untyped ExifTool member");
-        let parser = olympus::OlympusParser;
+        Some(Box::new(olympus::OlympusParser))
+    } else if phaseone::is_phaseone_makernote(data) {
+        // PhaseOne is signature-only and can appear under Leaf Make.
+        Some(Box::new(phaseone::PhaseOneMakerNoteParser))
+    } else if ricoh::is_type2_selector(make, model, data) {
+        Some(Box::new(ricoh::RicohType2Parser))
+    } else {
+        None
+    };
+    if let Some(parser) = source_parser {
         if let Some(rows) = occurrences.as_deref_mut() {
             parser.parse_with_context_and_values_and_session_and_occurrences(
                 ctx,
@@ -390,13 +452,18 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
         "canon" => Some(Box::new(canon::CanonParser)),
         "nikon" | "nikon corporation" => Some(Box::new(nikon::NikonParser)),
         "sony" => Some(Box::new(sony::SonyParser)),
-        "panasonic" => Some(Box::new(panasonic::PanasonicParser)),
         "fujifilm" | "fuji photo film co., ltd." => Some(Box::new(fujifilm::FujifilmParser)),
         // The unnumbered `MakerNoteLeica` (bare `Make eq "LEICA"`, header
         // "LEICA\0\0\0", MakerNotes.pm:599-604) shares Panasonic's own
         // `Main` tag table and "Panasonic:" group -- it is not one of the
         // `Leica2`..`Leica10` layouts, which key on the "Leica Camera AG"
         // prefix instead (MakerNotes.pm:611 onward).
+        // `MakerNoteLeica` and `MakerNotePanasonic2` both select the shared
+        // Panasonic parser only after different source conditions. In
+        // particular, Type2 additionally requires `Make =~ /^Panasonic/`
+        // (MakerNotes.pm:743-750), so a bare Leica MKE payload is not a
+        // Panasonic Type2 record.
+        "leica" if panasonic::is_panasonic_type2_makernote(data) => None,
         "leica" => Some(Box::new(panasonic::PanasonicParser)),
         // `MakerNoteLeica10` (MakerNotes.pm:724-731) is keyed on the signature
         // alone -- `Condition => '$$valPt =~ /^LEICA CAMERA AG\0/'` -- and
@@ -775,6 +842,100 @@ mod tests {
         // Should succeed but not extract any tags
         assert!(result.is_ok());
         assert!(tags.is_empty(), "Should not extract tags for unknown make");
+    }
+
+    /// `MakerNotePanasonic2` requires both `Make =~ /^Panasonic/` and an
+    /// `MKE` payload (MakerNotes.pm:743-750). A bare Leica Make normally
+    /// shares Panasonic::Main, but must not gain Panasonic::Type2 merely
+    /// because arbitrary MakerNote bytes begin with `MKE`.
+    #[test]
+    fn leica_mke_payload_does_not_dispatch_panasonic_type2() {
+        let mut tags = HashMap::new();
+
+        dispatch_makernote("LEICA", b"MKEM\0\0\x88\0", ByteOrder::BigEndian, &mut tags)
+            .expect("unmatched Leica MakerNote is ignored");
+
+        assert!(
+            tags.is_empty(),
+            "MakerNotes.pm requires a Panasonic Make before Type2 can emit tags"
+        );
+    }
+
+    /// The raw-file occurrence opt-in follows the dispatcher's own Pentax
+    /// routes (Make prefixes, Samsung GX "AOC\0") and nothing else.
+    #[test]
+    fn dispatches_to_pentax_matches_the_pentax_routes_only() {
+        assert!(dispatches_to_pentax("PENTAX", None, b"AOC\0MM"));
+        assert!(dispatches_to_pentax(
+            "  Asahi Optical Co.,Ltd ",
+            None,
+            b"AOC\0II"
+        ));
+        assert!(dispatches_to_pentax(
+            "RICOH IMAGING COMPANY, LTD.",
+            None,
+            b"PENTAX \0"
+        ));
+        assert!(dispatches_to_pentax("SAMSUNG TECHWIN", None, b"AOC\0MM"));
+        assert!(!dispatches_to_pentax("SAMSUNG TECHWIN", None, b"\x01\0"));
+        assert!(!dispatches_to_pentax("Panasonic", None, b"Panasonic\0\0\0"));
+        assert!(!dispatches_to_pentax("PENTAX", None, b"MINOL\0"));
+    }
+
+    /// Source-condition routes (MakerNotes.pm HP4 :206, Kodak2 :275, Ricoh2
+    /// :924) claim these notes before the Pentax Make fallback, so the raw
+    /// path must not treat them as Pentax.
+    #[test]
+    fn dispatches_to_pentax_defers_to_earlier_source_conditions() {
+        let mut kodak2 = b"\x01\0\0\0\0\0\x04\0ABCD".to_vec();
+        kodak2.resize(64, 0);
+        assert!(!dispatches_to_pentax("PENTAX Corporation", None, &kodak2));
+        let hp4 = b"IIII\x04\0rest";
+        assert!(!dispatches_to_pentax("PENTAX", None, hp4));
+        let ricoh2 = b"II*\0\x08\0\0\0\x02\0\0\0";
+        assert!(!dispatches_to_pentax(
+            "RICOH IMAGING COMPANY, LTD.",
+            Some("PENTAX XG-1"),
+            ricoh2
+        ));
+        assert!(!dispatches_to_pentax(
+            "RICOH IMAGING COMPANY, LTD.",
+            Some("RICOH WG-M1"),
+            b"PENTAX \0"
+        ));
+        // Ricoh2's Make test sees the raw Make, exactly as the dispatcher's
+        // own chain does, so a leading-blank Make is not claimed by Ricoh2.
+        let leading_blank = "  RICOH IMAGING COMPANY, LTD.";
+        assert_eq!(
+            source_condition_claims(leading_blank, Some("PENTAX XG-1"), ricoh2),
+            ricoh::is_type2_selector(leading_blank, Some("PENTAX XG-1"), ricoh2)
+        );
+        assert!(!source_condition_claims(
+            leading_blank,
+            Some("PENTAX XG-1"),
+            ricoh2
+        ));
+    }
+
+    /// `MakerNotePanasonic2` accepts every Make beginning with Panasonic, not
+    /// only the exact vendor spelling (MakerNotes.pm:743-750).
+    #[test]
+    fn panasonic_prefixed_make_dispatches_type2() {
+        let mut tags = HashMap::new();
+
+        dispatch_makernote(
+            "Panasonic Corporation",
+            b"MKEM\0\0\x88\0",
+            ByteOrder::BigEndian,
+            &mut tags,
+        )
+        .expect("Panasonic-prefixed Type2 MakerNote dispatches");
+
+        assert_eq!(
+            tags.get("Panasonic:MakerNoteType").map(String::as_str),
+            Some("MKEM")
+        );
+        assert_eq!(tags.get("Panasonic:Gain").map(String::as_str), Some("136"));
     }
 
     #[test]
