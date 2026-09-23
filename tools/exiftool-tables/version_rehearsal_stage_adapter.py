@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -541,6 +542,96 @@ def _release_test_oracle(suite_target: Path, perl: Path, native_source: Path) ->
     return cache, shim_directory
 
 
+def _ops_root() -> Path:
+    """The durable ops root, resolved exactly as every other ops consumer does."""
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import ops_paths
+    return ops_paths.ops_root()
+
+
+def _bootstrap_module(checkout: Path) -> Any:
+    """The checkout's own oracle bootstrap, which owns the corpus layout and lock."""
+    script = _regular(checkout / "tools" / "release" / "bootstrap_oracle.py", "oracle bootstrap")
+    spec = importlib.util.spec_from_file_location("oxidex_release_test_bootstrap_oracle", script)
+    if spec is None or spec.loader is None:
+        raise Refused("fixture corpus bootstrap cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _corpus_manifest_entries(corpus: Path, manifest: Path) -> int:
+    """Check the corpus against its manifest: same files, same bytes, nothing extra."""
+    listed: dict[str, str] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (\S.*)", line)
+        if match is None or match.group(2) in listed:
+            raise Refused("fixture corpus manifest is malformed")
+        listed[match.group(2)] = match.group(1)
+    present = {item.relative_to(corpus).as_posix(): item for item in corpus.rglob("*") if item.is_file()}
+    if not listed or set(present) != set(listed):
+        raise Refused("fixture corpus files differ from its verified manifest")
+    for name, digest in listed.items():
+        if _sha(present[name]) != digest:
+            raise Refused(f"fixture corpus file differs from its verified manifest: {name}")
+    return len(listed)
+
+
+def _verify_fixture_corpus(checkout: Path, env: dict[str, str],
+                           run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Authenticate the combined-samples corpus through the oracle bootstrap.
+
+    The corpus is the one every conformance receipt uses: the bootstrap's
+    lock-hashed ``combined-samples`` tree beneath the durable ops root, whose
+    ``verify`` refreshes and binds the sibling manifest. Sample images are
+    version-independent, so every release side uses this one corpus under the
+    bootstrap's own pin; only ``t/images`` comes from the side's selected tree.
+    """
+    root = _ops_root()
+    bootstrap = _bootstrap_module(checkout)
+    command = [sys.executable, str(checkout / "tools" / "release" / "bootstrap_oracle.py"), "verify",
+               "--root", str(root), "--pin", bootstrap.VERSION]
+    verify_env = {**{key: value for key, value in env.items() if key in TEST_ENVIRONMENT_PASSTHROUGH},
+                  "OXIDEX_OPS_DIR": str(root)}
+    record = _run(command, cwd=checkout, env=verify_env, run=run, merge_stderr=True)
+    if record["state"] != "ok":
+        raise Refused(f"fixture corpus verification failed: {record['stdout'].strip()[-400:]}")
+    corpus = Path(bootstrap.corpus_path(root))
+    manifest = corpus.parent / "combined-samples.manifest"
+    storage = Path(bootstrap.manifest_path(root))
+    _regular(storage, "fixture corpus storage manifest")
+    try:
+        artifacts_ = _json(storage)["artifacts"]
+        bound_manifest, bound_tree = artifacts_["corpus_manifest"], artifacts_["corpus_tree"]
+    except (KeyError, TypeError, Refused) as exc:
+        raise Refused("fixture corpus storage manifest is unreadable") from exc
+    manifest_sha = _sha(_regular(manifest, "fixture corpus manifest"))
+    tree_sha = bootstrap.LOCK.get("corpus_tree_sha256")
+    if (corpus.is_symlink() or not corpus.is_dir()
+            or bound_manifest != {"kind": "file", "path": str(manifest), "sha256": manifest_sha}
+            or bound_tree != {"kind": "tree", "path": str(corpus), "sha256": tree_sha}):
+        raise Refused("fixture corpus is not the bootstrap-verified corpus for this ops root")
+    count = _corpus_manifest_entries(corpus, manifest)
+    return {"ops_root": str(root), "bootstrap_pin": bootstrap.VERSION, "version_independent": True,
+            "corpus": str(corpus), "corpus_tree_sha256": tree_sha,
+            "manifest": {"path": str(manifest), "sha256": manifest_sha, "file_count": count},
+            "storage_manifest": {"path": str(storage), "sha256": _sha(storage)},
+            "verify_command": command}
+
+
+def _recheck_fixture_corpus(corpus_record: dict[str, Any], when: str) -> None:
+    manifest = Path(corpus_record["manifest"]["path"])
+    try:
+        if (_sha(_regular(manifest, "fixture corpus manifest")) != corpus_record["manifest"]["sha256"]
+                or _corpus_manifest_entries(Path(corpus_record["corpus"]), manifest)
+                != corpus_record["manifest"]["file_count"]):
+            raise Refused("fixture corpus manifest changed")
+    except (OSError, Refused) as exc:
+        raise Refused(f"fixture corpus drifted {when} the release tests: {exc}") from exc
+
+
 def _release_test_environment(perl: Path, suite_target: Path, cache: Path, shim_directory: Path) -> dict[str, str]:
     env = {key: os.environ[key] for key in TEST_ENVIRONMENT_PASSTHROUGH if key in os.environ}
     env["PATH"] = str(shim_directory) + os.pathsep + env.get("PATH", os.defpath)
@@ -601,6 +692,11 @@ def run_release_tests(args: argparse.Namespace, *,
     env = _release_test_environment(perl, suite_target, cache, shim_directory)
     oracle = _probe_release_test_oracle(args.release, perl, cache, shim_directory, native_source,
                                         identity, env, checkout, run)
+    corpus = _verify_fixture_corpus(checkout, env, run)
+    (cache / "combined-samples").symlink_to(Path(corpus["corpus"]), target_is_directory=True)
+    corpus["link"] = str(cache / "combined-samples")
+    _recheck_fixture_corpus(corpus, "before")
+    corpus["verified_before_run"] = True
     records = []
     for argv in TEST_COMMANDS:
         began = time.monotonic()
@@ -608,6 +704,8 @@ def run_release_tests(args: argparse.Namespace, *,
         record["duration_seconds"] = round(time.monotonic() - began, 3)
         records.append(record)
     raw = _raw(report, "test", {"commands": records})
+    _recheck_fixture_corpus(corpus, "during")
+    corpus["verified_after_run"] = True
     commands = []
     for record in records:
         if record["state"] not in {"ok", "exit_failed"}:
@@ -627,7 +725,7 @@ def run_release_tests(args: argparse.Namespace, *,
               "raw_report": raw,
               "test_suite": {"commands": commands, "totals": totals, "log": raw,
                              "target_directory": str(suite_target), "features": "all",
-                             "exiftool_oracle": oracle, "environment": env}}
+                             "exiftool_oracle": oracle, "environment": env, "fixture_corpus": corpus}}
     _atomic(report, result)
     return result
 

@@ -71,6 +71,21 @@ refuses unless it reports the selected release, `DOCX` and every module, from
 the selected tree, library and Perl. The probe result and the exact
 environment are recorded.
 
+Pinned fixtures come from two populations. `t/images` is the selected
+release's own tree. The combined samples are the authenticated corpus every
+conformance receipt uses: the stage runs `tools/release/bootstrap_oracle.py
+verify --root <ops root> --pin <bootstrap pin>`, requires its storage manifest
+to bind both the lock-hashed `combined-samples` tree and the sibling
+`combined-samples.manifest` it refreshed, and links
+`exiftool-oracle/combined-samples` to that corpus. The sample images are
+version-independent, so every release side uses this one corpus under the
+bootstrap's own pin. Every corpus file is checked against the manifest
+immediately before the run and again after it; a missing, unverifiable,
+extra, changed or removed file refuses. The ops root, corpus, lock tree hash,
+manifest path/SHA-256/file count, storage manifest and verify command are
+recorded, and qualification refuses unless they equal this host's
+bootstrap-verified corpus.
+
 The merged stdout/stderr stream is parsed strictly, per target announced by
 cargo. A test binary is read at its boundaries (its first `running N tests`
 line and its last summary), because tests that re-execute their own binary

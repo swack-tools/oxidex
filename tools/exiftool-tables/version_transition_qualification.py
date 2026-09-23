@@ -589,10 +589,54 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
     if log_sha != log.get("sha256"):
         raise Refused(f"{release} release test suite log differs from its report")
     oracle = _release_test_oracle(report, release)
+    corpus = _release_test_corpus(suite, release)
     return {"commands": expected, "exits": [row["exit"] for row in commands],
             **{key: totals[key] for key in keys},
             "duration_seconds": round(sum(row["duration_seconds"] for row in commands), 3),
-            "target_directory": suite["target_directory"], "log": log, "exiftool_oracle": oracle}
+            "target_directory": suite["target_directory"], "log": log, "exiftool_oracle": oracle,
+            "fixture_corpus": corpus}
+
+
+def _fixture_corpus_authority() -> dict[str, Any]:
+    """This host's bootstrap-verified combined corpus, read independently of any receipt."""
+    import importlib.util
+    script = REPOSITORY_ROOT / "tools" / "release" / "bootstrap_oracle.py"
+    spec = importlib.util.spec_from_file_location("oxidex_qualification_bootstrap_oracle", script)
+    if spec is None or spec.loader is None:
+        raise Refused("oracle bootstrap cannot be loaded")
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    root = ops_paths.ops_root()
+    corpus = Path(bootstrap.corpus_path(root))
+    manifest = corpus.parent / "combined-samples.manifest"
+    storage = _read_object(Path(bootstrap.manifest_path(root)), "oracle storage manifest")
+    manifest_sha = _sha_file(manifest)
+    tree_sha = bootstrap.LOCK.get("corpus_tree_sha256")
+    artifacts_ = storage.get("artifacts") if isinstance(storage.get("artifacts"), dict) else {}
+    if (artifacts_.get("corpus_manifest") != {"kind": "file", "path": str(manifest), "sha256": manifest_sha}
+            or artifacts_.get("corpus_tree") != {"kind": "tree", "path": str(corpus), "sha256": tree_sha}):
+        raise Refused("this host's combined corpus manifest is not bootstrap-verified")
+    count = sum(1 for line in manifest.read_text(encoding="utf-8").splitlines() if line)
+    return {"ops_root": str(root), "bootstrap_pin": bootstrap.VERSION, "corpus": str(corpus),
+            "corpus_tree_sha256": tree_sha,
+            "manifest": {"path": str(manifest), "sha256": manifest_sha, "file_count": count}}
+
+
+def _release_test_corpus(suite: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """The suite's combined samples must be this host's verified corpus, unchanged across the run."""
+    corpus = suite.get("fixture_corpus")
+    try:
+        authority = _fixture_corpus_authority()
+    except (OSError, ValueError) as exc:
+        raise Refused(f"{release} release test suite fixture corpus cannot be verified on this host") from exc
+    if (not isinstance(corpus, dict)
+            or any(corpus.get(key) != authority[key]
+                   for key in ("ops_root", "bootstrap_pin", "corpus", "corpus_tree_sha256", "manifest"))
+            or corpus.get("version_independent") is not True
+            or corpus.get("verified_before_run") is not True or corpus.get("verified_after_run") is not True
+            or corpus.get("link") != str(Path(suite["exiftool_oracle"]["cache_dir"]) / "combined-samples")):
+        raise Refused(f"{release} release test suite fixture corpus is not this host's verified combined corpus")
+    return corpus
 
 
 def _release_test_oracle(report: Mapping[str, Any], release: str) -> dict[str, Any]:

@@ -169,6 +169,8 @@ class ExecutorTests(unittest.TestCase):
                 "log": body["raw_report"], "target_directory": env["CARGO_TARGET_DIR"] + "/test-suite",
                 "exiftool_oracle": {"version": env["OXIDEX_REHEARSAL_RELEASE"], "docx_filetype": "DOCX",
                                     "perl_modules_available": True},
+                "fixture_corpus": {"manifest": {"sha256": "8" * 64, "file_count": 4249},
+                                   "verified_before_run": True, "verified_after_run": True},
             }
         if stage == "read":
             body["classification_counts"] = {
@@ -277,7 +279,8 @@ class ExecutorTests(unittest.TestCase):
         self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
 
     def test_test_report_graded_by_another_exiftool_cannot_pass(self):
-        for field, value in (("version", "13.55"), ("docx_filetype", "ZIP"), ("perl_modules_available", False)):
+        for field, value in (("version", "13.55"), ("docx_filetype", "ZIP"), ("perl_modules_available", False),
+                             ("fixture_corpus", None)):
             with self.subTest(field=field):
                 self.run_dir = self.root / f"foreign-oracle-{field}"
                 self.calls.clear()
@@ -288,7 +291,10 @@ class ExecutorTests(unittest.TestCase):
                     if argv[0] == "test":
                         report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
                         body = json.loads(report.read_text())
-                        body["test_suite"]["exiftool_oracle"][field] = value
+                        if field == "fixture_corpus":
+                            body["test_suite"]["fixture_corpus"]["verified_after_run"] = False
+                        else:
+                            body["test_suite"]["exiftool_oracle"][field] = value
                         report.write_text(json.dumps(body))
                     return result
                 with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):

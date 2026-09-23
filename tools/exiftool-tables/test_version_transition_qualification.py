@@ -344,12 +344,29 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "EXIFTOOL_CACHE_DIR": oracle_cache, "EXIFTOOL_PERL": "/pinned/perl",
                 "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES": "1",
             }
+            fixture_corpus = {
+                "ops_root": "/durable/ops", "bootstrap_pin": "13.59", "version_independent": True,
+                "corpus": "/durable/ops/cache/exiftool/13.59/combined-samples",
+                "link": oracle_cache + "/combined-samples", "corpus_tree_sha256": "7" * 64,
+                "manifest": {"path": "/durable/ops/cache/exiftool/13.59/combined-samples.manifest",
+                             "sha256": "8" * 64, "file_count": 4249},
+                "storage_manifest": {"path": "/durable/ops/evidence/storage-manifest.json", "sha256": "9" * 64},
+                "verify_command": ["python3", "/checkout/tools/release/bootstrap_oracle.py", "verify",
+                                   "--root", "/durable/ops", "--pin", "13.59"],
+                "verified_before_run": True, "verified_after_run": True,
+            }
+            authority = {"ops_root": "/durable/ops", "bootstrap_pin": "13.59",
+                         "corpus": fixture_corpus["corpus"], "corpus_tree_sha256": "7" * 64,
+                         "manifest": dict(fixture_corpus["manifest"])}
+            corpus_authority = patch.object(qualification, "_fixture_corpus_authority", return_value=authority)
+            corpus_authority.start(); self.addCleanup(corpus_authority.stop)
             release_tests = {
                 "state": "passed", "denominator": 8, "raw_report": log_binding,
                 "native_identity": read["native_identity"],
                 "test_suite": {"commands": suite_commands, "log": log_binding,
                                "target_directory": "/isolated/target/test-suite",
                                "exiftool_oracle": exiftool_oracle, "environment": environment,
+                               "fixture_corpus": fixture_corpus,
                                "totals": {"passed": 8, "failed": 0, "ignored": 2, "measured": 0,
                                           "filtered_out": 0, "targets": 4}},
             }
@@ -369,7 +386,7 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "exits": [0], "passed": 8, "failed": 0, "ignored": 2, "measured": 0,
                 "filtered_out": 0, "targets": 4, "duration_seconds": 3.0,
                 "target_directory": "/isolated/target/test-suite", "log": log_binding,
-                "exiftool_oracle": exiftool_oracle,
+                "exiftool_oracle": exiftool_oracle, "fixture_corpus": fixture_corpus,
             })
 
             def refused(label, mutate, pattern="release test suite"):
@@ -398,6 +415,15 @@ class SideAndRecoveryTests(unittest.TestCase):
             refused("foreign cache", lambda r: r["test_suite"]["environment"].update(EXIFTOOL_CACHE_DIR="/tmp/foreign"))
             refused("fixtures optional", lambda r: r["test_suite"]["environment"].pop("OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"))
             refused("path shim bypassed", lambda r: r["test_suite"]["environment"].update(PATH="/opt/homebrew/bin"))
+            refused("corpus absent", lambda r: r["test_suite"].pop("fixture_corpus"))
+            refused("corpus manifest differs", lambda r: r["test_suite"]["fixture_corpus"]["manifest"].update(sha256="0" * 64))
+            refused("corpus count differs", lambda r: r["test_suite"]["fixture_corpus"]["manifest"].update(file_count=12))
+            refused("corpus tree differs", lambda r: r["test_suite"]["fixture_corpus"].update(corpus_tree_sha256="0" * 64))
+            refused("foreign corpus", lambda r: r["test_suite"]["fixture_corpus"].update(corpus="/tmp/samples"))
+            refused("foreign ops root", lambda r: r["test_suite"]["fixture_corpus"].update(ops_root="/tmp/ops"))
+            refused("corpus not linked", lambda r: r["test_suite"]["fixture_corpus"].update(link="/tmp/elsewhere"))
+            refused("not verified before", lambda r: r["test_suite"]["fixture_corpus"].update(verified_before_run=False))
+            refused("not verified after", lambda r: r["test_suite"]["fixture_corpus"].update(verified_after_run=False))
             refused("failed state", lambda r: r.update(state="failed"))
             refused("no tests", lambda r: r["test_suite"]["totals"].update(passed=0))
             refused("totals disagree", lambda r: r["test_suite"]["totals"].update(ignored=3))
@@ -444,6 +470,37 @@ class SideAndRecoveryTests(unittest.TestCase):
                                   return_value={"total": 0, "counters": []}):
                     with self.assertRaisesRegex(qualification.Refused, "capability probe"):
                         qualification._side_receipt(run_dir, journal, "13.59", identity)
+
+    def test_fixture_corpus_authority_reads_the_bootstrap_verified_manifest(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock = json.loads((qualification.REPOSITORY_ROOT / "tools/release/oracle-lock.json").read_text())
+            corpus = root / "cache/exiftool/13.59/combined-samples"
+            corpus.mkdir(parents=True)
+            (corpus / "a.jpg").write_bytes(b"a")
+            manifest = corpus.parent / "combined-samples.manifest"
+            manifest.write_text(f"{qualification._sha_file(corpus / 'a.jpg')}  a.jpg\n")
+            storage = root / "evidence/20260919-beta1-functional/durable-controller-oracle-bootstrap/storage-manifest.json"
+            storage.parent.mkdir(parents=True)
+
+            def bind(manifest_sha, tree_sha):
+                storage.write_text(json.dumps({"artifacts": {
+                    "corpus_manifest": {"kind": "file", "path": str(manifest), "sha256": manifest_sha},
+                    "corpus_tree": {"kind": "tree", "path": str(corpus), "sha256": tree_sha}}}))
+
+            with patch.object(qualification.ops_paths, "ops_root", return_value=root):
+                bind(qualification._sha_file(manifest), lock["corpus_tree_sha256"])
+                self.assertEqual(qualification._fixture_corpus_authority(), {
+                    "ops_root": str(root), "bootstrap_pin": "13.59", "corpus": str(corpus),
+                    "corpus_tree_sha256": lock["corpus_tree_sha256"],
+                    "manifest": {"path": str(manifest), "sha256": qualification._sha_file(manifest),
+                                 "file_count": 1},
+                })
+                for manifest_sha, tree_sha in (("0" * 64, lock["corpus_tree_sha256"]),
+                                               (qualification._sha_file(manifest), "0" * 64)):
+                    bind(manifest_sha, tree_sha)
+                    with self.assertRaisesRegex(qualification.Refused, "not bootstrap-verified"):
+                        qualification._fixture_corpus_authority()
 
     def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
         with TemporaryDirectory() as temporary:

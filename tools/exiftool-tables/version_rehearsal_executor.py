@@ -478,6 +478,13 @@ def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
     if (not isinstance(oracle, dict) or oracle.get("version") != result.get("release")
             or oracle.get("docx_filetype") != "DOCX" or oracle.get("perl_modules_available") is not True):
         raise Refused("test result was not graded by the selected release's capable ExifTool")
+    corpus = suite.get("fixture_corpus")
+    manifest = corpus.get("manifest") if isinstance(corpus, dict) else None
+    if (not isinstance(manifest, dict) or type(manifest.get("file_count")) is not int or manifest["file_count"] < 1
+            or not isinstance(manifest.get("sha256"), str)
+            or __import__("re").fullmatch(r"[0-9a-f]{64}", manifest["sha256"]) is None
+            or corpus.get("verified_before_run") is not True or corpus.get("verified_after_run") is not True):
+        raise Refused("test result lacks a verified fixture corpus held unchanged across the run")
 
 
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,

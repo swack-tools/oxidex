@@ -37,7 +37,8 @@ denominator of two counts executables, not tests or tag coverage; the
 runs the checkout's suite with one `cargo test --workspace --all-features
 --no-fail-fast` in `<target>/test-suite`, from an allowlisted environment
 whose ExifTool oracle is the side's selected release (probed and recorded
-before the run), parses every target's libtest summary strictly, and reports
+before the run) and whose combined samples are the bootstrap-verified,
+version-independent corpus (checked against its manifest before and after), parses every target's libtest summary strictly, and reports
 `passed` only with zero failures (see `VERSION_REHEARSAL_EXECUTOR_API.md`). Read copies an immutable, hash-verified fixture manifest into
 the isolated target and invokes the checkout's `conformance.py` against that
 release's selected native source and the Cargo-announced binary. A nonzero

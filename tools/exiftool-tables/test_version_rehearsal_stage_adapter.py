@@ -108,6 +108,22 @@ class AdapterTests(unittest.TestCase):
         (self.native / "exiftool").write_text("#!/usr/bin/env perl\n")
         (self.native / "t/images").mkdir(parents=True); (self.native / "t/images/OOXML.docx").write_bytes(b"PK")
         self.oracle_version, self.oracle_docx, self.missing_module = "11.78", "DOCX", None
+        (self.checkout / "tools/release").mkdir(parents=True)
+        (self.checkout / "tools/release/bootstrap_oracle.py").write_text("# bootstrap placeholder\n")
+        self.ops = self.root / "ops"
+        self.corpus = self.ops / "cache/exiftool/13.59/combined-samples"
+        (self.corpus / "Apple").mkdir(parents=True)
+        (self.corpus / "ExifTool.jpg").write_bytes(b"\xff\xd8exiftool")
+        (self.corpus / "Apple/iPhone.jpg").write_bytes(b"\xff\xd8apple")
+        self.storage = self.ops / "evidence/storage-manifest.json"
+        self.bootstrap = SimpleNamespace(
+            VERSION="13.59", LOCK={"corpus_tree_sha256": "7" * 64},
+            corpus_path=lambda root: root / "cache/exiftool/13.59/combined-samples",
+            manifest_path=lambda root: root / "evidence/storage-manifest.json")
+        self.verify_calls, self.verify_exit, self.corpus_during_run = [], 0, None
+        for name, value in (("_ops_root", lambda: self.ops), ("_bootstrap_module", lambda _checkout: self.bootstrap)):
+            patcher = patch.object(adapter, name, side_effect=value, create=True)
+            patcher.start(); self.addCleanup(patcher.stop)
         self.source_targets = tuple(
             V4Target(0x013c + index, f"StringTarget{index}", "EXIF", "IFD0", "string")
             for index in range(13)
@@ -156,6 +172,8 @@ class AdapterTests(unittest.TestCase):
             self.suite_calls.append((argv, kwargs["env"]))
             if kwargs.get("stderr") is not subprocess.STDOUT:
                 raise AssertionError("release tests must merge stderr into stdout")
+            if self.corpus_during_run is not None:
+                self.corpus_during_run()
             return subprocess.CompletedProcess(argv, 0, SUITE_TESTS_OUTPUT, None)
         if Path(argv[0]).name == "perl":
             self.oracle_calls.append((argv, kwargs["env"]))
@@ -171,6 +189,21 @@ class AdapterTests(unittest.TestCase):
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
             binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"writer" if test else b"binary"); binary.chmod(0o755)
             return subprocess.CompletedProcess(argv, 0, json.dumps({"reason": "compiler-artifact", "manifest_path": str(self.checkout / "Cargo.toml"), "profile": {"test": test}, "target": {"name": "oxidex", "kind": ["lib"] if test else ["bin"]}, "executable": str(binary)}) + "\n", "")
+        if argv[0] == sys.executable and argv[1].endswith("tools/release/bootstrap_oracle.py"):
+            self.verify_calls.append((argv, kwargs["env"]))
+            if self.verify_exit:
+                return subprocess.CompletedProcess(argv, self.verify_exit, "refused: corpus lock hash mismatch", None)
+            root = Path(argv[argv.index("--root") + 1])
+            manifest = root / "cache/exiftool/13.59/combined-samples.manifest"
+            manifest.write_text("".join(
+                f"{adapter._sha(item)}  {item.relative_to(self.corpus).as_posix()}\n"
+                for item in sorted((value for value in self.corpus.rglob("*") if value.is_file()),
+                                   key=lambda value: value.relative_to(self.corpus).as_posix())))
+            self.storage.parent.mkdir(parents=True, exist_ok=True)
+            self.storage.write_text(json.dumps({"artifacts": {
+                "corpus_manifest": {"kind": "file", "path": str(manifest), "sha256": adapter._sha(manifest)},
+                "corpus_tree": {"kind": "tree", "path": str(self.corpus), "sha256": "7" * 64}}}))
+            return subprocess.CompletedProcess(argv, 0, str(self.storage), None)
         if argv[0] == sys.executable and argv[1].endswith("generated_tiff_write_matrix.py"):
             output = Path(argv[argv.index("--output") + 1]); output.parent.mkdir(parents=True, exist_ok=True)
             writer = Path(argv[argv.index("--test-binary") + 1]); ledger = Path(argv[argv.index("--ledger") + 1]); rules = Path(argv[argv.index("--rules") + 1])
@@ -381,6 +414,83 @@ class AdapterTests(unittest.TestCase):
         # The probes run exactly the argv the Rust oracle builds from EXIFTOOL_CACHE_DIR.
         self.assertIn([str(perl), f"-I{cache / 'exiftool' / 'lib'}", str(cache / "exiftool" / "exiftool"), "-ver"],
                       [argv for argv, _env in self.oracle_calls])
+
+    def test_release_tests_bind_the_verified_combined_corpus(self):
+        self.maxDiff = None
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        self.assertEqual(result["state"], "passed")
+        argv, env = self.verify_calls[0]
+        self.assertEqual(argv, [sys.executable, str(self.checkout.resolve() / "tools/release/bootstrap_oracle.py"),
+                                "verify", "--root", str(self.ops), "--pin", "13.59"])
+        self.assertEqual(env["OXIDEX_OPS_DIR"], str(self.ops))
+        order = [row[0] for row in self.seen]
+        self.assertLess(order.index(argv), order.index(list(adapter.TEST_COMMANDS[0])))
+        cache = self.target.resolve() / "test-suite" / "exiftool-oracle"
+        self.assertEqual((cache / "combined-samples").resolve(), self.corpus.resolve())
+        manifest = self.ops / "cache/exiftool/13.59/combined-samples.manifest"
+        self.assertEqual(result["test_suite"]["fixture_corpus"], {
+            "ops_root": str(self.ops), "bootstrap_pin": "13.59", "version_independent": True,
+            "corpus": str(self.corpus), "link": str(cache / "combined-samples"),
+            "corpus_tree_sha256": "7" * 64,
+            "manifest": {"path": str(manifest), "sha256": adapter._sha(manifest), "file_count": 2},
+            "storage_manifest": {"path": str(self.storage), "sha256": adapter._sha(self.storage)},
+            "verify_command": argv, "verified_before_run": True, "verified_after_run": True,
+        })
+
+    def test_release_tests_refuse_an_unverified_or_drifted_corpus(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+
+        def verify_then(mutate):
+            def run(argv, **kwargs):
+                result = self.fake_run(argv, **kwargs)
+                if len(argv) > 1 and argv[1].endswith("bootstrap_oracle.py"):
+                    mutate()
+                return result
+            return run
+
+        def rewrite(path, data):
+            return lambda: path.write_bytes(data)
+
+        def storage_edit(old, new):
+            return lambda: self.storage.write_text(self.storage.read_text().replace(old, new))
+
+        manifest = self.ops / "cache/exiftool/13.59/combined-samples.manifest"
+        cases = {
+            "verify refused": ("exit", None),
+            "storage manifest differs": ("after-verify", lambda: storage_edit(adapter._sha(manifest), "0" * 64)()),
+            "wrong lock tree": ("after-verify", storage_edit("7" * 64, "8" * 64)),
+            "manifest rewritten": ("after-verify", lambda: manifest.write_text(
+                manifest.read_text().replace("Apple/iPhone.jpg", "Apple/other.jpg"))),
+            "sample changed after verify": ("after-verify", rewrite(self.corpus / "ExifTool.jpg", b"changed")),
+            "unlisted sample": ("after-verify", rewrite(self.corpus / "Apple/extra.jpg", b"extra")),
+            "sample removed": ("after-verify", lambda: (self.corpus / "Apple/iPhone.jpg").unlink()),
+            "sample changed during run": ("during-run", rewrite(self.corpus / "ExifTool.jpg", b"tests wrote")),
+        }
+        for label, (when, mutate) in cases.items():
+            with self.subTest(label=label):
+                shutil.rmtree(self.corpus); (self.corpus / "Apple").mkdir(parents=True)
+                (self.corpus / "ExifTool.jpg").write_bytes(b"\xff\xd8exiftool")
+                (self.corpus / "Apple/iPhone.jpg").write_bytes(b"\xff\xd8apple")
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                self.suite_calls.clear()
+                self.verify_exit, self.corpus_during_run = (1 if when == "exit" else 0), None
+                run = self.fake_run
+                if when == "after-verify":
+                    run = verify_then(mutate)
+                elif when == "during-run":
+                    self.corpus_during_run = mutate
+                with self.assertRaisesRegex(adapter.Refused, "fixture corpus"):
+                    adapter.run_release_tests(self.args("test", report=str(report)), run=run)
+                self.assertFalse(report.exists())
+                if when != "during-run":
+                    self.assertEqual(self.suite_calls, [])
+        self.verify_exit, self.corpus_during_run = 0, None
 
     def test_release_test_oracle_must_be_the_selected_capable_release(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
