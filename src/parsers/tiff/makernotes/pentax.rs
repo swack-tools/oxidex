@@ -1045,6 +1045,39 @@ impl MakerNoteParser for PentaxParser {
         );
         Ok(())
     }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut crate::exiftool_tables::session::Session,
+        _cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, crate::core::TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        self.parse_located_with_occurrences(
+            ctx.window(),
+            byte_order,
+            ctx.payload_tiff_offset(),
+            model,
+            tags,
+            Some(occurrences),
+        )?;
+
+        let base = if ctx.payload().starts_with(PENTAX_HEADER_PENTAX) {
+            ctx.payload_base()
+        } else {
+            ctx.tiff_base()
+        };
+        crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+            tags,
+            base,
+            &["Pentax:PreviewImageStart"],
+        );
+        Ok(())
+    }
 }
 
 impl PentaxParser {
@@ -1056,6 +1089,19 @@ impl PentaxParser {
         data_base: Option<u32>,
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_located_with_occurrences(data, byte_order, data_base, model, tags, None)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn parse_located_with_occurrences(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        data_base: Option<u32>,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        mut occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -1186,6 +1232,16 @@ impl PentaxParser {
                         &mut members,
                         tags,
                     );
+                    // `FlashInfo` byte 24 has a second, fractional table key
+                    // (`24.1`) which the generated integer-index layout cannot
+                    // represent.  Decode that one field from the same record.
+                    if entry.tag_id == PENTAX_FLASH_INFO {
+                        decode_pentax_external_flash_guide_number(
+                            &record,
+                            tags,
+                            occurrences.as_deref_mut(),
+                        );
+                    }
                     // `LensInfoQ`'s `LensInfo` field (Pentax.pm:6048-6053,
                     // offset 0x2a, `string[20]`) has a `ValueConv =>
                     // '$val=~s/mm/mm /'` -- inserting a space after the
@@ -2066,7 +2122,7 @@ impl PentaxParser {
                 // `PrintConv => '$val =~ tr/ /x/; $val'` turns the space into
                 // an "x". `CAFPointsInFocus`/`CAFPointsSelected` need
                 // `DecodeAFPoints`, a bitmask walk over a grid whose size this
-                // byte determines, and neither is decoded here.
+                // byte determines.
                 PENTAX_CAF_POINT_INFO => {
                     let raw = inline_or_offset_bytes(&entry, data, value_base, byte_order);
                     if raw.len() >= 2 {
@@ -2077,6 +2133,65 @@ impl PentaxParser {
                             "Pentax:CAFGridSize".to_string(),
                             format!("{}x{}", b >> 4, b & 0x0f),
                         );
+                        let point_bytes = n.div_ceil(4) as usize;
+                        if raw.len() >= 2 + point_bytes {
+                            let point_bits = &raw[2..2 + point_bytes];
+                            if let Some(rows) = occurrences.as_deref_mut() {
+                                for (name, mask) in
+                                    [("CAFPointsInFocus", 0x02), ("CAFPointsSelected", 0x03)]
+                                {
+                                    let packed = crate::core::TagValue::Array(
+                                        point_bits
+                                            .iter()
+                                            .map(|&byte| {
+                                                crate::core::TagValue::Integer(i64::from(byte))
+                                            })
+                                            .collect(),
+                                    );
+                                    let display = crate::core::TagValue::new_string(
+                                        decode_caf_points(point_bits, n, mask),
+                                    );
+                                    rows.push((
+                                        format!("Pentax:{name}"),
+                                        crate::core::TagOccurrence {
+                                            id: crate::core::TagId::Named(format!(
+                                                "Pentax::CAFPointInfo::{name}"
+                                            )),
+                                            name: crate::core::tag_occurrence::intern(name),
+                                            group0: crate::core::tag_occurrence::intern(
+                                                "MakerNotes",
+                                            ),
+                                            group1: crate::core::tag_occurrence::intern("Pentax"),
+                                            group2: Some(crate::core::tag_occurrence::intern(
+                                                "Camera",
+                                            )),
+                                            instance: crate::core::Instance::default(),
+                                            raw: display.clone(),
+                                            value: Some(packed.clone()),
+                                            print: Some(display),
+                                            stored: Some(packed),
+                                            priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                                            is_list: false,
+                                            order: 0,
+                                            origin: crate::core::Provenance {
+                                                module: Some("Pentax"),
+                                                table: Some("CAFPointInfo"),
+                                                byte_range: None,
+                                            },
+                                        },
+                                    ));
+                                }
+                            } else {
+                                tags.insert(
+                                    "Pentax:CAFPointsInFocus".to_string(),
+                                    decode_caf_points(point_bits, n, 0x02),
+                                );
+                                tags.insert(
+                                    "Pentax:CAFPointsSelected".to_string(),
+                                    decode_caf_points(point_bits, n, 0x03),
+                                );
+                            }
+                        }
                     }
                 }
                 // Pentax.pm:2347-2364: `undef`/`int8u`, declared `Count => 4`
@@ -2863,6 +2978,96 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
     }
 }
 
+/// Decode `Pentax::FlashInfo`'s fractional index `24.1`.
+///
+/// ExifTool's `Mask => 0x1f` reads byte 24's low five bits, remaps stored 29
+/// to -3, then applies `2**($val / 16 + 4)` and prints zero as `n/a`
+/// (Pentax.pm:4650-4661). The generated table has only integer byte offsets,
+/// so this one fractional field remains beside the generated record decoder.
+fn decode_pentax_external_flash_guide_number(
+    record: &[u8],
+    tags: &mut HashMap<String, String>,
+    structured_rows: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
+) {
+    let Some(&byte) = record.get(24) else {
+        return;
+    };
+    let raw = byte & 0x1f;
+    let value = if raw == 0 {
+        0.0
+    } else {
+        let exponent = if raw == 29 { -3.0 } else { f64::from(raw) };
+        2_f64.powf(exponent / 16.0 + 4.0)
+    };
+    let print = if raw == 0 {
+        "n/a".to_string()
+    } else {
+        (value + 0.5).floor().to_string()
+    };
+    if let Some(rows) = structured_rows {
+        // The generated integer-index decoder emits a rounded display string
+        // for this fractional `24.1` field before this source-specific hook
+        // runs. Retire it so the canonical occurrence below owns every
+        // channel, as Pentax.pm's ValueConv/PrintConv split requires.
+        tags.remove("Pentax:ExternalFlashGuideNumber");
+        let stored = crate::core::TagValue::Integer(i64::from(raw));
+        let converted = crate::core::TagValue::Float(value);
+        let display = crate::core::TagValue::new_string(print);
+        rows.push((
+            "Pentax:ExternalFlashGuideNumber".to_string(),
+            crate::core::TagOccurrence {
+                id: crate::core::TagId::Named(
+                    "Pentax::FlashInfo::ExternalFlashGuideNumber".to_string(),
+                ),
+                name: crate::core::tag_occurrence::intern("ExternalFlashGuideNumber"),
+                group0: crate::core::tag_occurrence::intern("MakerNotes"),
+                group1: crate::core::tag_occurrence::intern("Pentax"),
+                group2: Some(crate::core::tag_occurrence::intern("Camera")),
+                instance: crate::core::Instance::default(),
+                raw: stored.clone(),
+                value: Some(converted),
+                print: Some(display),
+                stored: Some(stored),
+                priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                is_list: false,
+                order: 0,
+                origin: crate::core::Provenance {
+                    module: Some("Pentax"),
+                    table: Some("FlashInfo"),
+                    byte_range: None,
+                },
+            },
+        ));
+    } else {
+        tags.insert("Pentax:ExternalFlashGuideNumber".to_string(), print);
+    }
+}
+
+/// Decode the two-bit contrast-detect AF point records in `CAFPointInfo`.
+///
+/// This is `DecodeAFPoints($val, $num, 2, $mask)` from Pentax.pm:6727-6754.
+/// With no optional `bitVal`, ExifTool selects a point when *any* bit in the
+/// mask is set: mask 0x02 accepts states 2 and 3, while 0x03 accepts 1, 2 and
+/// 3. Points are one-based and packed from each byte's most-significant pair.
+fn decode_caf_points(bytes: &[u8], point_count: u32, mask: u8) -> String {
+    if bytes.is_empty() {
+        return "(none)".to_string();
+    }
+
+    let mut points = Vec::new();
+    for point in 0..point_count {
+        let byte_index = (point / 4) as usize;
+        let Some(&byte) = bytes.get(byte_index) else {
+            break;
+        };
+        let shift = 6 - (point % 4) * 2;
+        if ((byte >> shift) & mask) != 0 {
+            points.push((point + 1).to_string());
+        }
+    }
+    points.join(",")
+}
+
 /// The `%Pentax::Main` tags whose ExifTool entry is a `SubDirectory` over a
 /// `ProcessBinaryData` table this reader can transcribe, the table each one
 /// selects, and the byte order to read the record in.
@@ -2872,6 +3077,7 @@ fn right_align_inline_value(entry: IfdEntry, byte_order: ByteOrder) -> IfdEntry 
 /// produces nothing here rather than a guess -- `%Pentax` has an
 /// `...Unknown` companion table for exactly those, and ExifTool reports no
 /// named tags from it either.
+
 fn pentax_binary_subdir(
     entry: &IfdEntry,
     model: Option<&str>,
@@ -4042,6 +4248,182 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caf_point_info_preserves_packed_value_before_print_conv() {
+        // CAFPointInfo's source Format is int8u[ceil(NumCAFPoints/4)], with
+        // DecodeAFPoints only as PrintConv. PentaxQ-S1's 7x7 carrier has 13
+        // pre-PrintConv bytes and selects point 34 from byte nine (0x30).
+        let data = pentax_block(
+            &[(PENTAX_CAF_POINT_INFO, 7, 15, 64)],
+            &[0, 0x77, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0, 0, 0, 0],
+        );
+        let parser = PentaxParser::default();
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut rows = Vec::new();
+
+        parser
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::detached(
+                    &data,
+                ),
+                ByteOrder::BigEndian,
+                None,
+                &mut session,
+                &mut cond_ctx,
+                &mut tags,
+                &mut value_forms,
+                &mut rows,
+            )
+            .expect("synthetic Pentax CAF MakerNote parses");
+
+        assert_eq!(rows.len(), 2, "CAF point tags use canonical occurrences");
+        let (_, focus) = rows
+            .iter()
+            .find(|(key, _)| key == "Pentax:CAFPointsInFocus")
+            .expect("focus point occurrence");
+        let packed = crate::core::TagValue::Array(
+            [0, 0, 0, 0, 0, 0, 0, 0, 48, 0, 0, 0, 0]
+                .into_iter()
+                .map(crate::core::TagValue::Integer)
+                .collect(),
+        );
+        assert_eq!(focus.raw, crate::core::TagValue::new_string("34"));
+        assert_eq!(focus.value, Some(packed.clone()));
+        assert_eq!(focus.stored, Some(packed.clone()));
+        assert_eq!(focus.print, Some(crate::core::TagValue::new_string("34")));
+
+        let mut metadata = crate::core::MetadataMap::new();
+        for (key, row) in rows {
+            metadata.record_occurrence(key, row);
+        }
+        assert_eq!(metadata.get_string("Pentax:CAFPointsInFocus"), Some("34"));
+        assert_eq!(
+            metadata.without_print_conv().get("Pentax:CAFPointsInFocus"),
+            Some(&packed)
+        );
+    }
+
+    #[test]
+    fn external_flash_guide_number_preserves_value_conv_before_print_conv() {
+        // Pentax.pm:4650-4665 masks byte 24, converts raw 6 to
+        // 2**(6/16 + 4) = 20.7494328744..., then rounds only for PrintConv.
+        let mut flash_info = [0_u8; 27];
+        flash_info[24] = 6;
+        let data = pentax_block(&[(PENTAX_FLASH_INFO, 7, 27, 64)], &flash_info);
+        let parser = PentaxParser::default();
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut rows = Vec::new();
+
+        parser
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::detached(
+                    &data,
+                ),
+                ByteOrder::BigEndian,
+                None,
+                &mut session,
+                &mut cond_ctx,
+                &mut tags,
+                &mut value_forms,
+                &mut rows,
+            )
+            .expect("synthetic Pentax FlashInfo MakerNote parses");
+
+        let (_, guide) = rows
+            .iter()
+            .find(|(key, _)| key == "Pentax:ExternalFlashGuideNumber")
+            .expect("guide number occurrence preserves its channels");
+        assert_eq!(
+            rows.iter()
+                .filter(|(key, _)| key == "Pentax:ExternalFlashGuideNumber")
+                .count(),
+            1,
+            "the generated display-only field must not leak a duplicate -a occurrence"
+        );
+        let value = crate::core::TagValue::Float(20.749_432_874_416_154);
+        assert_eq!(guide.raw, crate::core::TagValue::Integer(6));
+        assert_eq!(guide.stored, Some(crate::core::TagValue::Integer(6)));
+        assert_eq!(guide.value, Some(value.clone()));
+        assert_eq!(guide.print, Some(crate::core::TagValue::new_string("21")));
+
+        let mut metadata = crate::core::MetadataMap::new();
+        for (key, row) in rows {
+            metadata.record_occurrence(key, row);
+        }
+        assert_eq!(
+            metadata.get_integer("Pentax:ExternalFlashGuideNumber"),
+            Some(6),
+            "MetadataMap exposes the stored raw channel; normal CLI output uses print"
+        );
+        assert_eq!(
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .find(|(key, _, _)| *key == "Pentax:ExternalFlashGuideNumber")
+                .map(|(_, _, value)| value.into_owned()),
+            Some(crate::core::TagValue::new_string("21"))
+        );
+        assert_eq!(
+            metadata
+                .without_print_conv()
+                .get("Pentax:ExternalFlashGuideNumber"),
+            Some(&value)
+        );
+    }
+
+    #[test]
+    fn external_flash_guide_number_zero_preserves_numeric_value_and_na_print() {
+        // Pentax.pm:4654 returns numeric zero before its PrintConv turns that
+        // false value into `n/a`; the display string must not replace either
+        // raw/stored zero or the ValueConv channel.
+        let flash_info = [0_u8; 27];
+        let data = pentax_block(&[(PENTAX_FLASH_INFO, 7, 27, 64)], &flash_info);
+        let parser = PentaxParser::default();
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut rows = Vec::new();
+
+        parser
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::detached(
+                    &data,
+                ),
+                ByteOrder::BigEndian,
+                None,
+                &mut session,
+                &mut cond_ctx,
+                &mut tags,
+                &mut value_forms,
+                &mut rows,
+            )
+            .expect("synthetic zero-valued Pentax FlashInfo MakerNote parses");
+
+        let guides: Vec<_> = rows
+            .iter()
+            .filter(|(key, _)| key == "Pentax:ExternalFlashGuideNumber")
+            .collect();
+        assert_eq!(
+            guides.len(),
+            1,
+            "no generated duplicate survives in -a output"
+        );
+        let guide = &guides[0].1;
+        assert_eq!(guide.raw, crate::core::TagValue::Integer(0));
+        assert_eq!(guide.stored, Some(crate::core::TagValue::Integer(0)));
+        assert_eq!(guide.value, Some(crate::core::TagValue::Float(0.0)));
+        assert_eq!(guide.print, Some(crate::core::TagValue::new_string("n/a")));
+    }
 
     #[test]
     fn samsung_gx20_auto_bracketing_uses_pentax_two_value_print_conv() {

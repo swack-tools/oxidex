@@ -26,7 +26,10 @@ pub mod extended;
 /// `%Panasonic` binary sub-tables, generated from ExifTool's own hashes.
 pub mod face_tables;
 
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagId, TagOccurrence, TagValue};
 use crate::error::{ExifToolError, Result};
+use crate::exiftool_tables::{Ctx, Dir, Emitted, find_table, process_binary_data};
 use crate::io::EndianReader;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use nom::{
@@ -40,6 +43,7 @@ use std::collections::HashMap;
 use super::makernote_context::{MakerNoteContext, value_overlaps_directory};
 use super::shared::MakerNoteParser;
 use super::shared::binary_subdir::{BinaryTable, decode_binary_subdir};
+use super::shared::engine_value::engine_value_text;
 use super::shared::ifd_parser_base::resolve_byte_order_at;
 use face_tables::{PANASONIC_FACEDETINFO, PANASONIC_FACERECINFO};
 
@@ -97,6 +101,14 @@ fn panasonic_ifd_offset(data: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// The payload half of `MakerNotePanasonic2`'s condition. Its Make half is
+/// enforced by the dispatcher before this parser is selected
+/// (MakerNotes.pm:743-750). Unlike Panasonic's TIFF-style Main notes, this is
+/// a headerless `ProcessBinaryData` record.
+pub(crate) fn is_panasonic_type2_makernote(data: &[u8]) -> bool {
+    data.starts_with(b"MKE")
 }
 
 // ============================================================================
@@ -664,8 +676,9 @@ impl MakerNoteParser for PanasonicParser {
     fn validate_header(&self, data: &[u8]) -> bool {
         // Panasonic header: "Panasonic\0\0\0" (12 bytes), or the unnumbered
         // "LEICA\0\0\0" (8 bytes) a bare-Make "LEICA" body writes for the
-        // same Panasonic::Main table.
-        panasonic_ifd_offset(data).is_some()
+        // same Panasonic::Main table. Older Panasonic bodies instead use the
+        // `MKE`-prefixed Type2 binary record.
+        panasonic_ifd_offset(data).is_some() || is_panasonic_type2_makernote(data)
     }
 
     fn parse(
@@ -674,7 +687,7 @@ impl MakerNoteParser for PanasonicParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl_with_tiff(data, byte_order, None, None, tags)
+        self.parse_impl_with_tiff(data, byte_order, None, None, tags, None)
     }
 
     fn parse_with_model(
@@ -684,7 +697,7 @@ impl MakerNoteParser for PanasonicParser {
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
     ) -> std::result::Result<(), String> {
-        self.parse_impl_with_tiff(data, byte_order, model, None, tags)
+        self.parse_impl_with_tiff(data, byte_order, model, None, tags, None)
     }
 
     /// Panasonic's out-of-line value offsets are measured from the enclosing
@@ -717,7 +730,35 @@ impl MakerNoteParser for PanasonicParser {
         // own entry list within `tiff()`, for the "Suspicious offset" guard
         // in `resolve_value_offset`.
         let full_tiff = ctx.is_located().then(|| (ctx.tiff(), ctx.payload_offset()));
-        self.parse_impl_with_tiff(ctx.window(), byte_order, model, full_tiff, tags)
+        let data = if is_panasonic_type2_makernote(ctx.payload()) {
+            // Type2 is a fixed binary record, not an IFD with TIFF-relative
+            // offsets. Restrict it to the entry's declared bytes so fields do
+            // not leak out of a short MakerNote into following TIFF data.
+            ctx.payload()
+        } else {
+            ctx.window()
+        };
+        self.parse_impl_with_tiff(data, byte_order, model, full_tiff, tags, None)
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut crate::exiftool_tables::session::Session,
+        _cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        let full_tiff = ctx.is_located().then(|| (ctx.tiff(), ctx.payload_offset()));
+        let data = if is_panasonic_type2_makernote(ctx.payload()) {
+            ctx.payload()
+        } else {
+            ctx.window()
+        };
+        self.parse_impl_with_tiff(data, byte_order, model, full_tiff, tags, Some(occurrences))
     }
 }
 
@@ -741,8 +782,14 @@ impl PanasonicParser {
         model: Option<&str>,
         full_tiff: Option<(&[u8], usize)>,
         tags: &mut HashMap<String, String>,
+        mut structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
+            return Ok(());
+        }
+
+        if is_panasonic_type2_makernote(data) {
+            insert_generated_type2(data, tags, structured_rows);
             return Ok(());
         }
 
@@ -823,7 +870,15 @@ impl PanasonicParser {
         // Extract tags from entries
         for entry in entries {
             self.parse_entry(
-                &entry, value_data, ifd_offset, data_base, byte_order, model, &registry, tags,
+                &entry,
+                value_data,
+                ifd_offset,
+                data_base,
+                byte_order,
+                model,
+                &registry,
+                tags,
+                structured_rows.as_deref_mut(),
             );
         }
 
@@ -845,6 +900,7 @@ impl PanasonicParser {
         model: Option<&str>,
         registry: &super::shared::tag_registry::TagRegistry,
         tags: &mut HashMap<String, String>,
+        structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
     ) {
         let tag_id = entry.tag_id;
 
@@ -1263,7 +1319,14 @@ impl PanasonicParser {
                 if entry.field_type == 3 {
                     let raw = inline_u16_value(entry, byte_order);
                     if raw != 0xFFFF {
-                        tags.insert("Panasonic:LensTypeMake".to_string(), raw.to_string());
+                        emit_panasonic_main_value(
+                            entry.tag_id,
+                            "LensTypeMake",
+                            TagValue::Integer(i64::from(raw)),
+                            TagValue::Integer(i64::from(raw)),
+                            tags,
+                            structured_rows,
+                        );
                     }
                 }
                 return;
@@ -1289,9 +1352,13 @@ impl PanasonicParser {
                 if entry.field_type == 3 {
                     let raw = inline_u16_value(entry, byte_order);
                     if raw != 0 {
-                        tags.insert(
-                            "Panasonic:LensTypeModel".to_string(),
-                            format!("{:02x} {:02x}", raw & 0xFF, raw >> 8),
+                        emit_panasonic_main_value(
+                            entry.tag_id,
+                            "LensTypeModel",
+                            TagValue::Integer(i64::from(raw)),
+                            TagValue::String(format!("{:02x} {:02x}", raw & 0xFF, raw >> 8)),
+                            tags,
+                            structured_rows,
                         );
                     }
                 }
@@ -1415,6 +1482,111 @@ fn inline_scalar_i32(entry: &IfdEntry, byte_order: ByteOrder) -> i32 {
         }
     } else {
         entry.value_offset as i32
+    }
+}
+
+/// Decode `%Panasonic::Type2` through the generated binary table. ExifTool's
+/// route forces little-endian independently of the enclosing TIFF
+/// (MakerNotes.pm:743-750).
+fn insert_generated_type2(
+    record: &[u8],
+    tags: &mut HashMap<String, String>,
+    structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
+) {
+    let Some(table) = find_table("Panasonic", "Type2") else {
+        return;
+    };
+    let mut members = HashMap::new();
+    let mut ctx = Ctx::new(&mut members);
+    let mut emitted = Vec::new();
+    process_binary_data(
+        table,
+        Dir::whole(record, ByteOrder::LittleEndian.to_io_byte_order()),
+        &mut ctx,
+        &mut emitted,
+    );
+
+    if let Some(rows) = structured_rows {
+        rows.extend(
+            emitted
+                .into_iter()
+                .filter_map(panasonic_generated_occurrence),
+        );
+    } else {
+        for row in emitted {
+            if let Some(text) = engine_value_text(&row.value) {
+                tags.insert(format!("Panasonic:{}", row.name), text);
+            }
+        }
+    }
+}
+
+fn panasonic_generated_occurrence(row: Emitted) -> Option<(String, TagOccurrence)> {
+    if row.module != "Panasonic" || row.group1 != "Panasonic" {
+        return None;
+    }
+    let key = format!("Panasonic:{}", row.name);
+    let value = row.value_conv.clone().unwrap_or_else(|| row.value.clone());
+    Some((
+        key,
+        TagOccurrence {
+            id: row.source_id,
+            name: intern(row.name),
+            group0: intern(row.group0),
+            group1: intern(row.group1),
+            group2: (!row.group2.is_empty()).then(|| intern(row.group2)),
+            instance: Instance::default(),
+            raw: row.value.clone(),
+            value: Some(value),
+            print: Some(row.value),
+            stored: Some(row.stored),
+            priority: u8::from(!(row.low_priority || row.avoid)),
+            is_list: row.is_list,
+            order: 0,
+            origin: Provenance {
+                module: Some(row.module),
+                table: Some(row.table),
+                byte_range: None,
+            },
+        },
+    ))
+}
+
+fn emit_panasonic_main_value(
+    tag_id: u16,
+    name: &'static str,
+    stored: TagValue,
+    value: TagValue,
+    tags: &mut HashMap<String, String>,
+    structured_rows: Option<&mut Vec<(String, TagOccurrence)>>,
+) {
+    let key = format!("Panasonic:{name}");
+    if let Some(rows) = structured_rows {
+        rows.push((
+            key,
+            TagOccurrence {
+                id: TagId::Numeric(tag_id),
+                name: intern(name),
+                group0: intern("MakerNotes"),
+                group1: intern("Panasonic"),
+                group2: Some(intern("Camera")),
+                instance: Instance::default(),
+                raw: value.clone(),
+                value: Some(value.clone()),
+                print: Some(value),
+                stored: Some(stored),
+                priority: 1,
+                is_list: false,
+                order: 0,
+                origin: Provenance {
+                    module: Some("Panasonic"),
+                    table: Some("Main"),
+                    byte_range: None,
+                },
+            },
+        ));
+    } else if let Some(text) = engine_value_text(&value) {
+        tags.insert(key, text);
     }
 }
 

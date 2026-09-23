@@ -301,13 +301,6 @@ pub fn apply(map: &mut MetadataMap) -> usize {
     // it once up front rather than per composite.
     let make = resolve_indexed(map, &mut names, "Make");
     let file_type = resolve_indexed(map, &mut names, "FileType");
-    // Which manufacturer's `LensType` lookup won the bare name -- the one piece
-    // of context `Composite:LensID` needs that a positional input cannot carry.
-    // Resolved once here rather than per pass; no Composite in this table
-    // produces a `LensType`, so it cannot change between passes.
-    let lens_occurrence = resolve_lens_occurrence(map, "LensType");
-    let rf_lens_occurrence = resolve_lens_occurrence(map, "RFLensType");
-    let lens_type_group = lens_occurrence.as_ref().map(|(group, _, _)| group.clone());
     // `%Image::ExifTool::Olympus::Composite{LensType}` is
     // `Require => {0 => 'LensTypeMake', 1 => 'LensTypeModel'}`,
     // `ValueConv => '"$val[0] $val[1]"'`, `PrintConv => \%olympusLensTypes`.
@@ -450,6 +443,13 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             }
 
             if comp.module == "Exif" && comp.name == "LensID" && !comp.require.is_empty() {
+                // Olympus::LensType may have been synthesized earlier in this
+                // same pass from Panasonic's LensTypeMake/LensTypeModel pair.
+                // Resolve its winning occurrence now, rather than snapshotting
+                // before the fixpoint, because Exif.pm's primary LensID reads
+                // the current bare LensType and its lookup identity.
+                let lens_occurrence = resolve_lens_occurrence(map, "LensType");
+                let rf_lens_occurrence = resolve_lens_occurrence(map, "RFLensType");
                 // These PrintConv inputs need labels; preserve the raw IDs in
                 // the separate context from those exact winning occurrences.
                 owned[0] = lens_occurrence.as_ref().map(|(_, label, _)| label.clone());
@@ -467,6 +467,11 @@ pub fn apply(map: &mut MetadataMap) -> usize {
             // that produce this Name are routed here rather than through
             // `compute::compute`, which has no such context; see [`lens_id`].
             let computed = if comp.module == "Exif" && comp.name == "LensID" {
+                // Resolve this context after all earlier composites in the
+                // pass have had an opportunity to provide LensType.
+                let lens_occurrence = resolve_lens_occurrence(map, "LensType");
+                let rf_lens_occurrence = resolve_lens_occurrence(map, "RFLensType");
+                let lens_type_group = lens_occurrence.as_ref().map(|(group, _, _)| group.clone());
                 if comp.require.is_empty() {
                     // `LensID-2` (Exif.pm:5362-5385): the LensModel/Lens text
                     // fallback, whose ValueConv and PrintConv genuinely differ.
@@ -1197,6 +1202,29 @@ mod tests {
             m.get_string("Composite:LensID"),
             Some("Canon EF 28-70mm f/2.8L USM or Sigma 28-70mm f/2.8 EX"),
             "the LensType-based primary must win, not the LensModel/Lens fallback"
+        );
+    }
+
+    #[test]
+    fn panasonic_lens_type_pair_feeds_primary_lens_id_in_the_same_fixpoint() {
+        // Panasonic.pm:1410-1425 loads Olympus's Composite LensType for this
+        // pair. Olympus.pm:4308-4322 joins 2 + 20 10 and maps it through
+        // %olympusLensTypes; Exif.pm:5303-5355 then requires that bare
+        // LensType for primary LensID. Both outputs are from the pinned 13.59
+        // oracle for PanasonicDC-G100.jpg.
+        let mut m = map_of(&[
+            ("Panasonic:LensTypeMake", "2"),
+            ("Panasonic:LensTypeModel", "20 10"),
+            ("IFD0:Make", "Panasonic"),
+        ]);
+        apply(&mut m);
+        assert_eq!(
+            m.get_string("Composite:LensType"),
+            Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS")
+        );
+        assert_eq!(
+            m.get_string("Composite:LensID"),
+            Some("Lumix G Vario 12-32mm F3.5-5.6 Asph. Mega OIS")
         );
     }
 

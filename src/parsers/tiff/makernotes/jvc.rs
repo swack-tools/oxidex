@@ -20,13 +20,20 @@
 #![allow(dead_code)]
 
 use crate::const_decoder;
+use crate::core::tag_occurrence::intern;
+use crate::core::{Instance, Provenance, TagOccurrence, TagValue};
+use crate::exiftool_tables::Ctx;
+use crate::exiftool_tables::session::Session;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, IfdEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+use super::makernote_context::MakerNoteContext;
 use super::registries::jvc::jvc_registry;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::ifd_parser_base::{
+    IfdParserConfig, parse_ifd_entries, resolve_makernote_byte_order,
+};
 use super::shared::tag_registry::TagRegistry;
 
 // Decodes JVC image quality.
@@ -62,7 +69,7 @@ fn extract_u16_value(entry: &IfdEntry, _data: &[u8], byte_order: ByteOrder) -> O
 // `extract_string` stops at the first NUL when the value is stored inline,
 // which would truncate CPUVersions; ExifTool hands the whole buffer to its
 // ValueConv instead.
-fn extract_raw_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<String> {
+fn extract_raw_bytes(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<Vec<u8>> {
     if entry.value_count == 0 {
         return None;
     }
@@ -75,13 +82,15 @@ fn extract_raw_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> O
             .collect::<Vec<u8>>()
     } else {
         let offset = entry.value_offset as usize;
-        if offset >= data.len() {
-            return None;
-        }
-        let end = std::cmp::min(offset + entry.value_count as usize, data.len());
-        data[offset..end].to_vec()
+        let end = offset.checked_add(entry.value_count as usize)?;
+        data.get(offset..end)?.to_vec()
     };
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    Some(bytes)
+}
+
+fn extract_raw_string(entry: &IfdEntry, data: &[u8], byte_order: ByteOrder) -> Option<String> {
+    extract_raw_bytes(entry, data, byte_order)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 // Applies ExifTool's CPUVersions ValueConv (JVC.pm:28-31):
@@ -154,6 +163,97 @@ impl JvcParser {
         JvcParser
     }
 
+    /// Walk the MakerNote directory in `directory_data`, resolving its
+    /// out-of-line TIFF entry values through `value_data`. `CPUVersions` in
+    /// JVC.jpg is at a TIFF-relative offset, so the declared MakerNote alone
+    /// does not provide the base that ExifTool's directory inherits.
+    fn parse_note(
+        &self,
+        directory_data: &[u8],
+        value_data: &[u8],
+        byte_order: ByteOrder,
+        tags: &mut HashMap<String, String>,
+        mut occurrences: Option<&mut Vec<(String, TagOccurrence)>>,
+    ) -> Result<(), String> {
+        let config = IfdParserConfig {
+            // MakerNotes.pm selects `MakerNoteJVC` on `^JVC ` and declares
+            // `Start => '$valuePtr + 4'`. Headerless synthetic/legacy notes
+            // retain the shared parser's normal zero-offset behavior.
+            signature: Some(b"JVC "),
+            signature_offset: 4,
+            max_entries: 500,
+        };
+
+        // MakerNotes.pm:237-243 declares ByteOrder Unknown. Exif.pm probes
+        // the IFD count at Start +4 before keeping or swapping TIFF order.
+        let byte_order = resolve_makernote_byte_order(directory_data, &config, byte_order);
+
+        parse_ifd_entries(directory_data, byte_order, &config, |entry, _| {
+            if let Some(row) = self.canonical_entry(entry, value_data, byte_order)
+                && let Some(rows) = occurrences.as_deref_mut()
+            {
+                rows.push(row);
+                return;
+            }
+            self.parse_entry(entry, value_data, byte_order, tags);
+        })
+    }
+
+    fn canonical_entry(
+        &self,
+        entry: &IfdEntry,
+        data: &[u8],
+        byte_order: ByteOrder,
+    ) -> Option<(String, TagOccurrence)> {
+        let (name, raw, value, print) = match entry.tag_id {
+            0x0002 => {
+                let bytes = extract_raw_bytes(entry, data, byte_order)?;
+                let converted =
+                    TagValue::new_string(convert_cpu_versions(&String::from_utf8_lossy(&bytes)));
+                (
+                    "CPUVersions",
+                    TagValue::Binary(bytes),
+                    converted.clone(),
+                    converted,
+                )
+            }
+            0x0003 => {
+                let value = extract_u16_value(entry, data, byte_order)?;
+                let raw = TagValue::Integer(i64::from(value));
+                (
+                    "Quality",
+                    raw.clone(),
+                    raw,
+                    TagValue::new_string(TAG_REGISTRY.decode_u16(entry.tag_id, value)),
+                )
+            }
+            _ => return None,
+        };
+        Some((
+            format!("JVC:{name}"),
+            TagOccurrence {
+                id: crate::core::TagId::Numeric(entry.tag_id),
+                name: intern(name),
+                group0: intern("MakerNotes"),
+                group1: intern("JVC"),
+                group2: Some(intern("Camera")),
+                instance: Instance::default(),
+                stored: Some(raw.clone()),
+                raw,
+                value: Some(value),
+                print: Some(print),
+                priority: 1,
+                is_list: false,
+                order: 0,
+                origin: Provenance {
+                    module: Some("JVC"),
+                    table: Some("Main"),
+                    byte_range: None,
+                },
+            },
+        ))
+    }
+
     /// Parses a single JVC MakerNote IFD entry and extracts its tag value
     /// Uses centralized registry for tag metadata and decoding
     fn parse_entry(
@@ -198,16 +298,37 @@ impl MakerNoteParser for JvcParser {
         byte_order: ByteOrder,
         tags: &mut HashMap<String, String>,
     ) -> Result<(), String> {
-        let config = IfdParserConfig {
-            signature: None,
-            signature_offset: 0,
-            max_entries: 500,
-        };
+        self.parse_note(data, data, byte_order, tags, None)
+    }
 
-        parse_ifd_entries(data, byte_order, &config, |entry, parse_data| {
-            self.parse_entry(entry, parse_data, byte_order, tags);
-        })?;
-        Ok(())
+    fn parse_with_context(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.parse_note(ctx.payload(), ctx.tiff(), byte_order, tags, None)
+    }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        _model: Option<&str>,
+        _session: &mut Session,
+        _cond_ctx: &mut Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, TagOccurrence)>,
+    ) -> Result<(), String> {
+        self.parse_note(
+            ctx.payload(),
+            ctx.tiff(),
+            byte_order,
+            tags,
+            Some(occurrences),
+        )
     }
 }
 
@@ -331,6 +452,25 @@ mod tests {
             // ExifTool emits exactly two JVC tags for this file; 0x0001 is
             // deliberately unnamed and must not be reported as Quality.
             assert_eq!(tags.len(), 2, "{order:?}: {tags:?}");
+        }
+    }
+
+    #[test]
+    fn signed_jvc_ifd_uses_its_own_byte_order() {
+        // MakerNotes.pm:237-243 declares Start +4 and ByteOrder Unknown.
+        // Exif.pm:6886-6893 swaps the inherited order when the IFD entry
+        // count is implausible in that order. Exercise both directions.
+        for (inner, outer) in [
+            (ByteOrder::LittleEndian, ByteOrder::BigEndian),
+            (ByteOrder::BigEndian, ByteOrder::LittleEndian),
+        ] {
+            let mut note = b"JVC ".to_vec();
+            note.extend_from_slice(&build_ifd(&[(0x0003, 3, 1, 1)], &[], inner));
+            let mut tags = HashMap::new();
+            JvcParser::new()
+                .parse(&note, outer, &mut tags)
+                .expect("JVC signed IFD must resolve its local byte order");
+            assert_eq!(tags.get("JVC:Quality"), Some(&"Normal".to_string()));
         }
     }
 }
