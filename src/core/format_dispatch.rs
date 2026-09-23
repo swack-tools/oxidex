@@ -351,14 +351,16 @@ pub fn dispatch_format_parser(
 /// Non-JPEG carriers whose pinned ExifTool reader walks trailers: the
 /// `%fileTypeLookup` TIFF-module types read by DoProcessTIFF (plus ORF/ORI,
 /// whose ProcessORF is ProcessTIFF), CRW (CanonRaw.pm) and PSD/PSB
-/// (Photoshop.pm), plus a `.raw` whose bytes select the TIFF reader. FFF
-/// (`['TIFF','FLIR']`), CR3, RAF, MRW, X3F and the rest are left out rather
-/// than assumed.
+/// (Photoshop.pm), plus a `.raw` or `.fff` whose bytes select the TIFF
+/// reader. CR3, RAF, MRW, X3F and the rest are left out rather than assumed.
 fn exiftool_processes_trailers(format: FileFormat, reader: &dyn FileReader) -> bool {
     use crate::parsers::raw::RawFormat as R;
     match format {
         FileFormat::TIFF | FileFormat::PSD => true,
         FileFormat::CameraRaw(R::GenericRAW) => raw_selects_tiff_reader(reader),
+        FileFormat::CameraRaw(R::HasselbladFFF) => reader
+            .read(0, reader.size().min(8) as usize)
+            .is_ok_and(tiff_header_reaches_trailers),
         FileFormat::CameraRaw(raw) => matches!(
             raw,
             R::CanonCR2
@@ -398,9 +400,14 @@ fn raw_selects_tiff_reader(reader: &dyn FileReader) -> bool {
     let Ok(head) = reader.read(0, reader.size().min(KYOCERA_HEADER) as usize) else {
         return false;
     };
-    if crate::parsers::raw::looks_like_kyocera_raw(head) {
-        return false;
-    }
+    !crate::parsers::raw::looks_like_kyocera_raw(head) && tiff_header_reaches_trailers(head)
+}
+
+/// DoProcessTIFF reaches its trailer pass only with an `II`/`MM` byte order
+/// and an IFD0 offset of at least 8. For `FFF => [['TIFF','FLIR'], ...]`
+/// this is also what selects the TIFF reader over FLIR.pm, which never walks
+/// trailers.
+fn tiff_header_reaches_trailers(head: &[u8]) -> bool {
     let Some(offset) = head.get(4..8).map(|bytes| {
         let bytes: [u8; 4] = bytes.try_into().expect("four bytes");
         match head.get(..2) {

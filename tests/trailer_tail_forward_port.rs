@@ -1136,3 +1136,79 @@ fn zero_size_photo_mechanic_trailer_still_exposes_samsung() {
     );
     assert_eq!(metadata.get_string("Trailer:JSONInfo"), Some("{\"a\":1}"));
 }
+
+#[test]
+fn tiff_form_hasselblad_fff_uses_the_trailer_chain() {
+    // `FFF => [['TIFF','FLIR'], ...]`: a TIFF-form `.fff` is read by
+    // DoProcessTIFF, which walks trailers. Pinned 13.59 reports
+    // Samsung:EmbeddedAudioFileName for II and MM headers, including one with
+    // Kyocera-looking bytes at 0x19 (only `.raw` tries KyoceraRaw first).
+    let mut little = tiff_carrier();
+    little.extend_from_slice(&samsung_soundshot_trailer());
+    let mut big = b"MM\0*\0\0\0\x08".to_vec();
+    big.extend_from_slice(&1_u16.to_be_bytes());
+    big.extend_from_slice(&0x0100_u16.to_be_bytes());
+    big.extend_from_slice(&3_u16.to_be_bytes());
+    big.extend_from_slice(&1_u32.to_be_bytes());
+    big.extend_from_slice(&(1_u32 << 16).to_be_bytes());
+    big.extend_from_slice(&0_u32.to_be_bytes());
+    big.extend_from_slice(&samsung_soundshot_trailer());
+    let mut kyocera_bytes = tiff_carrier();
+    kyocera_bytes.resize(kyocera_bytes.len() + 160, 0);
+    kyocera_bytes[0x19..0x19 + 7].copy_from_slice(b"ARECOYK");
+    kyocera_bytes.extend_from_slice(&samsung_soundshot_trailer());
+    let mut behind_mie = tiff_carrier();
+    behind_mie.extend_from_slice(&samsung_soundshot_trailer());
+    behind_mie.extend_from_slice(&mie_trailer());
+    for carrier in [little, big, kyocera_bytes, behind_mie] {
+        assert_eq!(
+            public_metadata_named("carrier.fff", &carrier)
+                .get_string("MakerNotes:EmbeddedAudioFileName"),
+            Some("SoundShot_000")
+        );
+    }
+}
+
+/// Reads `carrier` under `name`; an unrecognized carrier is an error, which
+/// reads no trailers either.
+fn assert_no_trailer_tags(name: &str, carrier: &[u8]) {
+    let dir = tempfile::tempdir().expect("create carrier directory");
+    let path = dir.path().join(name);
+    std::fs::write(&path, carrier).expect("write carrier");
+    if let Ok(metadata) = Metadata::from_path(&path) {
+        assert!(
+            metadata.get("MakerNotes:EmbeddedAudioFileName").is_none(),
+            "{name}"
+        );
+        assert!(
+            metadata.get("MakerNotes:EmbeddedAudioFile").is_none(),
+            "{name}"
+        );
+        assert!(metadata.get("Trailer:JSONInfo").is_none(), "{name}");
+    }
+}
+
+#[test]
+fn flir_form_or_unreadable_fff_reads_no_trailers() {
+    // FLIR-form (`FFF\0`/`AFF\0`) files are read by FLIR.pm, which never
+    // walks trailers; a TIFF header whose IFD0 offset is below 8 never
+    // reaches DoProcessTIFF's trailer pass; Vivo still ends the TIFF chain.
+    // Pinned 13.59: no Samsung or Vivo tags for any of these.
+    let mut flir_body = b"Test".to_vec();
+    flir_body.resize(16, 0);
+    flir_body.extend_from_slice(&100_u32.to_be_bytes());
+    flir_body.extend_from_slice(&[0; 40]);
+    for magic in [b"FFF\0", b"AFF\0"] {
+        let mut flir = magic.to_vec();
+        flir.extend_from_slice(&flir_body);
+        flir.extend_from_slice(&samsung_soundshot_trailer());
+        assert_no_trailer_tags("carrier.fff", &flir);
+    }
+    let mut bad_offset = b"II*\0\x04\0\0\0".to_vec();
+    bad_offset.extend_from_slice(&samsung_soundshot_trailer());
+    assert_no_trailer_tags("carrier.fff", &bad_offset);
+    let mut vivo_chain = tiff_carrier();
+    vivo_chain.extend_from_slice(&samsung_soundshot_trailer());
+    vivo_chain.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
+    assert_no_trailer_tags("carrier.fff", &vivo_chain);
+}
