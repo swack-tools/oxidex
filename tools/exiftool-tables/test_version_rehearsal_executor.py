@@ -315,18 +315,61 @@ class ExecutorTests(unittest.TestCase):
         unrelated = self.root / "unrelated.lock"
         unrelated.touch()
         with unrelated.open("r+") as stream:
-            with self.assertRaisesRegex(executor.Refused, "differs from configured lease"):
+            with self.assertRaisesRegex(executor.Refused, "not held"):
                 executor.execute(
                     self.run_dir, self.repository, self.cache, self.sources,
                     run=self.command, checkout=self.checkout, host_lock_fd=stream.fileno(),
                 )
         with executor._HostLock(self.lock) as held, \
              patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+            capability = getattr(held, "capability", None)
+            self.assertIsNotNone(capability, "held owner must lend a lock capability")
             journal = executor.execute(
                 self.run_dir, self.repository, self.cache, self.sources,
-                run=self.command, checkout=self.checkout, host_lock_fd=held.file.fileno(),
+                run=self.command, checkout=self.checkout, host_lock_fd=capability,
             )
         self.assertEqual(journal["phase"], "complete")
+
+    def test_unlocked_external_descriptor_is_refused_without_leaking_a_lock(self):
+        self.initialize(self.config())
+        self.lock.touch()
+        with self.lock.open("r+") as stream:
+            with self.assertRaisesRegex(executor.Refused, "not held"):
+                executor.execute(
+                    self.run_dir, self.repository, self.cache, self.sources,
+                    run=self.command, checkout=self.checkout, host_lock_fd=stream.fileno(),
+                )
+            with executor._HostLock(self.lock):
+                pass
+
+    def test_unlocked_stream_cannot_forge_an_external_lock_capability(self):
+        self.lock.touch()
+        with self.lock.open("r+") as stream:
+            with self.assertRaisesRegex(executor.Refused, "issued by lock acquisition"):
+                executor._HeldHostLock(self.lock, stream)
+            # Rejection must not accidentally acquire or strand the host lock.
+            with executor._HostLock(self.lock):
+                pass
+
+    def test_external_capability_refuses_after_owning_lock_releases(self):
+        self.lock.touch()
+        with executor._HostLock(self.lock) as held:
+            capability = getattr(held, "capability", None)
+            self.assertIsNotNone(capability, "held owner must lend a lock capability")
+        with self.assertRaisesRegex(executor.Refused, "not held"):
+            with executor._external_host_lock({"host_lock": str(self.lock)}, capability):
+                pass
+
+    def test_external_capability_refuses_different_configured_path(self):
+        self.lock.touch()
+        other = self.root / "other-host.lock"
+        other.touch()
+        with executor._HostLock(self.lock) as held:
+            capability = getattr(held, "capability", None)
+            self.assertIsNotNone(capability, "held owner must lend a lock capability")
+            with self.assertRaisesRegex(executor.Refused, "differs from configured lease"):
+                with executor._external_host_lock({"host_lock": str(other)}, capability):
+                    pass
 
     def test_live_child_cannot_be_recovered_as_interrupted(self):
         self.initialize(self.config())
@@ -338,7 +381,7 @@ class ExecutorTests(unittest.TestCase):
         status.write_text(json.dumps(journal))
         self.lock.touch()
         with executor._HostLock(self.lock) as held, self.assertRaisesRegex(executor.Refused, "still live"):
-            executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.file.fileno())
+            executor.recover(self.run_dir, self.cache, self.sources, host_lock_fd=held.capability)
 
     def test_recovery_accepts_legacy_schema_one_config_without_read_bindings(self):
         self.initialize(self.config())

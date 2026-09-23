@@ -11,7 +11,7 @@ It deliberately has no promotion action.
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
@@ -20,6 +20,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable, Mapping
 
@@ -920,44 +921,105 @@ def _run_native(run_dir: Path, journal: dict[str, Any], release: str, docs: tupl
     return report
 
 
+class _HeldHostLock:
+    """Borrow an owner-held flock without ever acquiring an arbitrary raw FD."""
+
+    def __init__(self, path: Path, stream: Any):
+        raise Refused("host lock capability must be issued by lock acquisition")
+
+    @classmethod
+    def acquire(cls, path: Path, stream: Any) -> "_HeldHostLock":
+        """Issue a capability only after this stream acquires the configured flock."""
+        path = path.absolute()
+        if stream.closed or path.is_symlink() or not path.is_file():
+            raise Refused("host lock is not an open configured regular file")
+        try:
+            held = os.fstat(stream.fileno())
+            current = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise Refused("host lock is not an open configured regular file") from exc
+        if (not __import__("stat").S_ISREG(current.st_mode)
+                or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+            raise Refused("host lock stream differs from configured lease")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            current = os.stat(path, follow_symlinks=False)
+            if (path.is_symlink() or not __import__("stat").S_ISREG(current.st_mode)
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                raise Refused("host lock changed during acquisition")
+        except BaseException:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            raise
+        self = object.__new__(cls)
+        self.path = path.absolute()
+        self.stream = stream
+        self.owner_pid = os.getpid()
+        self.active = True
+        self._borrow_lock = threading.Lock()
+        return self
+
+    @contextmanager
+    def borrow(self, configured: Path):
+        configured = configured.absolute()
+        with self._borrow_lock:
+            if not self.active or self.owner_pid != os.getpid() or self.stream.closed:
+                raise Refused("external host lock is not held by a live owner")
+            if configured.is_symlink() or not configured.is_file() or configured != self.path:
+                raise Refused("external host lock differs from configured lease")
+            try:
+                held = os.fstat(self.stream.fileno())
+                current = os.stat(configured, follow_symlinks=False)
+            except OSError as exc:
+                raise Refused("external host lock is not held by a live owner") from exc
+            if (not __import__("stat").S_ISREG(current.st_mode)
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                raise Refused("external host lock differs from configured lease")
+            yield
+
+    def deactivate(self) -> None:
+        # An owner cannot release its flock until every in-process borrower
+        # has left the critical section.
+        with self._borrow_lock:
+            self.active = False
+
+
 class _HostLock:
-    def __init__(self, path: Path): self.path, self.file = path, None
+    def __init__(self, path: Path):
+        self.path, self.file, self.capability = path, None, None
     def __enter__(self):
         if self.path.is_symlink():
             raise Refused("version rehearsal host lock must not be a symbolic link")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.path.open("a+")
         os.set_inheritable(self.file.fileno(), True)
-        try: fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc: self.file.close(); raise Refused("version rehearsal host lock is already held") from exc
+        try:
+            self.capability = _HeldHostLock.acquire(self.path, self.file)
+        except BlockingIOError as exc:
+            self.file.close()
+            raise Refused("version rehearsal host lock is already held") from exc
+        except BaseException:
+            self.file.close()
+            raise
         return self
     def __exit__(self, *_):
-        if self.file: fcntl.flock(self.file.fileno(), fcntl.LOCK_UN); self.file.close()
+        if self.file:
+            self.capability.deactivate()
+            fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
+            self.file.close()
 
 
-def _external_host_lock(config: Mapping[str, Any], descriptor: int | None):
+def _external_host_lock(config: Mapping[str, Any], descriptor: _HeldHostLock | None):
     if descriptor is None:
         return _HostLock(Path(config["host_lock"]))
-    if type(descriptor) is not int or descriptor < 0:
-        raise Refused("external host lock descriptor is malformed")
-    try:
-        held = os.fstat(descriptor)
-        configured = os.stat(config["host_lock"], follow_symlinks=False)
-    except (OSError, BlockingIOError) as exc:
-        raise Refused("external host lock descriptor is not a held configured lease") from exc
-    if not __import__("stat").S_ISREG(configured.st_mode) or (held.st_dev, held.st_ino) != (configured.st_dev, configured.st_ino):
-        raise Refused("external host lock descriptor differs from configured lease")
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, BlockingIOError) as exc:
-        raise Refused("external host lock descriptor is not held exclusively") from exc
-    return nullcontext()
+    if not isinstance(descriptor, _HeldHostLock):
+        raise Refused("external host lock is not held by a live owner")
+    return descriptor.borrow(Path(config["host_lock"]))
 
 
 def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: Path, *,
             run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
             checkout: Callable[[Path, str, Path, Callable[..., subprocess.CompletedProcess[str]]], Path] = _default_checkout,
-            host_lock_fd: int | None = None,
+            host_lock_fd: _HeldHostLock | None = None,
             stage_guard: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
     """Run each selected release once. Failed or interrupted stages are never retried."""
     journal, docs, config = _load_journal(run_dir, archive_cache, source_root)
@@ -1028,7 +1090,7 @@ def execute(run_dir: Path, repository: Path, archive_cache: Path, source_root: P
 
 
 def recover(run_dir: Path, archive_cache: Path, source_root: Path, *,
-            host_lock_fd: int | None = None) -> dict[str, Any]:
+            host_lock_fd: _HeldHostLock | None = None) -> dict[str, Any]:
     """Record interruption without guessing whether an active command completed."""
     journal, _, config = _load_journal(
         run_dir, archive_cache, source_root, allow_legacy_recovery=True,

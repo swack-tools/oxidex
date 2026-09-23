@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import subprocess
 import sys
 import time
+from contextlib import redirect_stdout
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -148,6 +150,44 @@ class CallerRestorationTests(unittest.TestCase):
 
 
 class SideAndRecoveryTests(unittest.TestCase):
+    def test_side_receipt_preserves_read_instrument_identity(self) -> None:
+        with TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "execution-status.json").write_text("{}")
+            source_commit = "a" * 40
+            read = {
+                "source_commit": source_commit,
+                "classification_counts": {"matched": 1, "value_diff": 0, "missing": 0,
+                                          "renames": 0, "extra": 0},
+                "binary": {"path": "/isolated/oxidex", "sha256": "b" * 64, "bytes": 123},
+                "native_identity": {"release": "13.59", "perl": {"path": "/pinned/perl", "sha256": "c" * 64},
+                                    "source": {"path": "/pinned/exiftool"},
+                                    "lib": {"path": "/pinned/lib", "exiftool_pm_sha256": "d" * 64}},
+                "native_probe_sha256": "e" * 64,
+                "fixtures": {"manifest": "/pinned/read-fixtures.json", "manifest_sha256": "f" * 64,
+                             "entries": [{"source": "/pinned/sample.jpg"}]},
+            }
+            reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}}
+            identity = {name: "identity" for name in (
+                "release", "tag_object", "peeled_commit", "source_directory",
+                "source_tree_sha256", "materialization_sha256",
+            )}
+            with patch.object(qualification, "_report_for", side_effect=lambda _dir, _journal, _release, stage: reports[stage]), \
+                 patch.object(qualification.stage_adapter, "generated_refusal_counts", return_value={"total": 0, "counters": []}):
+                side = qualification._side_receipt(
+                    run_dir, {"phase": "complete", "scope": {"write_acceptance": "passed_per_release"}},
+                    "13.59", identity,
+                )
+            self.assertEqual(side.get("instrument"), {
+                "source_commit": source_commit,
+                "binary": read["binary"],
+                "native_identity": read["native_identity"],
+                "native_probe_sha256": read["native_probe_sha256"],
+                "read_fixture_manifest": "/pinned/read-fixtures.json",
+                "read_fixture_manifest_sha256": "f" * 64,
+                "read_fixture_count": 1,
+            })
+
     def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -245,7 +285,9 @@ class SideAndRecoveryTests(unittest.TestCase):
             lease=lease_path, run_id="recover", owner_receipt=receipts[0],
             heartbeat_receipt=receipts[1], expiry_receipt=receipts[2], release_receipt=receipts[3],
         ) as held:
-            qualification._recover_if_running(run_dir, cache, sources, host_lock_fd=held.fileno)
+            capability = getattr(held, "host_lock_capability", None)
+            self.assertIsNotNone(capability, "transition lease must lend its owned lock")
+            qualification._recover_if_running(run_dir, cache, sources, host_lock_fd=capability)
         self.assertEqual(json.loads(journal_path.read_text())["phase"], "interrupted")
 
     def test_report_for_requires_the_execution_journal_digest(self) -> None:
@@ -265,6 +307,21 @@ class SideAndRecoveryTests(unittest.TestCase):
 
 
 class LeaseTests(unittest.TestCase):
+    def test_expired_owner_still_lends_held_lock_for_interruption_recovery(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lease_path = root / "transition.host.lock"
+            lease_path.touch()
+            with qualification.TransitionLease(
+                lease=lease_path, run_id="expired-recovery", owner_receipt=root / "owner.json",
+                heartbeat_receipt=root / "heartbeat.jsonl", expiry_receipt=root / "expiry.json",
+                release_receipt=root / "release.json",
+            ) as lease:
+                with patch.object(qualification.time, "time", return_value=lease.expires_at + 1):
+                    capability = lease.host_lock_capability
+                with capability.borrow(lease_path):
+                    self.assertTrue(lease_path.is_file())
+
     def test_live_receipt_cadence_cannot_be_treated_as_shutdown(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -471,7 +528,8 @@ class WrapperCallTests(unittest.TestCase):
         self.assertEqual(result["status"], "tooling-executed-nonpromoting")
         self.assertEqual(len(calls), 2)
         self.assertTrue(all(set(call[-1]) == {"host_lock_fd", "stage_guard"}
-                            and type(call[-1]["host_lock_fd"]) is int for call in calls))
+                            and type(call[-1]["host_lock_fd"]).__name__ == "_HeldHostLock"
+                            for call in calls))
         self.assertEqual([config["execution_releases"] for config in configs], [["13.59"], ["13.59"]])
         self.assertTrue(all("write" in config["commands"] for config in configs))
         self.assertEqual(configs[0]["target_directories"]["13.59"], str(self.row_target / "before"))
@@ -836,7 +894,7 @@ class WrapperCallTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 self.invoke(interrupted)
         recover.assert_called_once()
-        self.assertIsInstance(recover.call_args.kwargs["host_lock_fd"], int)
+        self.assertIsInstance(recover.call_args.kwargs["host_lock_fd"], qualification.executor._HeldHostLock)
         self.assertEqual(json.loads(self.receipts["release_receipt"].read_text())["terminal_status"], "failed")
 
     def test_recovery_refusal_does_not_mask_original_interruption(self) -> None:
@@ -920,6 +978,40 @@ class WrapperCallTests(unittest.TestCase):
 
 
 class MainOutcomeTests(unittest.TestCase):
+    def test_success_prints_instrument_before_status(self) -> None:
+        args = [
+            "--matrix", "matrix", "--repository", "repository", "--output", "output",
+            "--lease", "lease", "--run-id", "committed", "--owner-receipt", "owner",
+            "--heartbeat-receipt", "heartbeat", "--expiry-receipt", "expiry",
+            "--release-receipt", "release", "--handoff-receipt", "handoff",
+        ]
+        instrument = {
+            "source_commit": "a" * 40,
+            "binary": {"path": "/isolated/oxidex", "sha256": "b" * 64, "bytes": 123},
+            "native_identity": {"release": "13.59", "perl": {"path": "/pinned/perl", "sha256": "c" * 64},
+                                "source": {"path": "/pinned/exiftool"},
+                                "lib": {"path": "/pinned/lib", "exiftool_pm_sha256": "d" * 64}},
+            "native_probe_sha256": "e" * 64,
+            "read_fixture_manifest": "/pinned/read-fixtures.json",
+            "read_fixture_manifest_sha256": "f" * 64,
+            "read_fixture_count": 1,
+        }
+        result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
+                  "promotion": "forbidden", "caller": {"head": "0" * 40, "pin_version": "13.59"},
+                  "rows": [{"id": "same-pin-13.59", "before": {"release": "13.59", "instrument": instrument},
+                            "after": {"release": "13.59", "instrument": instrument}}]}
+        output = io.StringIO()
+        with patch.object(qualification, "run_qualification", return_value=result), redirect_stdout(output):
+            self.assertEqual(qualification.main(args), 0)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(lines[0], "=== instrument: version_transition_qualification.py ===")
+        self.assertIn("/isolated/oxidex", output.getvalue())
+        self.assertIn("/pinned/exiftool", output.getvalue())
+        self.assertIn("/pinned/read-fixtures.json", output.getvalue())
+        self.assertEqual(json.loads(lines[-1]), {
+            "run_id": "committed", "status": "tooling-executed-nonpromoting", "promotion": "forbidden",
+        })
+
     def test_interrupt_message_does_not_claim_recovery_without_proof(self) -> None:
         args = [
             "--matrix", "matrix", "--repository", "repository", "--output", "output",
@@ -974,6 +1066,7 @@ class MainOutcomeTests(unittest.TestCase):
         result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
                   "promotion": "forbidden"}
         with patch.object(qualification, "run_qualification", return_value=result), \
+             patch.object(qualification, "_instrument_header", return_value="=== instrument: committed ==="), \
              patch("builtins.print", side_effect=reporting):
             self.assertEqual(qualification.main(args), 3)
         self.assertIn("committed", messages[-1])

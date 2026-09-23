@@ -20,7 +20,7 @@ The config supplied to `init` is JSON with this shape:
   "commands": {
     "generate": { "argv": ["python3", "generator.py", "{native_source}", "{report}"] },
     "build": { "argv": ["python3", "build-release.py", "--report", "{report}"] },
-    "read": { "argv": ["python3", "read-compare.py", "{native_probe}", "{report}"] },
+    "read": { "argv": ["python3", "read-compare.py", "{native_probe}", "{report}", "--fixture-manifest", "{read_fixture_manifest}"] },
     "write": { "argv": ["python3", "write-acceptance.py", "{native_probe}", "{report}"] }
   }
 }
@@ -34,8 +34,9 @@ directory. This source commit is immutable config evidence; it is deliberately
 separate from the preserved release-selection plan commit and the executor
 checks the actual checkout `HEAD`. The runner supplies `{release}`, `{checkout}`, `{target}`,
 `{report}`, `{native_source}`, `{native_lib}`, `{native_program}`,
-`{native_perl}`, and `{native_probe}` and equivalent `OXIDEX_REHEARSAL_*`
-environment variables. `{native_probe_sha256}`, `{source_commit}` and
+`{native_perl}`, `{native_probe}`, and `{read_fixture_manifest}` and equivalent
+`OXIDEX_REHEARSAL_*` environment variables, including
+`OXIDEX_REHEARSAL_READ_FIXTURE_MANIFEST`. `{native_probe_sha256}`, `{source_commit}` and
 `OXIDEX_REHEARSAL_SOURCE_COMMIT` bind wrappers to the immutable OxiDex source.
 
 The example commands are wrappers: a raw `cargo build` does not itself write
@@ -94,7 +95,11 @@ both and rejects a substituted reader CLI, read fixture manifest, or writer
 driver.
 
 One explicit absolute host lock from immutable config covers checkout, native probe, generation, build and
-both comparisons. An interruption leaves the active stage `running`; `recover`
+both comparisons. Standalone `execute` and `recover` acquire it themselves;
+the in-process transition wrapper borrows only a live capability issued by
+its owning lease. An arbitrary matching file descriptor is refused because
+probing it with `flock` could acquire a previously unlocked descriptor.
+An interruption leaves the active stage `running`; `recover`
 changes it to `interrupted` and records the unknown completion state. The run is
 terminal afterward, so the executor never reselects or duplicates an
 interrupted action. Pair-level native-delta classification remains explicitly

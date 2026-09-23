@@ -496,6 +496,15 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
         "source_identity": {key: identity[key] for key in (
             "release", "tag_object", "peeled_commit", "source_directory",
             "source_tree_sha256", "materialization_sha256")},
+        "instrument": {
+            "source_commit": read["source_commit"],
+            "binary": read["binary"],
+            "native_identity": read["native_identity"],
+            "native_probe_sha256": read["native_probe_sha256"],
+            "read_fixture_manifest": read["fixtures"]["manifest"],
+            "read_fixture_manifest_sha256": read["fixtures"]["manifest_sha256"],
+            "read_fixture_count": len(read["fixtures"]["entries"]),
+        },
         "generated_artifacts": generate.get("generated_artifacts"),
         "classification_counts": classification,
         "generated_refusals": refusals,
@@ -541,19 +550,23 @@ class TransitionLease:
         self.sequence = 0
         self.terminal_status = "aborted"
         self._heartbeat_lock = threading.Lock()
+        self._host_lock_capability: executor._HeldHostLock | None = None
 
     def __enter__(self) -> "TransitionLease":
         if self.lease.is_symlink() or not self.lease.is_file():
             raise Refused("transition lease must be an existing regular non-symlink file")
         self.file = self.lease.open("r+")
         try:
-            fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.set_inheritable(self.file.fileno(), True)
+            self._host_lock_capability = executor._HeldHostLock.acquire(self.lease, self.file)
         except BlockingIOError as exc:
             self.file.seek(0)
             observed_owner = self.file.read().strip() or "owner metadata unavailable"
             self.file.close()
             raise Refused(f"transition lease is held: {observed_owner}") from exc
-        os.set_inheritable(self.file.fileno(), True)
+        except BaseException:
+            self.file.close()
+            raise
         try:
             self.acquired_at = time.time()
             self.expires_at = self.acquired_at + self.expires_seconds
@@ -575,6 +588,7 @@ class TransitionLease:
             return self
         except BaseException as acquire_error:
             try:
+                self._host_lock_capability.deactivate()
                 fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
             finally:
                 self.file.close()
@@ -617,6 +631,16 @@ class TransitionLease:
             raise Refused("transition lease descriptor is not held")
         return self.file.fileno()
 
+    @property
+    def host_lock_capability(self) -> executor._HeldHostLock:
+        # Expiry forbids another stage, but interruption recovery must still
+        # borrow the lock while this owner holds it to journal the active stage.
+        if self.file is None or self.file.closed:
+            raise Refused("transition lease is not held")
+        if self._host_lock_capability is None:
+            raise Refused("transition lease has no owned host lock")
+        return self._host_lock_capability
+
     def finish(self, terminal_status: str) -> None:
         self.terminal_status = terminal_status
 
@@ -641,6 +665,7 @@ class TransitionLease:
         confirmed = False
         if self.file is not None:
             try:
+                self._host_lock_capability.deactivate()
                 fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
                 confirmed = True
             except OSError as release_error:
@@ -735,7 +760,7 @@ class ReceiptCadence:
 
 
 def _recover_if_running(run_dir: Path, archive_cache: Path, source_root: Path, *,
-                        host_lock_fd: int | None = None) -> None:
+                        host_lock_fd: executor._HeldHostLock | None = None) -> None:
     journal_path = run_dir / "execution-status.json"
     if not journal_path.is_file() or journal_path.is_symlink():
         return
@@ -948,14 +973,14 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
                     try:
                         journal = execute(
                             side_run, repository, Path(identity["archive_cache"]), Path(identity["source_root"]),
-                            host_lock_fd=host_lease.fileno, stage_guard=stage_guard,
+                            host_lock_fd=host_lease.host_lock_capability, stage_guard=stage_guard,
                         )
                         cadence.check()
                     except BaseException as execution_error:
                         try:
                             _recover_if_running(
                                 side_run, Path(identity["archive_cache"]), Path(identity["source_root"]),
-                                host_lock_fd=host_lease.fileno,
+                                host_lock_fd=host_lease.host_lock_capability,
                             )
                         except BaseException as recovery_error:
                             if hasattr(execution_error, "add_note"):
@@ -1069,6 +1094,30 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _instrument_header(result: Mapping[str, Any]) -> str:
+    """Attribute every reported comparison to its validated build and oracle."""
+    caller = result["caller"]
+    lines = ["=== instrument: version_transition_qualification.py ===",
+             f"caller:  {caller['head']}  pin {caller['pin_version']}"]
+    for row in result["rows"]:
+        for side in SIDES:
+            entry = row[side]
+            proof = entry["instrument"]
+            native = proof["native_identity"]
+            binary = proof["binary"]
+            label = f"{row['id']}/{side}"
+            lines.extend((
+                f"{label}: OxiDex {binary['path']} sha256={binary['sha256']} source={proof['source_commit']}",
+                f"{label}: ExifTool {native['release']} source={native['source']['path']} "
+                f"lib_sha256={native['lib']['exiftool_pm_sha256']} perl={native['perl']['path']} "
+                f"probe_sha256={proof['native_probe_sha256']}",
+                f"{label}: corpus {proof['read_fixture_manifest']} "
+                f"manifest_sha256={proof['read_fixture_manifest_sha256']} "
+                f"files={proof['read_fixture_count']}",
+            ))
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -1094,9 +1143,10 @@ def main(argv: list[str] | None = None) -> int:
     # `run_qualification` returns only after validating the committed marker.
     # Reporting failure is distinct from an uncommitted/refused qualification.
     try:
+        print(_instrument_header(result))
         print(json.dumps({"run_id": result["run_id"], "status": result["status"],
                           "promotion": result["promotion"]}, sort_keys=True))
-    except OSError as exc:
+    except (OSError, KeyError, TypeError, ValueError) as exc:
         print(f"version transition qualification committed for {result['run_id']}, "
               f"but stdout reporting failed: {exc}", file=sys.stderr)
         return 3
