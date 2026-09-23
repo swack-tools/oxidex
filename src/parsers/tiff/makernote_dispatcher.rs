@@ -87,6 +87,22 @@ pub fn dispatch_makernote_with_model_and_values(
 /// the Make string).
 const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
 
+/// Whether this Make/payload pair dispatches to [`pentax::PentaxParser`].
+///
+/// Mirrors the dispatcher's own route order: the Phase One and `MINOL`/`CAMER` signature routes win before any Make
+/// prefix is consulted. For Pentax the occurrence-aware entry differs from
+/// the legacy map entry only by also returning canonical occurrences (the
+/// CAF point and flash guide-number fields whose ValueConv and PrintConv
+/// differ), so callers that record occurrences can opt in on this predicate
+/// without changing any other vendor's route.
+pub fn dispatches_to_pentax(make: &str, data: &[u8]) -> bool {
+    !phaseone::is_phaseone_makernote(data)
+        && !data.starts_with(b"MINOL\0")
+        && !data.starts_with(b"CAMER\0")
+        && parser_for_make_prefix(&make.trim().to_lowercase(), data)
+            .is_some_and(|parser| parser.manufacturer_name() == "Pentax")
+}
+
 /// Match the vendors whose Make string varies too much for a literal list.
 ///
 /// Returns `None` for everything else so the caller falls through to the
@@ -804,6 +820,22 @@ mod tests {
             tags.is_empty(),
             "MakerNotes.pm requires a Panasonic Make before Type2 can emit tags"
         );
+    }
+
+    /// The raw-file occurrence opt-in follows the dispatcher's own Pentax
+    /// routes (Make prefixes, Samsung GX "AOC\0") and nothing else.
+    #[test]
+    fn dispatches_to_pentax_matches_the_pentax_routes_only() {
+        assert!(dispatches_to_pentax("PENTAX", b"AOC\0MM"));
+        assert!(dispatches_to_pentax("  Asahi Optical Co.,Ltd ", b"AOC\0II"));
+        assert!(dispatches_to_pentax(
+            "RICOH IMAGING COMPANY, LTD.",
+            b"PENTAX \0"
+        ));
+        assert!(dispatches_to_pentax("SAMSUNG TECHWIN", b"AOC\0MM"));
+        assert!(!dispatches_to_pentax("SAMSUNG TECHWIN", b"\x01\0"));
+        assert!(!dispatches_to_pentax("Panasonic", b"Panasonic\0\0\0"));
+        assert!(!dispatches_to_pentax("PENTAX", b"MINOL\0"));
     }
 
     /// `MakerNotePanasonic2` accepts every Make beginning with Panasonic, not

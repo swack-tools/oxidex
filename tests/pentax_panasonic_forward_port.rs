@@ -190,8 +190,12 @@ fn pentax_real_carriers_prove_caf_guide_iso_and_city_semantics() {
     let k10d = fixtures::required_combined_fixture_path("Pentax/PentaxK10D.jpg");
     let k10d = read_metadata(&k10d).expect("read required Pentax K10D carrier");
     assert_eq!(
-        k10d.get_string("Pentax:ExternalFlashGuideNumber"),
-        Some("n/a")
+        k10d.project_occurrences(oxidex::core::tag_occurrence::ValueChannel::PrintConv)
+            .find(|(key, _, _)| *key == "Pentax:ExternalFlashGuideNumber")
+            .and_then(|(_, _, value)| value.as_string().map(str::to_owned))
+            .as_deref(),
+        Some("n/a"),
+        "Pentax.pm PrintConv renders numeric zero as n/a"
     );
     assert_eq!(k10d.get_string("Pentax:ISO"), Some("100"));
     assert_eq!(k10d.get_string("Pentax:HometownCity"), Some("Tokyo"));
