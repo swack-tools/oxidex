@@ -100,6 +100,29 @@ fn pentax_caf_point_info_honors_the_grid_sized_bitfield() {
 }
 
 #[test]
+fn pentax_caf_point_info_omits_truncated_point_bitfields() {
+    // A 7x7 grid needs ceil(49/4) = 13 bytes after the two-byte CAF header.
+    // Pentax.pm's dynamic Format cannot decode either point field from this
+    // five-byte record, but the header's count and grid values remain valid.
+    let data = pentax_block(0x0238, 7, 5, &[0, 0x77, 0x6c, 0, 0]);
+    let mut tags = HashMap::new();
+    PentaxParser::default()
+        .parse(&data, ByteOrder::LittleEndian, &mut tags)
+        .expect("truncated Pentax CAF MakerNote parses");
+
+    assert_eq!(
+        tags.get("Pentax:NumCAFPoints").map(String::as_str),
+        Some("49")
+    );
+    assert_eq!(
+        tags.get("Pentax:CAFGridSize").map(String::as_str),
+        Some("7x7")
+    );
+    assert!(!tags.contains_key("Pentax:CAFPointsInFocus"));
+    assert!(!tags.contains_key("Pentax:CAFPointsSelected"));
+}
+
+#[test]
 fn pentax_external_flash_guide_number_decodes_fractional_field() {
     for (raw, expected) in [(0_u8, "n/a"), (6, "21"), (29, "14"), (31, "61")] {
         let mut record = [0_u8; 27];

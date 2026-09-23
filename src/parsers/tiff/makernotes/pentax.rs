@@ -1045,6 +1045,39 @@ impl MakerNoteParser for PentaxParser {
         );
         Ok(())
     }
+
+    fn parse_with_context_and_values_and_session_and_occurrences(
+        &self,
+        ctx: &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext<'_>,
+        byte_order: ByteOrder,
+        model: Option<&str>,
+        _session: &mut crate::exiftool_tables::session::Session,
+        _cond_ctx: &mut crate::exiftool_tables::Ctx<'_>,
+        tags: &mut HashMap<String, String>,
+        _value_forms: &mut HashMap<String, String>,
+        occurrences: &mut Vec<(String, crate::core::TagOccurrence)>,
+    ) -> std::result::Result<(), String> {
+        self.parse_located_with_occurrences(
+            ctx.window(),
+            byte_order,
+            ctx.payload_tiff_offset(),
+            model,
+            tags,
+            Some(occurrences),
+        )?;
+
+        let base = if ctx.payload().starts_with(PENTAX_HEADER_PENTAX) {
+            ctx.payload_base()
+        } else {
+            ctx.tiff_base()
+        };
+        crate::parsers::tiff::makernotes::makernote_context::absolutise_is_offset(
+            tags,
+            base,
+            &["Pentax:PreviewImageStart"],
+        );
+        Ok(())
+    }
 }
 
 impl PentaxParser {
@@ -1056,6 +1089,19 @@ impl PentaxParser {
         data_base: Option<u32>,
         model: Option<&str>,
         tags: &mut HashMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        self.parse_located_with_occurrences(data, byte_order, data_base, model, tags, None)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn parse_located_with_occurrences(
+        &self,
+        data: &[u8],
+        byte_order: ByteOrder,
+        data_base: Option<u32>,
+        model: Option<&str>,
+        tags: &mut HashMap<String, String>,
+        mut occurrences: Option<&mut Vec<(String, crate::core::TagOccurrence)>>,
     ) -> std::result::Result<(), String> {
         if data.is_empty() {
             return Ok(());
@@ -2084,16 +2130,64 @@ impl PentaxParser {
                             format!("{}x{}", b >> 4, b & 0x0f),
                         );
                         let point_bytes = n.div_ceil(4) as usize;
-                        let point_end = raw.len().min(2 + point_bytes);
-                        let point_bits = &raw[2..point_end];
-                        tags.insert(
-                            "Pentax:CAFPointsInFocus".to_string(),
-                            decode_caf_points(point_bits, n, 0x02),
-                        );
-                        tags.insert(
-                            "Pentax:CAFPointsSelected".to_string(),
-                            decode_caf_points(point_bits, n, 0x03),
-                        );
+                        if raw.len() >= 2 + point_bytes {
+                            let point_bits = &raw[2..2 + point_bytes];
+                            if let Some(rows) = occurrences.as_deref_mut() {
+                                for (name, mask) in
+                                    [("CAFPointsInFocus", 0x02), ("CAFPointsSelected", 0x03)]
+                                {
+                                    let packed = crate::core::TagValue::Array(
+                                        point_bits
+                                            .iter()
+                                            .map(|&byte| {
+                                                crate::core::TagValue::Integer(i64::from(byte))
+                                            })
+                                            .collect(),
+                                    );
+                                    let display = crate::core::TagValue::new_string(
+                                        decode_caf_points(point_bits, n, mask),
+                                    );
+                                    rows.push((
+                                        format!("Pentax:{name}"),
+                                        crate::core::TagOccurrence {
+                                            id: crate::core::TagId::Named(format!(
+                                                "Pentax::CAFPointInfo::{name}"
+                                            )),
+                                            name: crate::core::tag_occurrence::intern(name),
+                                            group0: crate::core::tag_occurrence::intern(
+                                                "MakerNotes",
+                                            ),
+                                            group1: crate::core::tag_occurrence::intern("Pentax"),
+                                            group2: Some(crate::core::tag_occurrence::intern(
+                                                "Camera",
+                                            )),
+                                            instance: crate::core::Instance::default(),
+                                            raw: display.clone(),
+                                            value: Some(packed.clone()),
+                                            print: Some(display),
+                                            stored: Some(packed),
+                                            priority: crate::core::SHIM_DEFAULT_PRIORITY,
+                                            is_list: false,
+                                            order: 0,
+                                            origin: crate::core::Provenance {
+                                                module: Some("Pentax"),
+                                                table: Some("CAFPointInfo"),
+                                                byte_range: None,
+                                            },
+                                        },
+                                    ));
+                                }
+                            } else {
+                                tags.insert(
+                                    "Pentax:CAFPointsInFocus".to_string(),
+                                    decode_caf_points(point_bits, n, 0x02),
+                                );
+                                tags.insert(
+                                    "Pentax:CAFPointsSelected".to_string(),
+                                    decode_caf_points(point_bits, n, 0x03),
+                                );
+                            }
+                        }
                     }
                 }
                 // Pentax.pm:2347-2364: `undef`/`int8u`, declared `Count => 4`
@@ -4106,6 +4200,65 @@ mod staleness_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caf_point_info_preserves_packed_value_before_print_conv() {
+        // CAFPointInfo's source Format is int8u[ceil(NumCAFPoints/4)], with
+        // DecodeAFPoints only as PrintConv. PentaxQ-S1's 7x7 carrier has 13
+        // pre-PrintConv bytes and selects point 34 from byte nine (0x30).
+        let data = pentax_block(
+            &[(PENTAX_CAF_POINT_INFO, 7, 15, 64)],
+            &[0, 0x77, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0, 0, 0, 0],
+        );
+        let parser = PentaxParser::default();
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        let mut rows = Vec::new();
+
+        parser
+            .parse_with_context_and_values_and_session_and_occurrences(
+                &crate::parsers::tiff::makernotes::makernote_context::MakerNoteContext::detached(
+                    &data,
+                ),
+                ByteOrder::BigEndian,
+                None,
+                &mut session,
+                &mut cond_ctx,
+                &mut tags,
+                &mut value_forms,
+                &mut rows,
+            )
+            .expect("synthetic Pentax CAF MakerNote parses");
+
+        assert_eq!(rows.len(), 2, "CAF point tags use canonical occurrences");
+        let (_, focus) = rows
+            .iter()
+            .find(|(key, _)| key == "Pentax:CAFPointsInFocus")
+            .expect("focus point occurrence");
+        let packed = crate::core::TagValue::Array(
+            [0, 0, 0, 0, 0, 0, 0, 0, 48, 0, 0, 0, 0]
+                .into_iter()
+                .map(crate::core::TagValue::Integer)
+                .collect(),
+        );
+        assert_eq!(focus.raw, crate::core::TagValue::new_string("34"));
+        assert_eq!(focus.value, Some(packed.clone()));
+        assert_eq!(focus.stored, Some(packed.clone()));
+        assert_eq!(focus.print, Some(crate::core::TagValue::new_string("34")));
+
+        let mut metadata = crate::core::MetadataMap::new();
+        for (key, row) in rows {
+            metadata.record_occurrence(key, row);
+        }
+        assert_eq!(metadata.get_string("Pentax:CAFPointsInFocus"), Some("34"));
+        assert_eq!(
+            metadata.without_print_conv().get("Pentax:CAFPointsInFocus"),
+            Some(&packed)
+        );
+    }
 
     #[test]
     fn samsung_gx20_auto_bracketing_uses_pentax_two_value_print_conv() {
