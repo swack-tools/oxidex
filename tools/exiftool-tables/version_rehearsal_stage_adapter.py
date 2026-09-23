@@ -41,7 +41,9 @@ TEST_COMMANDS = (("cargo", "test", "--workspace", "--all-features", "--no-fail-f
 TEST_TARGET_SUBDIRECTORY = "test-suite"
 # The suite runs from an allowlisted environment, never the caller's: an
 # ambient EXIFTOOL, EXIFTOOL_CACHE_DIR, OXIDEX_ALLOW_EXIFTOOL_SKEW, RUSTFLAGS,
-# CARGO_* runner/quiet setting or compiler wrapper cannot reach it.
+# or CARGO_* runner/quiet/wrapper *variable* cannot reach it. Cargo also reads
+# configuration *files* (CARGO_HOME and every ancestor's .cargo/), which can
+# set the same things; the stage refuses when any exists outside the checkout.
 TEST_ENVIRONMENT_PASSTHROUGH = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
                                 "CARGO_HOME", "RUSTUP_HOME", "SDKROOT", "DEVELOPER_DIR")
 TEST_ENVIRONMENT_SET = ("CARGO_TARGET_DIR", "CARGO_TERM_COLOR", "EXIFTOOL_CACHE_DIR", "EXIFTOOL_PERL",
@@ -632,6 +634,22 @@ def _recheck_fixture_corpus(corpus_record: dict[str, Any], when: str) -> None:
         raise Refused(f"fixture corpus drifted {when} the release tests: {exc}") from exc
 
 
+def _ambient_cargo_configuration(checkout: Path, env: dict[str, str]) -> dict[str, Any]:
+    """Cargo config files the suite would read from outside the checkout.
+
+    Cargo merges ``.cargo/config[.toml]`` from the working directory and every
+    ancestor, then ``$CARGO_HOME`` (default ``~/.cargo``). The checkout's own
+    tracked file is source; any other can set rustflags, a runner or a
+    wrapper, so the stage refuses rather than hash-and-trust it.
+    """
+    checkout = checkout.resolve()
+    home = env.get("CARGO_HOME") or str(Path(env.get("HOME", str(Path.home()))) / ".cargo")
+    directories = [parent / ".cargo" for parent in checkout.parents] + [Path(home)]
+    checked = [str(directory / name) for directory in directories for name in ("config.toml", "config")]
+    outside = [path for path in checked if Path(path).exists() or Path(path).is_symlink()]
+    return {"checked": checked, "outside_checkout": outside}
+
+
 def _release_test_environment(perl: Path, suite_target: Path, cache: Path, shim_directory: Path) -> dict[str, str]:
     env = {key: os.environ[key] for key in TEST_ENVIRONMENT_PASSTHROUGH if key in os.environ}
     env["PATH"] = str(shim_directory) + os.pathsep + env.get("PATH", os.defpath)
@@ -692,6 +710,10 @@ def run_release_tests(args: argparse.Namespace, *,
     env = _release_test_environment(perl, suite_target, cache, shim_directory)
     oracle = _probe_release_test_oracle(args.release, perl, cache, shim_directory, native_source,
                                         identity, env, checkout, run)
+    cargo_config = _ambient_cargo_configuration(checkout, env)
+    if cargo_config["outside_checkout"]:
+        raise Refused("release tests refuse cargo configuration outside the checkout: "
+                      + ", ".join(cargo_config["outside_checkout"]))
     corpus = _verify_fixture_corpus(checkout, env, run)
     (cache / "combined-samples").symlink_to(Path(corpus["corpus"]), target_is_directory=True)
     corpus["link"] = str(cache / "combined-samples")
@@ -725,7 +747,8 @@ def run_release_tests(args: argparse.Namespace, *,
               "raw_report": raw,
               "test_suite": {"commands": commands, "totals": totals, "log": raw,
                              "target_directory": str(suite_target), "features": "all",
-                             "exiftool_oracle": oracle, "environment": env, "fixture_corpus": corpus}}
+                             "exiftool_oracle": oracle, "environment": env, "fixture_corpus": corpus,
+                             "cargo_config": cargo_config}}
     _atomic(report, result)
     return result
 

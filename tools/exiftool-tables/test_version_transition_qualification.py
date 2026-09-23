@@ -151,7 +151,8 @@ def _interrupted_live_child_wrapper(root_text: str) -> int:
             raise AssertionError("the wrapper must be interrupted while its stage child is live")
 
         arguments = [
-            "--matrix", str(root / "matrix.json"), "--repository", str(root), "--output", str(output),
+            "--matrix", str(qualification.CANONICAL_MATRIX), "--repository", str(qualification.REPOSITORY_ROOT),
+            "--output", str(output),
             "--target-root", str(target), "--lease", str(lease), "--run-id", run_id,
             "--owner-receipt", str(receipt_root / "lease-owner.json"),
             "--heartbeat-receipt", str(receipt_root / "lease-heartbeat.jsonl"),
@@ -248,6 +249,13 @@ class VerifiedInputTests(unittest.TestCase):
         }))
         side = next(side for pair in plan["pairs"] for side in (pair["old"], pair["new"])
                     if side["release"] == release)
+        # Temporary fixture roots are outside the ops root: the fence refuses them.
+        with self.assertRaisesRegex(qualification.Refused, "verified archive cache"):
+            qualification.resolve_source_identity(
+                {"expected_release": release, "expected_peeled_commit": side["peeled_commit"]}, bundle,
+            )
+        fence = patch.object(qualification, "_evidence_location", side_effect=lambda value, _label: Path(value))
+        fence.start(); self.addCleanup(fence.stop)
         identity = qualification.resolve_source_identity(
             {"expected_release": release, "expected_peeled_commit": side["peeled_commit"]}, bundle,
         )
@@ -367,6 +375,7 @@ class SideAndRecoveryTests(unittest.TestCase):
                                "target_directory": "/isolated/target/test-suite",
                                "exiftool_oracle": exiftool_oracle, "environment": environment,
                                "fixture_corpus": fixture_corpus,
+                               "cargo_config": {"checked": ["/durable/.cargo/config.toml"], "outside_checkout": []},
                                "totals": {"passed": 8, "failed": 0, "ignored": 2, "measured": 0,
                                           "filtered_out": 0, "targets": 4}},
             }
@@ -415,6 +424,9 @@ class SideAndRecoveryTests(unittest.TestCase):
             refused("foreign cache", lambda r: r["test_suite"]["environment"].update(EXIFTOOL_CACHE_DIR="/tmp/foreign"))
             refused("fixtures optional", lambda r: r["test_suite"]["environment"].pop("OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"))
             refused("path shim bypassed", lambda r: r["test_suite"]["environment"].update(PATH="/opt/homebrew/bin"))
+            refused("ambient cargo config", lambda r: r["test_suite"]["cargo_config"].update(
+                outside_checkout=["/Users/test/.cargo/config.toml"]))
+            refused("cargo config unchecked", lambda r: r["test_suite"].pop("cargo_config"))
             refused("corpus absent", lambda r: r["test_suite"].pop("fixture_corpus"))
             refused("corpus manifest differs", lambda r: r["test_suite"]["fixture_corpus"]["manifest"].update(sha256="0" * 64))
             refused("corpus count differs", lambda r: r["test_suite"]["fixture_corpus"]["manifest"].update(file_count=12))
@@ -501,6 +513,27 @@ class SideAndRecoveryTests(unittest.TestCase):
                     bind(manifest_sha, tree_sha)
                     with self.assertRaisesRegex(qualification.Refused, "not bootstrap-verified"):
                         qualification._fixture_corpus_authority()
+
+    def test_output_and_input_evidence_roots_are_fenced_under_the_ops_root(self) -> None:
+        matrix = qualification.load_matrix(qualification.CANONICAL_MATRIX, "13.59")
+        ops = Path("/durable/ops")
+        with patch.object(qualification.ops_paths, "ops_root", return_value=ops):
+            materialized = qualification.materialize_matrix(
+                matrix, output_root=ops / "evidence/task19", target_root=Path("/durable/targets"), run_id="run")
+            self.assertTrue(all(row["durable_output_directory"].startswith("/durable/ops/evidence/task19/")
+                                for row in materialized["rows"]))
+            with self.assertRaisesRegex(qualification.Refused, "beneath the ops root"):
+                qualification.materialize_matrix(matrix, output_root=Path("/durable/elsewhere"),
+                                                 target_root=Path("/durable/targets"), run_id="run")
+            with self.assertRaisesRegex(qualification.Refused, "durable"):
+                qualification.materialize_matrix(matrix, output_root=Path("/tmp/task19"),
+                                                 target_root=Path("/durable/targets"), run_id="run")
+            self.assertEqual(qualification._evidence_location("/durable/ops/cache/archives", "archive cache"),
+                             ops / "cache/archives")
+            for value in ("/tmp/cache", "/durable/elsewhere/cache", "relative/cache"):
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(qualification.Refused, "archive cache"):
+                        qualification._evidence_location(value, "archive cache")
 
     def test_side_config_selects_one_release_and_mandatory_write(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -888,7 +921,7 @@ class WrapperCallTests(unittest.TestCase):
                           for name in qualification.INPUT_NAMES},
         }
 
-    def invoke(self, execute):
+    def invoke(self, execute, *, matrix_path=None, repository=None):
         configs = []
         def initialize(run_dir, _capture, _catalog, _plan, _resolution, _materialization, config):
             run_dir.mkdir(parents=True)
@@ -909,7 +942,8 @@ class WrapperCallTests(unittest.TestCase):
              patch.object(qualification.executor, "initialize_run", side_effect=initialize), \
              patch.object(qualification, "_side_receipt", return_value=side_receipt):
             result = qualification.run_qualification(
-                matrix_path=Path("matrix"), repository=Path("repository"),
+                matrix_path=matrix_path or qualification.CANONICAL_MATRIX,
+                repository=repository or qualification.REPOSITORY_ROOT,
                 output_root=self.output, target_root=self.target,
                 lease_path=self.lease, run_id=self.run_id, execute=execute, **self.receipts,
             )
@@ -1285,6 +1319,36 @@ class WrapperCallTests(unittest.TestCase):
         self.assertFalse(self.receipts["owner_receipt"].exists())
         self.assertEqual(final_path.read_text(), "{}")
 
+    def test_caller_repository_must_be_this_entry_points_checkout(self) -> None:
+        execute = unittest.mock.Mock()
+        with TemporaryDirectory() as other:
+            with self.assertRaisesRegex(qualification.Refused, "checkout containing this entry point"):
+                self.invoke(execute, repository=Path(other))
+        execute.assert_not_called()
+        self.assertFalse(self.receipts["owner_receipt"].exists())
+
+    def test_matrix_must_be_the_callers_canonical_matrix_and_is_bound(self) -> None:
+        execute = unittest.mock.Mock()
+        copy = self.root / "version_transition_matrix.json"
+        copy.write_bytes(qualification.CANONICAL_MATRIX.read_bytes())
+        with self.assertRaisesRegex(qualification.Refused, "canonical transition matrix"):
+            self.invoke(execute, matrix_path=copy)
+        execute.assert_not_called()
+        self.assertFalse(self.receipts["owner_receipt"].exists())
+        result, _configs = self.invoke(lambda *_args, **_kwargs: {
+            "phase": "complete", "scope": {"write_acceptance": "passed_per_release"},
+        })
+        expected = {"path": str(qualification.CANONICAL_MATRIX),
+                    "sha256": qualification._sha_file(qualification.CANONICAL_MATRIX)}
+        self.assertEqual(result["matrix"], expected)
+        final_path = self.output / self.run_id / "qualification-result.json"
+        self.assertEqual(json.loads(final_path.read_text())["matrix"], expected)
+        broken = json.loads(final_path.read_text())
+        broken["matrix"]["sha256"] = "0" * 64
+        final_path.write_text(json.dumps(broken))
+        with self.assertRaisesRegex(qualification.Refused, "matrix"):
+            qualification.load_committed_result(final_path)
+
     def test_contending_invocation_writes_no_handoff_before_lease(self) -> None:
         with qualification.executor._HostLock(self.lease):
             with self.assertRaisesRegex(qualification.Refused, "transition lease is held"):
@@ -1562,6 +1626,8 @@ class MainOutcomeTests(unittest.TestCase):
                                              "docx_filetype": "DOCX"}}
         result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
                   "promotion": "forbidden",
+                  "matrix": {"path": "/checkout/tools/exiftool-tables/version_transition_matrix.json",
+                             "sha256": "3" * 64},
                   "caller": {"head": "0" * 40, "pin_version": "13.59", "status": "clean"},
                   "rows": [{"id": "same-pin-13.59",
                             "before": {"release": "13.59", "instrument": instrument, "release_tests": release_tests},
@@ -1572,6 +1638,8 @@ class MainOutcomeTests(unittest.TestCase):
         lines = output.getvalue().splitlines()
         self.assertEqual(lines[0], "=== instrument: version_transition_qualification.py ===")
         self.assertIn("tree clean", lines[1])
+        self.assertEqual(lines[2], "matrix:  /checkout/tools/exiftool-tables/version_transition_matrix.json "
+                                   "sha256=" + "3" * 64)
         self.assertTrue(any("capability ready -ver=13.59 OOXML.docx=DOCX perl-modules=available" in line
                             for line in lines), lines)
         self.assertTrue(any("tests passed=8 failed=0 ignored=2 targets=4 log=/isolated/test-command.json" in line

@@ -303,6 +303,27 @@ class ExecutorTests(unittest.TestCase):
                 self.assertEqual(journal["phase"], "failed")
                 self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
 
+    def test_test_suite_totals_must_be_the_sum_of_counted_commands(self):
+        base = {"release": "13.59", "denominator": 1, "raw_report": {"path": "raw", "sha256": "a" * 64},
+                "test_suite": {"log": {"path": "raw", "sha256": "a" * 64},
+                               "exiftool_oracle": {"version": "13.59", "docx_filetype": "DOCX",
+                                                   "perl_modules_available": True},
+                               "fixture_corpus": {"manifest": {"sha256": "8" * 64, "file_count": 1},
+                                                  "verified_before_run": True, "verified_after_run": True},
+                               "totals": {"passed": 1, "failed": 0, "ignored": 0, "measured": 0,
+                                          "filtered_out": 0, "targets": 1}}}
+        counted = {"exit": 0, "passed": 1, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0, "targets": 1}
+        good = json.loads(json.dumps(base)); good["test_suite"]["commands"] = [dict(counted)]
+        executor._require_test_suite_proof(good)
+        for label, commands in (("uncounted command", [{"exit": 0}]),
+                                ("totals exceed commands", [dict(counted, passed=0, targets=1)]),
+                                ("string count", [dict(counted, passed="1")]),
+                                ("second command uncounted", [dict(counted), {"exit": 0}])):
+            with self.subTest(label=label):
+                forged = json.loads(json.dumps(base)); forged["test_suite"]["commands"] = commands
+                with self.assertRaisesRegex(executor.Refused, "counted zero-failure"):
+                    executor._require_test_suite_proof(forged)
+
     def test_absent_test_command_is_visible_as_unsupported(self):
         self.initialize(self.config(tests=False))
         journal = self.execute()
@@ -461,6 +482,42 @@ class ExecutorTests(unittest.TestCase):
             with self.assertRaisesRegex(executor.Refused, "differs from configured lease"):
                 with executor._external_host_lock({"host_lock": str(other)}, capability):
                     pass
+
+    def test_exited_child_group_residue_gets_a_bounded_grace_then_fails_closed(self):
+        """macOS reports EPERM for killpg on a group left only with unreaped zombies."""
+        class Exited:
+            pid = 424242
+            def poll(self):
+                return 0
+        for label, residue_polls, expected in (("clears within grace", 3, []), ("never clears", None, 1)):
+            with self.subTest(label=label):
+                owned = executor._OwnedChildren()
+                owned.children[Exited.pid] = Exited()
+                calls = []
+                def killpg(pgid, _signal):
+                    calls.append(pgid)
+                    if residue_polls is None or len(calls) <= residue_polls:
+                        raise PermissionError(1, "Operation not permitted")
+                    raise ProcessLookupError()
+                self.lock.touch()
+                with patch.object(executor, "_OWNED", owned), \
+                     patch.object(executor.os, "killpg", side_effect=killpg), \
+                     patch.object(executor, "_TERMINATION_GRACE_SECONDS", 0.3):
+                    stream = self.lock.open("r+")
+                    capability = executor._HeldHostLock.acquire(self.lock, stream)
+                    began = __import__("time").monotonic()
+                    survivors = executor.release_or_retain(stream, capability)
+                    elapsed = __import__("time").monotonic() - began
+                self.assertLess(elapsed, 2)
+                if expected == []:
+                    self.assertEqual(survivors, [])
+                    stream.close()
+                else:
+                    self.assertEqual(len(survivors), expected)
+                    self.assertIn("cannot be inspected", survivors[0]["state"])
+                    self.assertGreaterEqual(elapsed, 0.3)
+                    with patch.object(executor, "_OWNED", executor._OwnedChildren()):
+                        self.assertEqual(executor.release_retained_locks(), [])
 
     def test_standalone_host_lock_is_retained_while_owned_child_is_live(self):
         """No explicit unlock may release the OFD a live child inherited."""

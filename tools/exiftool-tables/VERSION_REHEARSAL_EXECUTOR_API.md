@@ -59,8 +59,11 @@ The suite runs from an allowlisted environment, not the caller's: only
 `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, locale, `CARGO_HOME`,
 `RUSTUP_HOME`, `SDKROOT` and `DEVELOPER_DIR` pass through, so an ambient
 `EXIFTOOL`, `EXIFTOOL_CACHE_DIR`, `OXIDEX_ALLOW_EXIFTOOL_SKEW`, `RUSTFLAGS`,
-`CARGO_TERM_QUIET`, `CARGO_TARGET_*_RUNNER` or compiler wrapper cannot reach
-it. The adapter then sets `EXIFTOOL_CACHE_DIR` to
+`CARGO_TERM_QUIET`, `CARGO_TARGET_*_RUNNER` or compiler-wrapper variable
+cannot reach it. Cargo configuration files can set the same things, so the
+stage refuses when a `.cargo/config[.toml]` exists in any ancestor of the
+checkout or in `$CARGO_HOME` (default `~/.cargo`); the checkout's own tracked
+file is source. The checked paths are recorded. The adapter then sets `EXIFTOOL_CACHE_DIR` to
 `<target>/test-suite/exiftool-oracle`, whose `exiftool` entry is the side's
 selected native source, `EXIFTOOL_PERL` to the selected Perl, and
 `OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES=1`, and prepends a `bin/exiftool`
@@ -161,7 +164,9 @@ probing it with `flock` could acquire a previously unlocked descriptor.
 Stage children inherit the lock's open file description (`close_fds=False`).
 Because `flock` is per description, an owner's `LOCK_UN` would release the lock
 for a still-live child as well, so the owner unlocks only after every child it
-spawned has been reaped and its process group is empty. Otherwise the lock
+spawned has been reaped and its process group is empty (a reaped child
+whose group still answers gets a bounded grace of a few seconds: macOS reports
+EPERM while the group's last zombies await reaping). Otherwise the lock
 fails closed: no unlock, the descriptor is retained, and the owner exits
 non-zero naming each surviving PID (`LockRetained`; the transition wrapper
 reports it as `LeaseRetained`, exit 5). The lock then frees only when the last

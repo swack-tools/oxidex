@@ -472,7 +472,10 @@ def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
             or totals["failed"] != 0 or totals["passed"] < 1 or totals["targets"] < 1
             or result.get("denominator") != totals["passed"] + totals["failed"]
             or suite.get("log") != result.get("raw_report")
-            or any(not isinstance(row, dict) or row.get("exit") != 0 for row in commands)):
+            or any(not isinstance(row, dict) or row.get("exit") != 0
+                   or any(type(row.get(key)) is not int or row[key] < 0 for key in keys)
+                   for row in commands)
+            or any(totals[key] != sum(row[key] for row in commands) for key in keys)):
         raise Refused("test result lacks a counted zero-failure release test suite")
     oracle = suite.get("exiftool_oracle")
     if (not isinstance(oracle, dict) or oracle.get("version") != result.get("release")
@@ -678,6 +681,14 @@ def release_or_retain(stream: Any, capability: "_HeldHostLock | None") -> list[d
     if capability is not None:
         capability.deactivate()
     survivors = unproven_children()
+    # A reaped child whose group still answers (macOS returns EPERM while the
+    # group's last members are zombies awaiting reaping by init) gets a short,
+    # bounded chance to be proven gone. A running or unknown child gets none.
+    deadline = time.monotonic() + _TERMINATION_GRACE_SECONDS
+    while (survivors and time.monotonic() < deadline
+           and all(item["pid"] is not None and item["state"].startswith("exited") for item in survivors)):
+        time.sleep(0.02)
+        survivors = unproven_children()
     if survivors:
         _RETAINED_LOCKS.append(stream)
         return survivors

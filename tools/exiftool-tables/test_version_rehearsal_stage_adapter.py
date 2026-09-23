@@ -492,6 +492,38 @@ class AdapterTests(unittest.TestCase):
                     self.assertEqual(self.suite_calls, [])
         self.verify_exit, self.corpus_during_run = 0, None
 
+    def test_release_tests_refuse_cargo_configuration_outside_the_checkout(self):
+        (self.checkout / ".cargo").mkdir(); (self.checkout / ".cargo/config.toml").write_text("[alias]\n")
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        cargo_home = self.root / "cargo-home"; cargo_home.mkdir()
+        cases = {
+            "parent config.toml": (self.root / ".cargo/config.toml", {}),
+            "parent legacy config": (self.root / ".cargo/config", {}),
+            "CARGO_HOME config": (cargo_home / "config.toml", {"CARGO_HOME": str(cargo_home)}),
+        }
+        for label, (config, env) in cases.items():
+            with self.subTest(label=label):
+                config.parent.mkdir(exist_ok=True); config.write_text("[build]\nrustflags = ['--cfg', 'skip']\n")
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                self.suite_calls.clear()
+                with patch.dict(os.environ, env):
+                    with self.assertRaisesRegex(adapter.Refused, "cargo configuration outside the checkout"):
+                        adapter.run_release_tests(self.args("test", report=str(report)), run=self.fake_run)
+                self.assertEqual(self.suite_calls, [])
+                config.unlink()
+        # The checkout's own tracked .cargo/config.toml is source, not ambient configuration.
+        shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+        clean = self.reports / "clean"; clean.mkdir()
+        (clean / "build.json").write_text((self.reports / "build.json").read_text())
+        result = adapter.run_release_tests(self.args("test", report=str(clean / "test.json")), run=self.fake_run)
+        self.assertEqual(result["test_suite"]["cargo_config"]["outside_checkout"], [])
+        self.assertIn(str(self.root.resolve() / ".cargo" / "config.toml"),
+                      result["test_suite"]["cargo_config"]["checked"])
+
     def test_release_test_oracle_must_be_the_selected_capable_release(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)

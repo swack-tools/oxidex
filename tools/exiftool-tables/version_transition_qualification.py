@@ -50,6 +50,7 @@ FIXED_SOURCE_COMMITS = {
     "11.78": "ca8685788f5763c547349f239764bd19cf1952da",
     "12.64": "d35e9e26e0a8b443dae307f55d0a4a067d311a16",
 }
+CANONICAL_MATRIX = REPOSITORY_ROOT / "tools" / "exiftool-tables" / "version_transition_matrix.json"
 INPUT_NAMES = ("capture", "catalog", "plan", "resolution", "materialization")
 SIDES = ("before", "after")
 
@@ -232,12 +233,31 @@ def _validate_row(row: Mapping[str, Any], contract: tuple[str, str, str]) -> Non
         raise Refused("matrix row weakens mandatory transition controls")
 
 
+def _evidence_location(value: Any, label: str) -> Path:
+    """A durable evidence path beneath the ops root (OXIDEX_OPS_DIR)."""
+    if not isinstance(value, (str, Path)) or not Path(value).is_absolute():
+        raise Refused(f"{label} must be an absolute path beneath the ops root: {value}")
+    try:
+        resolved = ops_paths.durable_root(Path(value), label)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    root = ops_paths.ops_root()
+    if not resolved.is_relative_to(root):
+        raise Refused(f"{label} must be beneath the ops root {root}: {value}")
+    return resolved
+
+
 def materialize_matrix(matrix: dict[str, Any], *, output_root: Path, target_root: Path,
                        run_id: str) -> dict[str, Any]:
     if RUN_ID.fullmatch(run_id) is None:
         raise Refused("run ID is malformed")
-    output_root = ops_paths.durable_root(output_root, "qualification output")
-    target_root = ops_paths.durable_root(target_root, "OXIDEX_TARGET_ROOT")
+    # Output and every input bundle beneath it are evidence under the ops root.
+    # The Cargo target root is the documented separate exception.
+    output_root = _evidence_location(output_root, "qualification output")
+    try:
+        target_root = ops_paths.durable_root(target_root, "OXIDEX_TARGET_ROOT")
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
     value = _format_strings(matrix, {
         "output_root": str(output_root), "target_root": str(target_root), "run_id": run_id,
     })
@@ -322,10 +342,8 @@ def resolve_source_identity(identity: Mapping[str, Any], bundle: Path) -> dict[s
             or not isinstance(locations.get("archive_cache"), str)
             or not isinstance(locations.get("source_root"), str)):
         raise Refused("verified input locations are incomplete")
-    archive_cache = Path(locations["archive_cache"])
-    source_root = Path(locations["source_root"])
-    if not archive_cache.is_absolute() or not source_root.is_absolute():
-        raise Refused("verified archive and source roots must be absolute")
+    archive_cache = _evidence_location(locations["archive_cache"], "verified archive cache")
+    source_root = _evidence_location(locations["source_root"], "verified source root")
     catalog_stage.verify_source_materialization(
         materialization, plan, catalog, capture, resolution, archive_cache, source_root,
     )
@@ -590,6 +608,10 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
         raise Refused(f"{release} release test suite log differs from its report")
     oracle = _release_test_oracle(report, release)
     corpus = _release_test_corpus(suite, release)
+    cargo_config = suite.get("cargo_config")
+    if (not isinstance(cargo_config, dict) or cargo_config.get("outside_checkout") != []
+            or not isinstance(cargo_config.get("checked"), list) or not cargo_config["checked"]):
+        raise Refused(f"{release} release test suite may have read cargo configuration outside the checkout")
     return {"commands": expected, "exits": [row["exit"] for row in commands],
             **{key: totals[key] for key in keys},
             "duration_seconds": round(sum(row["duration_seconds"] for row in commands), 3),
@@ -1016,6 +1038,12 @@ def load_committed_result(final_path: Path) -> dict[str, Any]:
             or final.get("promotion") != "forbidden"
             or final.get("caller_restored") is not True):
         raise Refused("qualification final marker has invalid identity or outcome")
+    matrix = final.get("matrix")
+    if (not isinstance(matrix, dict) or set(matrix) != {"path", "sha256"}
+            or not isinstance(matrix["path"], str) or Path(matrix["path"]).name != CANONICAL_MATRIX.name
+            or not isinstance(matrix["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", matrix["sha256"]) is None
+            or not Path(matrix["path"]).is_file() or _sha_file(Path(matrix["path"])) != matrix["sha256"]):
+        raise Refused("qualification final marker does not bind the canonical transition matrix")
     root = final_path.parent
     manifest = final.get("receipt_manifest")
     names = {
@@ -1096,9 +1124,18 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
         expiry_receipt=expiry_receipt, release_receipt=release_receipt,
         handoff_receipt=handoff_receipt,
     )
+    # The caller is this entry point's own checkout, so the qualification,
+    # executor and inventory code that runs is the code whose HEAD is recorded.
+    if repository.resolve() != REPOSITORY_ROOT.resolve():
+        raise Refused(f"caller repository must be the checkout containing this entry point "
+                      f"({REPOSITORY_ROOT}), not {repository}")
+    if matrix_path.resolve() != CANONICAL_MATRIX.resolve():
+        raise Refused(f"only the canonical transition matrix {CANONICAL_MATRIX} may be qualified, "
+                      f"not {matrix_path}")
+    matrix_binding = {"path": str(CANONICAL_MATRIX), "sha256": _sha_file(CANONICAL_MATRIX)}
     caller = snapshot_caller(repository)
     pinned = caller["pin_version"]
-    matrix = materialize_matrix(load_matrix(matrix_path, pinned), output_root=output_root,
+    matrix = materialize_matrix(load_matrix(CANONICAL_MATRIX, pinned), output_root=output_root,
                                 target_root=target_root, run_id=run_id)
     rows = [row for row in matrix["rows"] if only is None or row["id"] == only]
     if not rows:
@@ -1209,7 +1246,7 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
             final = {
                 "schema": SCHEMA, "kind": RESULT_KIND, "run_id": run_id,
                 "promotion": "forbidden", "status": "tooling-executed-nonpromoting",
-                "caller": caller, "rows": results, "caller_restored": True,
+                "caller": caller, "matrix": matrix_binding, "rows": results, "caller_restored": True,
             }
             _append_jsonl(handoff_receipt, {"run_id": run_id, "timestamp": time.time(),
                                             "state": "final-validation-complete",
@@ -1227,6 +1264,8 @@ def run_qualification(*, matrix_path: Path, repository: Path, output_root: Path,
     if final is None:
         raise Refused("qualification ended without a validated final result")
     verify_caller(caller)
+    if _sha_file(CANONICAL_MATRIX) != matrix_binding["sha256"]:
+        raise Refused("canonical transition matrix changed during qualification")
     final["receipt_manifest"] = _receipt_manifest(
         owner_receipt=owner_receipt, heartbeat_receipt=heartbeat_receipt,
         expiry_receipt=expiry_receipt, release_receipt=release_receipt,
@@ -1292,7 +1331,8 @@ def _instrument_header(result: Mapping[str, Any]) -> str:
     """Attribute every reported comparison to its validated build and oracle."""
     caller = result["caller"]
     lines = ["=== instrument: version_transition_qualification.py ===",
-             f"caller:  {caller['head']}  pin {caller['pin_version']}  tree {caller['status']}"]
+             f"caller:  {caller['head']}  pin {caller['pin_version']}  tree {caller['status']}",
+             f"matrix:  {result['matrix']['path']} sha256={result['matrix']['sha256']}"]
     for row in result["rows"]:
         for side in SIDES:
             entry = row[side]
