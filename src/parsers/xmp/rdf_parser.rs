@@ -375,6 +375,15 @@ impl LegacyResults {
         }
     }
 
+    /// Keeps only the emissions `keep(reported key, raw value)` accepts.
+    fn retain(&mut self, mut keep: impl FnMut(&str, &str) -> bool) {
+        self.entries.retain(|(_, tag, value)| keep(tag, value));
+        self.counts.clear();
+        for (key, _, _) in &self.entries {
+            *self.counts.entry(key.clone()).or_default() += 1;
+        }
+    }
+
     fn dedup(&mut self) {
         let mut kept = std::collections::HashSet::new();
         self.entries.retain(|(key, _, _)| kept.insert(key.clone()));
@@ -397,6 +406,14 @@ fn generic_legacy_key(tag: &str) -> String {
     format!("XMP:{}", tag.split_once(':').map_or(tag, |(_, name)| name))
 }
 
+/// `%Image::ExifTool::DJI::XMP`'s namespace URI (XMP.pm:160).
+const DRONE_DJI_URI: &str = "http://www.dji.com/drone-dji/1.0/";
+
+/// The standard URI a declared namespace URI selects, if any.
+fn canonical_standard_uri(uri: &str) -> Option<&'static str> {
+    super::namespace_resolver::canonical_standard_uri(uri)
+}
+
 /// The legacy key of a simple property or shorthand attribute: the old
 /// namespace-to-family table (ten URIs, with dc and xmp filed under plain
 /// `XMP`) applied to the property's URI, and exif:PixelYDimension's
@@ -414,6 +431,15 @@ fn legacy_simple_key(qname: &str, resolver: &NamespaceResolver, tag: &str) -> St
             "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/" => "XMP-iptcCore",
             "http://iptc.org/std/Iptc4xmpExt/2008-02-29/" => "XMP-iptcExt",
             "http://ns.useplus.org/ldf/xmp/1.0/" => "XMP-plus",
+            // DJI.pm:160-163: `DJI::XMP` is family 1 `XMP-drone-dji`. Its
+            // `Version` (1.6) and crs:Version (7.0) are two tags ExifTool
+            // reports side by side (DJI_FC9313.jpg, DJI_M3T.jpg); under one
+            // plain `XMP:Version` key the second was shadowed and lost.
+            // ExifTool also selects the table for a declared URI that
+            // differs only by a trailing slash or `N.N` version, so match
+            // on the canonical URI -- for this namespace only, leaving every
+            // other schema's legacy key exactly as it was.
+            uri if canonical_standard_uri(uri) == Some(DRONE_DJI_URI) => "XMP-drone-dji",
             _ => "XMP",
         });
     if family == "XMP-exif" && name == "ExifImageHeight" {
@@ -878,6 +904,12 @@ fn parse_xmp_packet(
     results.retain(|(tag, _)| emitted_tags.insert(tag.clone()));
     legacy.dedup();
 
+    // A `DJI::XMP` coordinate whose text is not a clean number is withheld
+    // in every channel rather than printed as ExifTool's Perl numification
+    // would guess it (see `drone_dji_dms_degrees`).
+    results.retain(|(tag, value)| drone_dji_dms_publishable(tag, value));
+    legacy.retain(|tag, value| drone_dji_dms_publishable(tag, value));
+
     // Google's `GCamera:HdrPlusMakernote` property carries a base64,
     // encrypted, gzipped Protobuf blob (Google.pm's `ProcessHDRP`). ExifTool
     // re-files the fields it extracts from that blob under the `MakerNotes`
@@ -943,6 +975,13 @@ fn parse_xmp_packet(
                 && parse_xmp_rational(value).is_some()
             {
                 rational_forms.push((tag.to_string(), format_xmp_plain_rational(value)));
+            }
+            // A `DJI::XMP` coordinate prints through ToDMS but has no
+            // ValueConv: `exiftool -n` shows the packet's own text
+            // ("+32.0348174", DJI_FC2204.jpg), which is what composites and
+            // `--no-print-conv` must see.
+            if drone_dji_dms_ref(tag).is_some() {
+                rational_forms.push((tag.to_string(), value.to_string()));
             }
         }
         XmpValue::Scalar(format_xmp_value(tag, value))
@@ -3337,7 +3376,94 @@ const PROPERTY_RENAMES: &[(&str, &str, &str)] = &[
     // time-only EXIF tag of the same name), so ExifTool renames it to keep the
     // two from being copied into each other.
     ("XMP-exif", "GPSTimeStamp", "GPSDateTime"),
+    // DJI.pm:177-197 (`%Image::ExifTool::DJI::XMP`): the schema's `Gps*`
+    // spellings are reported as `GPS*`, the misspelt `GpsLongtitude` kept.
+    ("XMP-drone-dji", "GpsLatitude", "GPSLatitude"),
+    ("XMP-drone-dji", "GpsLongitude", "GPSLongitude"),
+    ("XMP-drone-dji", "GpsLongtitude", "GPSLongtitude"),
 ];
+
+/// `DJI::XMP` properties whose PrintConv is
+/// `Image::ExifTool::GPS::ToDMS($self, $val, 1, <ref>)` (DJI.pm:177-224),
+/// keyed on the reported (renamed) tag, with the reference letter each one
+/// passes. They have no ValueConv, so `-n` shows the packet text.
+const DRONE_DJI_DMS_TAGS: &[(&str, char)] = &[
+    ("XMP-drone-dji:GPSLatitude", 'N'),
+    ("XMP-drone-dji:GPSLongtitude", 'E'),
+    ("XMP-drone-dji:GPSLongitude", 'E'),
+    ("XMP-drone-dji:Latitude", 'N'),
+    ("XMP-drone-dji:Longitude", 'E'),
+];
+
+/// The reference letter [`DRONE_DJI_DMS_TAGS`] gives `tag`, if it is one.
+fn drone_dji_dms_ref(tag: &str) -> Option<char> {
+    DRONE_DJI_DMS_TAGS
+        .iter()
+        .find(|(name, _)| *name == tag)
+        .map(|(_, reference)| *reference)
+}
+
+/// The number a `DJI::XMP` coordinate's packet text denotes, when oxidex
+/// can reproduce ExifTool's `ToDMS` on it exactly: a clean finite decimal --
+/// optional Perl whitespace, optional sign, digits with an optional
+/// fraction, an optional exponent -- whose magnitude is below 2^63. `None`
+/// for anything else, which is then withheld rather than approximated:
+///
+/// - Perl numifies every string (`32.5abc` -> 32.5, `abc` -> 0, `Inf` prints
+///   `Inf deg NaN' NaN"`) and `%d` wraps past 2^63 (`1e20` prints `-1 deg`);
+///   oxidex does not model that numification.
+/// - Empty text: ExifTool returns a truly empty value unchanged
+///   (GPS.pm:500-503), but numifies a whitespace-only one to
+///   `0 deg 0' 0.00"`, and oxidex's attribute reader has already trimmed
+///   whitespace by the time the value arrives here, so the two cannot be
+///   told apart.
+fn drone_dji_dms_degrees(value: &str) -> Option<f64> {
+    let text = value.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c'));
+    let bytes = text.as_bytes();
+    let mut i = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let digits = |i: &mut usize| {
+        let start = *i;
+        while bytes.get(*i).is_some_and(u8::is_ascii_digit) {
+            *i += 1;
+        }
+        *i - start
+    };
+    let mut mantissa = digits(&mut i);
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        mantissa += digits(&mut i);
+    }
+    if mantissa == 0 {
+        return None;
+    }
+    if matches!(bytes.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(bytes.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        if digits(&mut i) == 0 {
+            return None;
+        }
+    }
+    if i != bytes.len() {
+        return None;
+    }
+    let degrees: f64 = text.parse().ok()?;
+    (degrees.is_finite() && degrees.abs() < 9_223_372_036_854_775_808.0).then_some(degrees)
+}
+
+/// Whether a `DJI::XMP` coordinate is reported at all; see
+/// [`drone_dji_dms_degrees`].
+fn drone_dji_dms_publishable(tag: &str, value: &str) -> bool {
+    drone_dji_dms_ref(tag).is_none() || drone_dji_dms_degrees(value).is_some()
+}
+
+/// `ToDMS($self, $val, 1, $ref)` for a `DJI::XMP` coordinate that
+/// [`drone_dji_dms_publishable`] admitted; `None` for one it did not.
+fn format_drone_dji_dms(value: &str, reference: char) -> Option<String> {
+    drone_dji_dms_degrees(value)
+        .map(|degrees| crate::exiftool_tables::exprs::gps_to_dms(degrees, Some(reference)))
+}
 
 /// Properties renamed by ExifTool in schemas that oxidex files under the plain
 /// `XMP` family, so [`PROPERTY_RENAMES`]'s family key cannot tell them apart.
@@ -3537,6 +3663,12 @@ fn format_xmp_value(tag: &str, value: &str) -> String {
     // table entries never fabricates a value for an unrecognized code.
     if tag == "XMP-plus:MediaSummaryCode" {
         return format_plus_media_summary_code(value);
+    }
+
+    if let Some(reference) = drone_dji_dms_ref(tag) {
+        // A value `format_drone_dji_dms` refuses never reaches here from a
+        // packet: `parse_xmp_packet` withholds the whole tag first.
+        return format_drone_dji_dms(value, reference).unwrap_or_else(|| value.to_string());
     }
 
     // XMP.pdf::Trapped removes one leading PDF name slash before its
@@ -5150,6 +5282,255 @@ mod tests {
             format_xmp_value("XMP-drone-dji:UTCAtExposure", "2022-10-27T05:08:32.100476"),
             "2022:10:27 05:08:32.100476"
         );
+    }
+
+    /// DJI.pm:177-224: `DJI::XMP`'s Gps* properties are renamed and printed
+    /// through `ToDMS(..., 1, ref)`; the packet text is the `-n` form.
+    /// Expected values: pinned 13.59 on DJI_FC2204.jpg / DJI_M3T.jpg.
+    #[test]
+    fn drone_dji_coordinates_are_renamed_and_dms_converted() {
+        let xml = br#"
+            <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description xmlns:drone-dji="http://www.dji.com/drone-dji/1.0/"
+                  xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+                  drone-dji:Version="1.6"
+                  drone-dji:GpsLatitude="+32.0348174"
+                  drone-dji:GpsLongitude="-118.421917247"
+                  drone-dji:GpsLongtitude=""
+                  drone-dji:Latitude="not a number"
+                  crs:Version="7.0"/>
+            </rdf:RDF>
+        "#;
+        let (entries, forms) = parse_xmp_entries_with_rational_forms(xml).unwrap();
+        let visible = |key: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.key == key && !entry.shadowed)
+                .map(|entry| (entry.group1.clone(), entry.value.clone().into_joined()))
+        };
+        assert_eq!(
+            visible("XMP-drone-dji:GPSLatitude"),
+            Some((
+                "XMP-drone-dji".to_string(),
+                "32 deg 2' 5.34\" N".to_string()
+            ))
+        );
+        assert_eq!(
+            visible("XMP-drone-dji:GPSLongitude"),
+            Some((
+                "XMP-drone-dji".to_string(),
+                "118 deg 25' 18.90\" W".to_string()
+            ))
+        );
+        // Empty text is withheld (see `drone_dji_dms_degrees`).
+        assert_eq!(visible("XMP-drone-dji:GPSLongtitude"), None);
+        // Text that is not a clean number is withheld: ExifTool numifies it
+        // Perl-style ("not a number" -> 0 deg 0' 0.00" N), which oxidex
+        // does not model, and the raw text is not what ExifTool prints.
+        assert_eq!(visible("XMP-drone-dji:Latitude"), None);
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.tag == "XMP-drone-dji:Latitude")
+        );
+        // Both Version tags survive under distinct keys.
+        assert_eq!(
+            visible("XMP-drone-dji:Version"),
+            Some(("XMP-drone-dji".to_string(), "1.6".to_string()))
+        );
+        assert_eq!(
+            visible("XMP:Version"),
+            Some(("XMP-crs".to_string(), "7.0".to_string()))
+        );
+        // The other three ToDMS properties, pinned 13.59 on the synthetic
+        // carrier evidence/20260921-beta1-direct/task14/fixtures/
+        // drone-dji-coordinates.xmp (sha256 758e6513...).
+        assert_eq!(
+            format_xmp_value("XMP-drone-dji:GPSLatitude", "-33.995641872"),
+            "33 deg 59' 44.31\" S"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-drone-dji:GPSLongtitude", "+151.2093"),
+            "151 deg 12' 33.48\" E"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-drone-dji:Latitude", "+51.124522459"),
+            "51 deg 7' 28.28\" N"
+        );
+        assert_eq!(
+            format_xmp_value("XMP-drone-dji:Longitude", "-6.363205003"),
+            "6 deg 21' 47.54\" W"
+        );
+        // Scoped to DJI::XMP: another schema's Latitude is untouched.
+        assert_eq!(format_xmp_value("XMP:Latitude", "+51.1"), "+51.1");
+        // The ValueConv (`-n`) form is the packet text.
+        assert!(forms.contains(&(
+            "XMP-drone-dji:GPSLatitude".to_string(),
+            "+32.0348174".to_string()
+        )));
+        assert!(forms.contains(&(
+            "XMP-drone-dji:GPSLongitude".to_string(),
+            "-118.421917247".to_string()
+        )));
+    }
+
+    /// `ToDMS($self, $val, 1, $ref)` over hostile packet text. Every
+    /// published row is the pinned 13.59 oracle's (`exiftool -j -G1 -a
+    /// -XMP-drone-dji:all` on the carriers in
+    /// evidence/20260921-beta1-direct/task14/review-fix-probes, manifest.json).
+    /// Perl numifies anything (`32.5abc` -> 32.5, `abc` -> 0, `Inf` ->
+    /// `Inf deg NaN'...`) and `%d` wraps at 2^63 (`1e20` -> `-1 deg`); oxidex
+    /// publishes only a clean finite decimal below 2^63 and withholds the
+    /// rest rather than approximating that numification.
+    #[test]
+    fn drone_dji_coordinates_publish_only_clean_numbers() {
+        let packet = |value: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                  <rdf:Description xmlns:drone-dji="http://www.dji.com/drone-dji/1.0/"
+                      drone-dji:GpsLatitude="{value}" drone-dji:Longitude="{value}"/>
+                </rdf:RDF>"#
+            )
+        };
+        let reported = |value: &str| {
+            let entries = parse_xmp_entries(packet(value).as_bytes()).unwrap();
+            let get = |tag: &str| {
+                entries
+                    .iter()
+                    .find(|entry| entry.tag == tag && !entry.shadowed)
+                    .map(|entry| entry.value.clone().into_joined())
+            };
+            (
+                get("XMP-drone-dji:GPSLatitude"),
+                get("XMP-drone-dji:Longitude"),
+                entries.iter().any(|entry| {
+                    entry.tag == "XMP-drone-dji:GPSLatitude"
+                        || entry.tag == "XMP-drone-dji:Longitude"
+                }),
+            )
+        };
+        // (packet attribute text, oracle GPSLatitude, oracle Longitude)
+        let published = [
+            ("32.5", "32 deg 30' 0.00\" N", "32 deg 30' 0.00\" E"),
+            (" 32.5 ", "32 deg 30' 0.00\" N", "32 deg 30' 0.00\" E"),
+            (
+                "9.2e18",
+                "9200000000000000000 deg 0' 0.00\" N",
+                "9200000000000000000 deg 0' 0.00\" E",
+            ),
+            (
+                "-9.2e18",
+                "9200000000000000000 deg 0' 0.00\" S",
+                "9200000000000000000 deg 0' 0.00\" W",
+            ),
+            (".5", "0 deg 30' 0.00\" N", "0 deg 30' 0.00\" E"),
+            ("5.", "5 deg 0' 0.00\" N", "5 deg 0' 0.00\" E"),
+            ("1E3", "1000 deg 0' 0.00\" N", "1000 deg 0' 0.00\" E"),
+            ("+0", "0 deg 0' 0.00\" N", "0 deg 0' 0.00\" E"),
+            ("-0", "0 deg 0' 0.00\" N", "0 deg 0' 0.00\" E"),
+            ("-0.0", "0 deg 0' 0.00\" N", "0 deg 0' 0.00\" E"),
+            ("1e-5", "0 deg 0' 0.04\" N", "0 deg 0' 0.04\" E"),
+            ("-32.0348174", "32 deg 2' 5.34\" S", "32 deg 2' 5.34\" W"),
+            ("+32.0348174", "32 deg 2' 5.34\" N", "32 deg 2' 5.34\" E"),
+            ("89.99999999", "90 deg 0' 0.00\" N", "90 deg 0' 0.00\" E"),
+        ];
+        for (text, latitude, longitude) in published {
+            let (lat, lon, _) = reported(text);
+            assert_eq!(lat.as_deref(), Some(latitude), "GPSLatitude {text:?}");
+            assert_eq!(lon.as_deref(), Some(longitude), "Longitude {text:?}");
+        }
+        // Oracle prints a Perl numification of each of these (e.g. `32.5abc`
+        // -> `32 deg 30' 0.00" N`, `1e20` -> `-1 deg 0' 0.00" N`): withheld.
+        for text in [
+            "32.5abc", "abc", "12,5", "Inf", "NaN", "0x10", "1.2.3", "-", "+", "+-5", "5e", "1_0",
+            "1e20", "9.3e18", "  ", "",
+        ] {
+            assert_eq!(reported(text), (None, None, false), "withheld {text:?}");
+        }
+    }
+
+    /// ExifTool matches a declared namespace to `DJI::XMP` after toggling a
+    /// trailing slash or any `N.N` version segment (XMP.pm's `%uri2ns`
+    /// fallback). Pinned 13.59 on the carriers in
+    /// evidence/20260921-beta1-direct/task14/review-fix-probes/uri*.xmp:
+    /// `.../drone-dji/1.0`, `.../drone-dji/2.0/` report `[XMP-drone-dji]
+    /// GPSLatitude 32 deg 2' 5.34" N` and `Version 1.6` beside `[XMP-crs]
+    /// Version 7.0`; `.../drone-dji/1.1`, `.../drone-dji/` and a foreign host
+    /// report `[XMP-tmp0] GpsLatitude +32.0348174`, unconverted.
+    #[test]
+    fn drone_dji_uri_variants_key_like_the_canonical_namespace() {
+        let packet = |uri: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                  <rdf:Description xmlns:drone-dji="{uri}"
+                      xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+                      drone-dji:GpsLatitude="+32.0348174" drone-dji:Version="1.6"
+                      crs:Version="7.0"/>
+                </rdf:RDF>"#
+            )
+        };
+        let visible = |uri: &str| {
+            parse_xmp_entries(packet(uri).as_bytes())
+                .unwrap()
+                .into_iter()
+                .filter(|entry| !entry.shadowed)
+                .map(|entry| (entry.key, entry.group1, entry.value.into_joined()))
+                .collect::<Vec<_>>()
+        };
+        for uri in [
+            "http://www.dji.com/drone-dji/1.0/",
+            "http://www.dji.com/drone-dji/1.0",
+            "http://www.dji.com/drone-dji/2.0/",
+        ] {
+            let entries = visible(uri);
+            let row = |key: &str| entries.iter().find(|(k, _, _)| k == key).cloned();
+            assert_eq!(
+                row("XMP-drone-dji:GPSLatitude"),
+                Some((
+                    "XMP-drone-dji:GPSLatitude".to_string(),
+                    "XMP-drone-dji".to_string(),
+                    "32 deg 2' 5.34\" N".to_string()
+                )),
+                "{uri}"
+            );
+            assert_eq!(
+                row("XMP-drone-dji:Version"),
+                Some((
+                    "XMP-drone-dji:Version".to_string(),
+                    "XMP-drone-dji".to_string(),
+                    "1.6".to_string()
+                )),
+                "{uri}"
+            );
+            assert_eq!(
+                row("XMP:Version"),
+                Some((
+                    "XMP:Version".to_string(),
+                    "XMP-crs".to_string(),
+                    "7.0".to_string()
+                )),
+                "{uri}"
+            );
+        }
+        for uri in [
+            "http://www.dji.com/drone-dji/1.1",
+            "http://www.dji.com/drone-dji/",
+            "http://example.com/drone-dji/1.0/",
+        ] {
+            let entries = visible(uri);
+            assert!(
+                entries
+                    .iter()
+                    .any(|(_, group, value)| group == "XMP-tmp0" && value == "+32.0348174"),
+                "{uri}: {entries:?}"
+            );
+            assert!(
+                !entries
+                    .iter()
+                    .any(|(key, _, _)| key.starts_with("XMP-drone-dji:")),
+                "{uri}: {entries:?}"
+            );
+        }
     }
 
     #[test]
