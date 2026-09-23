@@ -805,3 +805,81 @@ fn media_jukebox_unresolvable_numeric_reference_withholds_the_field() {
     assert_eq!(metadata.get_string("XML:People"), Some("&nbsp;"));
     assert_eq!(metadata.get_string("XML:Places"), Some("A"));
 }
+
+#[test]
+fn media_jukebox_empty_field_with_shorthand_attributes_is_not_a_value() {
+    // XMP.pm turns attributes into shorthand properties (CaptionA) and then
+    // publishes an empty element only `if (length $val or not $shorthand)`.
+    // Pinned 13.59: no Caption for the first two; the earlier value stands.
+    for fields in [&b"<Caption a=\"1\"/>"[..], b"<Caption a=\"1\"></Caption>"] {
+        assert!(
+            media_jukebox_metadata(fields).get("XML:Caption").is_none(),
+            "{fields:?}"
+        );
+    }
+    for fields in [
+        &b"<Caption>real</Caption><Caption a=\"1\"/>"[..],
+        b"<Caption>real</Caption><Caption a=\"1\"><!-- c --></Caption>",
+    ] {
+        assert_eq!(
+            media_jukebox_metadata(fields).get_string("XML:Caption"),
+            Some("real"),
+            "{fields:?}"
+        );
+    }
+    // A non-empty value is still published, and xml:lang / xmlns are not
+    // shorthand: pinned 13.59 reports " " and "" here.
+    assert_eq!(
+        media_jukebox_metadata(b"<Caption a=\"1\"> </Caption>").get_string("XML:Caption"),
+        Some(" ")
+    );
+    assert_eq!(
+        media_jukebox_metadata(b"<Caption>real</Caption><Caption xml:lang=\"en\"/>")
+            .get_string("XML:Caption"),
+        Some("")
+    );
+    assert_eq!(
+        media_jukebox_metadata(b"<Caption xmlns:q=\"u\"/>").get_string("XML:Caption"),
+        Some("")
+    );
+}
+
+#[test]
+fn media_jukebox_rdf_attribute_value_is_withheld() {
+    // An empty element takes its value from rdf:value / rdf:resource /
+    // rdf:about (pinned 13.59: Caption "z", Name "v", Caption "q"). That
+    // value is not reproduced here, so the field is withheld -- including an
+    // earlier value it would have replaced.
+    for (fields, tag) in [
+        (&b"<Caption rdf:resource=\"z\"/>"[..], "XML:Caption"),
+        (b"<Name rdf:value=\"v\"></Name>", "XML:Name"),
+        (
+            b"<Caption>real</Caption><Caption rdf:about=\"q\"/>",
+            "XML:Caption",
+        ),
+        (
+            b"<Name>real</Name><Name rdf:resource=\"z\"></Name>",
+            "XML:Name",
+        ),
+    ] {
+        assert!(
+            media_jukebox_metadata(fields).get(tag).is_none(),
+            "{fields:?}"
+        );
+    }
+}
+
+#[test]
+fn media_jukebox_field_with_processing_instruction_is_withheld() {
+    // Pinned 13.59 keeps the PI text verbatim ("a<?pi x?>b"); never publish
+    // "ab", nor leave an earlier value it replaces.
+    for fields in [
+        &b"<Caption>a<?pi x?>b</Caption>"[..],
+        b"<Caption>real</Caption><Caption>a<?pi x?>b</Caption>",
+    ] {
+        assert!(
+            media_jukebox_metadata(fields).get("XML:Caption").is_none(),
+            "{fields:?}"
+        );
+    }
+}

@@ -1508,7 +1508,7 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
                         let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
                         current = FIELDS
                             .contains(&name.as_str())
-                            .then(|| MediaJukeboxField::new(name));
+                            .then(|| MediaJukeboxField::new(name, &element));
                     } else if let Some(field) = current.as_mut() {
                         field.nested = true;
                     }
@@ -1517,7 +1517,11 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
                     if depth == 0 {
                         let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
                         if FIELDS.contains(&name.as_str()) {
-                            record(&name, Some(String::new()));
+                            if let Some((name, value)) =
+                                MediaJukeboxField::new(name, &element).published()
+                            {
+                                record(&name, value);
+                            }
                         }
                     } else if let Some(field) = current.as_mut() {
                         field.nested = true;
@@ -1566,16 +1570,19 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
                         }
                     }
                 }
+                Ok(Event::PI(_) | Event::Decl(_) | Event::DocType(_)) => {
+                    // XMP.pm keeps such markup verbatim in the value
+                    // (`a<?pi x?>b`); it is not reproduced here.
+                    if let Some(field) = current.as_mut() {
+                        field.renderable = false;
+                    }
+                }
                 Ok(Event::End(_)) => {
                     if depth == 1
                         && let Some(field) = current.take()
-                        && !field.nested
+                        && let Some((name, value)) = field.published()
                     {
-                        // A nested field is published by XMP.pm under a
-                        // path-concatenated name (e.g. `CaptionFoo`), never
-                        // under its own; one that cannot be rendered is
-                        // withheld, including any earlier value it replaces.
-                        record(&field.name, field.renderable.then_some(field.value));
+                        record(&name, value);
                     }
                     depth = depth.saturating_sub(1);
                 }
@@ -1604,16 +1611,80 @@ struct MediaJukeboxField {
     nested: bool,
     /// Every byte and reference decoded to text.
     renderable: bool,
+    attributes: MediaJukeboxAttributes,
+}
+
+/// How a field element's attributes affect an empty value in XMP.pm's
+/// ParseXMPElement.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MediaJukeboxAttributes {
+    /// None, or only `xmlns*` / `xml:lang`, which are not shorthand.
+    Plain,
+    /// Shorthand properties (`CaptionA`): an empty element is then not
+    /// published at all (`if (length $val or not $shorthand)`).
+    Shorthand,
+    /// `rdf:value` / `rdf:resource` / `rdf:about` would supply an empty
+    /// element's value, or the attributes do not parse; not reproduced.
+    Unreproduced,
 }
 
 impl MediaJukeboxField {
-    fn new(name: String) -> Self {
+    fn new(name: String, element: &quick_xml::events::BytesStart<'_>) -> Self {
         Self {
             name,
             value: String::new(),
             nested: false,
             renderable: true,
+            attributes: MediaJukeboxAttributes::of(element),
         }
+    }
+
+    /// What reaching the end of this field records, with its name: `None`
+    /// records nothing (an earlier value stands), a `None` value withholds
+    /// the field including any earlier value it would replace, and a
+    /// `Some` value publishes.
+    fn published(self) -> Option<(String, Option<String>)> {
+        if self.nested {
+            // XMP.pm publishes it under a path-concatenated name (e.g.
+            // `CaptionFoo`), never under its own.
+            return None;
+        }
+        if !self.renderable {
+            return Some((self.name, None));
+        }
+        if self.value.is_empty() {
+            return match self.attributes {
+                MediaJukeboxAttributes::Plain => Some((self.name, Some(self.value))),
+                MediaJukeboxAttributes::Shorthand => None,
+                MediaJukeboxAttributes::Unreproduced => Some((self.name, None)),
+            };
+        }
+        Some((self.name, Some(self.value)))
+    }
+}
+
+impl MediaJukeboxAttributes {
+    fn of(element: &quick_xml::events::BytesStart<'_>) -> Self {
+        // XMP.pm matches `\brdf:(?:value|resource)=` and `\brdf:about=`
+        // against the raw attribute text, so search it the same way.
+        let raw = element.attributes_raw();
+        if [&b"rdf:value="[..], b"rdf:resource=", b"rdf:about="]
+            .iter()
+            .any(|marker| memchr::memmem::find(raw, marker).is_some())
+        {
+            return Self::Unreproduced;
+        }
+        let mut attributes = Self::Plain;
+        for attribute in element.attributes() {
+            let Ok(attribute) = attribute else {
+                return Self::Unreproduced;
+            };
+            let key = attribute.key.as_ref();
+            if !(key == b"xml:lang" || key == b"xmlns" || key.starts_with(b"xmlns:")) {
+                attributes = Self::Shorthand;
+            }
+        }
+        attributes
     }
 }
 
