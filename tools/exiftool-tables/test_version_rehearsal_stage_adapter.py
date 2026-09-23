@@ -48,22 +48,27 @@ def fixture_text(artifact) -> str:
 
 
 
-# Captured from real `cargo test --workspace --all-features --no-fail-fast --tests`
-# and `--doc` runs; the strict parser must accept exactly this shape.
-SUITE_TESTS_STDOUT = """
+# Captured from real `cargo test --workspace --all-features --no-fail-fast`
+# `--tests` and `--doc` runs with stderr merged into stdout (cargo's
+# `Running`/`Doc-tests` line precedes each target's own output).
+SUITE_TESTS_OUTPUT = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)
+
 running 3 tests
 test t::b ... ignored
-test t::a ... ok
 test t::c ... ok
+test t::a ... ok
 
 test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
+     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)
 
 running 1 test
 test m ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
+     Running tests/it.rs (target/debug/deps/it-50a268676428d270)
 
 running 1 test
 test i ... ok
@@ -71,28 +76,84 @@ test i ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 """
-SUITE_TESTS_STDERR = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+SUITE_FAILED_OUTPUT = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
      Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)
+
+running 3 tests
+test t::b ... ignored
+test t::a ... ok
+test t::c ... FAILED
+
+failures:
+
+---- t::c stdout ----
+
+thread 't::c' (4453935) panicked at src/lib.rs:9:62:
+boom
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    t::c
+
+test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
      Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)
+
+running 1 test
+test m ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
      Running tests/it.rs (target/debug/deps/it-50a268676428d270)
+
+running 1 test
+test i ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `--lib`
 """
-SUITE_FAILED_STDOUT = SUITE_TESTS_STDOUT.replace(
-    "test t::c ... ok\n\ntest result: ok. 2 passed; 0 failed;",
-    "test t::c ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed;")
-SUITE_FAILED_STDERR = SUITE_TESTS_STDERR.replace(
-    "(target/debug/deps/tiny-63dad69917d0d146)\n",
-    "(target/debug/deps/tiny-63dad69917d0d146)\nerror: test failed, to rerun pass `--lib`\n") + "error: 1 target failed:\n    `--lib`\n"
-SUITE_DOC_STDOUT = """
+SUITE_DOC_OUTPUT = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+   Doc-tests tiny
+
 running 1 test
 test src/lib.rs - one (line 1) ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
 
 """
-SUITE_DOC_STDERR = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
-   Doc-tests tiny
-"""
+# Shape of this repository's real output: tests that re-exec their own binary
+# with a filter and inherited stdout interleave nested libtest runs, including
+# garbled lines, inside the outer target's output (excerpt of the 13.59 run).
+SUITE_NESTED_OUTPUT = """     Running unittests src/lib.rs (target/debug/deps/oxidex-1a)
 
+running 4 tests
+test fixtures::tests::absent_optional_fixture_has_no_path ... ok
+
+running 1 test
+
+running 1 test
+test fixtures::pinned_fixtures::environment_tests::absent_fallback_is_optional ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+test fixtures::pinned_fixtures::environment_tests::ops_root_uses_the_contract ... ok
+
+test result: ok
+test result: . 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered outok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+; finished in 0.00s
+
+test fixtures::pinned_fixtures::environment_tests::absent_fallback_is_optional ... ok
+test fixtures::pinned_fixtures::environment_tests::ops_root_uses_the_contract ... ok
+test reads_every_mac_new_header_field ... ignored, requires the pinned ExifTool fixture cache
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+"""
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
@@ -159,9 +220,11 @@ class AdapterTests(unittest.TestCase):
         if argv[0] == "bash": return subprocess.CompletedProcess(argv, 0, "regen", "")
         if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
             self.suite_calls.append((argv, kwargs["env"]))
+            if kwargs.get("stderr") is not subprocess.STDOUT:
+                raise AssertionError("release tests must merge stderr into stdout")
             if "--doc" in argv:
-                return subprocess.CompletedProcess(argv, 0, SUITE_DOC_STDOUT, SUITE_DOC_STDERR)
-            return subprocess.CompletedProcess(argv, 0, SUITE_TESTS_STDOUT, SUITE_TESTS_STDERR)
+                return subprocess.CompletedProcess(argv, 0, SUITE_DOC_OUTPUT, None)
+            return subprocess.CompletedProcess(argv, 0, SUITE_TESTS_OUTPUT, None)
         if argv[0] == "cargo":
             test = argv[1] == "test"
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
@@ -329,7 +392,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(suite["target_directory"], str(suite_target))
         self.assertEqual(suite["log"], result["raw_report"])
         log = json.loads(Path(suite["log"]["path"]).read_text())
-        self.assertEqual([row["stdout"] for row in log["commands"]], [SUITE_TESTS_STDOUT, SUITE_DOC_STDOUT])
+        self.assertEqual([row["stdout"] for row in log["commands"]], [SUITE_TESTS_OUTPUT, SUITE_DOC_OUTPUT])
         # The suite's own target keeps the build's CLI and writer driver intact.
         adapter.executor._require_binary_proof(built, self.target)
         adapter.executor._require_binary_proof(built, self.target, "writer_binary")
@@ -343,7 +406,7 @@ class AdapterTests(unittest.TestCase):
         def failing(argv, **kwargs):
             result = self.fake_run(argv, **kwargs)
             if argv[:2] == ["cargo", "test"] and "--tests" in argv:
-                return subprocess.CompletedProcess(argv, 101, SUITE_FAILED_STDOUT, SUITE_FAILED_STDERR)
+                return subprocess.CompletedProcess(argv, 101, SUITE_FAILED_OUTPUT, None)
             return result
         result = adapter.run_release_tests(self.args("test"), run=failing)
         self.assertEqual(result["state"], "failed")
@@ -355,19 +418,19 @@ class AdapterTests(unittest.TestCase):
     def test_unparsable_or_incomplete_test_output_refuses(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)
+        nested_crash = SUITE_NESTED_OUTPUT.rsplit("test result: ok. 3 passed", 1)[0]
         broken = {
-            "garbled result": (0, SUITE_TESTS_STDOUT.replace("0 measured; ", ""), SUITE_TESTS_STDERR),
-            "crashed target": (101, SUITE_TESTS_STDOUT.rsplit("running 1 test", 1)[0],
-                               SUITE_TESTS_STDERR),
-            "count mismatch": (0, SUITE_TESTS_STDOUT.replace("running 3 tests", "running 4 tests"),
-                               SUITE_TESTS_STDERR),
-            "exit disagrees": (101, SUITE_TESTS_STDOUT, SUITE_TESTS_STDERR),
-            "status disagrees": (0, SUITE_TESTS_STDOUT.replace("test result: ok. 2 passed; 0 failed",
-                                                               "test result: ok. 1 passed; 1 failed"),
-                                 SUITE_TESTS_STDERR),
-            "nothing ran": (101, "", "error[E0599]: no variant named `ValBpm`\n"),
+            "garbled result": (0, SUITE_TESTS_OUTPUT.replace("0 measured; ", "", 1)),
+            "crashed target": (101, SUITE_TESTS_OUTPUT.rsplit("test result:", 1)[0]),
+            "count mismatch": (0, SUITE_TESTS_OUTPUT.replace("running 3 tests", "running 4 tests")),
+            "exit disagrees": (101, SUITE_TESTS_OUTPUT),
+            "status disagrees": (0, SUITE_TESTS_OUTPUT.replace("test result: ok. 2 passed; 0 failed",
+                                                               "test result: ok. 1 passed; 1 failed")),
+            "nothing ran": (101, "error[E0599]: no variant named `ValBpm`\n"),
+            "nested summary only": (101, nested_crash),
+            "filtered outer run": (0, SUITE_TESTS_OUTPUT.replace("0 measured; 0 filtered out", "0 measured; 2 filtered out", 1)),
         }
-        for label, (code, stdout, stderr) in broken.items():
+        for label, (code, stdout) in broken.items():
             with self.subTest(label=label):
                 report = self.reports / label.replace(" ", "-") / "test.json"
                 report.parent.mkdir()
@@ -375,11 +438,17 @@ class AdapterTests(unittest.TestCase):
                 shutil.rmtree(self.target / "test-suite", ignore_errors=True)
                 def output(argv, **kwargs):
                     if argv[:2] == ["cargo", "test"] and "--tests" in argv:
-                        return subprocess.CompletedProcess(argv, code, stdout, stderr)
+                        return subprocess.CompletedProcess(argv, code, stdout, None)
                     return self.fake_run(argv, **kwargs)
                 with self.assertRaisesRegex(adapter.Refused, "cargo test"):
                     adapter.run_release_tests(self.args("test", report=str(report)), run=output)
                 self.assertFalse(report.exists())
+
+    def test_nested_self_reexec_output_counts_only_each_targets_own_run(self):
+        self.assertEqual(adapter.parse_test_output(SUITE_NESTED_OUTPUT), {
+            "passed": 3, "failed": 0, "ignored": 1, "measured": 0, "filtered_out": 0, "targets": 1,
+        })
+        self.assertEqual(adapter.parse_test_output(SUITE_TESTS_OUTPUT + SUITE_DOC_OUTPUT)["targets"], 4)
 
     def test_release_test_suite_requires_the_passed_build(self):
         adapter.generate(self.args("generate"), run=self.fake_run)

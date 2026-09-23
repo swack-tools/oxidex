@@ -104,18 +104,21 @@ def _atomic(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., subprocess.CompletedProcess[str]],
+         merge_stderr: bool = False) -> dict[str, Any]:
     """Run below the executor's process group and retain the actual output.
 
     The executor owns a session and an inheritable host-lock descriptor.  A
     nested generation/build/comparison process must stay in that group so an
     executor timeout kills it too and its inherited lock cannot outlive the
-    supervisor.  Do not create another session here.
+    supervisor.  Do not create another session here. ``merge_stderr`` keeps
+    one ordered stream (stderr into stdout) for output that must be segmented.
     """
+    stderr_target = subprocess.STDOUT if merge_stderr else subprocess.PIPE
     try:
         if run is subprocess.run:
             child = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True, errors="replace", stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, start_new_session=False, close_fds=False)
+                                     stderr=stderr_target, start_new_session=False, close_fds=False)
             try:
                 stdout, stderr = child.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired as exc:
@@ -127,8 +130,9 @@ def _run(argv: list[str], *, cwd: Path, env: dict[str, str], run: Callable[..., 
             completed = subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
             process = {"pid": child.pid, "pgid": os.getpgid(child.pid) if child.poll() is None else None}
         else:
-            completed = run(argv, cwd=str(cwd), env=env, text=True, errors="replace", capture_output=True,
-                            timeout=COMMAND_TIMEOUT_SECONDS, start_new_session=False, close_fds=False)
+            completed = run(argv, cwd=str(cwd), env=env, text=True, errors="replace", stdout=subprocess.PIPE,
+                            stderr=stderr_target, timeout=COMMAND_TIMEOUT_SECONDS, start_new_session=False,
+                            close_fds=False)
             process = {}
         stdout, stderr = completed.stdout or "", completed.stderr or ""
         return {"argv": argv, "cwd": str(cwd), "exit": completed.returncode, "state": "ok" if completed.returncode == 0 else "exit_failed", "stdout": stdout, "stderr": stderr, **process}
@@ -433,37 +437,45 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     _atomic(report, result); return result
 
 
-def parse_test_output(stdout: str, stderr: str) -> dict[str, int]:
-    """Strictly count one cargo test invocation; anything unrecognized refuses.
+def parse_test_output(output: str) -> dict[str, int]:
+    """Strictly count one cargo test invocation from its merged output stream.
 
-    Every test target cargo announces on stderr must have exactly one
-    ``running N tests`` line and one libtest summary on stdout, in order, and
-    each summary must account for its N and agree with its own status.
+    Cargo announces each target (``Running ...`` / ``Doc-tests ...``) before
+    running it, so the merged stream splits into one segment per target. A
+    test that re-executes its own binary with a filter and inherited stdout
+    interleaves nested libtest runs (some lines garbled) inside its target's
+    segment, so each segment is read only at its boundaries: the first
+    ``running N tests`` line (printed before any test starts) and the last
+    summary (printed after every test, nested ones included, has finished).
+    That summary must parse, be unfiltered (only nested runs carry a filter),
+    account for N and agree with its own status. Anything else refuses.
     """
-    running: list[int] = []
-    results: list[tuple[str, int, int, int, int, int]] = []
-    for line in stdout.splitlines():
-        text = line.strip()
-        if text.startswith("test result:"):
-            match = _TEST_RESULT.fullmatch(text)
-            if match is None:
-                raise Refused(f"cargo test summary line is unparsable: {text!r}")
-            results.append((match.group(1), *(int(match.group(index)) for index in range(2, 7))))
-        elif text.startswith("running "):
-            match = _TEST_RUNNING.fullmatch(text)
-            if match is None:
-                raise Refused(f"cargo test running line is unparsable: {text!r}")
-            running.append(int(match.group(1)))
-    targets = sum(1 for line in stderr.splitlines() if _TEST_TARGET.fullmatch(line))
-    if not results or len(results) != len(running) or len(results) != targets:
-        raise Refused(f"cargo test output is incomplete: {targets} target(s), {len(running)} started, "
-                      f"{len(results)} summarized")
-    totals = {"passed": 0, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0, "targets": targets}
-    for started, (status, passed, failed, ignored, measured, filtered) in zip(running, results, strict=True):
-        if started != passed + failed + ignored + measured or (status == "ok") != (failed == 0):
+    segments: list[list[str]] = []
+    for line in output.splitlines():
+        if _TEST_TARGET.fullmatch(line):
+            segments.append([])
+        elif segments:
+            segments[-1].append(line.strip())
+    if not segments:
+        raise Refused("cargo test ran no test targets")
+    totals = {"passed": 0, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0,
+              "targets": len(segments)}
+    for lines in segments:
+        started = next((match for match in map(_TEST_RUNNING.fullmatch, lines) if match), None)
+        summaries = [line for line in lines if line.startswith("test result:")]
+        if started is None or not summaries:
+            raise Refused("cargo test output is incomplete: a target has no start or summary")
+        match = _TEST_RESULT.fullmatch(summaries[-1])
+        if match is None:
+            raise Refused(f"cargo test summary line is unparsable: {summaries[-1]!r}")
+        status = match.group(1)
+        passed, failed, ignored, measured, filtered = (int(match.group(index)) for index in range(2, 7))
+        if filtered != 0:
+            raise Refused("cargo test target summary is filtered; it is not the target's own run")
+        if int(started.group(1)) != passed + failed + ignored + measured or (status == "ok") != (failed == 0):
             raise Refused("cargo test summary disagrees with its own test count or status")
-        for key, value in zip(("passed", "failed", "ignored", "measured", "filtered_out"),
-                              (passed, failed, ignored, measured, filtered), strict=True):
+        for key, value in zip(("passed", "failed", "ignored", "measured"),
+                              (passed, failed, ignored, measured), strict=True):
             totals[key] += value
     return totals
 
@@ -487,7 +499,7 @@ def run_release_tests(args: argparse.Namespace, *,
     records = []
     for argv in TEST_COMMANDS:
         began = time.monotonic()
-        record = _run(list(argv), cwd=checkout, env=env, run=run)
+        record = _run(list(argv), cwd=checkout, env=env, run=run, merge_stderr=True)
         record["duration_seconds"] = round(time.monotonic() - began, 3)
         records.append(record)
     raw = _raw(report, "test", {"commands": records})
@@ -495,7 +507,7 @@ def run_release_tests(args: argparse.Namespace, *,
     for record in records:
         if record["state"] not in {"ok", "exit_failed"}:
             raise Refused(f"cargo test command {record['state']}")
-        counts = parse_test_output(record["stdout"], record["stderr"])
+        counts = parse_test_output(record["stdout"])
         if (record["exit"] == 0) != (counts["failed"] == 0):
             raise Refused("cargo test exit status disagrees with its parsed results")
         commands.append({"argv": record["argv"], "exit": record["exit"],
