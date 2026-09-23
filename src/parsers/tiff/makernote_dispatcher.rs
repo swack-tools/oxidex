@@ -87,6 +87,43 @@ pub fn dispatch_makernote_with_model_and_values(
 /// the Make string).
 const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
 
+/// Conditions before HP4 in pinned MakerNotes.pm:38-205. An earlier match
+/// owns the note even if its payload also happens to have the HP4/Kodak2
+/// signature; leave its existing Make route (or omission) untouched.
+fn claimed_before_hp4(make: &str, data: &[u8]) -> bool {
+    data.starts_with(b"Apple iOS\0")
+        || data.starts_with(b"Nikon\0\x02")
+        || make.starts_with("Canon")
+        || make.starts_with("CASIO")
+        || data.starts_with(b"QVC\0")
+        || data.starts_with(b"DCI\0")
+        || data.starts_with(b"[ae_dbg_info:")
+        || (make == "DJI" && data.get(3..8) != Some(&b"@AMBA"[..]) && !data.starts_with(b"DJI"))
+        || make.starts_with("FLIR Systems")
+        || make.starts_with("Teledyne FLIR")
+        || data.starts_with(b"FUJIFILM")
+        || data.starts_with(b"GENERALE")
+        || data.starts_with(b"GE\0\0")
+        || data.starts_with(b"GENIC\0")
+        || data.starts_with(b"GE\x0c\0\0\0\x16\0\0\0")
+        || data.starts_with(b"HDRP\x02")
+        || data.starts_with(b"HDRP\x03")
+        || make == "Hasselblad"
+        || data.starts_with(b"Hewlett-Packard")
+        || data.starts_with(b"Vivitar")
+        || (data.starts_with(b"610") && data.get(3).is_some_and(|byte| *byte <= 4))
+}
+
+/// Conditions after HP4 but before Kodak2 in MakerNotes.pm:216-274. HP4
+/// itself must win before these are considered.
+fn claimed_between_hp4_and_kodak2(make: &str, data: &[u8]) -> bool {
+    data.starts_with(b"IIII\x06\0")
+        || data.starts_with(b"ISLMAKERNOTE000\0")
+        || data.starts_with(b"JVC ")
+        || ((make.starts_with("JVC") || make.starts_with("Victor")) && data.starts_with(b"VER:"))
+        || (make.starts_with("EASTMAN KODAK") && data.starts_with(b"KDK"))
+}
+
 /// Match the vendors whose Make string varies too much for a literal list.
 ///
 /// Returns `None` for everything else so the caller falls through to the
@@ -265,48 +302,23 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
     // Normalize make string (trim whitespace, case-insensitive matching)
     let make_normalized = make.trim().to_lowercase();
 
-    // Phase One's MakerNote is dispatched by ExifTool purely on its own
-    // signature (MakerNotes.pm's `MakerNotePhaseOne` Condition has no Make
-    // check at all), because the format is OEMed under multiple brand names.
-    // Leaf -- acquired by Phase One -- writes the identical directory shape
-    // under `Make: Leaf`; matching only "phase one"/"phase one a/s" left
-    // every Leaf-branded .IIQ unreachable (`Make=="Leaf"` matched nothing in
-    // the table below, so it silently produced zero PhaseOne: tags for real
-    // Leaf/Phase One IIQ files). Check the signature before the Make-keyed
-    // table so it wins regardless of brand.
-    if phaseone::is_phaseone_makernote(data) {
-        let parser = phaseone::PhaseOneMakerNoteParser;
-        if let Some(rows) = occurrences.as_deref_mut() {
-            parser.parse_with_context_and_values_and_session_and_occurrences(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-                rows,
-            )?;
-        } else {
-            parser.parse_with_context_and_values_and_session(
-                ctx,
-                byte_order,
-                model,
-                session,
-                cond_ctx,
-                tags,
-                value_forms,
-            )?;
-        }
-        return Ok(());
-    }
-
-    // MakerNotes.pm:505-515's MakerNoteMinolta2 routes literal `MINOL\0` and
-    // `CAMER\0` signatures to Olympus::Main independently of the file Make.
-    // The same condition sets OlympusCAMER, selecting Main 0x2050's binary
-    // CameraParameters alternative. Seed both condition stores used by the
-    // generated IFD path before parsing.
-    if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+    // Preserve the first matching source condition before any Make fallback:
+    // HP4 (:206), Kodak2 (:275), Minolta2 (:508), PhaseOne (:841), Ricoh2
+    // (:924) in pinned MakerNotes.pm. Kodak2 permits arbitrary leading bytes,
+    // so its payload can also match either later signature. The selected
+    // decoder must own a real table before this route consumes the note.
+    let source_make = make.trim();
+    let source_parser: Option<Box<dyn MakerNoteParser>> = if claimed_before_hp4(source_make, data) {
+        None
+    } else if hp::is_type4(data) {
+        Some(Box::new(hp::HpParser))
+    } else if claimed_between_hp4_and_kodak2(source_make, data) {
+        None
+    } else if kodak::is_type2(data) {
+        Some(Box::new(kodak::KodakParser))
+    } else if data.starts_with(b"MINOL\0") || data.starts_with(b"CAMER\0") {
+        // Minolta2's condition sets OlympusCAMER, selecting Olympus::Main
+        // 0x2050's binary CameraParameters alternative. Seed both stores.
         cond_ctx
             .members
             .insert("OlympusCAMER", crate::exiftool_tables::MemberValue::Num(1));
@@ -316,7 +328,16 @@ fn dispatch_makernote_with_context_and_values_and_session_impl(
                 crate::exiftool_tables::session::MemberVal::Int(1),
             )
             .expect("OlympusCAMER is an untyped ExifTool member");
-        let parser = olympus::OlympusParser;
+        Some(Box::new(olympus::OlympusParser))
+    } else if phaseone::is_phaseone_makernote(data) {
+        // PhaseOne is signature-only and can appear under Leaf Make.
+        Some(Box::new(phaseone::PhaseOneMakerNoteParser))
+    } else if ricoh::is_type2_selector(make, model, data) {
+        Some(Box::new(ricoh::RicohType2Parser))
+    } else {
+        None
+    };
+    if let Some(parser) = source_parser {
         if let Some(rows) = occurrences.as_deref_mut() {
             parser.parse_with_context_and_values_and_session_and_occurrences(
                 ctx,

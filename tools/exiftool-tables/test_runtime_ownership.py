@@ -87,14 +87,14 @@ class RuntimeOwnershipTests(unittest.TestCase):
         self.assertEqual(
             inventory["category_totals"],
             {
-                "generated": 553,
+                "generated": 561,
                 "not-applicable": 29,
-                "refused": 17,
-                "residual": 24,
+                "refused": 18,
+                "residual": 33,
                 "walker-owned": 0,
             },
         )
-        self.assertEqual(len(inventory["rows"]), 623)
+        self.assertEqual(len(inventory["rows"]), 641)
         self.assertEqual(inventory["rows"], sorted(inventory["rows"], key=lambda r: (r["module"], r["table"], r["field"]["kind"], r["field"]["value"], r["owner"])))
         self.assertIn('("Exif", "Main")', (self.root / "src/exiftool_tables/enabled_ifd.rs").read_text())
 
