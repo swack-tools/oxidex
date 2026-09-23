@@ -1535,13 +1535,11 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
                         }
                     }
                 }
-                Ok(Event::CData(data)) => {
-                    // FoundXMP copies CDATA content through unescaped.
+                Ok(Event::CData(_)) => {
+                    // XMP.pm counts a CDATA section (even `<![CDATA[]]>`) as
+                    // raw text of the element; that is not reproduced here.
                     if let Some(field) = current.as_mut() {
-                        match data.decode() {
-                            Ok(decoded) => field.value.push_str(&decoded),
-                            Err(_) => field.renderable = false,
-                        }
+                        field.renderable = false;
                     }
                 }
                 Ok(Event::GeneralRef(reference)) => {
@@ -1614,18 +1612,21 @@ struct MediaJukeboxField {
     attributes: MediaJukeboxAttributes,
 }
 
-/// How a field element's attributes affect an empty value in XMP.pm's
-/// ParseXMPElement.
+/// How a field element's attributes are treated. Which attributes XMP.pm's
+/// ParseXMPElement turns into shorthand properties, ignores, or uses as the
+/// value is deliberately not transcribed: only the clearly neutral ones are
+/// trusted, and anything else withholds an empty field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MediaJukeboxAttributes {
-    /// None, or only `xmlns*` / `xml:lang`, which are not shorthand.
-    Plain,
-    /// Shorthand properties (`CaptionA`): an empty element is then not
-    /// published at all (`if (length $val or not $shorthand)`).
-    Shorthand,
-    /// `rdf:value` / `rdf:resource` / `rdf:about` would supply an empty
-    /// element's value, or the attributes do not parse; not reproduced.
-    Unreproduced,
+    /// None, or only `xml:lang` / `xmlns:<prefix>`.
+    Neutral,
+    /// Any other attribute (a bare default `xmlns` included). A non-empty
+    /// value is still published; an empty one is withheld, since XMP.pm may
+    /// publish "", nothing, or a value taken from the attribute.
+    Other,
+    /// `rdf:nodeID` (pinned 13.59 drops the field with "internal error
+    /// parsing nodeID's"), or attributes that do not parse: withheld.
+    Withheld,
 }
 
 impl MediaJukeboxField {
@@ -1649,39 +1650,26 @@ impl MediaJukeboxField {
             // `CaptionFoo`), never under its own.
             return None;
         }
-        if !self.renderable {
-            return Some((self.name, None));
-        }
-        if self.value.is_empty() {
-            return match self.attributes {
-                MediaJukeboxAttributes::Plain => Some((self.name, Some(self.value))),
-                MediaJukeboxAttributes::Shorthand => None,
-                MediaJukeboxAttributes::Unreproduced => Some((self.name, None)),
-            };
-        }
-        Some((self.name, Some(self.value)))
+        let withheld = !self.renderable
+            || self.attributes == MediaJukeboxAttributes::Withheld
+            || (self.value.is_empty() && self.attributes == MediaJukeboxAttributes::Other);
+        Some((self.name, (!withheld).then_some(self.value)))
     }
 }
 
 impl MediaJukeboxAttributes {
     fn of(element: &quick_xml::events::BytesStart<'_>) -> Self {
-        // XMP.pm matches `\brdf:(?:value|resource)=` and `\brdf:about=`
-        // against the raw attribute text, so search it the same way.
-        let raw = element.attributes_raw();
-        if [&b"rdf:value="[..], b"rdf:resource=", b"rdf:about="]
-            .iter()
-            .any(|marker| memchr::memmem::find(raw, marker).is_some())
-        {
-            return Self::Unreproduced;
+        if memchr::memmem::find(element.attributes_raw(), b"rdf:nodeID").is_some() {
+            return Self::Withheld;
         }
-        let mut attributes = Self::Plain;
+        let mut attributes = Self::Neutral;
         for attribute in element.attributes() {
             let Ok(attribute) = attribute else {
-                return Self::Unreproduced;
+                return Self::Withheld;
             };
             let key = attribute.key.as_ref();
-            if !(key == b"xml:lang" || key == b"xmlns" || key.starts_with(b"xmlns:")) {
-                attributes = Self::Shorthand;
+            if !(key == b"xml:lang" || key.starts_with(b"xmlns:")) {
+                attributes = Self::Other;
             }
         }
         attributes

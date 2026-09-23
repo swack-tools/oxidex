@@ -817,13 +817,18 @@ fn media_jukebox_empty_field_with_shorthand_attributes_is_not_a_value() {
             "{fields:?}"
         );
     }
+    // Pinned 13.59 keeps the earlier "real" here. Whether an attribute is
+    // shorthand is not transcribed, so the field is withheld instead: never
+    // "" over the earlier value.
     for fields in [
         &b"<Caption>real</Caption><Caption a=\"1\"/>"[..],
         b"<Caption>real</Caption><Caption a=\"1\"><!-- c --></Caption>",
     ] {
-        assert_eq!(
-            media_jukebox_metadata(fields).get_string("XML:Caption"),
-            Some("real"),
+        assert!(
+            matches!(
+                media_jukebox_metadata(fields).get_string("XML:Caption"),
+                None | Some("real")
+            ),
             "{fields:?}"
         );
     }
@@ -882,4 +887,92 @@ fn media_jukebox_field_with_processing_instruction_is_withheld() {
             "{fields:?}"
         );
     }
+}
+
+/// A published Media Jukebox value must equal pinned 13.59's or be absent.
+fn assert_media_jukebox_absent_or(fields: &[u8], tag: &str, oracle: Option<&str>) {
+    let actual = media_jukebox_metadata(fields)
+        .get_string(tag)
+        .map(str::to_owned);
+    assert!(
+        actual.is_none() || actual.as_deref() == oracle,
+        "{}: {tag} = {actual:?}, pinned 13.59 {oracle:?}",
+        String::from_utf8_lossy(fields)
+    );
+}
+
+#[test]
+fn media_jukebox_empty_field_with_any_attribute_is_withheld() {
+    // Attributes in namespaces XMP.pm ignores (`x:`, rdf:parseType, rdf:ID,
+    // rdf:foo) are not shorthand there, so the empty element publishes ""
+    // over the earlier value; a bare default `xmlns` IS shorthand
+    // (KeywordsXmlns), so nothing is published. Only xml:lang and
+    // xmlns:<prefix> are treated as neutral here; otherwise an empty field
+    // is withheld rather than guessed.
+    for (fields, oracle) in [
+        (&b"<Name>real</Name><Name x:c=\"3\"></Name>"[..], Some("")),
+        (
+            b"<Name>real</Name><Name rdf:parseType=\"Resource\"/>",
+            Some(""),
+        ),
+        (b"<Name>real</Name><Name rdf:ID=\"i\"></Name>", Some("")),
+        (b"<Name>real</Name><Name rdf:foo=\"f\"/>", Some("")),
+    ] {
+        assert_media_jukebox_absent_or(fields, "XML:Name", oracle);
+    }
+    // Neutral attributes and non-empty values still publish.
+    assert_eq!(
+        media_jukebox_metadata(b"<Caption>real</Caption><Caption xml:lang=\"en\"/>")
+            .get_string("XML:Caption"),
+        Some("")
+    );
+    assert_eq!(
+        media_jukebox_metadata(b"<Caption a=\"1\">x</Caption>").get_string("XML:Caption"),
+        Some("x")
+    );
+}
+
+#[test]
+fn media_jukebox_field_with_cdata_is_withheld() {
+    // XMP.pm counts `<![CDATA[]]>` as raw text (pinned 13.59: Name "" over
+    // the earlier "real"); a field holding CDATA is withheld.
+    for fields in [
+        &b"<Name>real</Name><Name xmp:y=\"6\"><![CDATA[]]></Name>"[..],
+        b"<Name><![CDATA[]]></Name>",
+    ] {
+        assert_media_jukebox_absent_or(fields, "XML:Name", Some(""));
+        assert_ne!(
+            media_jukebox_metadata(fields).get_string("XML:Name"),
+            Some("real")
+        );
+    }
+}
+
+#[test]
+fn media_jukebox_field_with_rdf_node_id_is_withheld() {
+    // Pinned 13.59 hits "internal error parsing nodeID's" and drops the
+    // nodeID field while keeping its siblings.
+    let metadata = media_jukebox_metadata(
+        b"<Caption>a</Caption><Name rdf:nodeID=\"n\">b</Name><Album>c</Album>",
+    );
+    assert!(metadata.get("XML:Name").is_none());
+    assert_eq!(metadata.get_string("XML:Caption"), Some("a"));
+    assert_eq!(metadata.get_string("XML:Album"), Some("c"));
+    assert_media_jukebox_absent_or(
+        b"<Album/><Album rdf:nodeID=\"n\">45000</Album>",
+        "XML:Album",
+        Some(""),
+    );
+}
+
+#[test]
+fn media_jukebox_empty_field_with_default_xmlns_is_withheld() {
+    // A bare default `xmlns` is shorthand in XMP.pm (KeywordsXmlns), so
+    // pinned 13.59 publishes no Keywords for the empty element.
+    assert_media_jukebox_absent_or(b"<Keywords xmlns=\"u\"/>", "XML:Keywords", None);
+    assert_media_jukebox_absent_or(
+        b"<Keywords>real</Keywords><Keywords xmlns=\"u\"/>",
+        "XML:Keywords",
+        Some("real"),
+    );
 }
