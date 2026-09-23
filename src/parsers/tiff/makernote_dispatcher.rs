@@ -97,15 +97,18 @@ const PENTAX_AOC_SIGNATURE: &[u8] = b"AOC\0";
 /// callers that record occurrences can opt in on this predicate without
 /// changing any other vendor's route.
 pub fn dispatches_to_pentax(make: &str, model: Option<&str>, data: &[u8]) -> bool {
-    !source_condition_claims(make.trim(), model, data)
+    !source_condition_claims(make, model, data)
         && parser_for_make_prefix(&make.trim().to_lowercase(), data)
             .is_some_and(|parser| parser.manufacturer_name() == "Pentax")
 }
 
 /// Whether the source-condition chain in
 /// `dispatch_makernote_with_context_and_values_and_session_impl` selects a
-/// parser for this note before the Make fallback runs. Keep the two in step.
-fn source_condition_claims(source_make: &str, model: Option<&str>, data: &[u8]) -> bool {
+/// parser for this note before the Make fallback runs. Keep the two in step,
+/// including which conditions see the trimmed Make and which the raw one
+/// (ExifTool strips only trailing blanks from Make, Exif.pm:585).
+fn source_condition_claims(make: &str, model: Option<&str>, data: &[u8]) -> bool {
+    let source_make = make.trim();
     if claimed_before_hp4(source_make, data) {
         return false;
     }
@@ -115,7 +118,7 @@ fn source_condition_claims(source_make: &str, model: Option<&str>, data: &[u8]) 
                 || data.starts_with(b"MINOL\0")
                 || data.starts_with(b"CAMER\0")
                 || phaseone::is_phaseone_makernote(data)
-                || ricoh::is_type2_selector(source_make, model, data)))
+                || ricoh::is_type2_selector(make, model, data)))
 }
 
 /// Conditions before HP4 in pinned MakerNotes.pm:38-205. An earlier match
@@ -899,6 +902,18 @@ mod tests {
             "RICOH IMAGING COMPANY, LTD.",
             Some("RICOH WG-M1"),
             b"PENTAX \0"
+        ));
+        // Ricoh2's Make test sees the raw Make, exactly as the dispatcher's
+        // own chain does, so a leading-blank Make is not claimed by Ricoh2.
+        let leading_blank = "  RICOH IMAGING COMPANY, LTD.";
+        assert_eq!(
+            source_condition_claims(leading_blank, Some("PENTAX XG-1"), ricoh2),
+            ricoh::is_type2_selector(leading_blank, Some("PENTAX XG-1"), ricoh2)
+        );
+        assert!(!source_condition_claims(
+            leading_blank,
+            Some("PENTAX XG-1"),
+            ricoh2
         ));
     }
 
