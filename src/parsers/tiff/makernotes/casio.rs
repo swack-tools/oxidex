@@ -35,7 +35,7 @@ use std::collections::HashMap;
 
 use super::registries::casio::casio_registry;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries, resolve_byte_order_at};
 use super::shared::tag_registry::TagRegistry;
 
 // ===== Casio MakerNote Tag IDs =====
@@ -486,6 +486,9 @@ pub fn parse_casio_preview_image_tag(
 
     let ifd_offset = ctx.payload_offset() + CASIO_TYPE2_IFD_START;
     let tiff = ctx.tiff();
+    // MakerNotes.pm:82-91 declares ByteOrder Unknown for this signed IFD.
+    // Exif.pm:6886-6893 probes its entry count before inheriting TIFF order.
+    let byte_order = resolve_byte_order_at(tiff, ifd_offset, byte_order);
     let Some(entry) = find_casio_entry(tiff, ifd_offset, byte_order, CASIO_PREVIEW_IMAGE) else {
         return;
     };
@@ -662,6 +665,9 @@ pub fn parse_casio_type2_extra_tags(
 
     let ifd_offset = ctx.payload_offset() + CASIO_TYPE2_IFD_START;
     let tiff = ctx.tiff();
+    // MakerNotes.pm:82-91 declares ByteOrder Unknown for this signed IFD.
+    // Exif.pm:6886-6893 probes its entry count before inheriting TIFF order.
+    let byte_order = resolve_byte_order_at(tiff, ifd_offset, byte_order);
 
     if let Some(entry) =
         find_casio_entry(tiff, ifd_offset, byte_order, CASIO_TYPE2_PREVIEW_IMAGE_SIZE)
@@ -713,16 +719,20 @@ pub fn parse_casio_type2_extra_tags(
         && let Some(value) = extract_u16_value(&entry, &[], byte_order)
         && value == 0
     {
-        // Every Casio.pm Condition arm maps zero to Off, including the final
-        // undecoded-model arm selected by Casio2.jpg's EX-Z3. Nonzero values
-        // remain withheld here: selecting their model-specific label needs a
-        // model parameter this existing metadata-side hook does not receive.
+        // Casio.pm:1517-1569 selects EX-ZR300's conditioned map before the
+        // final undecoded-model arm. Its map has no zero, so ExifTool prints
+        // Unknown (0); the other zero mappings, including EX-Z3, print Off.
+        let print = if metadata.get_string("IFD0:Model") == Some("EX-ZR300") {
+            "Unknown (0)"
+        } else {
+            "Off"
+        };
         record_casio_type2_u16(
             metadata,
             CASIO_TYPE2_BEST_SHOT_MODE,
             "BestShotMode",
             value,
-            "Off".to_string(),
+            print.to_string(),
         );
     }
 
@@ -1121,6 +1131,87 @@ mod tests {
 mod casio_preview_image_tests {
     use super::*;
     use crate::core::MetadataMap;
+    use crate::core::tag_occurrence::ValueChannel;
+
+    fn type2_inline_u16_note(entries: &[(u16, u16)], order: ByteOrder) -> Vec<u8> {
+        let w16 = |value: u16| match order {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        };
+        let w32 = |value: u32| match order {
+            ByteOrder::LittleEndian => value.to_le_bytes(),
+            ByteOrder::BigEndian => value.to_be_bytes(),
+        };
+        let mut note = b"QVC\0\0\0".to_vec();
+        note.extend_from_slice(&w16(entries.len() as u16));
+        for &(tag, value) in entries {
+            note.extend_from_slice(&w16(tag));
+            note.extend_from_slice(&w16(3)); // TIFF SHORT
+            note.extend_from_slice(&w32(1));
+            note.extend_from_slice(&w16(value));
+            note.extend_from_slice(&[0, 0]);
+        }
+        note.extend_from_slice(&w32(0));
+        note
+    }
+
+    #[test]
+    fn casio_type2_extra_tags_use_local_ifd_byte_order() {
+        // MakerNotes.pm:82-91 declares ByteOrder Unknown and Start +6.
+        // The enclosing TIFF may use the opposite order in either direction.
+        for (inner, outer) in [
+            (ByteOrder::LittleEndian, ByteOrder::BigEndian),
+            (ByteOrder::BigEndian, ByteOrder::LittleEndian),
+        ] {
+            let note = type2_inline_u16_note(
+                &[(CASIO_TYPE2_QUALITY, 3), (CASIO_TYPE2_ART_MODE, 0)],
+                inner,
+            );
+            let ctx = MakerNoteContext::detached(&note);
+            let mut metadata = MetadataMap::new();
+            parse_casio_type2_extra_tags(&ctx, outer, &mut metadata);
+            let quality = metadata.occurrences_for("Casio:Quality");
+            assert_eq!(quality.len(), 1, "{inner:?} in {outer:?}");
+            assert_eq!(
+                quality[0].project(ValueChannel::PrintConv).as_ref(),
+                &TagValue::new_string("Fine")
+            );
+            let art = metadata.occurrences_for("Casio:ArtMode");
+            assert_eq!(art.len(), 1, "{inner:?} in {outer:?}");
+            assert_eq!(
+                art[0].project(ValueChannel::PrintConv).as_ref(),
+                &TagValue::new_string("Normal")
+            );
+        }
+    }
+
+    #[test]
+    fn ex_zr300_best_shot_zero_uses_conditioned_unknown_fallback() {
+        // Casio.pm:1517-1569: EX-ZR300's map starts at 1. Only the final,
+        // unconditioned arm maps zero to Off, and this model never takes it.
+        let note =
+            type2_inline_u16_note(&[(CASIO_TYPE2_BEST_SHOT_MODE, 0)], ByteOrder::LittleEndian);
+        let ctx = MakerNoteContext::detached(&note);
+        let mut metadata = MetadataMap::new();
+        metadata.insert("IFD0:Model", TagValue::new_string("EX-ZR300"));
+        parse_casio_type2_extra_tags(&ctx, ByteOrder::LittleEndian, &mut metadata);
+        let rows = metadata.occurrences_for("Casio:BestShotMode");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("Unknown (0)")
+        );
+
+        let mut other_model = MetadataMap::new();
+        other_model.insert("IFD0:Model", TagValue::new_string("EX-Z3"));
+        parse_casio_type2_extra_tags(&ctx, ByteOrder::LittleEndian, &mut other_model);
+        let rows = other_model.occurrences_for("Casio:BestShotMode");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].project(ValueChannel::PrintConv).as_ref(),
+            &TagValue::new_string("Off")
+        );
+    }
 
     /// Builds a synthetic TIFF block holding a Casio Type2 ("QVC\0"-signed)
     /// MakerNote at `payload_offset`, one IFD entry (0x2000, undef,
@@ -1178,6 +1269,44 @@ mod casio_preview_image_tests {
             metadata.get("MakerNotes:PreviewImage"),
             Some(&TagValue::new_binary(preview_bytes))
         );
+    }
+
+    #[test]
+    fn casio_type2_preview_image_uses_local_ifd_byte_order() {
+        // The same Type2 ByteOrder Unknown applies to PreviewImage 0x2000.
+        // Its count and TIFF-relative pointer must be read in IFD order.
+        for (inner, outer) in [
+            (ByteOrder::LittleEndian, ByteOrder::BigEndian),
+            (ByteOrder::BigEndian, ByteOrder::LittleEndian),
+        ] {
+            let w16 = |value: u16| match inner {
+                ByteOrder::LittleEndian => value.to_le_bytes(),
+                ByteOrder::BigEndian => value.to_be_bytes(),
+            };
+            let w32 = |value: u32| match inner {
+                ByteOrder::LittleEndian => value.to_le_bytes(),
+                ByteOrder::BigEndian => value.to_be_bytes(),
+            };
+            let mut note = b"QVC\0\0\0".to_vec();
+            note.extend_from_slice(&w16(1));
+            note.extend_from_slice(&w16(CASIO_PREVIEW_IMAGE));
+            note.extend_from_slice(&w16(7)); // undef
+            note.extend_from_slice(&w32(5));
+            note.extend_from_slice(&w32(80)); // TIFF-relative
+            note.extend_from_slice(&w32(0));
+            let mut tiff = vec![0; 20];
+            tiff.extend_from_slice(&note);
+            tiff.resize(85, 0);
+            tiff[80..85].copy_from_slice(b"abcde");
+            let ctx = MakerNoteContext::in_tiff(&tiff, 20, note.len(), 12);
+            let mut metadata = MetadataMap::new();
+            parse_casio_preview_image_tag(&ctx, outer, &mut metadata);
+            assert_eq!(
+                metadata.get("MakerNotes:PreviewImage"),
+                Some(&TagValue::new_binary(b"abcde".to_vec())),
+                "{inner:?} in {outer:?}"
+            );
+        }
     }
 
     #[test]

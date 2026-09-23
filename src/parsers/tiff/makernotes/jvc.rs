@@ -31,7 +31,9 @@ use std::collections::HashMap;
 use super::makernote_context::MakerNoteContext;
 use super::registries::jvc::jvc_registry;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::ifd_parser_base::{
+    IfdParserConfig, parse_ifd_entries, resolve_makernote_byte_order,
+};
 use super::shared::tag_registry::TagRegistry;
 
 // Decodes JVC image quality.
@@ -181,6 +183,10 @@ impl JvcParser {
             signature_offset: 4,
             max_entries: 500,
         };
+
+        // MakerNotes.pm:237-243 declares ByteOrder Unknown. Exif.pm probes
+        // the IFD count at Start +4 before keeping or swapping TIFF order.
+        let byte_order = resolve_makernote_byte_order(directory_data, &config, byte_order);
 
         parse_ifd_entries(directory_data, byte_order, &config, |entry, _| {
             if let Some(row) = self.canonical_entry(entry, value_data, byte_order)
@@ -446,6 +452,25 @@ mod tests {
             // ExifTool emits exactly two JVC tags for this file; 0x0001 is
             // deliberately unnamed and must not be reported as Quality.
             assert_eq!(tags.len(), 2, "{order:?}: {tags:?}");
+        }
+    }
+
+    #[test]
+    fn signed_jvc_ifd_uses_its_own_byte_order() {
+        // MakerNotes.pm:237-243 declares Start +4 and ByteOrder Unknown.
+        // Exif.pm:6886-6893 swaps the inherited order when the IFD entry
+        // count is implausible in that order. Exercise both directions.
+        for (inner, outer) in [
+            (ByteOrder::LittleEndian, ByteOrder::BigEndian),
+            (ByteOrder::BigEndian, ByteOrder::LittleEndian),
+        ] {
+            let mut note = b"JVC ".to_vec();
+            note.extend_from_slice(&build_ifd(&[(0x0003, 3, 1, 1)], &[], inner));
+            let mut tags = HashMap::new();
+            JvcParser::new()
+                .parse(&note, outer, &mut tags)
+                .expect("JVC signed IFD must resolve its local byte order");
+            assert_eq!(tags.get("JVC:Quality"), Some(&"Normal".to_string()));
         }
     }
 }

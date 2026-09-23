@@ -227,6 +227,40 @@ fn dispatched(make: &str, model: Option<&str>, note: &[u8]) -> HashMap<String, S
 }
 
 #[test]
+fn earlier_source_conditions_block_hp4_and_kodak2_signature_routes() {
+    // MakerNotes.pm:61 Canon Make precedes HP4 (:206) and Kodak2 (:275).
+    // This valid HP4 record would otherwise emit ISO 125 under Canon Make.
+    let mut hp = vec![0; 120];
+    hp[..6].copy_from_slice(b"IIII\x04\0");
+    hp[20..39].copy_from_slice(b"2216/02/28 03:49:48");
+    hp[52..54].copy_from_slice(&125u16.to_le_bytes());
+    let mut tags = HashMap::new();
+    let _ = dispatch_makernote_with_model("Canon", None, &hp, ByteOrder::LittleEndian, &mut tags);
+    assert!(!tags.keys().any(|name| name.starts_with("HP:")));
+
+    // Canon Make likewise precedes Kodak2. Kodak2's first alternative leaves
+    // its initial eight bytes arbitrary, so an earlier signature may occupy
+    // them. FujiFilm (:119) and JVC (:237) are signature-first examples.
+    for (make, prefix) in [
+        ("Canon", *b"abcdefgh"),
+        ("PENTAX", *b"FUJIFILM"),
+        ("PENTAX", *b"JVC abc\0"),
+    ] {
+        let mut note = vec![0; 116];
+        note[..8].copy_from_slice(&prefix);
+        note[8..21].copy_from_slice(b"Eastman Kodak");
+        note[108..112].copy_from_slice(&800u32.to_be_bytes());
+        let mut tags = HashMap::new();
+        let _ =
+            dispatch_makernote_with_model(make, None, &note, ByteOrder::LittleEndian, &mut tags);
+        assert!(
+            !tags.keys().any(|name| name.starts_with("Kodak:")),
+            "earlier source condition {prefix:?} / {make} must block Kodak2"
+        );
+    }
+}
+
+#[test]
 fn source_order_routes_kodak_type2_by_payload_without_kodak_make() {
     // MakerNotes.pm:275-286: eight arbitrary bytes followed by the literal
     // Eastman Kodak is enough, even when EXIF Make names another camera.
