@@ -993,6 +993,17 @@ impl NikonParser {
                             tags,
                             &mut parsed_value_forms,
                         );
+                        // `RawConv => '$$self{PixelShiftActive} = $val'`
+                        // (Nikon.pm:12149), the int8u at offset 12. Read by
+                        // SeqInfoZ9's FocusShiftShooting PrintConv, which is
+                        // deferred to the end of this IFD, so it does not
+                        // matter whether 0x0056 precedes ShotInfo or not.
+                        if let Some(&pixel_shift) = bytes.get(12) {
+                            ctx.set(
+                                binary_data::Dm::PixelShiftActive,
+                                binary_data::Scalar::Num(f64::from(pixel_shift)),
+                            );
+                        }
                     }
                 }
 
@@ -1752,6 +1763,9 @@ impl NikonParser {
             }
         });
 
+        // PrintConvs that read `$$self{...}` members stored later in the walk
+        // (see `binary_data::Pc::is_deferred`).
+        ctx.finish_deferred(tags);
         parsed_value_forms.extend(ctx.take_value_forms());
         value_forms.extend(parsed_value_forms);
 
@@ -2232,6 +2246,177 @@ mod tests {
         assert_eq!(
             metadata.get_string("Nikon:PreviewImageLength"),
             Some("19346")
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // SeqInfoZ9 `FocusShiftShooting` (Nikon.pm:9015-9025).
+    //
+    // Its PrintConv reads `$$self{FocusShiftNumberShots}` (stored by
+    // MenuSettingsZ9's RawConv, Nikon.pm:10161) and `$$self{PixelShiftActive}`
+    // (MakerNotes0x56's RawConv, Nikon.pm:12149). ExifTool evaluates PrintConv
+    // only when the value is fetched for output, after the whole file has been
+    // read, so both members hold their end-of-file values whatever order the
+    // directories were visited in. The expected strings below are the pinned
+    // 13.59 oracle's output on byte-identical TIFFs built by
+    // /private/tmp/claude-501/nikon-focus-shift/synth.py (which encrypts with
+    // ExifTool's own `Nikon::Decrypt`).
+    // ---------------------------------------------------------------------
+
+    const Z9_SERIAL: u32 = 1_234_567;
+    const Z9_COUNT: u32 = 42;
+
+    /// A ShotInfoZ9 (version 0805, firmware 01.00.f0) whose SeqInfoZ9 holds
+    /// `frame` at 0x20 and, when `menu`, whose MenuInfoZ9 -> MenuSettingsZ9
+    /// holds `shots` at 232. Enciphered from byte 4 like a real body writes it.
+    fn z9_shot_info(frame: u8, shots: u8, menu: bool) -> Vec<u8> {
+        let mut d = vec![0u8; 0x400];
+        d[0..4].copy_from_slice(b"0805");
+        d[4..12].copy_from_slice(b"01.00.f0");
+        d[36..40].copy_from_slice(&26u32.to_le_bytes()); // NumberOffsets
+        d[48..52].copy_from_slice(&0x100u32.to_le_bytes()); // SequenceOffset
+        if menu {
+            d[140..144].copy_from_slice(&0x200u32.to_le_bytes()); // MenuOffset
+        }
+        d[0x100 + 0x20] = frame; // FocusShiftShooting
+        d[0x210..0x214].copy_from_slice(&0x40u32.to_le_bytes()); // MenuSettingsOffsetZ9
+        d[0x240 + 232] = shots; // FocusShiftNumberShots
+        encrypted::Decryptor::new(Z9_SERIAL, Z9_COUNT).decrypt_from(&mut d, 4);
+        d
+    }
+
+    /// A little-endian Type 2 MakerNote: SerialNumber, ShutterMode
+    /// (Electronic), optionally MakerNotes0x56 with PixelShiftActive `ps`,
+    /// ShotInfo, ShutterCount. `after` stores 0x0056 *after* 0x0091, so the
+    /// member is set only once FocusShiftShooting has been extracted.
+    fn z9_makernote(frame: u8, shots: u8, ps: Option<u8>, after: bool, menu: bool) -> Vec<u8> {
+        let serial = format!("{Z9_SERIAL}\0").into_bytes();
+        let mut rec56 = b"0120".to_vec();
+        rec56.extend_from_slice(&[0u8; 8]);
+        rec56.extend(ps);
+        let mut entries: Vec<(u16, u16, Vec<u8>)> = vec![
+            (0x001d, 2, serial),
+            (0x0034, 3, 16u16.to_le_bytes().to_vec()),
+        ];
+        let e56 = ps.map(|_| (0x0056u16, 7u16, rec56));
+        let e91 = (0x0091u16, 7u16, z9_shot_info(frame, shots, menu));
+        if after {
+            entries.push(e91);
+            entries.extend(e56);
+        } else {
+            entries.extend(e56);
+            entries.push(e91);
+        }
+        entries.push((0x00a7, 4, Z9_COUNT.to_le_bytes().to_vec()));
+
+        let values_at = 8 + 2 + 12 * entries.len() + 4;
+        let mut ifd = (entries.len() as u16).to_le_bytes().to_vec();
+        let mut blob = Vec::new();
+        for (tag, typ, val) in &entries {
+            let unit = match typ {
+                3 => 2,
+                4 => 4,
+                _ => 1,
+            };
+            ifd.extend_from_slice(&tag.to_le_bytes());
+            ifd.extend_from_slice(&typ.to_le_bytes());
+            ifd.extend_from_slice(&((val.len() / unit) as u32).to_le_bytes());
+            if val.len() <= 4 {
+                let mut inline = val.clone();
+                inline.resize(4, 0);
+                ifd.extend_from_slice(&inline);
+            } else {
+                ifd.extend_from_slice(&((values_at + blob.len()) as u32).to_le_bytes());
+                blob.extend_from_slice(val);
+                if blob.len() % 2 == 1 {
+                    blob.push(0);
+                }
+            }
+        }
+        let mut mn = b"Nikon\0\x02\x10\0\0II*\0".to_vec();
+        mn.extend_from_slice(&8u32.to_le_bytes());
+        mn.extend_from_slice(&ifd);
+        mn.extend_from_slice(&[0u8; 4]);
+        mn.extend_from_slice(&blob);
+        mn
+    }
+
+    fn focus_shift(
+        frame: u8,
+        shots: u8,
+        ps: Option<u8>,
+        after: bool,
+        menu: bool,
+    ) -> Option<String> {
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        NikonParser
+            .parse_with_model_and_values(
+                &z9_makernote(frame, shots, ps, after, menu),
+                ByteOrder::LittleEndian,
+                Some("NIKON Z 9"),
+                &mut tags,
+                &mut value_forms,
+            )
+            .expect("parse synthetic Z9 MakerNote");
+        tags.get("Nikon:FocusShiftShooting").cloned()
+    }
+
+    /// Oracle: `a_fs_ps0.tif` -> `On: Frame 3 of 100`. FocusShiftNumberShots
+    /// lives in MenuSettingsZ9, which is walked after SeqInfoZ9.
+    #[test]
+    fn focus_shift_shooting_reads_the_shot_count_decoded_after_it() {
+        assert_eq!(
+            focus_shift(3, 100, Some(0), false, true).as_deref(),
+            Some("On: Frame 3 of 100")
+        );
+        // `i_ps0_56after91.tif`
+        assert_eq!(
+            focus_shift(3, 100, Some(0), true, true).as_deref(),
+            Some("On: Frame 3 of 100")
+        );
+        // `d_no56.tif`: no MakerNotes0x56 at all.
+        assert_eq!(
+            focus_shift(3, 100, None, false, true).as_deref(),
+            Some("On: Frame 3 of 100")
+        );
+    }
+
+    /// Oracle: `b_ps1.tif` and `c_ps1_56after91.tif` -> `On: Frame 3`,
+    /// whether 0x0056 precedes or follows ShotInfo.
+    #[test]
+    fn focus_shift_shooting_drops_the_total_when_pixel_shift_is_active() {
+        assert_eq!(
+            focus_shift(3, 100, Some(1), false, true).as_deref(),
+            Some("On: Frame 3")
+        );
+        assert_eq!(
+            focus_shift(3, 100, Some(1), true, true).as_deref(),
+            Some("On: Frame 3")
+        );
+        // `e_ps2.tif`: `$$self{PixelShiftActive} eq 1` is false for 2.
+        assert_eq!(
+            focus_shift(3, 100, Some(2), false, true).as_deref(),
+            Some("On: Frame 3 of 100")
+        );
+    }
+
+    /// Oracle: `f_off.tif` -> `Off`; `g_nomenu_ps0.tif` (MenuOffset 0, so no
+    /// FocusShiftNumberShots is ever stored) -> `On: Frame 3 of 0`, Perl's
+    /// `sprintf("%.0f", undef)`; `h_nomenu_ps1.tif` -> `On: Frame 3`.
+    #[test]
+    fn focus_shift_shooting_off_and_absent_shot_count() {
+        assert_eq!(
+            focus_shift(0, 100, Some(0), false, true).as_deref(),
+            Some("Off")
+        );
+        assert_eq!(
+            focus_shift(3, 100, Some(0), false, false).as_deref(),
+            Some("On: Frame 3 of 0")
+        );
+        assert_eq!(
+            focus_shift(3, 100, Some(1), false, false).as_deref(),
+            Some("On: Frame 3")
         );
     }
 }

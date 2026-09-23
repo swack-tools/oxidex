@@ -290,8 +290,24 @@ pub enum Pc {
     AutoCaptureCriteriaBits,
     /// `IntervalShooting`, which reads three other data members.
     IntervalShooting,
-    /// `FocusShiftShooting`, which reads `FocusShiftNumberShots`.
+    /// `FocusShiftShooting`, which reads `FocusShiftNumberShots` and
+    /// `PixelShiftActive`. Evaluated late -- see [`Pc::is_deferred`].
     FocusShiftShooting,
+}
+
+impl Pc {
+    /// ExifTool runs a PrintConv only when the value is fetched for output,
+    /// after the whole file has been read, so a PrintConv that reads
+    /// `$$self{...}` sees each member's end-of-file value. `FocusShiftShooting`
+    /// (SeqInfoZ9, Nikon.pm:9015-9025) reads `FocusShiftNumberShots`, which
+    /// MenuSettingsZ8/Z9 store only later in the same ShotInfo walk
+    /// (Nikon.pm:9863, 10161, 10346, 10556), and `PixelShiftActive`, stored
+    /// by `Nikon::Main` 0x0056 (Nikon.pm:12149) wherever that entry sits in
+    /// the IFD. These are converted by [`Ctx::finish_deferred`] once the
+    /// MakerNote has been walked, instead of at the point they are found.
+    fn is_deferred(self) -> bool {
+        matches!(self, Pc::FocusShiftShooting)
+    }
 }
 
 /// A `Hook`, which shifts every later tag in the table.
@@ -501,6 +517,9 @@ pub fn perl_num_to_string(v: f64) -> String {
 pub struct Ctx {
     members: HashMap<Dm, Scalar>,
     value_forms: HashMap<String, String>,
+    /// Tags whose PrintConv must wait for the end of the MakerNote, in the
+    /// order they were found: `(key, tag, ValueConv'd value)`.
+    deferred: Vec<(String, &'static BinTag, Scalar)>,
     pub model: Option<String>,
     /// `$$self{FILE_TYPE}` -- "JPEG" for JPEGs, "TIFF" for NEF and TIFF.
     ///
@@ -517,6 +536,7 @@ impl Ctx {
         Ctx {
             members: HashMap::new(),
             value_forms: HashMap::new(),
+            deferred: Vec::new(),
             model: model.map(str::to_string),
             file_type,
         }
@@ -536,6 +556,22 @@ impl Ctx {
 
     pub fn take_value_forms(&mut self) -> HashMap<String, String> {
         std::mem::take(&mut self.value_forms)
+    }
+
+    /// Print every deferred tag against the members as they stand now -- the
+    /// end-of-MakerNote state ExifTool's PrintConv sees -- and store it with
+    /// the same `FoundTag` precedence [`process`] uses.
+    pub fn finish_deferred(&mut self, out: &mut HashMap<String, String>) {
+        for (key, tag, val) in std::mem::take(&mut self.deferred) {
+            let Some(printed) = apply_print_conv(tag, &val, self) else {
+                continue;
+            };
+            if tag.low_priority {
+                out.entry(key).or_insert(printed);
+            } else {
+                out.insert(key, printed);
+            }
+        }
     }
 
     fn num(&self, dm: Dm) -> f64 {
@@ -1187,6 +1223,11 @@ pub fn process(
         let Some(converted) = apply_value_conv(tag.vc, &val, ctx, big) else {
             continue;
         };
+        if tag.pc.is_deferred() {
+            ctx.deferred
+                .push((format!("Nikon:{}", tag.name), tag, converted));
+            continue;
+        }
         let Some(printed) = apply_print_conv(tag, &converted, ctx) else {
             continue;
         };
