@@ -30,6 +30,8 @@ use crate::parsers::jpeg::segment_parser::Segment;
 use crate::parsers::tiff::ifd_parser::{ByteOrder, parse_ifd};
 use crate::parsers::tiff::tiff_subreader::TiffSubReader;
 use crate::tag_db::lookup_tag_name;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::{Reader, events::Event};
 
 /// Processes JFIF APP0 segments and extracts version and resolution metadata.
 ///
@@ -1438,6 +1440,267 @@ pub fn process_app15_segments(segments: &[Segment], metadata: &mut MetadataMap) 
         // (JPEG.pm:667).
         metadata.insert_with_group1("APP15:Quality", TagValue::Integer(quality), "GraphConv");
     }
+}
+
+/// Processes ExifTool's exact `Media Jukebox\0` APP9 XML packet.
+pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut MetadataMap) {
+    const APP9: u16 = 0xffe9;
+    const IDENTIFIER: &[u8] = b"Media Jukebox\0";
+    const DIRECTORY_START: usize = 22;
+    const FIELDS: [&str; 9] = [
+        "Caption",
+        "Keywords",
+        "Tool_Name",
+        "Tool_Version",
+        "People",
+        "Places",
+        "Album",
+        "Name",
+        "Date",
+    ];
+    // (field, published value). XMP.pm lets a later property replace an
+    // earlier one of the same name, so each field is kept once, last wins.
+    let mut found: Vec<(&str, Option<String>)> = Vec::new();
+    let mut record = |field: &str, value: Option<String>| {
+        let value = value.and_then(|value| {
+            if field == "Date" {
+                // JPEG.pm routes Date through ConvertUnixTime and
+                // ConvertDateTime.  Do not turn a non-finite or unsupported
+                // float into a plausible timestamp.
+                format_media_jukebox_date(&value)
+            } else {
+                Some(value)
+            }
+        });
+        let field = FIELDS
+            .iter()
+            .copied()
+            .find(|known| *known == field)
+            .expect("only known fields are recorded");
+        match found.iter_mut().find(|(known, _)| *known == field) {
+            Some(slot) => slot.1 = value,
+            None => found.push((field, value)),
+        }
+    };
+    for segment in segments.iter().filter(|segment| segment.marker == APP9) {
+        if !segment.data.starts_with(IDENTIFIER) {
+            continue;
+        }
+        // JPEG.pm recognizes the 14-byte identifier, then begins its table
+        // directory at byte 22 after the envelope and `<MJMD>` root.
+        let Some(xml) = segment.data.get(DIRECTORY_START..) else {
+            continue;
+        };
+        let mut reader = Reader::from_reader(xml);
+        // XMP.pm keeps an element's text verbatim (it trims whitespace only
+        // for rdf:Description), so no trimming here; `Rock &amp; Roll` also
+        // arrives as text/reference/text events and must keep its spaces.
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        // Element depth below `<MJMD>`: fields are its direct children.
+        let mut depth = 0usize;
+        let mut current: Option<MediaJukeboxField> = None;
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) => {
+                    depth += 1;
+                    if depth == 1 {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        current = FIELDS
+                            .contains(&name.as_str())
+                            .then(|| MediaJukeboxField::new(name, &element));
+                    } else if let Some(field) = current.as_mut() {
+                        field.nested = true;
+                    }
+                }
+                Ok(Event::Empty(element)) => {
+                    if depth == 0 {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        if FIELDS.contains(&name.as_str()) {
+                            if let Some((name, value)) =
+                                MediaJukeboxField::new(name, &element).published()
+                            {
+                                record(&name, value);
+                            }
+                        }
+                    } else if let Some(field) = current.as_mut() {
+                        field.nested = true;
+                    }
+                }
+                Ok(Event::Text(text)) => {
+                    if let Some(field) = current.as_mut() {
+                        match text.decode() {
+                            Ok(decoded) => field.value.push_str(&decoded),
+                            Err(_) => field.renderable = false,
+                        }
+                    }
+                }
+                Ok(Event::CData(_)) => {
+                    // XMP.pm counts a CDATA section (even `<![CDATA[]]>`) as
+                    // raw text of the element; that is not reproduced here.
+                    if let Some(field) = current.as_mut() {
+                        field.renderable = false;
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    // UnescapeXML: numeric and predefined references resolve;
+                    // an unknown named `&name;` is kept as written. A numeric
+                    // reference to a non-character (`&#0;`, a surrogate, past
+                    // U+10FFFF) becomes raw bytes there, so withhold the field.
+                    if let Some(field) = current.as_mut() {
+                        match reference.xml10_content() {
+                            Ok(name) if name.starts_with('#') => {
+                                match reference.resolve_char_ref() {
+                                    Ok(Some(character)) => field.value.push(character),
+                                    _ => field.renderable = false,
+                                }
+                            }
+                            Ok(name) => {
+                                if let Some(entity) = resolve_predefined_entity(&name) {
+                                    field.value.push_str(entity);
+                                } else {
+                                    field.value.push('&');
+                                    field.value.push_str(&name);
+                                    field.value.push(';');
+                                }
+                            }
+                            Err(_) => field.renderable = false,
+                        }
+                    }
+                }
+                Ok(Event::PI(_) | Event::Decl(_) | Event::DocType(_)) => {
+                    // XMP.pm keeps such markup verbatim in the value
+                    // (`a<?pi x?>b`); it is not reproduced here.
+                    if let Some(field) = current.as_mut() {
+                        field.renderable = false;
+                    }
+                }
+                Ok(Event::End(_)) => {
+                    if depth == 1
+                        && let Some(field) = current.take()
+                        && let Some((name, value)) = field.published()
+                    {
+                        record(&name, value);
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    for (field, value) in found {
+        if let Some(value) = value {
+            metadata.insert_with_group1(
+                format!("XML:{field}"),
+                TagValue::new_string(value),
+                "MediaJukebox",
+            );
+        }
+    }
+}
+
+/// A direct child of the Media Jukebox root while it is being read.
+struct MediaJukeboxField {
+    name: String,
+    value: String,
+    /// Contains a child element (XMP.pm then names it by path instead).
+    nested: bool,
+    /// Every byte and reference decoded to text.
+    renderable: bool,
+    attributes: MediaJukeboxAttributes,
+}
+
+/// How a field element's attributes are treated. Which attributes XMP.pm's
+/// ParseXMPElement turns into shorthand properties, ignores, or uses as the
+/// value is deliberately not transcribed: only the clearly neutral ones are
+/// trusted, and anything else withholds an empty field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MediaJukeboxAttributes {
+    /// None, or only `xml:lang` / `xmlns:<prefix>`.
+    Neutral,
+    /// Any other attribute (a bare default `xmlns` included). A non-empty
+    /// value is still published; an empty one is withheld, since XMP.pm may
+    /// publish "", nothing, or a value taken from the attribute.
+    Other,
+    /// A `nodeID` attribute key, whatever its prefix (pinned 13.59 drops an
+    /// rdf:nodeID field with "internal error parsing nodeID's"), or
+    /// attributes that do not parse: withheld.
+    Withheld,
+}
+
+impl MediaJukeboxField {
+    fn new(name: String, element: &quick_xml::events::BytesStart<'_>) -> Self {
+        Self {
+            name,
+            value: String::new(),
+            nested: false,
+            renderable: true,
+            attributes: MediaJukeboxAttributes::of(element),
+        }
+    }
+
+    /// What reaching the end of this field records, with its name: `None`
+    /// records nothing (an earlier value stands), a `None` value withholds
+    /// the field including any earlier value it would replace, and a
+    /// `Some` value publishes.
+    fn published(self) -> Option<(String, Option<String>)> {
+        if self.nested {
+            // XMP.pm publishes it under a path-concatenated name (e.g.
+            // `CaptionFoo`), never under its own.
+            return None;
+        }
+        let withheld = !self.renderable
+            || self.attributes == MediaJukeboxAttributes::Withheld
+            || (self.value.is_empty() && self.attributes == MediaJukeboxAttributes::Other);
+        Some((self.name, (!withheld).then_some(self.value)))
+    }
+}
+
+impl MediaJukeboxAttributes {
+    fn of(element: &quick_xml::events::BytesStart<'_>) -> Self {
+        let mut attributes = Self::Neutral;
+        for attribute in element.attributes() {
+            let Ok(attribute) = attribute else {
+                return Self::Withheld;
+            };
+            let key = attribute.key.as_ref();
+            // XMP.pm resolves the prefix, so `r:nodeID` with `r` bound to
+            // the RDF namespace is rdf:nodeID too. Namespaces are not
+            // resolved here: any `nodeID` local name withholds the field.
+            // Attribute values (`note="rdf:nodeID"`) are never keys.
+            if key == b"nodeID" || key.ends_with(b":nodeID") {
+                return Self::Withheld;
+            }
+            if !(key == b"xml:lang" || key.starts_with(b"xmlns:")) {
+                attributes = Self::Other;
+            }
+        }
+        attributes
+    }
+}
+
+fn format_media_jukebox_date(value: &str) -> Option<String> {
+    // Perl numification skips ASCII whitespace only (not NBSP or other
+    // Unicode spaces, which leave the value non-numeric).
+    let days = value
+        .trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))
+        .parse::<f64>()
+        .ok()?;
+    if !days.is_finite() {
+        return None;
+    }
+    // JPEG.pm:577: ConvertUnixTime(($val - (70 * 365 + 17 + 2)) * 24 * 3600),
+    // multiplied in Perl's left-to-right order so the f64 rounding matches.
+    // Reuse the pinned helper for zero and half-second rounding semantics.
+    let seconds = (days - 25_569.0) * 24.0 * 3600.0;
+    if !seconds.is_finite() || seconds.abs() >= 9.2e18 {
+        return None;
+    }
+    Some(crate::exiftool_tables::exprs::convert_unix_time(
+        seconds, false,
+    ))
 }
 
 /// Processes JPEG COM (comment) segments, and the APP10 "UNICODE" comment

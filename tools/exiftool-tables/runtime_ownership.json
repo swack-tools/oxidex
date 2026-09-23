@@ -3,10 +3,10 @@
     "generated": 563,
     "not-applicable": 29,
     "refused": 18,
-    "residual": 47,
+    "residual": 59,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "485558eda060be4e0bd3af7b87475dc8df542f16eef0bbb6a296bec6b6df17f5",
+  "fragment_inputs_sha256": "7a4921c84663c8467229564968c17c8cea8e8e82275a56ccc524da01586b73a9",
   "rows": [
     {
       "field": {
@@ -8844,6 +8844,240 @@
     },
     {
       "field": {
+        "kind": "name",
+        "value": "Album"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Album",
+        "raw_key": "Album",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Caption"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Caption",
+        "raw_key": "Caption",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Date"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Date",
+        "raw_key": "Date",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "97770fc7c66831a6dc843a05c6f3ad30585f4760c6105541271a529ab1038368",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Keywords"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Keywords",
+        "raw_key": "Keywords",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Name"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Name",
+        "raw_key": "Name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "People"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "People",
+        "raw_key": "People",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Places"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Places",
+        "raw_key": "Places",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Tool_Name"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Tool_Name",
+        "raw_key": "Tool_Name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "Tool_Version"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "JPEG",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::JPEG::MediaJukebox",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Tool_Version",
+        "raw_key": "Tool_Version",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/core/jpeg_helpers.rs::process_media_jukebox_segments",
+      "table": "MediaJukebox"
+    },
+    {
+      "field": {
         "kind": "numeric",
         "value": "0x0002"
       },
@@ -9703,6 +9937,84 @@
       "source_sha256": "94e52182741c2338ab31355c074be488795d1f01af38d8ade680fd3e68d40a69",
       "symbol": "src/parsers/tiff/makernotes/ricoh.rs::parse_ricoh_type2_rows",
       "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "EmbeddedAudioFile"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"
+      },
+      "module": "Samsung",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Samsung::Trailer",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "EmbeddedAudioFile",
+        "raw_key": "0x0100",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "e9b50c8eb90ff557cf277a0c9ed9497f9e192df5403c6e786a3175abf78ea24c",
+      "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+      "table": "Trailer"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "EmbeddedAudioFileName"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/fixtures/samsung-qdio-seft.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "59312fd9158a6cdc2eea9dc53e7f434a75f45e8cdf1a00674f16f1327953c085"
+      },
+      "module": "Samsung",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Samsung::Trailer",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "EmbeddedAudioFileName",
+        "raw_key": "0x0100-name",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "22539c93fe4a2c3fff86d928b31d0e7bf7c5e636fc272d6c8286b3fbdcaf3212",
+      "symbol": "src/parsers/samsung_trailer.rs::parse_samsung_trailer",
+      "table": "Trailer"
+    },
+    {
+      "field": {
+        "kind": "name",
+        "value": "JSONInfo"
+      },
+      "fixture": {
+        "relative_path": "evidence/20260921-beta1-direct/task16/claude-followup/ownership-fixtures/mediajukebox-vivo.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "7035040ec99b01f13450b679be7917a23ec4f82d3bb3bd9010f0ba5b87899fb2"
+      },
+      "module": "Trailer",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Trailer::Vivo",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "JSONInfo",
+        "raw_key": "JSONInfo",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "symbol": "src/parsers/vivo.rs::process_vivo",
+      "table": "Vivo"
     }
   ],
   "schema": 1,

@@ -10,7 +10,8 @@
   "instrument": "tools/exiftool-tables/codegen.py --ifd-out --ifd-identity-ledger-out",
   "ownership_counts": {
     "binary_rows": 8295,
-    "named_raw_key_rows": 674
+    "named_raw_key_rows": 674,
+    "samsung_trailer_rows": 2
   },
   "ownership_rows": [
     {
@@ -82647,6 +82648,26 @@
       "source_kind": "binary",
       "source_sha256": "36afe96cb474964f79a941803a153e120fbd2fded7b7c5c3dd3cbb0c9fc45aa6",
       "table": "Thumbnail2",
+      "variant_path": []
+    },
+    {
+      "full_name": "Image::ExifTool::Samsung::Trailer",
+      "module": "Samsung",
+      "name": "EmbeddedAudioFile",
+      "raw_key": "0x0100",
+      "source_kind": "samsung-trailer",
+      "source_sha256": "e9b50c8eb90ff557cf277a0c9ed9497f9e192df5403c6e786a3175abf78ea24c",
+      "table": "Trailer",
+      "variant_path": []
+    },
+    {
+      "full_name": "Image::ExifTool::Samsung::Trailer",
+      "module": "Samsung",
+      "name": "EmbeddedAudioFileName",
+      "raw_key": "0x0100-name",
+      "source_kind": "samsung-trailer",
+      "source_sha256": "22539c93fe4a2c3fff86d928b31d0e7bf7c5e636fc272d6c8286b3fbdcaf3212",
+      "table": "Trailer",
       "variant_path": []
     },
     {
