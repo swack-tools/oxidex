@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 use super::registries::ricoh::ricoh_registry;
 use super::shared::MakerNoteParser;
-use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries};
+use super::shared::ifd_parser_base::{IfdParserConfig, parse_ifd_entries, resolve_byte_order_at};
 use super::shared::print_im::decode_print_im_from_ifd;
 use super::shared::tag_registry::TagRegistry;
 
@@ -76,13 +76,10 @@ fn parse_ricoh_type2_rows(
     inherited_order: ByteOrder,
 ) -> Vec<(String, TagOccurrence)> {
     let payload = ctx.payload();
-    let order = if payload.starts_with(b"II") {
-        ByteOrder::LittleEndian
-    } else if payload.starts_with(b"MM") {
-        ByteOrder::BigEndian
-    } else {
-        inherited_order
-    };
+    // MakerNotes.pm:937 `ByteOrder => 'Unknown'` is resolved by Exif.pm:6982-6993
+    // from the int16u at `$valuePtr + 8`, before the patch below moves the
+    // count. This also covers the headerless WG-M1 model override.
+    let order = resolve_byte_order_at(payload, 8, inherited_order);
     let reader = EndianReader::new(payload, order.to_io_byte_order());
     let Some(first) = reader.u16_at(8) else {
         return Vec::new();
@@ -614,6 +611,56 @@ mod tests {
         let result = parser.parse(&data, ByteOrder::LittleEndian, &mut tags);
         assert!(result.is_ok());
         assert_eq!(tags.get("Ricoh:FocusMode"), Some(&"Manual".to_string()));
+    }
+
+    /// A headerless WG-M1 Ricoh2 note: two little-endian entries whose count
+    /// sits at `count_at` (8 = before the padding, 10 = after it).
+    fn wg_m1_little_endian_note(count_at: usize) -> Vec<u8> {
+        let mut note = vec![0; 100];
+        note[..8].copy_from_slice(b"WG-M1foo");
+        note[count_at..count_at + 2].copy_from_slice(&2u16.to_le_bytes());
+        note[12..14].copy_from_slice(&0x0207u16.to_le_bytes());
+        note[14..16].copy_from_slice(&2u16.to_le_bytes());
+        note[16..20].copy_from_slice(&4u32.to_le_bytes());
+        note[20..24].copy_from_slice(b"ABCD");
+        note[24..26].copy_from_slice(&0x0300u16.to_le_bytes());
+        note[26..28].copy_from_slice(&7u16.to_le_bytes());
+        note[28..32].copy_from_slice(&8u32.to_le_bytes());
+        note[32..36].copy_from_slice(&80u32.to_le_bytes());
+        note[80..88].copy_from_slice(b"Make    ");
+        note
+    }
+
+    fn type2_prints(note: &[u8], inherited: ByteOrder) -> HashMap<String, TagValue> {
+        parse_ricoh_type2_rows(&MakerNoteContext::detached(note), inherited)
+            .into_iter()
+            .filter_map(|(key, row)| row.print.map(|print| (key, print)))
+            .collect()
+    }
+
+    #[test]
+    fn ricoh_type2_resolves_unknown_order_against_a_big_endian_tiff() {
+        // MakerNotes.pm:937 `ByteOrder => 'Unknown'`: Exif.pm:6982-6993 reads
+        // the int16u at `$valuePtr + 8` in the enclosing order and flips when
+        // it is not a plausible entry count (0x0200 read as MM here).
+        let prints = type2_prints(&wg_m1_little_endian_note(8), ByteOrder::BigEndian);
+        assert_eq!(
+            prints.get("Ricoh:RicohModel"),
+            Some(&TagValue::String("ABCD".into()))
+        );
+        assert_eq!(
+            prints.get("Ricoh:RicohMake"),
+            Some(&TagValue::String("Make".into()))
+        );
+    }
+
+    #[test]
+    fn ricoh_type2_order_check_precedes_the_kodak_patch() {
+        // The order test runs before ProcessKodakPatch (MakerNotes.pm:1742)
+        // moves the count, so a zero first word keeps the inherited MM order;
+        // the patched count 0x0200 then overruns the note and nothing is read.
+        let prints = type2_prints(&wg_m1_little_endian_note(10), ByteOrder::BigEndian);
+        assert!(prints.is_empty(), "{prints:?}");
     }
 
     #[test]
