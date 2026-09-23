@@ -695,3 +695,113 @@ fn pinned_exiftool_jpeg_walks_vivo_then_samsung() {
         ))
     );
 }
+
+/// SOI, a JFIF APP0 and SOF0, without SOS: the prefix of the reviewer's
+/// no-scan probes.
+fn jpeg_prefix_without_scan() -> Vec<u8> {
+    let mut jpeg = base_jpeg();
+    push_segment(&mut jpeg, 0xe0, b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+    push_segment(
+        &mut jpeg,
+        0xc0,
+        &[0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00],
+    );
+    jpeg
+}
+
+#[test]
+fn jpeg_that_never_reaches_sos_reads_no_trailers() {
+    // ProcessJPEG calls IdentifyTrailer/ProcessTrailers only on reaching SOS
+    // (ExifTool.pm:7627-7634); at EOI it merely finishes a walk begun there.
+    // Pinned ExifTool 13.59 reports "Missing JPEG SOS" / "JPEG format error"
+    // and no Samsung or Vivo tags for any of these carriers.
+    let mut eoi_then_samsung = jpeg_prefix_without_scan();
+    eoi_then_samsung.extend_from_slice(b"\xff\xd9");
+    eoi_then_samsung.extend_from_slice(&samsung_soundshot_trailer());
+    let mut eoi_then_vivo = jpeg_prefix_without_scan();
+    eoi_then_vivo.extend_from_slice(b"\xff\xd9");
+    eoi_then_vivo.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
+    let mut no_eoi_samsung = jpeg_prefix_without_scan();
+    no_eoi_samsung.extend_from_slice(&samsung_soundshot_trailer());
+    for carrier in [eoi_then_samsung, eoi_then_vivo, no_eoi_samsung] {
+        let metadata = public_metadata(&carrier);
+        assert!(metadata.get("MakerNotes:EmbeddedAudioFileName").is_none());
+        assert!(metadata.get("MakerNotes:EmbeddedAudioFile").is_none());
+        assert!(metadata.get("Trailer:JSONInfo").is_none());
+    }
+}
+
+fn media_jukebox_metadata(fields: &[u8]) -> Metadata {
+    let mut jpeg = base_jpeg();
+    push_segment(&mut jpeg, 0xe9, &media_jukebox_payload(fields));
+    finish_jpeg(&mut jpeg);
+    public_metadata(&jpeg)
+}
+
+#[test]
+fn media_jukebox_date_skips_only_ascii_whitespace() {
+    // Perl numification skips ASCII whitespace only: a leading NBSP makes the
+    // value 0 (pinned: 1899:12:30 00:00:00), never 45000 days.
+    let metadata = media_jukebox_metadata(b"<Date>\xc2\xa045000</Date>");
+    assert_ne!(metadata.get_string("XML:Date"), Some("2023:03:15 00:00:00"));
+    assert_eq!(
+        media_jukebox_metadata(b"<Date>\t45000 \n</Date>").get_string("XML:Date"),
+        Some("2023:03:15 00:00:00")
+    );
+}
+
+#[test]
+fn media_jukebox_publishes_only_leaf_children_of_the_root() {
+    // XMP.pm names a nested element by its path (FooCaption, CaptionName,
+    // CaptionFoo in pinned 13.59); none of these is a plain Caption or Name.
+    for fields in [
+        &b"<Foo><Caption>x</Caption></Foo>"[..],
+        b"<Caption><Name>x</Name></Caption>",
+        b"<Caption>a<Foo/>b</Caption>",
+    ] {
+        let metadata = media_jukebox_metadata(fields);
+        assert!(metadata.get("XML:Caption").is_none(), "{fields:?}");
+        assert!(metadata.get("XML:Name").is_none(), "{fields:?}");
+    }
+    // Empty and self-closing leaves are still values ("" in pinned 13.59).
+    let metadata = media_jukebox_metadata(b"<Caption></Caption><Name/>");
+    assert_eq!(metadata.get_string("XML:Caption"), Some(""));
+    assert_eq!(metadata.get_string("XML:Name"), Some(""));
+}
+
+#[test]
+fn media_jukebox_repeated_field_keeps_the_last_value() {
+    // Pinned 13.59 reports one Caption, "b", for two Caption elements, even
+    // with -a (XMP.pm's later property replaces the earlier one).
+    let mut jpeg = base_jpeg();
+    push_segment(
+        &mut jpeg,
+        0xe9,
+        &media_jukebox_payload(b"<Caption>a</Caption><Caption>b</Caption>"),
+    );
+    finish_jpeg(&mut jpeg);
+    let mut file = tempfile::NamedTempFile::new().expect("create JPEG carrier");
+    file.write_all(&jpeg).expect("write JPEG carrier");
+    let map = oxidex::core::operations::read_metadata(file.path()).expect("JPEG parses");
+    let captions: Vec<TagValue> = map
+        .project_occurrences(oxidex::core::tag_occurrence::ValueChannel::PrintConv)
+        .filter(|(key, _, _)| *key == "XML:Caption")
+        .map(|(_, _, value)| value.into_owned())
+        .collect();
+    assert_eq!(captions, [TagValue::new_string("b")]);
+}
+
+#[test]
+fn media_jukebox_unresolvable_numeric_reference_withholds_the_field() {
+    // UnescapeXML turns these into raw code points that are not valid text;
+    // pinned 13.59 prints "ab", "???" and "????". Never publish them literally.
+    let metadata = media_jukebox_metadata(
+        b"<Caption>a&#0;b</Caption><Name>&#xD800;</Name><Album>&#x110000;</Album><People>&nbsp;</People><Places>&#x41;</Places>",
+    );
+    assert!(metadata.get("XML:Caption").is_none());
+    assert!(metadata.get("XML:Name").is_none());
+    assert!(metadata.get("XML:Album").is_none());
+    // An unknown named reference is kept as written, as pinned 13.59 does.
+    assert_eq!(metadata.get_string("XML:People"), Some("&nbsp;"));
+    assert_eq!(metadata.get_string("XML:Places"), Some("A"));
+}

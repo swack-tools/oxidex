@@ -1458,6 +1458,30 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
         "Name",
         "Date",
     ];
+    // (field, published value). XMP.pm lets a later property replace an
+    // earlier one of the same name, so each field is kept once, last wins.
+    let mut found: Vec<(&str, Option<String>)> = Vec::new();
+    let mut record = |field: &str, value: Option<String>| {
+        let value = value.and_then(|value| {
+            if field == "Date" {
+                // JPEG.pm routes Date through ConvertUnixTime and
+                // ConvertDateTime.  Do not turn a non-finite or unsupported
+                // float into a plausible timestamp.
+                format_media_jukebox_date(&value)
+            } else {
+                Some(value)
+            }
+        });
+        let field = FIELDS
+            .iter()
+            .copied()
+            .find(|known| *known == field)
+            .expect("only known fields are recorded");
+        match found.iter_mut().find(|(known, _)| *known == field) {
+            Some(slot) => slot.1 = value,
+            None => found.push((field, value)),
+        }
+    };
     for segment in segments.iter().filter(|segment| segment.marker == APP9) {
         if !segment.data.starts_with(IDENTIFIER) {
             continue;
@@ -1473,77 +1497,87 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
         // arrives as text/reference/text events and must keep its spaces.
         reader.config_mut().trim_text(false);
         let mut buffer = Vec::new();
-        // (field, value, every byte decoded). A field with bytes that do not
-        // decode is withheld rather than published with a gap in it.
-        let mut current: Option<(String, String, bool)> = None;
+        // Element depth below `<MJMD>`: fields are its direct children.
+        let mut depth = 0usize;
+        let mut current: Option<MediaJukeboxField> = None;
         loop {
             match reader.read_event_into(&mut buffer) {
                 Ok(Event::Start(element)) => {
-                    let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
-                    current =
-                        FIELDS
+                    depth += 1;
+                    if depth == 1 {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        current = FIELDS
                             .contains(&name.as_str())
-                            .then_some((name, String::new(), true));
+                            .then(|| MediaJukeboxField::new(name));
+                    } else if let Some(field) = current.as_mut() {
+                        field.nested = true;
+                    }
+                }
+                Ok(Event::Empty(element)) => {
+                    if depth == 0 {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        if FIELDS.contains(&name.as_str()) {
+                            record(&name, Some(String::new()));
+                        }
+                    } else if let Some(field) = current.as_mut() {
+                        field.nested = true;
+                    }
                 }
                 Ok(Event::Text(text)) => {
-                    if let Some((_, value, valid)) = current.as_mut() {
+                    if let Some(field) = current.as_mut() {
                         match text.decode() {
-                            Ok(decoded) => value.push_str(&decoded),
-                            Err(_) => *valid = false,
+                            Ok(decoded) => field.value.push_str(&decoded),
+                            Err(_) => field.renderable = false,
                         }
                     }
                 }
                 Ok(Event::CData(data)) => {
                     // FoundXMP copies CDATA content through unescaped.
-                    if let Some((_, value, valid)) = current.as_mut() {
+                    if let Some(field) = current.as_mut() {
                         match data.decode() {
-                            Ok(decoded) => value.push_str(&decoded),
-                            Err(_) => *valid = false,
+                            Ok(decoded) => field.value.push_str(&decoded),
+                            Err(_) => field.renderable = false,
                         }
                     }
                 }
                 Ok(Event::GeneralRef(reference)) => {
                     // UnescapeXML: numeric and predefined references resolve;
-                    // an unknown `&name;` is kept as written.
-                    if let Some((_, value, valid)) = current.as_mut() {
+                    // an unknown named `&name;` is kept as written. A numeric
+                    // reference to a non-character (`&#0;`, a surrogate, past
+                    // U+10FFFF) becomes raw bytes there, so withhold the field.
+                    if let Some(field) = current.as_mut() {
                         match reference.xml10_content() {
-                            Ok(name) => {
-                                if let Ok(Some(character)) = reference.resolve_char_ref() {
-                                    value.push(character);
-                                } else if let Some(entity) = resolve_predefined_entity(&name) {
-                                    value.push_str(entity);
-                                } else {
-                                    value.push('&');
-                                    value.push_str(&name);
-                                    value.push(';');
+                            Ok(name) if name.starts_with('#') => {
+                                match reference.resolve_char_ref() {
+                                    Ok(Some(character)) => field.value.push(character),
+                                    _ => field.renderable = false,
                                 }
                             }
-                            Err(_) => *valid = false,
+                            Ok(name) => {
+                                if let Some(entity) = resolve_predefined_entity(&name) {
+                                    field.value.push_str(entity);
+                                } else {
+                                    field.value.push('&');
+                                    field.value.push_str(&name);
+                                    field.value.push(';');
+                                }
+                            }
+                            Err(_) => field.renderable = false,
                         }
                     }
                 }
                 Ok(Event::End(_)) => {
-                    if let Some((field, value, valid)) = current.take() {
-                        if !valid {
-                            continue;
-                        }
-                        let value = if field == "Date" {
-                            // JPEG.pm routes Date through ConvertUnixTime and
-                            // ConvertDateTime.  Do not turn a non-finite or
-                            // unsupported float into a plausible timestamp.
-                            let Some(date) = format_media_jukebox_date(&value) else {
-                                continue;
-                            };
-                            date
-                        } else {
-                            value
-                        };
-                        metadata.insert_with_group1(
-                            format!("XML:{field}"),
-                            TagValue::new_string(value),
-                            "MediaJukebox",
-                        );
+                    if depth == 1
+                        && let Some(field) = current.take()
+                        && !field.nested
+                    {
+                        // A nested field is published by XMP.pm under a
+                        // path-concatenated name (e.g. `CaptionFoo`), never
+                        // under its own; one that cannot be rendered is
+                        // withheld, including any earlier value it replaces.
+                        record(&field.name, field.renderable.then_some(field.value));
                     }
+                    depth = depth.saturating_sub(1);
                 }
                 Ok(Event::Eof) | Err(_) => break,
                 _ => {}
@@ -1551,11 +1585,45 @@ pub fn process_media_jukebox_segments(segments: &[Segment], metadata: &mut Metad
             buffer.clear();
         }
     }
+    for (field, value) in found {
+        if let Some(value) = value {
+            metadata.insert_with_group1(
+                format!("XML:{field}"),
+                TagValue::new_string(value),
+                "MediaJukebox",
+            );
+        }
+    }
+}
+
+/// A direct child of the Media Jukebox root while it is being read.
+struct MediaJukeboxField {
+    name: String,
+    value: String,
+    /// Contains a child element (XMP.pm then names it by path instead).
+    nested: bool,
+    /// Every byte and reference decoded to text.
+    renderable: bool,
+}
+
+impl MediaJukeboxField {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            value: String::new(),
+            nested: false,
+            renderable: true,
+        }
+    }
 }
 
 fn format_media_jukebox_date(value: &str) -> Option<String> {
-    // Perl numifies around leading and trailing whitespace.
-    let days = value.trim().parse::<f64>().ok()?;
+    // Perl numification skips ASCII whitespace only (not NBSP or other
+    // Unicode spaces, which leave the value non-numeric).
+    let days = value
+        .trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))
+        .parse::<f64>()
+        .ok()?;
     if !days.is_finite() {
         return None;
     }
