@@ -1624,8 +1624,9 @@ enum MediaJukeboxAttributes {
     /// value is still published; an empty one is withheld, since XMP.pm may
     /// publish "", nothing, or a value taken from the attribute.
     Other,
-    /// `rdf:nodeID` (pinned 13.59 drops the field with "internal error
-    /// parsing nodeID's"), or attributes that do not parse: withheld.
+    /// A `nodeID` attribute key, whatever its prefix (pinned 13.59 drops an
+    /// rdf:nodeID field with "internal error parsing nodeID's"), or
+    /// attributes that do not parse: withheld.
     Withheld,
 }
 
@@ -1659,15 +1660,19 @@ impl MediaJukeboxField {
 
 impl MediaJukeboxAttributes {
     fn of(element: &quick_xml::events::BytesStart<'_>) -> Self {
-        if memchr::memmem::find(element.attributes_raw(), b"rdf:nodeID").is_some() {
-            return Self::Withheld;
-        }
         let mut attributes = Self::Neutral;
         for attribute in element.attributes() {
             let Ok(attribute) = attribute else {
                 return Self::Withheld;
             };
             let key = attribute.key.as_ref();
+            // XMP.pm resolves the prefix, so `r:nodeID` with `r` bound to
+            // the RDF namespace is rdf:nodeID too. Namespaces are not
+            // resolved here: any `nodeID` local name withholds the field.
+            // Attribute values (`note="rdf:nodeID"`) are never keys.
+            if key == b"nodeID" || key.ends_with(b":nodeID") {
+                return Self::Withheld;
+            }
             if !(key == b"xml:lang" || key.starts_with(b"xmlns:")) {
                 attributes = Self::Other;
             }

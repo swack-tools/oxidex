@@ -1077,3 +1077,62 @@ fn later_sos_headers_are_scanned_as_exiftool_scans_them() {
         );
     }
 }
+
+#[test]
+fn media_jukebox_node_id_is_an_attribute_key_not_attribute_text() {
+    // Pinned 13.59: `note="rdf:nodeID"` is an ordinary attribute (NameNote),
+    // so Name "Album" is published.
+    assert_eq!(
+        media_jukebox_metadata(b"<Name note=\"rdf:nodeID\">Album</Name>").get_string("XML:Name"),
+        Some("Album")
+    );
+    // XMP.pm resolves the prefix: `r:nodeID` with `xmlns:r` bound to the RDF
+    // namespace is still rdf:nodeID, and pinned 13.59 drops Name. Any
+    // `*:nodeID` key is withheld here rather than resolved.
+    let rdf = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    for fields in [
+        format!("<Caption>a</Caption><Name xmlns:r=\"{rdf}\" r:nodeID=\"n\">b</Name>"),
+        format!("<Caption>a</Caption><Name r:nodeID=\"n\" xmlns:r=\"{rdf}\">b</Name>"),
+        "<Caption>a</Caption><Name rdf:nodeID = \"n\">b</Name>".to_string(),
+    ] {
+        let metadata = media_jukebox_metadata(fields.as_bytes());
+        assert!(metadata.get("XML:Name").is_none(), "{fields}");
+        assert_eq!(metadata.get_string("XML:Caption"), Some("a"), "{fields}");
+    }
+    // `rdf` rebound to another namespace, or a nested prefix, is not
+    // rdf:nodeID in pinned 13.59 (Name "b"): published or withheld, never
+    // anything else.
+    for fields in [
+        &b"<Caption>a</Caption><Name xmlns:rdf=\"urn:other\" rdf:nodeID=\"n\">b</Name>"[..],
+        b"<Caption>a</Caption><Name x:rdf:nodeID=\"n\">b</Name>",
+    ] {
+        assert_media_jukebox_absent_or(fields, "XML:Name", Some("b"));
+    }
+}
+
+#[test]
+fn zero_size_photo_mechanic_trailer_still_exposes_samsung() {
+    // ProcessPhotoMechanic accepts `size == 0` (a 12-byte trailer); pinned
+    // 13.59 then reaches Samsung, and Vivo outside it, on JPEG and TIFF.
+    let zero_photo_mechanic = b"\0\0\0\0cbipcbbl";
+    let mut jpeg = base_jpeg();
+    finish_jpeg(&mut jpeg);
+    jpeg.extend_from_slice(&samsung_soundshot_trailer());
+    jpeg.extend_from_slice(zero_photo_mechanic);
+    let mut tiff = tiff_carrier();
+    tiff.extend_from_slice(&samsung_soundshot_trailer());
+    tiff.extend_from_slice(zero_photo_mechanic);
+    for carrier in [&jpeg, &tiff] {
+        assert_eq!(
+            public_metadata(carrier).get_string("MakerNotes:EmbeddedAudioFileName"),
+            Some("SoundShot_000")
+        );
+    }
+    jpeg.extend_from_slice(&vivo_trailer(b"{\"a\":1}"));
+    let metadata = public_metadata(&jpeg);
+    assert_eq!(
+        metadata.get_string("MakerNotes:EmbeddedAudioFileName"),
+        Some("SoundShot_000")
+    );
+    assert_eq!(metadata.get_string("Trailer:JSONInfo"), Some("{\"a\":1}"));
+}
