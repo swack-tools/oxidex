@@ -288,7 +288,8 @@ pub enum Pc {
     BlockShotBits,
     /// `AutoCaptureCriteria` bits, with 255 meaning `All`.
     AutoCaptureCriteriaBits,
-    /// `IntervalShooting`, which reads three other data members.
+    /// `IntervalShooting`, which reads three other data members. Evaluated
+    /// late -- see [`Pc::is_deferred`].
     IntervalShooting,
     /// `FocusShiftShooting`, which reads `FocusShiftNumberShots` and
     /// `PixelShiftActive`. Evaluated late -- see [`Pc::is_deferred`].
@@ -298,15 +299,28 @@ pub enum Pc {
 impl Pc {
     /// ExifTool runs a PrintConv only when the value is fetched for output,
     /// after the whole file has been read, so a PrintConv that reads
-    /// `$$self{...}` sees each member's end-of-file value. `FocusShiftShooting`
-    /// (SeqInfoZ9, Nikon.pm:9015-9025) reads `FocusShiftNumberShots`, which
-    /// MenuSettingsZ8/Z9 store only later in the same ShotInfo walk
-    /// (Nikon.pm:9863, 10161, 10346, 10556), and `PixelShiftActive`, stored
-    /// by `Nikon::Main` 0x0056 (Nikon.pm:12149) wherever that entry sits in
-    /// the IFD. These are converted by [`Ctx::finish_deferred`] once the
-    /// MakerNote has been walked, instead of at the point they are found.
+    /// `$$self{...}` sees each member's end-of-file value. Two of them read
+    /// members stored by directories walked after them:
+    ///
+    /// * `FocusShiftShooting` (SeqInfoZ9, Nikon.pm:9015-9025) reads
+    ///   `FocusShiftNumberShots`, which MenuSettingsZ8/Z9 store later in the
+    ///   same ShotInfo walk (Nikon.pm:9863, 10161, 10346, 10556), and
+    ///   `PixelShiftActive`, stored by `Nikon::Main` 0x0056 (Nikon.pm:12149)
+    ///   wherever that entry sits in the IFD;
+    /// * `IntervalShooting` (SeqInfoD6 7719-7729, IntervalInfoZ7II 8779-8789,
+    ///   SeqInfoZ9 9030-9040) reads `IntervalFrame`, stored at a later index
+    ///   of its own table, and `IntervalShootingIntervals` /
+    ///   `IntervalShootingShotsPerInterval`, stored by IntervalInfoD6
+    ///   (7751, 7757) or the MenuSettings tables (9430-10551), all walked
+    ///   after it.
+    ///
+    /// These are converted by [`Ctx::finish_deferred`] once the MakerNote has
+    /// been walked, instead of at the point they are found. (`FocusDistance`
+    /// in LensData0800 also reads a later member, `FocusStepsFromInfinity`,
+    /// but that tag is `Unknown` and ExifTool never stores it without `-u`,
+    /// so there is nothing to wait for.)
     fn is_deferred(self) -> bool {
-        matches!(self, Pc::FocusShiftShooting)
+        matches!(self, Pc::FocusShiftShooting | Pc::IntervalShooting)
     }
 }
 

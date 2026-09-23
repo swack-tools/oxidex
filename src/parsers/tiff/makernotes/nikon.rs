@@ -2290,6 +2290,12 @@ mod tests {
     /// ShotInfo, ShutterCount. `after` stores 0x0056 *after* 0x0091, so the
     /// member is set only once FocusShiftShooting has been extracted.
     fn z9_makernote(frame: u8, shots: u8, ps: Option<u8>, after: bool, menu: bool) -> Vec<u8> {
+        nikon_makernote(z9_shot_info(frame, shots, menu), ps, after)
+    }
+
+    /// The MakerNote of [`z9_makernote`] around an already-enciphered
+    /// ShotInfo block.
+    fn nikon_makernote(shot_info: Vec<u8>, ps: Option<u8>, after: bool) -> Vec<u8> {
         let serial = format!("{Z9_SERIAL}\0").into_bytes();
         let mut rec56 = b"0120".to_vec();
         rec56.extend_from_slice(&[0u8; 8]);
@@ -2299,7 +2305,7 @@ mod tests {
             (0x0034, 3, 16u16.to_le_bytes().to_vec()),
         ];
         let e56 = ps.map(|_| (0x0056u16, 7u16, rec56));
-        let e91 = (0x0091u16, 7u16, z9_shot_info(frame, shots, menu));
+        let e91 = (0x0091u16, 7u16, shot_info);
         if after {
             entries.push(e91);
             entries.extend(e56);
@@ -2418,5 +2424,160 @@ mod tests {
             focus_shift(3, 100, Some(1), false, false).as_deref(),
             Some("On: Frame 3")
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // `IntervalShooting` (SeqInfoD6, Nikon.pm:7719-7729; IntervalInfoZ7II,
+    // 8779-8789; SeqInfoZ9, 9030-9040). The PrintConv reads
+    // `$$self{IntervalFrame}` (stored at a later index of the same table) and
+    // `$$self{IntervalShootingIntervals}` / `...ShotsPerInterval}`, stored by
+    // IntervalInfoD6 (7751, 7757), MenuSettingsZ7II (9626, 9632) or
+    // MenuSettingsZ9 (10149, 10155) -- all walked after it. Expected strings
+    // are the pinned 13.59 oracle's output on byte-identical TIFFs built by
+    // /private/tmp/claude-501/nikon-focus-shift/synth2.py.
+    // ---------------------------------------------------------------------
+
+    #[derive(Clone, Copy)]
+    enum IntervalLayout {
+        /// ShotInfoZ9 0805: SeqInfoZ9 at 0x100, MenuInfoZ9 at 0x200.
+        Z9,
+        /// ShotInfoD6 0246: SeqInfoD6 at 0x100, IntervalInfoD6 at 0x200.
+        D6,
+        /// ShotInfoZ7II 0803: IntervalInfoZ7II at 0x100, MenuInfoZ7II at 0x200.
+        Z7II,
+    }
+
+    fn put_u16(d: &mut [u8], at: usize, v: u16) {
+        d[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    }
+
+    fn put_u32(d: &mut [u8], at: usize, v: u32) {
+        d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    /// A ShotInfo carrying IntervalShooting / IntervalFrame in its sequence
+    /// block and Intervals / ShotsPerInterval in the block the later offset
+    /// points at (left unreferenced when `!block`).
+    fn interval_shot_info(
+        layout: IntervalLayout,
+        shooting: u16,
+        frame: u16,
+        intervals: u32,
+        per: u32,
+        block: bool,
+    ) -> Vec<u8> {
+        let mut d = vec![0u8; 0x800];
+        put_u32(&mut d, 0x24, 48); // NumberOffsets
+        put_u32(&mut d, 0x30, 0x100); // SequenceOffset / IntervalOffset
+        match layout {
+            IntervalLayout::Z9 => {
+                d[0..12].copy_from_slice(b"080501.00.f0");
+                if block {
+                    put_u32(&mut d, 0x8c, 0x200); // MenuOffset
+                }
+                put_u16(&mut d, 0x128, shooting);
+                put_u16(&mut d, 0x12a, frame);
+                put_u32(&mut d, 0x210, 0x40); // MenuSettingsOffsetZ9
+                put_u32(&mut d, 0x240 + 188, intervals);
+                put_u32(&mut d, 0x240 + 192, per);
+            }
+            IntervalLayout::D6 => {
+                d[0..12].copy_from_slice(b"024601.00.00");
+                if block {
+                    put_u32(&mut d, 0xa4, 0x200); // IntervalOffset
+                }
+                put_u16(&mut d, 0x124, shooting);
+                put_u16(&mut d, 0x128, frame);
+                put_u32(&mut d, 0x200 + 0x17c, intervals);
+                put_u32(&mut d, 0x200 + 0x180, per);
+            }
+            IntervalLayout::Z7II => {
+                d[0..12].copy_from_slice(b"080301.00.00");
+                if block {
+                    put_u32(&mut d, 0xa0, 0x200); // MenuOffset
+                }
+                put_u16(&mut d, 0x124, shooting);
+                put_u16(&mut d, 0x128, frame);
+                put_u32(&mut d, 0x210, 0x40); // MenuSettingsOffsetZ7II
+                put_u32(&mut d, 0x240 + 176, intervals);
+                put_u32(&mut d, 0x240 + 180, per);
+            }
+        }
+        encrypted::Decryptor::new(Z9_SERIAL, Z9_COUNT).decrypt_from(&mut d, 4);
+        d
+    }
+
+    fn interval_shooting(
+        layout: IntervalLayout,
+        shooting: u16,
+        frame: u16,
+        intervals: u32,
+        per: u32,
+        block: bool,
+    ) -> Option<String> {
+        let model = match layout {
+            IntervalLayout::Z9 => "NIKON Z 9",
+            IntervalLayout::D6 => "NIKON D6",
+            IntervalLayout::Z7II => "NIKON Z 7_2",
+        };
+        let mn = nikon_makernote(
+            interval_shot_info(layout, shooting, frame, intervals, per, block),
+            None,
+            false,
+        );
+        let mut tags = HashMap::new();
+        let mut value_forms = HashMap::new();
+        NikonParser
+            .parse_with_model_and_values(
+                &mn,
+                ByteOrder::LittleEndian,
+                Some(model),
+                &mut tags,
+                &mut value_forms,
+            )
+            .expect("parse synthetic interval MakerNote");
+        tags.get("Nikon:IntervalShooting").cloned()
+    }
+
+    const INTERVAL_LAYOUTS: [IntervalLayout; 3] =
+        [IntervalLayout::Z9, IntervalLayout::D6, IntervalLayout::Z7II];
+
+    /// Oracle: `{z9,d6,z7ii}_full.tif` -> `On: Interval 2 of 5 Frame 1 of 3`.
+    #[test]
+    fn interval_shooting_reads_members_decoded_after_it() {
+        for layout in INTERVAL_LAYOUTS {
+            assert_eq!(
+                interval_shooting(layout, 2, 1, 5, 3, true).as_deref(),
+                Some("On: Interval 2 of 5 Frame 1 of 3")
+            );
+        }
+    }
+
+    /// Oracle: `{z9,d6,z7ii}_per1.tif` -> `On: Interval 2 of 5` (the frame
+    /// clause needs ShotsPerInterval > 1); `*_off.tif` -> `Off`.
+    #[test]
+    fn interval_shooting_single_shot_and_off() {
+        for layout in INTERVAL_LAYOUTS {
+            assert_eq!(
+                interval_shooting(layout, 2, 1, 5, 1, true).as_deref(),
+                Some("On: Interval 2 of 5")
+            );
+            assert_eq!(
+                interval_shooting(layout, 0, 1, 5, 3, true).as_deref(),
+                Some("Off")
+            );
+        }
+    }
+
+    /// Oracle: `{z9,d6,z7ii}_noblock.tif` (the later block is never walked)
+    /// -> `On: Interval 2 of 0`, from the PrintConv's own `||0`.
+    #[test]
+    fn interval_shooting_without_the_interval_block() {
+        for layout in INTERVAL_LAYOUTS {
+            assert_eq!(
+                interval_shooting(layout, 2, 1, 5, 3, false).as_deref(),
+                Some("On: Interval 2 of 0")
+            );
+        }
     }
 }
