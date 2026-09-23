@@ -588,10 +588,46 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
         raise Refused(f"{release} release test suite log is unavailable") from exc
     if log_sha != log.get("sha256"):
         raise Refused(f"{release} release test suite log differs from its report")
+    oracle = _release_test_oracle(report, release)
     return {"commands": expected, "exits": [row["exit"] for row in commands],
             **{key: totals[key] for key in keys},
             "duration_seconds": round(sum(row["duration_seconds"] for row in commands), 3),
-            "target_directory": suite["target_directory"], "log": log}
+            "target_directory": suite["target_directory"], "log": log, "exiftool_oracle": oracle}
+
+
+def _release_test_oracle(report: Mapping[str, Any], release: str) -> dict[str, Any]:
+    """The suite must have been graded by this side's selected, capable ExifTool.
+
+    The report's native identity is the executor-verified selected release
+    (tree, Perl and library). The recorded oracle probe and the suite's
+    allowlisted environment must both resolve to exactly that tree.
+    """
+    suite = report["test_suite"]
+    oracle, env, native = suite.get("exiftool_oracle"), suite.get("environment"), report.get("native_identity")
+    allowed = set(stage_adapter.TEST_ENVIRONMENT_PASSTHROUGH) | set(stage_adapter.TEST_ENVIRONMENT_SET)
+    try:
+        cache = oracle["cache_dir"]
+        shim = str(Path(cache) / "bin")
+        valid = (
+            isinstance(native, dict) and isinstance(env, dict)
+            and oracle["version"] == release and oracle["docx_filetype"] == "DOCX"
+            and oracle["perl_modules_available"] is True
+            and oracle["tree"] == str(Path(cache) / "exiftool")
+            and oracle["tree_realpath"] == native["source"]["path"]
+            and oracle["lib"]["exiftool_pm_sha256"] == native["lib"]["exiftool_pm_sha256"]
+            and oracle["perl"] == native["perl"]
+            and set(env) <= allowed and set(stage_adapter.TEST_ENVIRONMENT_SET) <= set(env)
+            and env["EXIFTOOL_CACHE_DIR"] == cache and env["EXIFTOOL_PERL"] == native["perl"]["path"]
+            and env["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"] == "1"
+            and env["CARGO_TARGET_DIR"] == suite["target_directory"]
+            and isinstance(env.get("PATH"), str) and env["PATH"].split(os.pathsep)[0] == shim
+        )
+    except (KeyError, TypeError) as exc:
+        raise Refused(f"{release} release test suite lacks its ExifTool oracle proof") from exc
+    if not valid:
+        raise Refused(f"{release} release test suite was not graded by the selected capable ExifTool "
+                      "under the allowlisted environment")
+    return oracle
 
 
 def _regular_receipt(path: Path) -> Path:
@@ -1232,6 +1268,9 @@ def _instrument_header(result: Mapping[str, Any]) -> str:
                 f"{'available' if capability['perl_modules_available'] else 'missing'}",
                 f"{label}: tests passed={tests['passed']} failed={tests['failed']} "
                 f"ignored={tests['ignored']} targets={tests['targets']} log={tests['log']['path']}",
+                f"{label}: tests graded by ExifTool {tests['exiftool_oracle']['version']} "
+                f"tree={tests['exiftool_oracle']['tree_realpath']} "
+                f"OOXML.docx={tests['exiftool_oracle']['docx_filetype']}",
                 f"{label}: corpus {proof['read_fixture_manifest']} "
                 f"manifest_sha256={proof['read_fixture_manifest_sha256']} "
                 f"files={proof['read_fixture_count']}",

@@ -474,6 +474,10 @@ def _require_test_suite_proof(result: Mapping[str, Any]) -> None:
             or suite.get("log") != result.get("raw_report")
             or any(not isinstance(row, dict) or row.get("exit") != 0 for row in commands)):
         raise Refused("test result lacks a counted zero-failure release test suite")
+    oracle = suite.get("exiftool_oracle")
+    if (not isinstance(oracle, dict) or oracle.get("version") != result.get("release")
+            or oracle.get("docx_filetype") != "DOCX" or oracle.get("perl_modules_available") is not True):
+        raise Refused("test result was not graded by the selected release's capable ExifTool")
 
 
 def _stage_result(path: Path, release: str, stage: str, native_probe_sha: str | None,

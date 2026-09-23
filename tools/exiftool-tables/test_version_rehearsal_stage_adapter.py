@@ -49,82 +49,13 @@ def fixture_text(artifact) -> str:
 
 
 # Captured from real `cargo test --workspace --all-features --no-fail-fast`
-# `--tests` and `--doc` runs with stderr merged into stdout (cargo's
-# `Running`/`Doc-tests` line precedes each target's own output).
-SUITE_TESTS_OUTPUT = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
-     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)
-
-running 3 tests
-test t::b ... ignored
-test t::c ... ok
-test t::a ... ok
-
-test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)
-
-running 1 test
-test m ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-     Running tests/it.rs (target/debug/deps/it-50a268676428d270)
-
-running 1 test
-test i ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-"""
-SUITE_FAILED_OUTPUT = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
-     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)
-
-running 3 tests
-test t::b ... ignored
-test t::a ... ok
-test t::c ... FAILED
-
-failures:
-
----- t::c stdout ----
-
-thread 't::c' (4453935) panicked at src/lib.rs:9:62:
-boom
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-
-
-failures:
-    t::c
-
-test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-error: test failed, to rerun pass `--lib`
-     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)
-
-running 1 test
-test m ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-     Running tests/it.rs (target/debug/deps/it-50a268676428d270)
-
-running 1 test
-test i ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-error: 1 target failed:
-    `--lib`
-"""
-SUITE_DOC_OUTPUT = """    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
-   Doc-tests tiny
-
-running 1 test
-test src/lib.rs - one (line 1) ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
-
-"""
+# runs (stderr merged into stdout, CARGO_TERM_COLOR=never) on this host:
+# cargo's `Running`/`Doc-tests` line precedes each target's own output.
+SUITE_TESTS_OUTPUT = '    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)\n\nrunning 3 tests\ntest t::b ... ignored\ntest t::c ... ok\ntest t::a ... ok\n\ntest result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)\n\nrunning 1 test\ntest m ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/it.rs (target/debug/deps/it-50a268676428d270)\n\nrunning 1 test\ntest i ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests tiny\n\nrunning 1 test\ntest src/lib.rs - one (line 1) ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n'
+SUITE_FAILED_OUTPUT = "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (target/debug/deps/tiny-63dad69917d0d146)\n\nrunning 3 tests\ntest t::b ... ignored\ntest t::a ... ok\ntest t::c ... FAILED\n\nfailures:\n\n---- t::c stdout ----\n\nthread 't::c' (5090742) panicked at src/lib.rs:9:62:\nboom\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    t::c\n\ntest result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `--lib`\n     Running unittests src/main.rs (target/debug/deps/tiny-4651c4a6039ea66e)\n\nrunning 1 test\ntest m ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/it.rs (target/debug/deps/it-50a268676428d270)\n\nrunning 1 test\ntest i ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests tiny\n\nrunning 1 test\ntest src/lib.rs - one (line 1) ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s\n\nerror: 1 target failed:\n    `--lib`\n"
+# Edition 2024 merges doc tests: one `Doc-tests` heading carries a merged
+# block and a standalone block, each with its own start and summary.
+SUITE_EDITION2024_OUTPUT = '    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s\n     Running unittests src/lib.rs (target/debug/deps/tiny24-0f7cd0931238ab25)\n\nrunning 1 test\ntest t::a ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n     Running tests/it.rs (target/debug/deps/it-db7a870656a72ec5)\n\nrunning 1 test\ntest i ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Doc-tests tiny24\n\nrunning 3 tests\ntest src/lib.rs - one (line 13) - should panic ... ok\ntest src/lib.rs - one (line 5) ... ok\ntest src/lib.rs - one (line 1) ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 1 test\ntest src/lib.rs - one (line 9) ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s\n\nall doctests ran in 0.38s; merged doctests compilation took 0.19s\n'
 # Shape of this repository's real output: tests that re-exec their own binary
 # with a filter and inherited stdout interleave nested libtest runs, including
 # garbled lines, inside the outer target's output (excerpt of the 13.59 run).
@@ -173,7 +104,10 @@ class AdapterTests(unittest.TestCase):
         self.manifest = self.root / "fixtures.json"; self.manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_fixture_manifest", "fixtures": [{"path": str(self.fixture), "sha256": adapter._sha(self.fixture), "bytes": self.fixture.stat().st_size}]}))
         self.jpeg = self.root / "write.jpg"; self.jpeg.write_bytes(b"\xff\xd8fixture")
         self.write_manifest = self.root / "write-fixtures.json"; self.write_manifest.write_text(json.dumps({"schema": 1, "kind": "oxidex_version_rehearsal_write_fixture_manifest", "fixtures": [{"path": str(self.jpeg), "sha256": adapter._sha(self.jpeg), "bytes": self.jpeg.stat().st_size}]}))
-        self.seen = []; self.suite_calls = []; self.diff_output = ".exiftool-version\n"
+        self.seen = []; self.suite_calls = []; self.oracle_calls = []; self.diff_output = ".exiftool-version\n"
+        (self.native / "exiftool").write_text("#!/usr/bin/env perl\n")
+        (self.native / "t/images").mkdir(parents=True); (self.native / "t/images/OOXML.docx").write_bytes(b"PK")
+        self.oracle_version, self.oracle_docx, self.missing_module = "11.78", "DOCX", None
         self.source_targets = tuple(
             V4Target(0x013c + index, f"StringTarget{index}", "EXIF", "IFD0", "string")
             for index in range(13)
@@ -222,9 +156,16 @@ class AdapterTests(unittest.TestCase):
             self.suite_calls.append((argv, kwargs["env"]))
             if kwargs.get("stderr") is not subprocess.STDOUT:
                 raise AssertionError("release tests must merge stderr into stdout")
-            if "--doc" in argv:
-                return subprocess.CompletedProcess(argv, 0, SUITE_DOC_OUTPUT, None)
             return subprocess.CompletedProcess(argv, 0, SUITE_TESTS_OUTPUT, None)
+        if Path(argv[0]).name == "perl":
+            self.oracle_calls.append((argv, kwargs["env"]))
+            if argv[1].startswith("-M"):
+                code = 1 if argv[1][2:] == self.missing_module else 0
+                return subprocess.CompletedProcess(argv, code, "", "")
+            if argv[-1] == "-ver":
+                return subprocess.CompletedProcess(argv, 0, self.oracle_version + "\n", None)
+            if argv[-3:-1] == ["-s3", "-FileType"]:
+                return subprocess.CompletedProcess(argv, 0, self.oracle_docx + "\n", None)
         if argv[0] == "cargo":
             test = argv[1] == "test"
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
@@ -378,6 +319,8 @@ class AdapterTests(unittest.TestCase):
         built = adapter.build(self.args("build"), run=self.fake_run)
         result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
         self.assertEqual(result["state"], "passed")
+        # One invocation, exactly as CI's required doc-test step runs it.
+        self.assertEqual(adapter.TEST_COMMANDS, (("cargo", "test", "--workspace", "--all-features", "--no-fail-fast"),))
         self.assertEqual([argv for argv, _env in self.suite_calls], [list(row) for row in adapter.TEST_COMMANDS])
         suite_target = self.target.resolve() / "test-suite"
         self.assertTrue(all(env["CARGO_TARGET_DIR"] == str(suite_target) and env["CARGO_TERM_COLOR"] == "never"
@@ -386,13 +329,12 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(suite["totals"], {"passed": 5, "failed": 0, "ignored": 1, "measured": 0,
                                            "filtered_out": 0, "targets": 4})
         self.assertEqual(result["denominator"], 5)
-        self.assertEqual([row["exit"] for row in suite["commands"]], [0, 0])
-        self.assertEqual([row["targets"] for row in suite["commands"]], [3, 1])
+        self.assertEqual([row["exit"] for row in suite["commands"]], [0])
         self.assertTrue(all(type(row["duration_seconds"]) is float for row in suite["commands"]))
         self.assertEqual(suite["target_directory"], str(suite_target))
         self.assertEqual(suite["log"], result["raw_report"])
         log = json.loads(Path(suite["log"]["path"]).read_text())
-        self.assertEqual([row["stdout"] for row in log["commands"]], [SUITE_TESTS_OUTPUT, SUITE_DOC_OUTPUT])
+        self.assertEqual([row["stdout"] for row in log["commands"]], [SUITE_TESTS_OUTPUT])
         # The suite's own target keeps the build's CLI and writer driver intact.
         adapter.executor._require_binary_proof(built, self.target)
         adapter.executor._require_binary_proof(built, self.target, "writer_binary")
@@ -400,12 +342,72 @@ class AdapterTests(unittest.TestCase):
             adapter.run_release_tests(self.args("test", report=str(self.reports / "again" / "test.json")),
                                       run=self.fake_run)
 
+    def test_release_tests_use_the_selected_oracle_and_ignore_ambient_overrides(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        ambient = {
+            "EXIFTOOL": "/opt/homebrew/bin/exiftool", "EXIFTOOL_CACHE_DIR": "/tmp/foreign-cache",
+            "EXIFTOOL_PERL": "/opt/homebrew/bin/perl", "OXIDEX_ALLOW_EXIFTOOL_SKEW": "1",
+            "OXIDEX_PINNED_EXIFTOOL": "/tmp/other", "CARGO_TERM_QUIET": "true", "RUSTFLAGS": "--cfg skip",
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER": "true", "RUSTC_WRAPPER": "true",
+            "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES": "0",
+        }
+        with patch.dict(os.environ, ambient):
+            result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
+        perl, native = self.perl.resolve(), self.native.resolve()
+        suite_target = self.target.resolve() / "test-suite"
+        cache = suite_target / "exiftool-oracle"
+        for env in [env for _argv, env in self.suite_calls] + [env for _argv, env in self.oracle_calls]:
+            self.assertFalse({"EXIFTOOL", "OXIDEX_ALLOW_EXIFTOOL_SKEW", "OXIDEX_PINNED_EXIFTOOL",
+                              "CARGO_TERM_QUIET", "RUSTFLAGS", "RUSTC_WRAPPER",
+                              "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER"} & set(env))
+            self.assertLessEqual(set(env), set(adapter.TEST_ENVIRONMENT_PASSTHROUGH) | set(adapter.TEST_ENVIRONMENT_SET))
+            self.assertEqual(env["EXIFTOOL_CACHE_DIR"], str(cache))
+            self.assertEqual(env["EXIFTOOL_PERL"], str(perl))
+            self.assertEqual(env["OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"], "1")
+            self.assertTrue(env["PATH"].startswith(str(cache / "bin") + os.pathsep))
+        self.assertEqual((cache / "exiftool").resolve(), native)
+        shim = (cache / "bin" / "exiftool").read_text()
+        self.assertIn(str(perl), shim); self.assertIn(str(cache / "exiftool" / "exiftool"), shim)
+        oracle = result["test_suite"]["exiftool_oracle"]
+        self.assertEqual(oracle["version"], "11.78")
+        self.assertEqual(oracle["docx_filetype"], "DOCX")
+        self.assertTrue(oracle["perl_modules_available"])
+        self.assertEqual(oracle["tree_realpath"], str(native))
+        self.assertEqual(oracle["cache_dir"], str(cache))
+        self.assertEqual(oracle["perl"]["path"], str(perl))
+        self.assertEqual(oracle["lib"]["exiftool_pm_sha256"], result["native_identity"]["lib"]["exiftool_pm_sha256"])
+        self.assertEqual(result["test_suite"]["environment"], self.suite_calls[0][1])
+        # The probes run exactly the argv the Rust oracle builds from EXIFTOOL_CACHE_DIR.
+        self.assertIn([str(perl), f"-I{cache / 'exiftool' / 'lib'}", str(cache / "exiftool" / "exiftool"), "-ver"],
+                      [argv for argv, _env in self.oracle_calls])
+
+    def test_release_test_oracle_must_be_the_selected_capable_release(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        adapter.build(self.args("build"), run=self.fake_run)
+        for label, change in (("wrong release", {"oracle_version": "13.55"}),
+                              ("zip degraded", {"oracle_docx": "ZIP"}),
+                              ("module missing", {"missing_module": "Archive::Zip"})):
+            with self.subTest(label=label):
+                report = self.reports / label.replace(" ", "-") / "test.json"
+                report.parent.mkdir()
+                (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
+                shutil.rmtree(self.target / "test-suite", ignore_errors=True)
+                self.oracle_version, self.oracle_docx, self.missing_module = "11.78", "DOCX", None
+                for name, value in change.items():
+                    setattr(self, name, value)
+                self.suite_calls.clear()
+                with self.assertRaisesRegex(adapter.Refused, "release test oracle"):
+                    adapter.run_release_tests(self.args("test", report=str(report)), run=self.fake_run)
+                self.assertEqual(self.suite_calls, [])
+                self.assertFalse(report.exists())
+
     def test_release_test_failures_publish_a_failed_report_not_a_pass(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)
         def failing(argv, **kwargs):
             result = self.fake_run(argv, **kwargs)
-            if argv[:2] == ["cargo", "test"] and "--tests" in argv:
+            if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
                 return subprocess.CompletedProcess(argv, 101, SUITE_FAILED_OUTPUT, None)
             return result
         result = adapter.run_release_tests(self.args("test"), run=failing)
@@ -419,9 +421,10 @@ class AdapterTests(unittest.TestCase):
         adapter.generate(self.args("generate"), run=self.fake_run)
         adapter.build(self.args("build"), run=self.fake_run)
         nested_crash = SUITE_NESTED_OUTPUT.rsplit("test result: ok. 3 passed", 1)[0]
+        doc_heading = "   Doc-tests tiny\n"
         broken = {
             "garbled result": (0, SUITE_TESTS_OUTPUT.replace("0 measured; ", "", 1)),
-            "crashed target": (101, SUITE_TESTS_OUTPUT.rsplit("test result:", 1)[0]),
+            "crashed target": (101, SUITE_TESTS_OUTPUT.split("   Doc-tests", 1)[0].rsplit("test result:", 1)[0]),
             "count mismatch": (0, SUITE_TESTS_OUTPUT.replace("running 3 tests", "running 4 tests")),
             "exit disagrees": (101, SUITE_TESTS_OUTPUT),
             "status disagrees": (0, SUITE_TESTS_OUTPUT.replace("test result: ok. 2 passed; 0 failed",
@@ -429,6 +432,8 @@ class AdapterTests(unittest.TestCase):
             "nothing ran": (101, "error[E0599]: no variant named `ValBpm`\n"),
             "nested summary only": (101, nested_crash),
             "filtered outer run": (0, SUITE_TESTS_OUTPUT.replace("0 measured; 0 filtered out", "0 measured; 2 filtered out", 1)),
+            "doc block without summary": (0, SUITE_TESTS_OUTPUT.replace(doc_heading, doc_heading + "\nrunning 2 tests\n")),
+            "garbled doc summary": (0, SUITE_TESTS_OUTPUT.rsplit("test result:", 1)[0] + "test result: ok\n"),
         }
         for label, (code, stdout) in broken.items():
             with self.subTest(label=label):
@@ -437,7 +442,7 @@ class AdapterTests(unittest.TestCase):
                 (report.parent / "build.json").write_text((self.reports / "build.json").read_text())
                 shutil.rmtree(self.target / "test-suite", ignore_errors=True)
                 def output(argv, **kwargs):
-                    if argv[:2] == ["cargo", "test"] and "--tests" in argv:
+                    if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
                         return subprocess.CompletedProcess(argv, code, stdout, None)
                     return self.fake_run(argv, **kwargs)
                 with self.assertRaisesRegex(adapter.Refused, "cargo test"):
@@ -448,7 +453,16 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(adapter.parse_test_output(SUITE_NESTED_OUTPUT), {
             "passed": 3, "failed": 0, "ignored": 1, "measured": 0, "filtered_out": 0, "targets": 1,
         })
-        self.assertEqual(adapter.parse_test_output(SUITE_TESTS_OUTPUT + SUITE_DOC_OUTPUT)["targets"], 4)
+        self.assertEqual(adapter.parse_test_output(SUITE_TESTS_OUTPUT)["targets"], 4)
+
+    def test_edition_2024_merged_and_standalone_doctest_blocks_are_summed(self):
+        self.assertEqual(adapter.parse_test_output(SUITE_EDITION2024_OUTPUT), {
+            "passed": 6, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0, "targets": 3,
+        })
+        broken = SUITE_EDITION2024_OUTPUT.replace("running 1 test\ntest src/lib.rs - one (line 9)",
+                                                  "running 2 tests\ntest src/lib.rs - one (line 9)")
+        with self.assertRaisesRegex(adapter.Refused, "cargo test"):
+            adapter.parse_test_output(broken)
 
     def test_release_test_suite_requires_the_passed_build(self):
         adapter.generate(self.args("generate"), run=self.fake_run)

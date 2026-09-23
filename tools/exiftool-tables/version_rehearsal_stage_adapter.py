@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,16 +31,22 @@ import version_rehearsal_executor as executor
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
-# The release's own test suite, run in the regenerated checkout. `--tests`
-# covers lib, bin and integration test targets; doc tests run separately
-# because one combined invocation races the FFI test's nested lib build on the
-# shared rlib (see the doc-test step in .github/workflows/ci.yml). All features
-# match the adapter build and CI; --no-fail-fast counts every target.
-TEST_COMMANDS = (
-    ("cargo", "test", "--workspace", "--all-features", "--no-fail-fast", "--tests"),
-    ("cargo", "test", "--workspace", "--all-features", "--no-fail-fast", "--doc"),
-)
+# The release's own test suite, run in the regenerated checkout exactly as
+# CI's required test step spells it: ONE invocation, because a separate
+# `--doc` run self-heals a mid-run lib rebuild that only the combined command
+# exposes (see the doc-test step in .github/workflows/ci.yml). All features
+# match the adapter build; --no-fail-fast counts every target.
+TEST_COMMANDS = (("cargo", "test", "--workspace", "--all-features", "--no-fail-fast"),)
 TEST_TARGET_SUBDIRECTORY = "test-suite"
+# The suite runs from an allowlisted environment, never the caller's: an
+# ambient EXIFTOOL, EXIFTOOL_CACHE_DIR, OXIDEX_ALLOW_EXIFTOOL_SKEW, RUSTFLAGS,
+# CARGO_* runner/quiet setting or compiler wrapper cannot reach it.
+TEST_ENVIRONMENT_PASSTHROUGH = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
+                                "CARGO_HOME", "RUSTUP_HOME", "SDKROOT", "DEVELOPER_DIR")
+TEST_ENVIRONMENT_SET = ("CARGO_TARGET_DIR", "CARGO_TERM_COLOR", "EXIFTOOL_CACHE_DIR", "EXIFTOOL_PERL",
+                        "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES")
+TEST_ORACLE_DIRECTORY = "exiftool-oracle"
+TEST_ORACLE_MODULES = ("strict", "warnings", "Archive::Zip", "Compress::Zlib")
 _TEST_RESULT = re.compile(
     r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; "
     r"(\d+) filtered out; finished in \d+(?:\.\d+)?s")
@@ -437,53 +444,149 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     _atomic(report, result); return result
 
 
+def _summary(line: str) -> tuple[str, int, int, int, int, int]:
+    match = _TEST_RESULT.fullmatch(line)
+    if match is None:
+        raise Refused(f"cargo test summary line is unparsable: {line!r}")
+    return (match.group(1), *(int(match.group(index)) for index in range(2, 7)))
+
+
+def _checked_block(started: int, summary: tuple[str, int, int, int, int, int]) -> tuple[int, int, int, int]:
+    status, passed, failed, ignored, measured, filtered = summary
+    if filtered != 0:
+        raise Refused("cargo test summary is filtered; it is not the target's own run")
+    if started != passed + failed + ignored + measured or (status == "ok") != (failed == 0):
+        raise Refused("cargo test summary disagrees with its own test count or status")
+    return passed, failed, ignored, measured
+
+
 def parse_test_output(output: str) -> dict[str, int]:
     """Strictly count one cargo test invocation from its merged output stream.
 
     Cargo announces each target (``Running ...`` / ``Doc-tests ...``) before
-    running it, so the merged stream splits into one segment per target. A
-    test that re-executes its own binary with a filter and inherited stdout
-    interleaves nested libtest runs (some lines garbled) inside its target's
-    segment, so each segment is read only at its boundaries: the first
-    ``running N tests`` line (printed before any test starts) and the last
-    summary (printed after every test, nested ones included, has finished).
-    That summary must parse, be unfiltered (only nested runs carry a filter),
-    account for N and agree with its own status. Anything else refuses.
+    running it, so the merged stream splits into one segment per target.
+
+    A test binary's segment is read only at its boundaries: tests that
+    re-execute their own binary with a filter and inherited stdout interleave
+    nested libtest runs (some lines garbled) inside it. Its first ``running N
+    tests`` line precedes every test and its last summary follows every
+    nested run, so only those two are the target's own.
+
+    A doc-test segment has no nested runs, but edition 2024 prints a merged
+    and a standalone block under one heading. Every line there must parse,
+    blocks pair in order, and each is checked and summed.
+
+    Every counted summary must be unfiltered, account for its N and agree with
+    its own status. Anything else refuses.
     """
-    segments: list[list[str]] = []
+    segments: list[tuple[bool, list[str]]] = []
     for line in output.splitlines():
         if _TEST_TARGET.fullmatch(line):
-            segments.append([])
+            segments.append((line.strip().startswith("Doc-tests "), []))
         elif segments:
-            segments[-1].append(line.strip())
+            segments[-1][1].append(line.strip())
     if not segments:
         raise Refused("cargo test ran no test targets")
     totals = {"passed": 0, "failed": 0, "ignored": 0, "measured": 0, "filtered_out": 0,
               "targets": len(segments)}
-    for lines in segments:
-        started = next((match for match in map(_TEST_RUNNING.fullmatch, lines) if match), None)
+    for doc, lines in segments:
+        starts = [line for line in lines if line.startswith("running ")]
         summaries = [line for line in lines if line.startswith("test result:")]
-        if started is None or not summaries:
+        if not starts or not summaries:
             raise Refused("cargo test output is incomplete: a target has no start or summary")
-        match = _TEST_RESULT.fullmatch(summaries[-1])
-        if match is None:
-            raise Refused(f"cargo test summary line is unparsable: {summaries[-1]!r}")
-        status = match.group(1)
-        passed, failed, ignored, measured, filtered = (int(match.group(index)) for index in range(2, 7))
-        if filtered != 0:
-            raise Refused("cargo test target summary is filtered; it is not the target's own run")
-        if int(started.group(1)) != passed + failed + ignored + measured or (status == "ok") != (failed == 0):
-            raise Refused("cargo test summary disagrees with its own test count or status")
-        for key, value in zip(("passed", "failed", "ignored", "measured"),
-                              (passed, failed, ignored, measured), strict=True):
-            totals[key] += value
+        if doc:
+            counts = []
+            if len(starts) != len(summaries):
+                raise Refused("cargo test doc-test blocks are incomplete")
+            for start, summary in zip(starts, summaries, strict=True):
+                match = _TEST_RUNNING.fullmatch(start)
+                if match is None:
+                    raise Refused(f"cargo test running line is unparsable: {start!r}")
+                counts.append(_checked_block(int(match.group(1)), _summary(summary)))
+        else:
+            match = _TEST_RUNNING.fullmatch(starts[0])
+            if match is None:
+                raise Refused(f"cargo test running line is unparsable: {starts[0]!r}")
+            counts = [_checked_block(int(match.group(1)), _summary(summaries[-1]))]
+        for passed, failed, ignored, measured in counts:
+            totals["passed"] += passed
+            totals["failed"] += failed
+            totals["ignored"] += ignored
+            totals["measured"] += measured
     return totals
+
+
+def _file_identity(path: Path) -> dict[str, str]:
+    return {"path": str(path), "sha256": _sha(_regular(path, "release test oracle file"))}
+
+
+def _release_test_oracle(suite_target: Path, perl: Path, native_source: Path) -> tuple[Path, Path]:
+    """Lay out the side's selected ExifTool where the Rust oracle resolves it.
+
+    ``EXIFTOOL_CACHE_DIR/exiftool`` is the oracle's pinned-tree root, so it
+    names the selected native source. A PATH shim makes any bare ``exiftool``
+    lookup run the same tree under the selected Perl rather than whatever
+    the host installed.
+    """
+    cache = suite_target / TEST_ORACLE_DIRECTORY
+    cache.mkdir()
+    (cache / "exiftool").symlink_to(native_source, target_is_directory=True)
+    shim_directory = cache / "bin"
+    shim_directory.mkdir()
+    tree = cache / "exiftool"
+    shim = shim_directory / "exiftool"
+    shim.write_text("#!/bin/sh\nexec " + " ".join(shlex.quote(part) for part in (
+        str(perl), f"-I{tree / 'lib'}", str(tree / "exiftool"))) + ' "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return cache, shim_directory
+
+
+def _release_test_environment(perl: Path, suite_target: Path, cache: Path, shim_directory: Path) -> dict[str, str]:
+    env = {key: os.environ[key] for key in TEST_ENVIRONMENT_PASSTHROUGH if key in os.environ}
+    env["PATH"] = str(shim_directory) + os.pathsep + env.get("PATH", os.defpath)
+    env.update(CARGO_TARGET_DIR=str(suite_target), CARGO_TERM_COLOR="never", EXIFTOOL_CACHE_DIR=str(cache),
+               EXIFTOOL_PERL=str(perl), OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES="1")
+    return env
+
+
+def _probe_release_test_oracle(release: str, perl: Path, cache: Path, shim_directory: Path,
+                               native_source: Path, identity: dict[str, Any], env: dict[str, str],
+                               checkout: Path,
+                               run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Prove, with the suite's own environment, which ExifTool it will grade against."""
+    tree = cache / "exiftool"
+    lib, program = tree / "lib", tree / "exiftool"
+    prefix = [str(perl), f"-I{lib}", str(program)]
+    version = _run([*prefix, "-ver"], cwd=checkout, env=env, run=run, merge_stderr=True)
+    docx = _run([*prefix, "-s3", "-FileType", str(tree / "t" / "images" / "OOXML.docx")],
+                cwd=checkout, env=env, run=run, merge_stderr=True)
+    modules = {module: _run([str(perl), f"-M{module}", "-e", "1"], cwd=checkout, env=env, run=run,
+                            merge_stderr=True)["state"] == "ok" for module in TEST_ORACLE_MODULES}
+    oracle = {
+        "cache_dir": str(cache), "tree": str(tree), "tree_realpath": str(tree.resolve()),
+        "program": _file_identity(program),
+        "lib": {"path": str(lib), "exiftool_pm_sha256": _sha(_regular(lib / "Image" / "ExifTool.pm",
+                                                                      "release test oracle library"))},
+        "perl": _file_identity(perl),
+        "version": version["stdout"].strip() if version["state"] == "ok" else None,
+        "docx_filetype": docx["stdout"].strip() if docx["state"] == "ok" else None,
+        "perl_modules": modules, "perl_modules_available": all(modules.values()),
+        "path_shim": _file_identity(shim_directory / "exiftool"),
+    }
+    if (oracle["version"] != release or oracle["docx_filetype"] != "DOCX" or not oracle["perl_modules_available"]
+            or oracle["tree_realpath"] != str(native_source.resolve())
+            or oracle["lib"]["exiftool_pm_sha256"] != identity["lib"]["exiftool_pm_sha256"]
+            or oracle["perl"] != identity["perl"]):
+        raise Refused(f"release test oracle is not the selected capable ExifTool {release}: "
+                      f"-ver={oracle['version']!r} OOXML.docx={oracle['docx_filetype']!r} "
+                      f"modules={modules} tree={oracle['tree_realpath']}")
+    return oracle
 
 
 def run_release_tests(args: argparse.Namespace, *,
                       run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> dict[str, Any]:
     """Run the regenerated checkout's own test suite in a dedicated target."""
-    checkout, target, report, perl, _source, native_lib, identity = _common(args, run)
+    checkout, target, report, perl, native_source, _native_lib, identity = _common(args, run)
     if (checkout / ".exiftool-version").read_text(encoding="utf-8") != args.release + "\n":
         raise Refused("test checkout is not pinned to selected release")
     # A separate target keeps the build's proven CLI and writer driver intact;
@@ -494,8 +597,10 @@ def run_release_tests(args: argparse.Namespace, *,
     previous = _prior(report, "build", args, identity, checkout)
     generated = _validate_artifacts(checkout, previous.get("generated_artifacts"))
     suite_target.mkdir()
-    env = _environment(perl, native_lib, suite_target)
-    env["CARGO_TERM_COLOR"] = "never"
+    cache, shim_directory = _release_test_oracle(suite_target, perl, native_source)
+    env = _release_test_environment(perl, suite_target, cache, shim_directory)
+    oracle = _probe_release_test_oracle(args.release, perl, cache, shim_directory, native_source,
+                                        identity, env, checkout, run)
     records = []
     for argv in TEST_COMMANDS:
         began = time.monotonic()
@@ -521,7 +626,8 @@ def run_release_tests(args: argparse.Namespace, *,
               "denominator": totals["passed"] + totals["failed"], "generated_artifacts": generated,
               "raw_report": raw,
               "test_suite": {"commands": commands, "totals": totals, "log": raw,
-                             "target_directory": str(suite_target), "features": "all"}}
+                             "target_directory": str(suite_target), "features": "all",
+                             "exiftool_oracle": oracle, "environment": env}}
     _atomic(report, result)
     return result
 

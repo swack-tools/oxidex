@@ -45,21 +45,43 @@ checks the actual checkout `HEAD`. The runner supplies `{release}`, `{checkout}`
 
 The stage adapter's `test` subcommand runs, in the owned checkout with its
 own `CARGO_TARGET_DIR` (`<target>/test-suite`, so the build's proven CLI and
-writer driver are never replaced):
+writer driver are never replaced), exactly one invocation:
 
 ```bash
-cargo test --workspace --all-features --no-fail-fast --tests
-cargo test --workspace --all-features --no-fail-fast --doc
+cargo test --workspace --all-features --no-fail-fast
 ```
 
-Doc tests are a separate invocation for the reason given at the doc-test step
-in `.github/workflows/ci.yml`. Each invocation's output is parsed strictly:
-every target cargo announces must have one `running N tests` line and one
-libtest summary that accounts for N and agrees with its own status, and the
-exit status must agree with the failure count. Anything else refuses. The
-result records each command, exit, duration and per-command and total
-passed/failed/ignored/measured/filtered-out/target counts, plus the raw
-output log path and hash; failures produce a `failed` result, never a pass.
+It is one invocation on purpose, matching CI's required test step: a
+separate `--doc` run self-heals a mid-run lib rebuild that only the combined
+command exposes (see the doc-test step in `.github/workflows/ci.yml`).
+
+The suite runs from an allowlisted environment, not the caller's: only
+`PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, locale, `CARGO_HOME`,
+`RUSTUP_HOME`, `SDKROOT` and `DEVELOPER_DIR` pass through, so an ambient
+`EXIFTOOL`, `EXIFTOOL_CACHE_DIR`, `OXIDEX_ALLOW_EXIFTOOL_SKEW`, `RUSTFLAGS`,
+`CARGO_TERM_QUIET`, `CARGO_TARGET_*_RUNNER` or compiler wrapper cannot reach
+it. The adapter then sets `EXIFTOOL_CACHE_DIR` to
+`<target>/test-suite/exiftool-oracle`, whose `exiftool` entry is the side's
+selected native source, `EXIFTOOL_PERL` to the selected Perl, and
+`OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES=1`, and prepends a `bin/exiftool`
+shim that runs the same tree under the same Perl. Before any test runs it
+probes that oracle in that environment (`-ver`, the tree's `OOXML.docx`
+FileType, and `strict`/`warnings`/`Archive::Zip`/`Compress::Zlib`) and
+refuses unless it reports the selected release, `DOCX` and every module, from
+the selected tree, library and Perl. The probe result and the exact
+environment are recorded.
+
+The merged stdout/stderr stream is parsed strictly, per target announced by
+cargo. A test binary is read at its boundaries (its first `running N tests`
+line and its last summary), because tests that re-execute their own binary
+interleave nested, filtered runs; a doc-test target may hold several blocks
+(edition 2024 prints a merged and a standalone block), and each is parsed
+and summed. Every counted summary must be unfiltered, account for its N and
+agree with its status, and the exit status must agree with the failure
+count. Anything else refuses. The result records the command, exit,
+duration, passed/failed/ignored/measured/filtered-out/target counts, the ExifTool
+oracle, the environment, and the raw output log path and hash; failures
+produce a `failed` result, never a pass.
 
 The example commands are wrappers: a raw `cargo build` does not itself write
 the required stage result. `native_cases` use the constrained case schema from

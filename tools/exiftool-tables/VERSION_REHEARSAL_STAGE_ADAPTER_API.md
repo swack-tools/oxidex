@@ -34,10 +34,11 @@ rechecks their hashes. Neither a CLI executable substituted for the test driver
 nor a failed second compilation can produce a passing build report. The build
 denominator of two counts executables, not tests or tag coverage; the
 `--no-run` compile proves only that the driver builds. `test` then actually
-runs the checkout's suite, `cargo test --workspace --all-features
---no-fail-fast --tests` followed by `--doc`, in `<target>/test-suite`, parses
-every target's libtest summary strictly, and reports `passed` only with zero
-failures (see `VERSION_REHEARSAL_EXECUTOR_API.md`). Read copies an immutable, hash-verified fixture manifest into
+runs the checkout's suite with one `cargo test --workspace --all-features
+--no-fail-fast` in `<target>/test-suite`, from an allowlisted environment
+whose ExifTool oracle is the side's selected release (probed and recorded
+before the run), parses every target's libtest summary strictly, and reports
+`passed` only with zero failures (see `VERSION_REHEARSAL_EXECUTOR_API.md`). Read copies an immutable, hash-verified fixture manifest into
 the isolated target and invokes the checkout's `conformance.py` against that
 release's selected native source and the Cargo-announced binary. A nonzero
 VALUE, MISSING, RENAME or EXTRA count produces a `failed` report; it never

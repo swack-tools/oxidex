@@ -11,9 +11,11 @@ target, immutable read fixtures, mandatory native write/readback fixtures, a
 live generated-artifact manifest, zero silent EXTRA retention, explicit
 generated-refusal counts, interruption recovery, and caller restoration. Each
 side must also pass the regenerated checkout's own test suite
-(`cargo test --workspace --all-features --no-fail-fast --tests`, then `--doc`,
-in a dedicated target) with zero failures; a missing, failed or unparsable
-test receipt refuses the side. Until the plan's release-aware test rewrite
+(one `cargo test --workspace --all-features --no-fail-fast`, as CI runs it, in
+a dedicated target) with zero failures, graded by that side's selected
+ExifTool under an allowlisted environment with pinned fixtures required; a
+missing, failed or unparsable test receipt, or one graded by any other
+ExifTool, refuses the side. Until the plan's release-aware test rewrite
 lands, the historical 113 (11.78) and 79 (12.64) lib-test failures mean those
 rows will refuse at this stage, which is the intended outcome.
 

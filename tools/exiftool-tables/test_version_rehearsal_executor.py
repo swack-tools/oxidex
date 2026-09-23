@@ -167,6 +167,8 @@ class ExecutorTests(unittest.TestCase):
                 "totals": {"passed": 3, "failed": 0, "ignored": 1, "measured": 0,
                            "filtered_out": 0, "targets": 2},
                 "log": body["raw_report"], "target_directory": env["CARGO_TARGET_DIR"] + "/test-suite",
+                "exiftool_oracle": {"version": env["OXIDEX_REHEARSAL_RELEASE"], "docx_filetype": "DOCX",
+                                    "perl_modules_available": True},
             }
         if stage == "read":
             body["classification_counts"] = {
@@ -273,6 +275,27 @@ class ExecutorTests(unittest.TestCase):
                                        run=forged, checkout=self.checkout)
         self.assertEqual(journal["phase"], "failed")
         self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
+
+    def test_test_report_graded_by_another_exiftool_cannot_pass(self):
+        for field, value in (("version", "13.55"), ("docx_filetype", "ZIP"), ("perl_modules_available", False)):
+            with self.subTest(field=field):
+                self.run_dir = self.root / f"foreign-oracle-{field}"
+                self.calls.clear()
+                self.initialize(self.config())
+                original = self.command
+                def foreign(argv, **kwargs):
+                    result = original(argv, **kwargs)
+                    if argv[0] == "test":
+                        report = Path(kwargs["env"]["OXIDEX_REHEARSAL_REPORT"])
+                        body = json.loads(report.read_text())
+                        body["test_suite"]["exiftool_oracle"][field] = value
+                        report.write_text(json.dumps(body))
+                    return result
+                with patch.object(executor.native_oracle, "probe_materialized_native", side_effect=self.probe):
+                    journal = executor.execute(self.run_dir, self.repository, self.cache, self.sources,
+                                               run=foreign, checkout=self.checkout)
+                self.assertEqual(journal["phase"], "failed")
+                self.assertNotIn("read", [argv[0] for argv, _, _ in self.calls])
 
     def test_absent_test_command_is_visible_as_unsupported(self):
         self.initialize(self.config(tests=False))

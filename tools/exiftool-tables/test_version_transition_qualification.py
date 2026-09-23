@@ -323,14 +323,33 @@ class SideAndRecoveryTests(unittest.TestCase):
             log.write_text('{"commands": []}')
             log_binding = {"path": str(log), "sha256": qualification._sha_file(log)}
             suite_commands = [
-                {"argv": list(argv), "exit": 0, "duration_seconds": 1.5, "passed": 4, "failed": 0,
-                 "ignored": 1, "measured": 0, "filtered_out": 0, "targets": 2}
+                {"argv": list(argv), "exit": 0, "duration_seconds": 3.0, "passed": 8, "failed": 0,
+                 "ignored": 2, "measured": 0, "filtered_out": 0, "targets": 4}
                 for argv in qualification.stage_adapter.TEST_COMMANDS
             ]
+            oracle_cache = "/isolated/target/test-suite/exiftool-oracle"
+            exiftool_oracle = {
+                "cache_dir": oracle_cache, "tree": oracle_cache + "/exiftool",
+                "tree_realpath": "/pinned/exiftool",
+                "program": {"path": oracle_cache + "/exiftool/exiftool", "sha256": "1" * 64},
+                "lib": {"path": oracle_cache + "/exiftool/lib", "exiftool_pm_sha256": "d" * 64},
+                "perl": {"path": "/pinned/perl", "sha256": "c" * 64},
+                "version": "13.59", "docx_filetype": "DOCX", "perl_modules_available": True,
+                "perl_modules": {"Archive::Zip": True},
+                "path_shim": {"path": oracle_cache + "/bin/exiftool", "sha256": "2" * 64},
+            }
+            environment = {
+                "PATH": oracle_cache + "/bin" + os.pathsep + "/usr/bin", "HOME": "/Users/test",
+                "CARGO_TARGET_DIR": "/isolated/target/test-suite", "CARGO_TERM_COLOR": "never",
+                "EXIFTOOL_CACHE_DIR": oracle_cache, "EXIFTOOL_PERL": "/pinned/perl",
+                "OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES": "1",
+            }
             release_tests = {
                 "state": "passed", "denominator": 8, "raw_report": log_binding,
+                "native_identity": read["native_identity"],
                 "test_suite": {"commands": suite_commands, "log": log_binding,
                                "target_directory": "/isolated/target/test-suite",
+                               "exiftool_oracle": exiftool_oracle, "environment": environment,
                                "totals": {"passed": 8, "failed": 0, "ignored": 2, "measured": 0,
                                           "filtered_out": 0, "targets": 4}},
             }
@@ -347,9 +366,10 @@ class SideAndRecoveryTests(unittest.TestCase):
                 side = qualification._side_receipt(run_dir, journal, "13.59", identity)
             self.assertEqual(side.get("release_tests"), {
                 "commands": [list(argv) for argv in qualification.stage_adapter.TEST_COMMANDS],
-                "exits": [0, 0], "passed": 8, "failed": 0, "ignored": 2, "measured": 0,
+                "exits": [0], "passed": 8, "failed": 0, "ignored": 2, "measured": 0,
                 "filtered_out": 0, "targets": 4, "duration_seconds": 3.0,
                 "target_directory": "/isolated/target/test-suite", "log": log_binding,
+                "exiftool_oracle": exiftool_oracle,
             })
 
             def refused(label, mutate, pattern="release test suite"):
@@ -365,12 +385,25 @@ class SideAndRecoveryTests(unittest.TestCase):
                         qualification._side_receipt(run_dir, journal, "13.59", identity)
 
             refused("failed tests", lambda r: r["test_suite"]["totals"].update(failed=1))
-            refused("failed command", lambda r: r["test_suite"]["commands"][1].update(exit=101))
+            refused("failed command", lambda r: r["test_suite"]["commands"][0].update(exit=101))
+            refused("homebrew oracle", lambda r: r["test_suite"]["exiftool_oracle"].update(version="13.55"))
+            refused("degraded oracle", lambda r: r["test_suite"]["exiftool_oracle"].update(docx_filetype="ZIP"))
+            refused("module missing", lambda r: r["test_suite"]["exiftool_oracle"].update(perl_modules_available=False))
+            refused("foreign tree", lambda r: r["test_suite"]["exiftool_oracle"].update(tree_realpath="/opt/homebrew/exiftool"))
+            refused("foreign lib", lambda r: r["test_suite"]["exiftool_oracle"]["lib"].update(exiftool_pm_sha256="0" * 64))
+            refused("foreign perl", lambda r: r["test_suite"]["exiftool_oracle"]["perl"].update(sha256="0" * 64))
+            refused("oracle absent", lambda r: r["test_suite"].pop("exiftool_oracle"))
+            refused("ambient EXIFTOOL", lambda r: r["test_suite"]["environment"].update(EXIFTOOL="/opt/homebrew/bin/exiftool"))
+            refused("skew allowed", lambda r: r["test_suite"]["environment"].update(OXIDEX_ALLOW_EXIFTOOL_SKEW="1"))
+            refused("foreign cache", lambda r: r["test_suite"]["environment"].update(EXIFTOOL_CACHE_DIR="/tmp/foreign"))
+            refused("fixtures optional", lambda r: r["test_suite"]["environment"].pop("OXIDEX_RELEASE_REQUIRE_PINNED_FIXTURES"))
+            refused("path shim bypassed", lambda r: r["test_suite"]["environment"].update(PATH="/opt/homebrew/bin"))
             refused("failed state", lambda r: r.update(state="failed"))
             refused("no tests", lambda r: r["test_suite"]["totals"].update(passed=0))
             refused("totals disagree", lambda r: r["test_suite"]["totals"].update(ignored=3))
             refused("weaker command", lambda r: r["test_suite"]["commands"][0].update(argv=["cargo", "test", "--lib"]))
-            refused("missing doc command", lambda r: r["test_suite"]["commands"].pop())
+            refused("split doc command", lambda r: r["test_suite"]["commands"].append(
+                dict(r["test_suite"]["commands"][0], argv=["cargo", "test", "--doc"])))
             refused("string count", lambda r: r["test_suite"]["totals"].update(passed="8"))
             refused("log differs", lambda r: r["test_suite"].update(log={"path": str(log), "sha256": "0" * 64}))
             refused("malformed", lambda r: r.pop("test_suite"))
@@ -1467,7 +1500,9 @@ class MainOutcomeTests(unittest.TestCase):
         release_tests = {"commands": [["cargo", "test", "--workspace"]], "exits": [0], "passed": 8,
                          "failed": 0, "ignored": 2, "measured": 0, "filtered_out": 0, "targets": 4,
                          "duration_seconds": 3.0, "target_directory": "/isolated/test-suite",
-                         "log": {"path": "/isolated/test-command.json", "sha256": "a" * 64}}
+                         "log": {"path": "/isolated/test-command.json", "sha256": "a" * 64},
+                         "exiftool_oracle": {"version": "13.59", "tree_realpath": "/pinned/exiftool",
+                                             "docx_filetype": "DOCX"}}
         result = {"run_id": "committed", "status": "tooling-executed-nonpromoting",
                   "promotion": "forbidden",
                   "caller": {"head": "0" * 40, "pin_version": "13.59", "status": "clean"},
@@ -1483,6 +1518,8 @@ class MainOutcomeTests(unittest.TestCase):
         self.assertTrue(any("capability ready -ver=13.59 OOXML.docx=DOCX perl-modules=available" in line
                             for line in lines), lines)
         self.assertTrue(any("tests passed=8 failed=0 ignored=2 targets=4 log=/isolated/test-command.json" in line
+                            for line in lines), lines)
+        self.assertTrue(any("tests graded by ExifTool 13.59 tree=/pinned/exiftool OOXML.docx=DOCX" in line
                             for line in lines), lines)
         self.assertIn("/isolated/oxidex", output.getvalue())
         self.assertIn("/pinned/exiftool", output.getvalue())
