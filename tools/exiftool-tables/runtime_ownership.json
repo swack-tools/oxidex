@@ -1,12 +1,12 @@
 {
   "category_totals": {
-    "generated": 561,
+    "generated": 563,
     "not-applicable": 29,
     "refused": 18,
-    "residual": 35,
+    "residual": 41,
     "walker-owned": 0
   },
-  "fragment_inputs_sha256": "a081f13d6b51ff030af92f74beff41a5eabe6ab9c8845c252a5be466be19fbc6",
+  "fragment_inputs_sha256": "7037a08f78c1492d0889f7e087edfe307c4cd85398a2d200ad5c351ecb803df2",
   "rows": [
     {
       "field": {
@@ -9079,6 +9079,32 @@
     {
       "field": {
         "kind": "name",
+        "value": "LensType"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-GX800.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "0da2af2c59f276f2e803e35cb9f0efebdea839177e5bde11d6eb3c7e7e7aea3b"
+      },
+      "module": "Olympus",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Olympus::Composite",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensType",
+        "raw_key": "LensType",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "a6e480934a7fa8c66a971244587e4b600d0ef464a3af0d718ec4274867a5217f",
+      "symbol": "src/composite/compute.rs::panasonic_lens_type",
+      "table": "Composite"
+    },
+    {
+      "field": {
+        "kind": "name",
         "value": "ZoomedPreviewImage"
       },
       "fixture": {
@@ -9232,6 +9258,190 @@
       "source_release": "13.59",
       "source_sha256": "952f63280c119fed6fc2f60d832623f7d8186f6f8aff81a1025e049e9f26670e",
       "symbol": "src/parsers/tiff/makernotes/olympus.rs::walk_main_through_engine",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x00c4"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-GX800.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "0da2af2c59f276f2e803e35cb9f0efebdea839177e5bde11d6eb3c7e7e7aea3b"
+      },
+      "module": "Panasonic",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensTypeMake",
+        "raw_key": "196",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "c4fefba3412a76794d0b232cd8e179b2779ea8ec04c77889e64c305473723c6b",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::emit_panasonic_main_value",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x00c5"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-GX800.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "0da2af2c59f276f2e803e35cb9f0efebdea839177e5bde11d6eb3c7e7e7aea3b"
+      },
+      "module": "Panasonic",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensTypeModel",
+        "raw_key": "197",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "5dcdc2083925c61e6140c4c5b6ae701af2fcbe078323ee2bd9d2511a0faf1f87",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::emit_panasonic_main_value",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x00e4"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicDC-S1H.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "5139c8e4bbd892a4cb761ad27b311831b1fb226d20158a60d5f9e7cb29e9a800"
+      },
+      "module": "Panasonic",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "LensTypeModel",
+        "raw_key": "228",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "5dcdc2083925c61e6140c4c5b6ae701af2fcbe078323ee2bd9d2511a0faf1f87",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::emit_panasonic_main_value",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0000"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "f5ba5b016b7776eb70aaf0e37930b43ebd4693312033b5b7829666b4448376c3"
+      },
+      "module": "Panasonic",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "MakerNoteType",
+        "raw_key": "0",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "98cba2af79e4fd63e4895340c819d2ef09c4c7e65eb0c6e9c4a9188e93ba8fb8",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::insert_generated_type2",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0003"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Panasonic/PanasonicPV-DV401-K.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "f5ba5b016b7776eb70aaf0e37930b43ebd4693312033b5b7829666b4448376c3"
+      },
+      "module": "Panasonic",
+      "owner": "generated",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Panasonic::Type2",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "Gain",
+        "raw_key": "3",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "36e196104f30f41c345041249be7a4284ed712ff61bc7a9f8914ac910cd879b9",
+      "symbol": "src/parsers/tiff/makernotes/panasonic.rs::insert_generated_type2",
+      "table": "Type2"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0208"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxK10D.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "6d144b0591c4899a9ecd4feaf3454e2d18413d483233598eabb8e9ac2371104f"
+      },
+      "module": "Pentax",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Pentax::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "FlashInfo",
+        "raw_key": "520",
+        "variant_path": [
+          0
+        ]
+      },
+      "source_release": "13.59",
+      "source_sha256": "e9aa345e728c2991b2c0c7dc1c96edd5505cb0885bb42bb82997dacd538ec42d",
+      "symbol": "src/parsers/tiff/makernotes/pentax.rs::decode_pentax_external_flash_guide_number",
+      "table": "Main"
+    },
+    {
+      "field": {
+        "kind": "numeric",
+        "value": "0x0238"
+      },
+      "fixture": {
+        "relative_path": "cache/exiftool/13.59/combined-samples/Pentax/PentaxQ-S1.jpg",
+        "root": "OXIDEX_OPS_DIR",
+        "sha256": "c71f4314c8f51f1f5e96490081defe90d23e8391a1489e0379d87bb8cf8ce1b9"
+      },
+      "module": "Pentax",
+      "owner": "residual",
+      "provenance_schema": "source-carrier/v1",
+      "refusal": null,
+      "source_binding": {
+        "full_name": "Image::ExifTool::Pentax::Main",
+        "ledger": "tools/exiftool-tables/ifd_identity_ledger.json",
+        "name": "CAFPointInfo",
+        "raw_key": "568",
+        "variant_path": []
+      },
+      "source_release": "13.59",
+      "source_sha256": "fe2fc7ff107962f59ec1541c43271f249cb09746c12508bf1d7977afd7f41320",
+      "symbol": "src/parsers/tiff/makernotes/pentax.rs::decode_caf_points",
       "table": "Main"
     },
     {

@@ -1104,6 +1104,31 @@ fn parse_tiff_based_raw(data: &[u8], format: RawFormat) -> Result<MetadataMap> {
                             &mut value_forms,
                             &mut structured_occurrences,
                         )
+                    } else if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(
+                        make,
+                        camera_model.as_deref(),
+                        mn_data,
+                    ) {
+                        // Same detached context and fresh session as the
+                        // legacy entry below; the only difference is the
+                        // occurrence channel, which carries Pentax's
+                        // pre-PrintConv CAF point bytes and unrounded flash
+                        // guide number for `--no-print-conv`.
+                        let ctx = MakerNoteContext::detached(mn_data);
+                        let mut session = crate::exiftool_tables::session::Session::new();
+                        let mut members = std::collections::HashMap::new();
+                        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+                        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+                            make,
+                            camera_model.as_deref(),
+                            &ctx,
+                            byte_order,
+                            &mut session,
+                            &mut cond_ctx,
+                            &mut makernote_tags,
+                            &mut value_forms,
+                            &mut structured_occurrences,
+                        )
                     } else {
                         crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
                             make,
@@ -3583,16 +3608,43 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
 
     let mut tags = std::collections::HashMap::new();
     let mut forms = std::collections::HashMap::new();
-    if let Err(error) =
+    let mut structured_occurrences = Vec::new();
+    let result = if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(
+        make, None, &rebuilt,
+    ) {
+        // Pentax emits its CAF point and flash guide-number fields as
+        // canonical occurrences so `--no-print-conv` keeps their ValueConv;
+        // otherwise identical to the legacy entry below.
+        let mut session = crate::exiftool_tables::session::Session::new();
+        let mut members = std::collections::HashMap::new();
+        let mut cond_ctx = crate::exiftool_tables::Ctx::new(&mut members);
+        crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_context_and_values_and_session_and_occurrences(
+            make,
+            None,
+            &MakerNoteContext::detached(&rebuilt),
+            byte_order,
+            &mut session,
+            &mut cond_ctx,
+            &mut tags,
+            &mut forms,
+            &mut structured_occurrences,
+        )
+    } else {
         crate::parsers::tiff::makernote_dispatcher::dispatch_makernote_with_model_and_values(
             make, None, &rebuilt, byte_order, &mut tags, &mut forms,
         )
-    {
+    };
+    if let Err(error) = result {
         eprintln!(
             "Warning: Failed to parse DNGPrivateData MakerNote for {}: {}",
             make, error
         );
         return;
+    }
+    // As at the main RAW MakerNote site: structured owners are recorded
+    // before residual map rows and never rebuilt from the string sidecars.
+    for (key, occurrence) in structured_occurrences {
+        metadata.record_occurrence(key, occurrence);
     }
     // `make` is a dynamic value here (a Pentax DNG's DNGPrivateData MakN
     // record names Pentax), so `record_makernote_tag` -- not a bare
@@ -11930,5 +11982,141 @@ mod rational_array_tests {
         let file = build_ciff(&scalar_records(&powershot));
         let metadata = parse_canon_crw(&file, RawFormat::CanonCRW).expect("CRW parse");
         assert_eq!(metadata.get_string("CanonRaw:SerialNumber"), None);
+    }
+}
+
+#[cfg(test)]
+mod pentax_raw_value_channel_tests {
+    use super::*;
+
+    /// Pentax.pm:5202-5227's CAFPointInfo record for a 7x7 grid: header byte
+    /// 0x77 sets NumCAFPoints to 49, so `int8u[int((49+3)/4)]` is 13 packed
+    /// bytes; byte nine (0x30) selects point 34.
+    const CAF_RECORD: [u8; 15] = [0, 0x77, 0, 0, 0, 0, 0, 0, 0, 0, 0x30, 0, 0, 0, 0];
+
+    /// Pentax.pm:4650-4661's FlashInfo 24.1 `ExternalFlashGuideNumber`: raw 6
+    /// has ValueConv `2**(6/16 + 4)` and PrintConv `int($val + 0.5)` = 21.
+    fn flash_record() -> [u8; 27] {
+        let mut record = [0_u8; 27];
+        record[24] = 6;
+        record
+    }
+
+    fn packed_caf() -> TagValue {
+        TagValue::Array(
+            [0, 0, 0, 0, 0, 0, 0, 0, 48, 0, 0, 0, 0]
+                .into_iter()
+                .map(TagValue::Integer)
+                .collect(),
+        )
+    }
+
+    /// Both channels of both source fields must survive the raw dispatch.
+    fn assert_pentax_value_channels(metadata: &MetadataMap, route: &str) {
+        let numeric = metadata.without_print_conv();
+        for name in ["Pentax:CAFPointsInFocus", "Pentax:CAFPointsSelected"] {
+            assert_eq!(
+                metadata.get_string(name),
+                Some("34"),
+                "{route}: {name} PrintConv is DecodeAFPoints"
+            );
+            assert_eq!(
+                numeric.get(name),
+                Some(&packed_caf()),
+                "{route}: {name} --no-print-conv must be the packed int8u bytes"
+            );
+        }
+        assert_eq!(
+            metadata
+                .project_occurrences(crate::core::tag_occurrence::ValueChannel::PrintConv)
+                .find(|(key, _, _)| *key == "Pentax:ExternalFlashGuideNumber")
+                .map(|(_, _, value)| value.into_owned()),
+            Some(TagValue::new_string("21")),
+            "{route}: ExternalFlashGuideNumber PrintConv rounds"
+        );
+        assert_eq!(
+            numeric.get("Pentax:ExternalFlashGuideNumber"),
+            Some(&TagValue::Float(20.749_432_874_416_154)),
+            "{route}: ExternalFlashGuideNumber --no-print-conv keeps the ValueConv"
+        );
+    }
+
+    /// A MakerNotePentax5 body ("PENTAX \0" + byte order, `Base => '$start -
+    /// 10'`, MakerNotes.pm:818-829): value offsets count from the header.
+    fn pentax5_makernote() -> Vec<u8> {
+        let mut note = b"PENTAX \0MM".to_vec();
+        note.extend_from_slice(&2_u16.to_be_bytes());
+        for (tag, count, offset) in [(0x0208_u16, 27_u32, 40_u32), (0x0238, 15, 68)] {
+            note.extend_from_slice(&tag.to_be_bytes());
+            note.extend_from_slice(&7_u16.to_be_bytes());
+            note.extend_from_slice(&count.to_be_bytes());
+            note.extend_from_slice(&offset.to_be_bytes());
+        }
+        note.extend_from_slice(&0_u32.to_be_bytes());
+        assert_eq!(note.len(), 40);
+        note.extend_from_slice(&flash_record());
+        note.push(0);
+        note.extend_from_slice(&CAF_RECORD);
+        note
+    }
+
+    /// The generic TIFF-based RAW walk (PEF) hands IFD0's MakerNote to the
+    /// dispatcher at `parse_tiff_based_raw`'s MakerNote site.
+    #[test]
+    fn pef_makernote_dispatch_preserves_pentax_value_channels() {
+        let note = pentax5_makernote();
+        let make_offset = 38_u32;
+        let note_offset = 46_u32;
+        let mut pef = b"II\x2a\0\x08\0\0\0".to_vec();
+        pef.extend_from_slice(&2_u16.to_le_bytes());
+        for (tag, field_type, count, value) in [
+            (0x010F_u16, 2_u16, 7_u32, make_offset),
+            (0x927C, 7, note.len() as u32, note_offset),
+        ] {
+            pef.extend_from_slice(&tag.to_le_bytes());
+            pef.extend_from_slice(&field_type.to_le_bytes());
+            pef.extend_from_slice(&count.to_le_bytes());
+            pef.extend_from_slice(&value.to_le_bytes());
+        }
+        pef.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(pef.len(), make_offset as usize);
+        pef.extend_from_slice(b"PENTAX\0\0");
+        assert_eq!(pef.len(), note_offset as usize);
+        pef.extend_from_slice(&note);
+
+        let metadata =
+            parse_raw_metadata(&pef, RawFormat::PentaxPEF).expect("synthetic PEF parses");
+        assert_pentax_value_channels(&metadata, "PEF MakerNote");
+    }
+
+    /// DNGPrivateData's `MakN` record (DNG.pm:237-296) relocates the source
+    /// MakerNote; a headerless little-endian Pentax IFD rebuilds and reaches
+    /// the same dispatcher through `parse_adobe_makn_record`.
+    #[test]
+    fn dng_private_makernote_dispatch_preserves_pentax_value_channels() {
+        let original_pos = 1000_u32;
+        let mut ifd = 2_u16.to_le_bytes().to_vec();
+        for (tag, count, relative) in [(0x0208_u16, 27_u32, 30_u32), (0x0238, 15, 58)] {
+            ifd.extend_from_slice(&tag.to_le_bytes());
+            ifd.extend_from_slice(&7_u16.to_le_bytes());
+            ifd.extend_from_slice(&count.to_le_bytes());
+            ifd.extend_from_slice(&(original_pos + relative).to_le_bytes());
+        }
+        ifd.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(ifd.len(), 30);
+        ifd.extend_from_slice(&flash_record());
+        ifd.push(0);
+        ifd.extend_from_slice(&CAF_RECORD);
+
+        let mut block = b"II".to_vec();
+        block.extend_from_slice(&original_pos.to_be_bytes());
+        block.extend_from_slice(&ifd);
+        let mut private = b"Adobe\0MakN".to_vec();
+        private.extend_from_slice(&(block.len() as u32).to_be_bytes());
+        private.extend_from_slice(&block);
+
+        let mut metadata = MetadataMap::new();
+        extract_dng_adobe_private_data(&private, "PENTAX", &mut metadata);
+        assert_pentax_value_channels(&metadata, "DNGPrivateData MakN");
     }
 }
