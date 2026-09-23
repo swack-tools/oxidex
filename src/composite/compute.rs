@@ -1205,6 +1205,21 @@ fn panasonic_advanced_scene_mode(model: &str, scene: &str, advanced: &str) -> Op
     Computed::new(value, print)
 }
 
+/// Olympus.pm's Composite `LensType` is the Panasonic Raw pairing of
+/// `LensTypeMake` and `LensTypeModel`: join their ValueConv forms, then use
+/// the Olympus equipment lens lookup shared by both formats.
+fn panasonic_lens_type(i: Inputs<'_>) -> Option<Computed> {
+    let value = format!("{} {}", get(i, 0)?, get(i, 1)?);
+    let print = crate::parsers::tiff::makernotes::olympus::lookups::EQUIPMENT_LENS_TYPE
+        .iter()
+        .find(|(key, _)| *key == value)
+        .map_or_else(
+            || format!("Unknown ({value})"),
+            |(_, label)| (*label).to_string(),
+        );
+    Computed::new(value, print)
+}
+
 /// Compute one composite by name. `None` means "do not emit this tag".
 ///
 /// `make` is the camera manufacturer, needed because ExifTool branches on it
@@ -1228,6 +1243,7 @@ pub fn compute(module: &str, name: &str, i: Inputs, make: Option<&str>) -> Optio
         ("Panasonic", "AdvancedSceneMode") => {
             panasonic_advanced_scene_mode(get(i, 0)?, get(i, 1)?, get(i, 2)?)
         }
+        ("Olympus", "LensType") => panasonic_lens_type(i),
 
         // AIFF.pm:136-145 Composite::Duration:
         //   require:  0) AIFF:SampleRate, 1) AIFF:NumSampleFrames
