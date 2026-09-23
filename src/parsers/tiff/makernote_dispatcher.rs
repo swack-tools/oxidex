@@ -863,7 +863,11 @@ mod tests {
     #[test]
     fn dispatches_to_pentax_matches_the_pentax_routes_only() {
         assert!(dispatches_to_pentax("PENTAX", None, b"AOC\0MM"));
-        assert!(dispatches_to_pentax("  Asahi Optical Co.,Ltd ", None, b"AOC\0II"));
+        assert!(dispatches_to_pentax(
+            "  Asahi Optical Co.,Ltd ",
+            None,
+            b"AOC\0II"
+        ));
         assert!(dispatches_to_pentax(
             "RICOH IMAGING COMPANY, LTD.",
             None,

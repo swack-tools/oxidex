@@ -3609,8 +3609,9 @@ fn parse_adobe_makn_record(block: &[u8], make: &str, metadata: &mut MetadataMap)
     let mut tags = std::collections::HashMap::new();
     let mut forms = std::collections::HashMap::new();
     let mut structured_occurrences = Vec::new();
-    let result = if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(make, None, &rebuilt)
-    {
+    let result = if crate::parsers::tiff::makernote_dispatcher::dispatches_to_pentax(
+        make, None, &rebuilt,
+    ) {
         // Pentax emits its CAF point and flash guide-number fields as
         // canonical occurrences so `--no-print-conv` keeps their ValueConv;
         // otherwise identical to the legacy entry below.
