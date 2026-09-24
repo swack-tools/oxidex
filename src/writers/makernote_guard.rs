@@ -335,6 +335,12 @@ fn integer(map: &MetadataMap, key: &str) -> Option<usize> {
 ///
 /// Any mismatch refuses the write.
 pub(crate) fn verify_makernote_preserved(original: Carrier<'_>, output: Carrier<'_>) -> Result<()> {
+    // A block dropped entirely (a clear) has nothing to check, and the
+    // discarded original is never parsed.
+    let after_tiff = output.tiff();
+    if after_tiff.is_empty() {
+        return Ok(());
+    }
     let before_tiff = original.tiff();
     let Ok(before) = scan_exif_entries(before_tiff) else {
         return Ok(());
@@ -349,10 +355,6 @@ pub(crate) fn verify_makernote_preserved(original: Carrier<'_>, output: Carrier<
     else {
         return Ok(());
     };
-    let after_tiff = output.tiff();
-    if after_tiff.is_empty() {
-        return Ok(());
-    }
     let after = scan_exif_entries(after_tiff)?;
     let Some(written) = after
         .entries

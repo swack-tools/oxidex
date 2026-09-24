@@ -107,8 +107,12 @@ pub fn is_walkable_tiff(bytes: &[u8]) -> bool {
         b"MM" => ByteOrder::BigEndian,
         _ => return false,
     };
-    matches!(read_u16(&bytes[2..4], bo), 42 | 85)
+    WALKABLE_TIFF_MAGICS.contains(&read_u16(&bytes[2..4], bo))
 }
+
+/// The TIFF magic numbers [`is_walkable_tiff`] accepts; the post-write check
+/// of a TIFF-structured file scans with exactly this set.
+pub(crate) const WALKABLE_TIFF_MAGICS: &[u16] = &[42, 85];
 
 /// Walks IFD0, the ExifIFD and the GPS IFD, recording where each entry
 /// record physically sits.

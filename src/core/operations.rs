@@ -958,9 +958,27 @@ pub(crate) fn write_metadata_with_removals(
     }
 
     // PHASE 2: ROUTE TO APPROPRIATE WRITER
+    // A whole-carrier clear (an empty replacement map, no named removals:
+    // `clear_all_metadata`, `-all=`) never parses or verifies what it
+    // discards; its post-condition is only that the carrier is gone. Any
+    // other request is first asked whether it is a no-op for the file's EXIF
+    // (`exif_surgical::exif_request_is_no_op`) -- before every writer guard
+    // and the post-write check -- and a no-op writes nothing.
+    let whole_clear = metadata.is_empty() && removed.is_empty();
     if is_surgical_tiff_target(format, &reader) {
         let file_bytes = reader.read(0, reader.size() as usize)?;
         let original = baseline.unwrap_or_default();
+        if !whole_clear
+            && crate::writers::exif_surgical::exif_request_is_no_op(
+                &[file_bytes],
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+                &original,
+                metadata,
+                removed,
+            )
+        {
+            return Ok(());
+        }
         let plan = crate::writers::generated_public_write::plan_public_write(
             &original, metadata, removed,
         )?;
@@ -968,66 +986,96 @@ pub(crate) fn write_metadata_with_removals(
             file_bytes, &original, plan,
         )?;
         // Every removal gone, every set present, before anything is written.
-        crate::writers::exif_surgical::verify_exif_write(
-            Some(file_bytes),
-            &out,
-            &original,
-            metadata,
-            removed,
-        )?;
-        // Every maker-note value still reads back, the data it locates
-        // outside the MakerNote included (`writers::makernote_guard`).
-        crate::writers::makernote_guard::verify_makernote_preserved(
-            crate::writers::makernote_guard::Carrier::block(file_bytes),
-            crate::writers::makernote_guard::Carrier::block(&out),
-        )?;
+        if !whole_clear {
+            crate::writers::exif_surgical::verify_exif_write(
+                Some(file_bytes),
+                &out,
+                &original,
+                metadata,
+                removed,
+                crate::writers::tiff_surgical::WALKABLE_TIFF_MAGICS,
+            )?;
+            // Every maker-note value still reads back, the data it locates
+            // outside the MakerNote included (`writers::makernote_guard`).
+            // Never on a whole clear, and a no-op returned above.
+            crate::writers::makernote_guard::verify_makernote_preserved(
+                crate::writers::makernote_guard::Carrier::block(file_bytes),
+                crate::writers::makernote_guard::Carrier::block(&out),
+            )?;
+        }
         write_atomic(path, &out)?;
         return Ok(());
     }
 
     match format {
         FileFormat::JPEG => {
-            // Use JPEG writer to serialize metadata
             let original = baseline.unwrap_or_default();
+            let file_bytes = reader.read(0, reader.size() as usize)?;
+            if !whole_clear
+                && let Ok(payloads) = crate::writers::exif_surgical::jpeg_exif_payloads(file_bytes)
+            {
+                let blocks: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
+                if crate::writers::exif_surgical::exif_request_is_no_op(
+                    &blocks,
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
+                    &original,
+                    metadata,
+                    removed,
+                ) {
+                    return Ok(());
+                }
+            }
             let plan = crate::writers::generated_public_write::plan_public_write(
                 &original, metadata, removed,
             )?;
             let serialized_bytes = crate::writers::jpeg_writer::write_public_exif_transaction(
                 &reader, &original, plan,
             )?;
-            // Every removal gone, every set present, before anything is
-            // written (`exif_surgical::verify_exif_write`).
-            let original_bytes = reader.read(0, reader.size() as usize)?;
-            let before = crate::writers::exif_surgical::jpeg_exif_payload(original_bytes)?;
-            let after = crate::writers::exif_surgical::jpeg_exif_payload(&serialized_bytes)?;
-            crate::writers::exif_surgical::verify_exif_write(
-                before.as_deref(),
-                after.as_deref().unwrap_or_default(),
-                &original,
-                metadata,
-                removed,
-            )?;
-            // Every maker-note value still reads back, the data it locates
-            // outside the MakerNote included -- here in the whole file, so a
-            // preview in the JPEG trailer that a longer EXIF segment would
-            // shift away is caught too (`writers::makernote_guard`).
-            if let (Some((was_at, was_len)), Some((now_at, now_len))) = (
-                crate::writers::exif_surgical::jpeg_exif_block(original_bytes)?,
-                crate::writers::exif_surgical::jpeg_exif_block(&serialized_bytes)?,
-            ) {
-                use crate::writers::makernote_guard::{Carrier, verify_makernote_preserved};
-                verify_makernote_preserved(
-                    Carrier {
-                        file: original_bytes,
-                        tiff_at: was_at,
-                        tiff_len: was_len,
-                    },
-                    Carrier {
-                        file: &serialized_bytes,
-                        tiff_at: now_at,
-                        tiff_len: now_len,
-                    },
+            let after = crate::writers::exif_surgical::jpeg_exif_payloads(&serialized_bytes)?;
+            if whole_clear {
+                // The clear's only post-condition: no EXIF APP1 is left.
+                if !after.is_empty() {
+                    return Err(ExifToolError::unsupported_format(
+                        "EXIF write verification failed: the EXIF block was to be \
+                         cleared but is still present; nothing was written",
+                    ));
+                }
+            } else {
+                // Every removal gone, every set present, before anything is
+                // written (`exif_surgical::verify_exif_write`).
+                let before = crate::writers::exif_surgical::jpeg_exif_payload(file_bytes)?;
+                crate::writers::exif_surgical::verify_exif_write(
+                    before.as_deref(),
+                    after.first().map(Vec::as_slice).unwrap_or_default(),
+                    &original,
+                    metadata,
+                    removed,
+                    crate::writers::exif_surgical::EXIF_BLOCK_MAGICS,
                 )?;
+                // Every maker-note value still reads back, the data it
+                // locates outside the MakerNote included -- here in the whole
+                // file, so a preview in the JPEG trailer that a longer EXIF
+                // segment would shift away is caught too
+                // (`writers::makernote_guard`). Never on a whole clear, and
+                // a no-op returned above.
+                if let (Some((was_at, was_len)), Some((now_at, now_len))) = (
+                    crate::writers::exif_surgical::jpeg_exif_block(file_bytes)?,
+                    crate::writers::exif_surgical::jpeg_exif_block(&serialized_bytes)?,
+                ) {
+                    use crate::writers::makernote_guard::{Carrier, verify_makernote_preserved};
+                    verify_makernote_preserved(
+                        Carrier {
+                            file: file_bytes,
+                            tiff_at: was_at,
+                            tiff_len: was_len,
+                        },
+                        Carrier {
+                            file: &serialized_bytes,
+                            tiff_at: now_at,
+                            tiff_len: now_len,
+                        },
+                    )?;
+                }
             }
             write_atomic(path, &serialized_bytes)?;
         }

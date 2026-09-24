@@ -1409,6 +1409,15 @@ pub(crate) fn requires_subifd_write(key: &str) -> bool {
 /// returned. Corrupt sub-structures degrade gracefully: an out-of-bounds
 /// IFD offset or value offset skips that IFD/entry rather than erroring.
 pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
+    scan_entries_with_magics(tiff, EXIF_BLOCK_MAGICS)
+}
+
+/// The TIFF magic an EXIF block (JPEG APP1, PNG eXIf) carries.
+pub(crate) const EXIF_BLOCK_MAGICS: &[u16] = &[42];
+
+/// [`scan_exif_entries`] accepting the header magics `magics` -- for a
+/// TIFF-structured file, the set its writer walks (42, and 85 for RW2).
+pub(crate) fn scan_entries_with_magics(tiff: &[u8], magics: &[u16]) -> Result<ExifScan> {
     if tiff.len() < 8 {
         return Err(ExifToolError::parse_error("EXIF TIFF structure too small"));
     }
@@ -1421,7 +1430,7 @@ pub fn scan_exif_entries(tiff: &[u8]) -> Result<ExifScan> {
             ));
         }
     };
-    if read_u16(&tiff[2..4], byte_order) != 42 {
+    if !magics.contains(&read_u16(&tiff[2..4], byte_order)) {
         return Err(ExifToolError::parse_error(
             "Invalid TIFF magic number in EXIF data",
         ));
@@ -2111,6 +2120,11 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
             &empty,
         ),
     };
+    if let Some(tiff) = tiff
+        && is_no_op(&scan, original_map, desired, removed)
+    {
+        return Ok(tiff.to_vec());
+    }
     let plan = plan_exif_write_with_removals(&scan, original_map, desired, removed)?;
     let out = serialize_exif_keeping(&plan, tiff)?;
     if let Some(tiff) = tiff {
@@ -2121,6 +2135,124 @@ pub(crate) fn rewrite_tiff_exif_with_removals(
         )?;
     }
     Ok(out)
+}
+
+/// Key prefixes the EXIF writers plan: IFD0/ExifIFD/GPS/IFD1/InteropIFD
+/// rows, the family spelling `EXIF:`, and `MakerNotes:`.
+fn is_planned_key(key: &str) -> bool {
+    [
+        "IFD0:",
+        "ExifIFD:",
+        "GPS:",
+        "EXIF:",
+        "IFD1:",
+        "InteropIFD:",
+        "MakerNotes:",
+    ]
+    .iter()
+    .any(|prefix| key.starts_with(prefix))
+}
+
+/// Every planned row of `desired` is its `baseline` value and no planned
+/// `baseline` row is gone.
+fn rows_unchanged(baseline: &MetadataMap, desired: &MetadataMap) -> bool {
+    desired
+        .iter()
+        .filter(|(key, _)| is_planned_key(key))
+        .all(|(key, value)| baseline.get(key.as_str()) == Some(value))
+        && baseline
+            .iter()
+            .filter(|(key, _)| is_planned_key(key))
+            .all(|(key, _)| desired.contains_key(key.as_str()))
+}
+
+/// Whether none of the named `removed` keys names an entry of `scan`: not a
+/// reader row, not an entry by tag id (`removal_names_rowless_entry`), not a
+/// raw-carried entry (`removal_names_carried_entry`), not an entry by its
+/// family-0 `EXIF:` name, and no `<group>:All` over a group with entries.
+fn removals_name_nothing(scan: &ExifScan, original_map: &MetadataMap, removed: &[String]) -> bool {
+    removed.iter().filter(|key| is_planned_key(key)).all(|key| {
+        let group_all = key.split_once(':').is_some_and(|(group, name)| {
+            name.eq_ignore_ascii_case("all")
+                && scan.entries.iter().any(|entry| {
+                    group == "EXIF"
+                        || group == entry.ifd.prefix()
+                        || (group == "MakerNotes"
+                            && entry.ifd == IfdKind::ExifIfd
+                            && entry.tag_id == MAKERNOTE)
+                })
+        });
+        !group_all
+            && !original_map.contains_key(key.as_str())
+            && !removal_names_carried_entry(key, scan, original_map)
+            && !scan.entries.iter().any(|entry| {
+                removal_names_rowless_entry(key, entry.ifd, entry.tag_id, original_map)
+                    || key.strip_prefix("EXIF:").is_some_and(|name| {
+                        lookup_tag_name(entry.tag_id, entry.ifd.prefix())
+                            .split_once(':')
+                            .is_some_and(|(_, n)| n == name)
+                    })
+            })
+    })
+}
+
+/// Whether a write changes nothing in the block (see
+/// [`exif_request_is_no_op`]): the payload is then returned unchanged.
+fn is_no_op(
+    scan: &ExifScan,
+    original_map: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> bool {
+    rows_unchanged(original_map, desired) && removals_name_nothing(scan, original_map, removed)
+}
+
+/// Whether a write request is a no-op for a carrier whose EXIF payloads are
+/// `blocks` (JPEG APP1s, PNG eXIf chunks, decoded raw EXIF profiles, a
+/// TIFF-structured file): every planned row of `desired` is its `baseline`
+/// value, no planned row is gone, and no named removal names an entry of a
+/// block -- a block no scanner reading `magics` can parse holds nothing a
+/// removal could name (the reader surfaced nothing from it either).
+///
+/// Decided once, up front, before any refusal guard (the raw-profile and
+/// multiple-eXIf guards, the unmodelled-pointer guard, the raw-carried
+/// guards, the post-write check): `remove_tag` of a tag that is not there
+/// succeeds with the file untouched, as it promises and as pinned ExifTool
+/// 13.59 leaves it ("not defined" / "unchanged"). A whole-carrier clear is
+/// not a no-op question and is decided before this.
+pub(crate) fn exif_request_is_no_op(
+    blocks: &[&[u8]],
+    magics: &[u16],
+    baseline: &MetadataMap,
+    desired: &MetadataMap,
+    removed: &[String],
+) -> bool {
+    if !rows_unchanged(baseline, desired) {
+        return false;
+    }
+    if removed
+        .iter()
+        .any(|key| is_planned_key(key) && baseline.contains_key(key.as_str()))
+    {
+        return false;
+    }
+    blocks
+        .iter()
+        .all(|block| match scan_entries_with_magics(block, magics) {
+            Ok(scan) => removals_name_nothing(&scan, baseline, removed),
+            Err(_) => true,
+        })
+}
+
+/// The TIFF payloads of every `Exif\0\0` APP1 block of a JPEG.
+pub(crate) fn jpeg_exif_payloads(file_bytes: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let reader = SliceReader(file_bytes);
+    let segments = parse_segments(&reader)?;
+    Ok(segments
+        .iter()
+        .filter(|s| s.is_app1() && s.data.starts_with(EXIF_IDENTIFIER))
+        .map(|s| s.data[EXIF_IDENTIFIER.len()..].to_vec())
+        .collect())
 }
 
 /// [`rewrite_tiff_exif_with_removals`] for the legacy half of a transaction
@@ -2135,6 +2267,9 @@ pub(crate) fn rewrite_tiff_exif_keeping_carrier(
     removed: &[String],
 ) -> Result<Vec<u8>> {
     let scan = scan_exif_entries(tiff)?;
+    if is_no_op(&scan, original_map, desired, removed) {
+        return Ok(tiff.to_vec());
+    }
     let plan = plan_exif_write_inner(&scan, original_map, desired, removed, false)?;
     let out = serialize_exif_keeping(&plan, Some(tiff))?;
     super::makernote_guard::verify_makernote_preserved(
@@ -2208,12 +2343,18 @@ fn key_addresses(key: &str) -> Vec<(IfdKind, u16)> {
 /// an edit was dropped while success was reported; this closes the class:
 /// a mismatch refuses the whole write. Both payloads are read with
 /// [`scan_exif_entries`], the scanner the writers plan from.
+///
+/// `magics` is the TIFF header set the validated writer accepts
+/// ([`EXIF_BLOCK_MAGICS`] for an EXIF block, `tiff_surgical::
+/// WALKABLE_TIFF_MAGICS` for a TIFF-structured file): the check must read
+/// exactly what the writer reads.
 pub(crate) fn verify_exif_write(
     original: Option<&[u8]>,
     output: &[u8],
     baseline: &MetadataMap,
     desired: &MetadataMap,
     removed: &[String],
+    magics: &[u16],
 ) -> Result<()> {
     let empty = || ExifScan {
         byte_order: ByteOrder::LittleEndian,
@@ -2222,13 +2363,13 @@ pub(crate) fn verify_exif_write(
         makernote_offset: None,
     };
     let before = match original {
-        Some(tiff) if !tiff.is_empty() => scan_exif_entries(tiff)?,
+        Some(tiff) if !tiff.is_empty() => scan_entries_with_magics(tiff, magics)?,
         _ => empty(),
     };
     let after = if output.is_empty() {
         empty()
     } else {
-        scan_exif_entries(output)?
+        scan_entries_with_magics(output, magics)?
     };
     let find = |scan: &ExifScan, ifd: IfdKind, tag_id: u16| -> Option<RawEntry> {
         scan.entries
@@ -4054,12 +4195,28 @@ mod tests {
             // A removal the writer "forgot": the output is the input.
             let mut removed = baseline.clone();
             removed.remove("IFD0:Make");
-            let err = verify_exif_write(Some(&tiff), &tiff, &baseline, &removed, &[]).unwrap_err();
+            let err = verify_exif_write(
+                Some(&tiff),
+                &tiff,
+                &baseline,
+                &removed,
+                &[],
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap_err();
             assert!(err.to_string().contains("IFD0:Make"), "{err}");
             // ... and done properly, it passes.
             let good =
                 serialize_exif(&plan_exif_write(&scan, &baseline, &removed).unwrap()).unwrap();
-            verify_exif_write(Some(&tiff), &good, &baseline, &removed, &[]).unwrap();
+            verify_exif_write(
+                Some(&tiff),
+                &good,
+                &baseline,
+                &removed,
+                &[],
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap();
 
             // A named removal of an entry the reader surfaced no row for.
             let err = verify_exif_write(
@@ -4068,6 +4225,7 @@ mod tests {
                 &removed,
                 &removed,
                 &["IFD0:Make".to_string()],
+                EXIF_BLOCK_MAGICS,
             )
             .unwrap_err();
             assert!(err.to_string().contains("IFD0:Make"), "{err}");
@@ -4075,19 +4233,37 @@ mod tests {
             // A set the writer "forgot": entry left as it was.
             let mut set = baseline.clone();
             set.insert("IFD0:Orientation", TagValue::Integer(3));
-            let err = verify_exif_write(Some(&tiff), &tiff, &baseline, &set, &[]).unwrap_err();
+            let err =
+                verify_exif_write(Some(&tiff), &tiff, &baseline, &set, &[], EXIF_BLOCK_MAGICS)
+                    .unwrap_err();
             assert!(err.to_string().contains("IFD0:Orientation"), "{err}");
             let good = serialize_exif(&plan_exif_write(&scan, &baseline, &set).unwrap()).unwrap();
-            verify_exif_write(Some(&tiff), &good, &baseline, &set, &[]).unwrap();
+            verify_exif_write(Some(&tiff), &good, &baseline, &set, &[], EXIF_BLOCK_MAGICS).unwrap();
 
             // A new tag with no entry at its address.
             let mut added = baseline.clone();
             added.insert("IFD0:Artist", TagValue::new_string("you"));
-            let err = verify_exif_write(Some(&tiff), &tiff, &baseline, &added, &[]).unwrap_err();
+            let err = verify_exif_write(
+                Some(&tiff),
+                &tiff,
+                &baseline,
+                &added,
+                &[],
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap_err();
             assert!(err.to_string().contains("IFD0:Artist"), "{err}");
 
             // Nothing requested, nothing to check.
-            verify_exif_write(Some(&tiff), &tiff, &baseline, &baseline, &[]).unwrap();
+            verify_exif_write(
+                Some(&tiff),
+                &tiff,
+                &baseline,
+                &baseline,
+                &[],
+                EXIF_BLOCK_MAGICS,
+            )
+            .unwrap();
         }
     }
 }
