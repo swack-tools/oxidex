@@ -12,10 +12,21 @@
 //! runs, before anyone thought to check which binary actually ran.
 //! `resolve_binary` below fails loudly, before a single tag is compared,
 //! instead of letting a missing binary masquerade as a total regression.
+//!
+//! It also names the compiler that built the binary under test
+//! ([`toolchain_report`]): `rust-toolchain.toml` is read only by rustup's
+//! proxies, so a PATH with Homebrew's `rustc` first silently builds with
+//! Homebrew's release instead of the pin (every local measurement on
+//! 2026-09-23 was built by 1.98.1 while CI used the pinned 1.97.1). The
+//! binary's own embedded `/rustc/<commit-hash>/` std paths say which
+//! toolchain built it, independent of what PATH resolves today.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use regex::bytes::Regex as BytesRegex;
 
 pub const DIRTY_OVERRIDE_ENV: &str = "OXIDEX_ALLOW_DIRTY_TREE";
 
@@ -203,6 +214,355 @@ pub fn staleness_note(binary: &BinaryIdentity, git: &GitState) -> Option<String>
     ))
 }
 
+// --- which compiler -------------------------------------------------------
+// Mirrors `scripts/instrument.py`'s toolchain section; keep the two in step.
+
+/// std's panic locations embed `/rustc/<full commit hash>/library/...` in
+/// every Rust executable, stripped or not. The hash is `rustc -vV`'s
+/// `commit-hash:`, so it names the toolchain that built the binary.
+static EMBEDDED_RUSTC: LazyLock<BytesRegex> =
+    LazyLock::new(|| BytesRegex::new(r"/rustc/([0-9a-f]{40})/").expect("static regex"));
+
+/// `[toolchain] channel` from the checkout's own `rust-toolchain.toml` (or a
+/// legacy extensionless `rust-toolchain` holding just the channel).
+pub fn pinned_rust_channel(repo: &Path) -> Option<String> {
+    for name in ["rust-toolchain.toml", "rust-toolchain"] {
+        let Ok(text) = std::fs::read_to_string(repo.join(name)) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("channel") else {
+                continue;
+            };
+            let Some(value) = rest.trim_start().strip_prefix('=') else {
+                continue;
+            };
+            let value = value.trim();
+            if let Some(inner) = value.strip_prefix('"')
+                && let Some(end) = inner.find('"')
+            {
+                return Some(inner[..end].trim().to_string());
+            }
+        }
+        if name == "rust-toolchain" {
+            return text
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(str::to_string);
+        }
+        return None;
+    }
+    None
+}
+
+fn is_numeric_release(s: &str, parts: usize) -> bool {
+    let split: Vec<&str> = s.split('.').collect();
+    split.len() == parts
+        && split
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Does `release` satisfy `channel`? `Some(bool)` for a numeric pin (exact
+/// `1.97.1`, or any `1.97.x` for `1.97`); `None` for a symbolic channel.
+pub fn channel_matches(channel: &str, release: Option<&str>) -> Option<bool> {
+    let Some(release) = release else {
+        return Some(false);
+    };
+    if is_numeric_release(channel, 3) {
+        Some(release == channel)
+    } else if is_numeric_release(channel, 2) {
+        Some(release.starts_with(&format!("{channel}.")))
+    } else {
+        None
+    }
+}
+
+/// One resolved rustc and what `-vV` says about it.
+#[derive(Clone, Debug, Default)]
+pub struct RustcIdentity {
+    pub command: String,
+    pub path: Option<String>,
+    pub version: String,
+    pub release: Option<String>,
+    pub commit_hash: Option<String>,
+}
+
+impl RustcIdentity {
+    fn describe(&self) -> String {
+        format!(
+            "{} at {}",
+            if self.version.is_empty() {
+                "rustc ?"
+            } else {
+                &self.version
+            },
+            self.path.as_deref().unwrap_or(&self.command)
+        )
+    }
+}
+
+/// Parse `rustc -vV` output into an identity for `command`.
+pub fn parse_rustc_verbose(command: &str, text: &str) -> RustcIdentity {
+    let mut ident = RustcIdentity {
+        command: command.to_string(),
+        ..Default::default()
+    };
+    let mut lines = text.trim().lines();
+    ident.version = lines.next().unwrap_or("").trim().to_string();
+    for line in lines {
+        if let Some((key, value)) = line.split_once(':') {
+            match key.trim() {
+                "release" => ident.release = Some(value.trim().to_string()),
+                "commit-hash" => ident.commit_hash = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+    ident
+}
+
+fn run_stdout(cmd: &mut Command) -> Option<String> {
+    let out = cmd.output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn which(command: &str) -> Option<PathBuf> {
+    let candidate = Path::new(command);
+    if candidate.components().count() > 1 {
+        return candidate.is_file().then(|| candidate.to_path_buf());
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(command))
+        .find(|p| p.is_file())
+}
+
+/// What `rustc` means in `repo` now -- cargo's own resolution (`$RUSTC`,
+/// else `rustc` on PATH), run in the checkout so a rustup proxy honours its
+/// toolchain file.
+pub fn rustc_identity(repo: &Path) -> Option<RustcIdentity> {
+    let command = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let text = run_stdout(Command::new(&command).arg("-vV").current_dir(repo))?;
+    let mut ident = parse_rustc_verbose(&command, &text);
+    ident.path = which(&command).map(|p| p.display().to_string());
+    Some(ident)
+}
+
+fn rustup_executable() -> Option<PathBuf> {
+    which("rustup").or_else(|| {
+        let home = std::env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))?;
+        let candidate = home.join("bin").join("rustup");
+        candidate.is_file().then_some(candidate)
+    })
+}
+
+/// The pinned toolchain's own rustc, asked through rustup directly (PATH
+/// order irrelevant). `RUSTUP_AUTO_INSTALL=0`: never download to identify.
+pub fn pinned_rustc_identity(channel: &str, repo: &Path) -> Option<RustcIdentity> {
+    let rustup = rustup_executable()?;
+    let text = run_stdout(
+        Command::new(&rustup)
+            .args(["run", channel, "rustc", "-vV"])
+            .current_dir(repo)
+            .env("RUSTUP_AUTO_INSTALL", "0")
+            .env_remove("RUSTUP_TOOLCHAIN"),
+    )?;
+    let mut ident = parse_rustc_verbose(&format!("rustup run {channel} rustc"), &text);
+    ident.path = run_stdout(
+        Command::new(&rustup)
+            .args(["which", "--toolchain", channel, "rustc"])
+            .current_dir(repo)
+            .env("RUSTUP_AUTO_INSTALL", "0")
+            .env_remove("RUSTUP_TOOLCHAIN"),
+    )
+    .map(|s| s.trim().to_string());
+    Some(ident)
+}
+
+/// Every distinct `/rustc/<commit-hash>/` embedded in `bytes`, sorted.
+pub fn embedded_rustc_commits_in(bytes: &[u8]) -> Vec<String> {
+    let mut found: Vec<String> = EMBEDDED_RUSTC
+        .captures_iter(bytes)
+        .filter_map(|c| c.get(1))
+        .map(|m| String::from_utf8_lossy(m.as_bytes()).to_string())
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// What the header says about compilers.
+pub struct ToolchainReport {
+    pub lines: Vec<String>,
+    /// Known to differ from the pin. The header prints `lines`; the verdict
+    /// flags are for callers and tests, as in `scripts/instrument.py`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub mismatch: bool,
+    /// Could not be confirmed either way.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub unverified: bool,
+}
+
+const WARN: &str = "         \u{26a0}\u{fe0f}  ";
+
+/// Pure verdict over gathered facts. `binary_commits` is `None` when no
+/// binary is measured; then only the current PATH resolution is judged.
+pub fn assess_toolchain(
+    channel: Option<&str>,
+    binary_commits: Option<&[String]>,
+    binary_label: &str,
+    pinned: Option<&RustcIdentity>,
+    current: Option<&RustcIdentity>,
+) -> ToolchainReport {
+    let Some(channel) = channel else {
+        return ToolchainReport {
+            lines: vec![
+                "rustc:   no rust-toolchain.toml in this checkout -- compiler not checked".into(),
+            ],
+            mismatch: false,
+            unverified: true,
+        };
+    };
+    let mut lines = Vec::new();
+    let (mut mismatch, mut unverified) = (false, false);
+    let current_is_pin =
+        current.is_some_and(|c| channel_matches(channel, c.release.as_deref()) == Some(true));
+    let pinned_hash: Option<String> = pinned.and_then(|p| p.commit_hash.clone()).or_else(|| {
+        current
+            .filter(|_| current_is_pin)
+            .and_then(|c| c.commit_hash.clone())
+    });
+    let known: Vec<&RustcIdentity> = [pinned, current].into_iter().flatten().collect();
+    let name = |commit: &str| -> String {
+        known
+            .iter()
+            .find(|i| i.commit_hash.as_deref() == Some(commit))
+            .map(|i| {
+                format!(
+                    "{} ({})",
+                    i.version,
+                    i.path.as_deref().unwrap_or(&i.command)
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "an unidentified rustc (commit {})",
+                    &commit[..commit.len().min(12)]
+                )
+            })
+    };
+    let pin_text = format!(
+        "pin {channel} (rust-toolchain.toml{})",
+        pinned_hash
+            .as_deref()
+            .map(|h| format!(", commit {}", &h[..h.len().min(12)]))
+            .unwrap_or_default()
+    );
+    if let Some(commits) = binary_commits {
+        let names: Vec<String> = commits.iter().map(|c| name(c)).collect();
+        if commits.is_empty() {
+            lines.push(format!(
+                "rustc:   compiler that built the {binary_label} is UNKNOWN; {pin_text}"
+            ));
+            lines.push(format!(
+                "{WARN}no /rustc/<commit> fingerprint in the {binary_label}: cannot confirm it \
+                 was built with the pinned toolchain."
+            ));
+            unverified = true;
+        } else if pinned_hash.is_none() {
+            lines.push(format!(
+                "rustc:   {binary_label} built by {}; {pin_text}",
+                names.join(", ")
+            ));
+            lines.push(format!(
+                "{WARN}pinned toolchain {channel} is not resolvable here (`rustup run {channel} \
+                 rustc -vV` failed and PATH rustc is not it): cannot confirm the binary's compiler."
+            ));
+            unverified = true;
+        } else if commits.len() == 1 && Some(commits[0].as_str()) == pinned_hash.as_deref() {
+            lines.push(format!(
+                "rustc:   {binary_label} built by the pinned toolchain -- {}",
+                names[0]
+            ));
+        } else {
+            mismatch = true;
+            lines.push(format!(
+                "rustc:   {binary_label} built by {}",
+                names.join(", ")
+            ));
+            lines.push(format!(
+                "{WARN}TOOLCHAIN MISMATCH: the {binary_label} was NOT compiled by the {pin_text}. \
+                 Its numbers are not comparable with CI's. Rebuild with the pin: put ~/.cargo/bin \
+                 ahead of /opt/homebrew/bin on PATH (see AGENTS.md 'Rust toolchain pin')."
+            ));
+        }
+    }
+    let lead = if lines.is_empty() {
+        "rustc:   "
+    } else {
+        "         "
+    };
+    match current {
+        None => {
+            lines.push(format!("{lead}rustc on PATH now: none resolvable"));
+            unverified = true;
+        }
+        Some(c) => {
+            let verdict = channel_matches(channel, c.release.as_deref());
+            let suffix = match verdict {
+                Some(true) => String::new(),
+                Some(false) => format!("  [!= pin {channel}]"),
+                None => "  [symbolic pin: unchecked]".to_string(),
+            };
+            lines.push(format!("{lead}rustc on PATH now: {}{suffix}", c.describe()));
+            if verdict == Some(false) && binary_commits.is_none() {
+                mismatch = true;
+                lines.push(format!(
+                    "{WARN}TOOLCHAIN MISMATCH: a build here would use rustc {}, not the {pin_text}.",
+                    c.release.as_deref().unwrap_or("?")
+                ));
+            }
+        }
+    }
+    ToolchainReport {
+        lines,
+        mismatch,
+        unverified,
+    }
+}
+
+/// Which compiler built `binary` (by its embedded fingerprint), and is it
+/// `repo`'s pinned toolchain? Also records what PATH resolves `rustc` to
+/// now -- what the NEXT build would use, a different question.
+pub fn toolchain_report(repo: &Path, binary: Option<&BinaryIdentity>) -> ToolchainReport {
+    let channel = pinned_rust_channel(repo);
+    let current = rustc_identity(repo);
+    let pinned = channel
+        .as_deref()
+        .and_then(|c| pinned_rustc_identity(c, repo));
+    let commits = binary.map(|b| {
+        std::fs::read(&b.path)
+            .map(|bytes| embedded_rustc_commits_in(&bytes))
+            .unwrap_or_default()
+    });
+    let label = binary
+        .map(|b| format!("{} binary", b.kind))
+        .unwrap_or_else(|| "binary".to_string());
+    assess_toolchain(
+        channel.as_deref(),
+        commits.as_deref(),
+        &label,
+        pinned.as_ref(),
+        current.as_ref(),
+    )
+}
+
 /// ExifTool's own identity: not just `-ver`, but a functional capability
 /// probe -- AGENTS.md's "a matching -ver is not a working oracle". A perl
 /// missing Archive::Zip still prints the right release and still reports
@@ -272,6 +632,9 @@ pub fn print_header(
         if let Some(note) = staleness_note(b, git) {
             lines.push(format!("         \u{26a0}\u{fe0f}  {note}"));
         }
+        // The compiler that built THIS binary (embedded fingerprint), not
+        // merely the one PATH resolves now -- see `toolchain_report`.
+        lines.extend(toolchain_report(&git.repo_root, Some(b)).lines);
     }
     let mut tree_line = format!("repo:    {}", git.short());
     if dirty_overridden {
@@ -302,4 +665,181 @@ pub fn print_header(
     let text = lines.join("\n");
     println!("{text}");
     text
+}
+
+#[cfg(test)]
+mod toolchain_tests {
+    use super::*;
+
+    const PIN: &str = "8bab26f4f68e0e26f0bb7960be334d5b520ea452";
+    const BREW: &str = "48a229ceaefd4985c50990b14116b6d856af0985";
+
+    fn ident(release: &str, commit: &str, path: &str) -> RustcIdentity {
+        RustcIdentity {
+            command: "rustc".into(),
+            path: Some(path.into()),
+            version: format!("rustc {release} ({})", &commit[..9]),
+            release: Some(release.into()),
+            commit_hash: Some(commit.into()),
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "oxidex-instrument-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reads_the_checkouts_own_channel() {
+        let dir = scratch("channel");
+        assert_eq!(pinned_rust_channel(&dir), None);
+        std::fs::write(
+            dir.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.97.1\" # pin\ncomponents = [\"clippy\"]\n",
+        )
+        .unwrap();
+        assert_eq!(pinned_rust_channel(&dir).as_deref(), Some("1.97.1"));
+        std::fs::remove_file(dir.join("rust-toolchain.toml")).unwrap();
+        std::fs::write(dir.join("rust-toolchain"), "1.80.0\n").unwrap();
+        assert_eq!(pinned_rust_channel(&dir).as_deref(), Some("1.80.0"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn channel_matching_is_exact_for_numeric_pins() {
+        assert_eq!(channel_matches("1.97.1", Some("1.97.1")), Some(true));
+        assert_eq!(channel_matches("1.97.1", Some("1.98.1")), Some(false));
+        assert_eq!(channel_matches("1.97", Some("1.97.3")), Some(true));
+        assert_eq!(channel_matches("1.97", Some("1.970.0")), Some(false));
+        assert_eq!(channel_matches("1.97.1", None), Some(false));
+        assert_eq!(channel_matches("stable", Some("1.97.1")), None);
+    }
+
+    #[test]
+    fn parses_rustc_verbose_output() {
+        let i = parse_rustc_verbose(
+            "rustc",
+            "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\n\
+             commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\nrelease: 1.98.1\n",
+        );
+        assert_eq!(i.version, "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)");
+        assert_eq!(i.release.as_deref(), Some("1.98.1"));
+        assert_eq!(i.commit_hash.as_deref(), Some(BREW));
+    }
+
+    #[test]
+    fn fingerprint_names_every_embedded_toolchain() {
+        let bytes = format!(
+            "\0/rustc/{BREW}/library/core/src/panicking.rs\0/rustc/{BREW}/library/std/x\0\
+             /rustc/{PIN}/library/alloc/y\0/rustc/nothex/"
+        );
+        assert_eq!(
+            embedded_rustc_commits_in(bytes.as_bytes()),
+            vec![BREW.to_string(), PIN.to_string()]
+        );
+        assert!(embedded_rustc_commits_in(b"no fingerprint").is_empty());
+    }
+
+    #[test]
+    fn binary_built_by_the_pin_passes_even_when_path_is_skewed() {
+        let pinned = ident("1.97.1", PIN, "/rustup/1.97.1/bin/rustc");
+        let current = ident("1.98.1", BREW, "/opt/homebrew/bin/rustc");
+        let r = assess_toolchain(
+            Some("1.97.1"),
+            Some(&[PIN.to_string()]),
+            "oxidex binary",
+            Some(&pinned),
+            Some(&current),
+        );
+        assert!(!r.mismatch && !r.unverified, "{:?}", r.lines);
+        assert!(r.lines[0].contains("built by the pinned toolchain"));
+        assert!(r.lines[1].contains("[!= pin 1.97.1]"));
+    }
+
+    #[test]
+    fn binary_built_by_another_rustc_is_a_loud_mismatch() {
+        let pinned = ident("1.97.1", PIN, "/rustup/1.97.1/bin/rustc");
+        let current = ident("1.98.1", BREW, "/opt/homebrew/bin/rustc");
+        let r = assess_toolchain(
+            Some("1.97.1"),
+            Some(&[BREW.to_string()]),
+            "oxidex binary",
+            Some(&pinned),
+            Some(&current),
+        );
+        assert!(r.mismatch);
+        assert!(
+            r.lines[0].contains("/opt/homebrew/bin/rustc"),
+            "{:?}",
+            r.lines
+        );
+        assert!(r.lines[1].contains("TOOLCHAIN MISMATCH"));
+        // Two toolchains in one binary is never "the pin".
+        let mixed = assess_toolchain(
+            Some("1.97.1"),
+            Some(&[BREW.to_string(), PIN.to_string()]),
+            "oxidex binary",
+            Some(&pinned),
+            None,
+        );
+        assert!(mixed.mismatch);
+    }
+
+    #[test]
+    fn unfingerprinted_or_unresolvable_pin_is_unverified_not_passed() {
+        let current = ident("1.98.1", BREW, "/opt/homebrew/bin/rustc");
+        let none = assess_toolchain(Some("1.97.1"), Some(&[]), "oxidex binary", None, None);
+        assert!(none.unverified && !none.mismatch);
+        assert!(none.lines[0].contains("UNKNOWN"));
+        let unresolved = assess_toolchain(
+            Some("1.97.1"),
+            Some(&[BREW.to_string()]),
+            "oxidex binary",
+            None,
+            Some(&current),
+        );
+        assert!(unresolved.unverified && !unresolved.mismatch);
+        // Without rustup, a PATH rustc that IS the pin still identifies it.
+        let via_path = assess_toolchain(
+            Some("1.97.1"),
+            Some(&[PIN.to_string()]),
+            "oxidex binary",
+            None,
+            Some(&ident("1.97.1", PIN, "/usr/local/bin/rustc")),
+        );
+        assert!(
+            !via_path.mismatch && !via_path.unverified,
+            "{:?}",
+            via_path.lines
+        );
+    }
+
+    #[test]
+    fn without_a_binary_only_the_path_resolution_is_judged() {
+        let skewed = assess_toolchain(
+            Some("1.97.1"),
+            None,
+            "binary",
+            None,
+            Some(&ident("1.98.1", BREW, "/opt/homebrew/bin/rustc")),
+        );
+        assert!(skewed.mismatch);
+        assert!(skewed.lines[0].starts_with("rustc:   rustc on PATH now"));
+        let fine = assess_toolchain(
+            Some("1.97.1"),
+            None,
+            "binary",
+            None,
+            Some(&ident("1.97.1", PIN, "/home/u/.cargo/bin/rustc")),
+        );
+        assert!(!fine.mismatch && !fine.unverified);
+        let unpinned = assess_toolchain(None, None, "binary", None, None);
+        assert!(unpinned.unverified && !unpinned.mismatch);
+    }
 }

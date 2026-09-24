@@ -34,6 +34,43 @@ a source regression. Prefer `just test`, which supplies the scoped unwind
 override; if reproducing the bare command is necessary, clear the colliding
 artifacts first with `cargo clean --release -p chrono -p oxidex`.
 
+## Rust toolchain pin (build gotcha)
+
+`rust-toolchain.toml` pins the compiler (`channel = "1.97.1"`; CI builds with
+it), but **only rustup's proxies read that file**. Any other `rustc` earlier on
+`PATH` ignores it without a word. On the maintainer's Mac, `/opt/homebrew/bin`
+comes before `~/.cargo/bin`, so `rustc` and `cargo` are Homebrew's 1.98.1 and
+every local build silently used it. Even rustup's own cargo
+(`~/.cargo/bin/cargo`, or `rustup run 1.97.1 cargo build`) compiles with
+Homebrew's rustc there, because cargo runs the first `rustc` it finds on
+`PATH`. **`rustup run` is not a fix.** Checked: a crate built that way embeds
+Homebrew's `/rustc/48a229ce…` std paths.
+
+Fix it once per shell (put it in the profile):
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"   # rustup proxies first; they honour the pin
+```
+
+For a single command, use `PATH="$HOME/.cargo/bin:$PATH" cargo …` or
+`RUSTC="$(rustup which --toolchain 1.97.1 rustc)" cargo …`. Check with
+`tools/preflight.sh`, which exits 6 when `rustc` (or `$RUSTC`) or `cargo`
+resolves to anything but the pinned channel. `OXIDEX_ALLOW_TOOLCHAIN_SKEW=1`
+turns that failure into a printed warning. Use it only for work that builds
+nothing you will measure.
+
+To see which compiler built a binary, read its own bytes. What `PATH` resolves
+today can differ from what built it:
+`grep -aoE '/rustc/[0-9a-f]{40}' target/release/oxidex | sort -u`, compared
+with `rustup run 1.97.1 rustc -vV | grep commit-hash`. Every instrument
+header does that comparison and warns on a mismatch (see incident 12 below).
+
+**Measurements from 2026-09-23 are off-pin.** Every local build and corpus
+measurement on this Mac that day came from a 1.98.1-built binary: each
+worktree binary checked embeds `/rustc/48a229ce…`, Homebrew 1.98.1. CI used
+the pinned 1.97.1. Before comparing those numbers with CI or with later runs,
+rebuild on the pin and measure again.
+
 ## Structure
 - `src/` - Core library and CLI
 - `src/exiftool_tables/` - Binary tag layouts transcribed from ExifTool's Perl tables (generated)
@@ -222,10 +259,27 @@ instrument keeps lying in a new way, not because the old ways stopped:
     the test — a test that spells the formula itself proves only that its
     author repeated the mistake.
 
+12. **An implicit toolchain resolution.** `rust-toolchain.toml` said
+    1.97.1, but a Homebrew `rustc` ahead of rustup's proxies on `PATH`
+    ignored it. Every local binary and corpus measurement on 2026-09-23 came
+    from 1.98.1 while CI used the pin. Nothing reported it, because nothing
+    asked which compiler ran. Fix: `tools/preflight.sh` fails (exit 6) on a
+    `rustc`/`cargo` that is not the pinned channel. Every instrument header
+    names the compiler that built the binary under test. It reads the
+    `/rustc/<commit>/` std paths embedded in the binary, because the
+    compiler on `PATH` today may not be the one that built a prebuilt binary,
+    and it warns loudly on a mismatch. `corpus_read_receipt.py build` passes
+    the pinned rustc to Cargo as `$RUSTC`, records it, and refuses anything
+    else. The version-rehearsal build and its qualification also refuse any
+    compiler other than the one the built checkout's own
+    `rust-toolchain.toml` pins, checked against both `rustc -vV` and the
+    binaries' fingerprints. See "Rust toolchain pin" above.
+
 Every measurement script under `tools/exiftool-tables/` and
 `src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header
 before its first number: which oxidex (path, and a staleness warning per
-#2 above), which git commit and whether the tree is dirty, which ExifTool
+#2 above), which rustc compiled that binary (by its embedded fingerprint)
+against the pin, per #12, which git commit and whether the tree is dirty, which ExifTool
 and its capability-probe result, and the corpus path and file count. A dirty
 tree refuses to measure at all unless `OXIDEX_ALLOW_DIRTY_TREE=1` is set,
 in which case the header says so. See `scripts/instrument.py`'s module
@@ -262,7 +316,9 @@ them to check. `tools/preflight.sh` performs the mechanical half; run it first.
 **Know which checkout you are in.** `tools/preflight.sh` prints the worktree
 root, whether it is the main checkout or a linked worktree, the branch, and the
 uncommitted-file count, and it exits non-zero on a protected branch (`main`,
-`refactor/tag-machinery`) or a dirty tree. Never edit the main checkout while
+`refactor/tag-machinery`), on a dirty tree, or when `rustc`/`cargo`
+resolves to a compiler other than `rust-toolchain.toml`'s (exit 6; see "Rust
+toolchain pin"). Never edit the main checkout while
 operating from a worktree, and never edit a worktree another agent owns: several
 agents sharing one tree is not hypothetical here — a live acceptance run found
 its tree gone dirty 58 s in, from a sibling's staged edits, and everything

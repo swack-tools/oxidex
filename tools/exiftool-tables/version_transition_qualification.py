@@ -545,8 +545,9 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             or not isinstance(perl_capability, dict) or perl_capability.get("available") is not True):
         raise Refused(f"{release} native capability probe is not the ready probe used by read")
     release_tests = _release_test_receipt(run_dir, journal, release)
-    build_environment = _build_environment_receipt(_report_for(run_dir, journal, release, "build"), release)
     checkout = run_dir / "checkouts" / executor._safe_name(release)
+    build_environment = _build_environment_receipt(_report_for(run_dir, journal, release, "build"), release,
+                                                   checkout)
     refusals = stage_adapter.generated_refusal_counts(checkout)
     if not isinstance(refusals.get("total"), int) or refusals["total"] < 0:
         raise Refused("generated refusal accounting is unavailable")
@@ -698,8 +699,15 @@ def _release_test_oracle(report: Mapping[str, Any], release: str) -> dict[str, A
     return oracle
 
 
-def _build_environment_receipt(build: Mapping[str, Any], release: str) -> dict[str, Any]:
-    """The qualified binaries must come from the allowlisted build environment."""
+def _build_environment_receipt(build: Mapping[str, Any], release: str, checkout: Path) -> dict[str, Any]:
+    """The qualified binaries must come from the allowlisted build environment,
+    compiled by the rustc release that checkout's own rust-toolchain.toml pins.
+
+    PATH is allowlisted, and a rustc ahead of rustup's proxies on it ignores
+    the pin silently, so "some identified rustc" is not enough: the recorded
+    ``rustc -vV``/``cargo -V`` must be the pinned release, the pin recorded at
+    build time must still be the checkout's file, and both executables must
+    embed that rustc's commit (std's /rustc/<commit>/ paths)."""
     recorded = build.get("build_environment")
     allowed = set(stage_adapter.BUILD_ENVIRONMENT_PASSTHROUGH) | set(stage_adapter.BUILD_ENVIRONMENT_SET)
     try:
@@ -713,10 +721,19 @@ def _build_environment_receipt(build: Mapping[str, Any], release: str) -> dict[s
             and isinstance(cargo_config.get("checked"), list) and cargo_config["checked"]
             and binary.is_relative_to(Path(env["CARGO_TARGET_DIR"]))
         )
+        recorded_pin, compiled_by = recorded["toolchain_pin"], recorded["compiled_by"]
     except (KeyError, TypeError, AttributeError) as exc:
         raise Refused(f"{release} build environment is not recorded") from exc
     if not valid:
         raise Refused(f"{release} build environment is not the allowlisted, identified toolchain build")
+    try:
+        pin = stage_adapter.toolchain_pin_for(checkout)
+        if recorded_pin != pin:
+            raise stage_adapter.Refused(f"recorded toolchain pin {recorded_pin} is not the checkout's {pin}")
+        stage_adapter.check_toolchain_against_pin(toolchain, pin["channel"])
+        stage_adapter.check_binary_compilers(toolchain, compiled_by)
+    except (stage_adapter.Refused, OSError) as exc:
+        raise Refused(f"{release} build environment is not the checkout's pinned toolchain: {exc}") from exc
     return recorded
 
 

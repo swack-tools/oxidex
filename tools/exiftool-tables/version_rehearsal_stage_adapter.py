@@ -26,6 +26,7 @@ from typing import Any, Callable
 import artifacts
 import generated_tiff_write_matrix as generated_matrix
 import native_write_matrix as native
+import instrument  # noqa: E402 -- scripts/ is on sys.path via native_write_matrix
 import version_rehearsal as rehearsal
 import version_rehearsal_executor as executor
 
@@ -456,6 +457,13 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
         if record["state"] != "ok" or not record["stdout"].strip().startswith(name + " "):
             raise Refused(f"build toolchain cannot be identified: {' '.join(command)}")
         toolchain[name] = record["stdout"].strip()
+    # PATH is allowlisted, and only rustup's proxies honour the checkout's
+    # rust-toolchain.toml: a Homebrew rustc ahead of them builds with its own
+    # release, silently. Refuse before building unless the compiler the
+    # allowlisted PATH resolves IS this checkout's pin (read from the
+    # checkout itself -- another release may pin another toolchain).
+    toolchain_pin = toolchain_pin_for(checkout)
+    check_toolchain_against_pin(toolchain, toolchain_pin["channel"])
     records = []
     for command in (["cargo", "build", "--all-features", "--message-format=json", "--bin", "oxidex"],
                     ["cargo", "test", "--lib", "--all-features", "--no-run", "--message-format=json"]):
@@ -469,13 +477,54 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     writer = _cargo_executable(records[1], checkout, target, test=True)
     if executable["path"] == writer["path"]:
         raise Refused("CLI and writer driver must be distinct Cargo executables")
+    # What actually compiled each executable, from its own bytes (std's
+    # embedded /rustc/<commit>/ paths): exactly the rustc recorded above.
+    compiled_by = {"binary": instrument.embedded_rustc_commits(executable["path"]),
+                   "writer_binary": instrument.embedded_rustc_commits(writer["path"])}
+    check_binary_compilers(toolchain, compiled_by)
     # A build may not change the generated inputs whose identity it claims.
     _validate_artifacts(checkout, generated)
     result = {**_base("build", args, checkout, identity), "state": "passed", "denominator": 2,
               "generated_artifacts": generated, "binary": executable,
               "writer_binary": writer, "raw_report": raw,
-              "build_environment": {"environment": env, "toolchain": toolchain, "cargo_config": cargo_config}}
+              "build_environment": {"environment": env, "toolchain": toolchain, "cargo_config": cargo_config,
+                                    "toolchain_pin": toolchain_pin, "compiled_by": compiled_by}}
     _atomic(report, result); return result
+
+
+def toolchain_pin_for(checkout: Path) -> dict[str, str]:
+    """The checkout's own rust-toolchain.toml pin; refuses a checkout without a numeric one."""
+    path = instrument.rust_toolchain_file(checkout)
+    channel = instrument.pinned_rust_channel(checkout)
+    if path is None or channel is None or instrument.channel_matches(channel, channel) is not True:
+        raise Refused("build checkout has no numeric rust-toolchain.toml channel; its compiler cannot be qualified")
+    return {"file": path.name, "sha256": _sha(path), "channel": channel}
+
+
+def check_toolchain_against_pin(toolchain: dict[str, Any], channel: str) -> dict[str, str]:
+    """Recorded ``rustc -vV``/``cargo -V`` must be the pinned release. -> {release, commit_hash}."""
+    try:
+        fields = instrument.parse_rustc_verbose(toolchain["rustc"])
+        cargo = instrument.cargo_release(toolchain["cargo"])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise Refused("build toolchain is not recorded") from exc
+    release, commit = fields.get("release"), fields.get("commit-hash", "")
+    if instrument.channel_matches(channel, release) is not True:
+        raise Refused(f"build toolchain rustc {release or '?'} is not the checkout's pinned {channel}: the "
+                      "allowlisted PATH resolves another compiler first (put ~/.cargo/bin ahead of it)")
+    if instrument.channel_matches(channel, cargo) is not True:
+        raise Refused(f"build toolchain cargo {cargo or '?'} is not the checkout's pinned {channel}")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise Refused("build toolchain rustc -vV carries no commit hash")
+    return {"release": release, "commit_hash": commit}
+
+
+def check_binary_compilers(toolchain: dict[str, Any], compiled_by: Any) -> None:
+    """Every built executable must embed exactly the recorded rustc's commit."""
+    commit = instrument.parse_rustc_verbose(toolchain["rustc"]).get("commit-hash")
+    if (not isinstance(compiled_by, dict) or set(compiled_by) != {"binary", "writer_binary"}
+            or any(value != [commit] for value in compiled_by.values())):
+        raise Refused(f"build executables were not compiled by the recorded rustc {commit}: {compiled_by}")
 
 
 def _summary(line: str) -> tuple[str, int, int, int, int, int]:

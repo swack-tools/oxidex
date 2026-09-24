@@ -21,6 +21,15 @@ import version_rehearsal_stage_adapter as adapter
 COMMIT = "a" * 40
 
 
+PIN_COMMIT = "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+BREW_COMMIT = "48a229ceaefd4985c50990b14116b6d856af0985"
+
+
+def fixture_rustc_vv(release: str, commit: str) -> str:
+    return (f"rustc {release} (fixture 2026-01-01)\nbinary: rustc\ncommit-hash: {commit}\n"
+            f"host: aarch64-apple-darwin\nrelease: {release}\n")
+
+
 @dataclass(frozen=True)
 class V4Target:
     raw_tag_id: int
@@ -91,6 +100,9 @@ class AdapterTests(unittest.TestCase):
         self.temp = TemporaryDirectory(); self.addCleanup(self.temp.cleanup); self.root = Path(self.temp.name)
         self.checkout = self.root / "checkout"; self.checkout.mkdir()
         (self.checkout / ".exiftool-version").write_text("13.59\n")
+        (self.checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.97.1"\n')
+        self.rustc_release, self.cargo_release = "1.97.1", "1.97.1"
+        self.rustc_commit = self.binary_commit = PIN_COMMIT
         (self.checkout / "tools/exiftool-tables").mkdir(parents=True)
         (self.checkout / "tools/exiftool-tables/regen-all.sh").write_text("#!/bin/sh\n")
         for item in artifacts.ARTIFACTS:
@@ -169,9 +181,9 @@ class AdapterTests(unittest.TestCase):
             if argv[-2:] == ["diff", "--name-only"]: return subprocess.CompletedProcess(argv, 0, self.diff_output, "")
         if argv[0] == "bash": return subprocess.CompletedProcess(argv, 0, "regen", "")
         if argv == ["rustc", "-vV"]:
-            return subprocess.CompletedProcess(argv, 0, "rustc 1.97.1 (fixture 2026-01-01)\nhost: aarch64-apple-darwin\n", "")
+            return subprocess.CompletedProcess(argv, 0, fixture_rustc_vv(self.rustc_release, self.rustc_commit), "")
         if argv == ["cargo", "-V"]:
-            return subprocess.CompletedProcess(argv, 0, "cargo 1.97.1 (fixture 2026-01-01)\n", "")
+            return subprocess.CompletedProcess(argv, 0, f"cargo {self.cargo_release} (fixture 2026-01-01)\n", "")
         if argv[:2] == ["cargo", "test"] and "--no-run" not in argv:
             self.suite_calls.append((argv, kwargs["env"]))
             if kwargs.get("stderr") is not subprocess.STDOUT:
@@ -191,7 +203,8 @@ class AdapterTests(unittest.TestCase):
         if argv[0] == "cargo":
             test = argv[1] == "test"
             binary = self.target / ("debug/deps/oxidex-writer-test" if test else "debug/oxidex")
-            binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes(b"writer" if test else b"binary"); binary.chmod(0o755)
+            fingerprint = f"\0/rustc/{self.binary_commit}/library/core/src/panicking.rs\0".encode()
+            binary.parent.mkdir(parents=True, exist_ok=True); binary.write_bytes((b"writer" if test else b"binary") + fingerprint); binary.chmod(0o755)
             return subprocess.CompletedProcess(argv, 0, json.dumps({"reason": "compiler-artifact", "manifest_path": str(self.checkout / "Cargo.toml"), "profile": {"test": test}, "target": {"name": "oxidex", "kind": ["lib"] if test else ["bin"]}, "executable": str(binary)}) + "\n", "")
         if argv[0] == sys.executable and argv[1].endswith("tools/release/bootstrap_oracle.py"):
             self.verify_calls.append((argv, kwargs["env"]))
@@ -640,9 +653,52 @@ class AdapterTests(unittest.TestCase):
         build_env = built["build_environment"]
         self.assertEqual(build_env["environment"], calls[-1][1])
         self.assertEqual(build_env["toolchain"], {
-            "rustc": "rustc 1.97.1 (fixture 2026-01-01)\nhost: aarch64-apple-darwin",
+            "rustc": fixture_rustc_vv("1.97.1", PIN_COMMIT).strip(),
             "cargo": "cargo 1.97.1 (fixture 2026-01-01)"})
         self.assertEqual(build_env["cargo_config"]["outside_checkout"], [])
+        self.assertEqual(build_env["toolchain_pin"], {
+            "file": "rust-toolchain.toml", "channel": "1.97.1",
+            "sha256": adapter._sha(self.checkout / "rust-toolchain.toml")})
+        self.assertEqual(build_env["compiled_by"], {"binary": [PIN_COMMIT], "writer_binary": [PIN_COMMIT]})
+
+    def assert_build_refused_before_cargo(self, pattern):
+        first = len(self.seen)
+        with self.assertRaisesRegex(adapter.Refused, pattern):
+            adapter.build(self.args("build"), run=self.fake_run)
+        self.assertFalse(any(argv[:2] in (["cargo", "build"], ["cargo", "test"]) for argv, _env in self.seen[first:]))
+        self.assertFalse((self.reports / "build.json").exists())
+
+    def test_build_refuses_a_path_resolved_compiler_other_than_the_checkouts_pin(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.rustc_release, self.rustc_commit = "1.98.1", BREW_COMMIT
+        self.assert_build_refused_before_cargo("rustc 1.98.1 is not the checkout's pinned 1.97.1")
+        self.rustc_release, self.rustc_commit, self.cargo_release = "1.97.1", PIN_COMMIT, "1.98.1"
+        self.assert_build_refused_before_cargo("cargo 1.98.1 is not the checkout's pinned 1.97.1")
+
+    def test_build_reads_the_pin_from_the_checkout_being_built(self):
+        (self.checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.80.0"\n')
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.assert_build_refused_before_cargo("rustc 1.97.1 is not the checkout's pinned 1.80.0")
+        self.rustc_release = self.cargo_release = "1.80.0"
+        built = adapter.build(self.args("build"), run=self.fake_run)
+        self.assertEqual(built["build_environment"]["toolchain_pin"]["channel"], "1.80.0")
+
+    def test_build_refuses_a_checkout_without_a_pin(self):
+        (self.checkout / "rust-toolchain.toml").unlink()
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.assert_build_refused_before_cargo("no numeric rust-toolchain.toml channel")
+
+    def test_build_refuses_a_symbolic_pin_it_cannot_check(self):
+        (self.checkout / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "stable"\n')
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.assert_build_refused_before_cargo("no numeric rust-toolchain.toml channel")
+
+    def test_build_refuses_executables_compiled_by_another_rustc(self):
+        adapter.generate(self.args("generate"), run=self.fake_run)
+        self.binary_commit = BREW_COMMIT
+        with self.assertRaisesRegex(adapter.Refused, "not compiled by the recorded rustc"):
+            adapter.build(self.args("build"), run=self.fake_run)
+        self.assertFalse((self.reports / "build.json").exists())
 
     def test_build_refuses_cargo_configuration_outside_the_checkout(self):
         adapter.generate(self.args("generate"), run=self.fake_run)
