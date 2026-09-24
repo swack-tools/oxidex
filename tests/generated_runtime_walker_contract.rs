@@ -1078,7 +1078,7 @@ fn unrepresentable_member_policy_is_explicit_per_walker() {
 #[test]
 fn representable_member_is_written_before_reporting() {
     let (keyed, _, _) = walk_keyed(
-        &keyed_state_scalar(),
+        keyed_state_scalar(),
         &ciff_inline(&[(0x1006, &[0, 5])]),
         NATIVE_SCOPE,
         512,
@@ -1118,7 +1118,10 @@ const IDENTITY_GROUPS: [&str; 4] = ["File", "System", "ExifTool", "Composite"];
 /// metadata, an exact tag the named walker produces)`. `read_metadata` keys
 /// are not always the `-G1` family-1 group (`ICC_Profile:`, not
 /// `ICC-header:`).
-const ROUTES: [(&str, &str, Option<(&str, &str)>); 11] = [
+/// `(key, exact value)` a named walker produces on a route carrier.
+type WalkerTag = Option<(&'static str, &'static str)>;
+
+const ROUTES: [(&str, &str, WalkerTag); 11] = [
     ("ExifTool.jpg", "IFD0", Some(("IFD0:Make", "FUJIFILM"))),
     ("QuickTime.mov", "QuickTime", None),
     ("RIFF.wav", "RIFF", None),
