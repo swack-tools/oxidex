@@ -150,6 +150,13 @@ pub struct CliArgs {
     /// Example: -EXIF:Artist="John Doe" -EXIF:Copyright=2025 photo.jpg
     /// The last argument must be the file path.
     pub args: Vec<String>,
+
+    /// Every argument after `--`, in order. These are always file paths,
+    /// however they are spelled: pinned 13.59 `exiftool -s2 -Make -- a.jpg -s`
+    /// reads both `a.jpg` and a file named `-s`. They are kept apart from
+    /// `args`, whose accessors classify by spelling (a leading `-` means an
+    /// option or tag) and by position (the last argument is the file).
+    pub literal_paths: Vec<String>,
 }
 
 fn normalize_exiftool_option(arg: String) -> String {
@@ -342,6 +349,7 @@ impl CliArgs {
         let mut next_arg_is_lexopt_value = false;
 
         let mut options_ended = false;
+        let mut literal_paths = Vec::new();
 
         for raw_arg in raw_args {
             if next_arg_is_lexopt_value {
@@ -351,18 +359,16 @@ impl CliArgs {
             }
 
             // `--` ends option recognition: everything after it is a path,
-            // however it is spelled (pinned 13.59 `exiftool -Make -- -s`
-            // reads a file named `-s`). lexopt applies the same rule to
-            // what it is handed, so pass `--` and the rest straight through
-            // rather than letting the option/tag recognition below claim an
-            // argument like `-s` or `-G1` first.
+            // however it is spelled (pinned 13.59 `exiftool -Make -- a.jpg -s`
+            // reads `a.jpg` and a file named `-s`). They go to
+            // `literal_paths`, never through the option/tag recognition below
+            // or into `args`, where a leading `-` would read as a tag.
             if options_ended {
-                lexopt_args.push(raw_arg);
+                literal_paths.push(raw_arg);
                 continue;
             }
             if raw_arg == "--" {
                 options_ended = true;
-                lexopt_args.push(raw_arg);
                 continue;
             }
 
@@ -613,12 +619,30 @@ impl CliArgs {
             dry_run,
             strict,
             args,
+            literal_paths,
         })
     }
 
-    /// Extracts the file path from the arguments (last argument)
+    /// The arguments that can be options, tags or modifications: all of
+    /// `args` when `--` supplied the paths, otherwise every argument but the
+    /// last, which is the file.
+    fn option_args(&self) -> &[String] {
+        if !self.literal_paths.is_empty() {
+            &self.args
+        } else if self.args.is_empty() {
+            &[]
+        } else {
+            &self.args[..self.args.len() - 1]
+        }
+    }
+
+    /// Extracts the file path from the arguments: the last path given after
+    /// `--`, otherwise the last argument.
     pub fn file(&self) -> Option<PathBuf> {
-        self.args.last().map(PathBuf::from)
+        self.literal_paths
+            .last()
+            .or(self.args.last())
+            .map(PathBuf::from)
     }
 
     /// Extracts every file/directory path from the arguments, preserving
@@ -634,11 +658,16 @@ impl CliArgs {
     /// Falls back to `file()` when the filter finds nothing, so an edge
     /// case like a single dash-prefixed filename still resolves the same
     /// way it did before this method existed.
+    ///
+    /// Every argument after `--` is a path regardless of spelling, and comes
+    /// after the plain positional ones -- which is also its command-line
+    /// order, since `--` ends the options.
     pub fn files(&self) -> Vec<PathBuf> {
         let files: Vec<PathBuf> = self
             .args
             .iter()
             .filter(|arg| !arg.starts_with('-'))
+            .chain(self.literal_paths.iter())
             .map(PathBuf::from)
             .collect();
 
@@ -652,13 +681,9 @@ impl CliArgs {
     /// Parses tag modification arguments (all args except the last one)
     /// Returns a vector of (tag_name, value) tuples
     pub fn tag_modifications(&self) -> Vec<(String, String)> {
-        if self.args.len() <= 1 {
-            return Vec::new();
-        }
-
         let mut modifications = Vec::new();
-        // Process all arguments except the last one (which is the file)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never the file, see `option_args`)
+        for arg in self.option_args() {
             if let Some((tag, value)) = Self::parse_modification(arg) {
                 modifications.push((tag, value));
             }
@@ -725,15 +750,10 @@ impl CliArgs {
         // If -TagsFromFile is not set, return None
         self.tags_from_file.as_ref()?;
 
-        // If no additional args (only destination file), copy all tags
-        if self.args.len() <= 1 {
-            return Some(Vec::new());
-        }
-
         let mut tag_names = Vec::new();
 
-        // Process all arguments except the last one (which is the destination file)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never the destination file)
+        for arg in self.option_args() {
             // Check if it's a tag name (starts with '-' but does NOT contain '=')
             if arg.starts_with('-') && !arg.contains('=') {
                 // Extract tag name (remove leading '-')
@@ -774,15 +794,10 @@ impl CliArgs {
             return None;
         }
 
-        // If only file argument present, show all tags
-        if self.args.len() <= 1 {
-            return None;
-        }
-
         let mut tag_names = Vec::new();
 
-        // Process all arguments except the last one (file path)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never a file path, see `option_args`)
+        for arg in self.option_args() {
             // Tag extraction: starts with '-', does NOT contain '='
             if arg.starts_with('-') && !arg.contains('=') {
                 let tag_name = arg.trim_start_matches('-').to_string();
@@ -867,14 +882,10 @@ impl CliArgs {
     /// - `-EXIF:DateTime-=0:1:0 0:0:0` -> Subtract 1 month from DateTime
     /// - `-EXIF:DateTime=2025:01:15 10:30:00` -> Set DateTime to specific value
     pub fn date_shift_operations(&self) -> Vec<(String, String, String)> {
-        if self.args.len() <= 1 {
-            return Vec::new();
-        }
-
         let mut operations = Vec::new();
 
-        // Process all arguments except the last one (which is the file)
-        for arg in &self.args[..self.args.len() - 1] {
+        // Process every option argument (never the file, see `option_args`)
+        for arg in self.option_args() {
             if let Some((tag, op, value)) = Self::parse_date_shift(arg) {
                 operations.push((tag, op, value));
             }
@@ -1123,6 +1134,69 @@ mod tests {
         assert!(!is_group_display_flag("-GPSLatitude=1"));
         assert!(!is_group_display_flag("photo.jpg"));
         assert!(!is_group_display_flag("--json"));
+    }
+
+    fn cli_args(args: &[&str], literal_paths: &[&str]) -> CliArgs {
+        CliArgs {
+            detector: DetectorMode::default(),
+            json: false,
+            csv: false,
+            short_level: 2,
+            all_tags: false,
+            group_display: None,
+            extended_output: false,
+            recursive: false,
+            preserve_file_times: false,
+            backup: false,
+            readonly: false,
+            exiftool_compat: true,
+            tags_from_file: None,
+            date_format: None,
+            dry_run: false,
+            strict: false,
+            args: args.iter().map(|a| a.to_string()).collect(),
+            literal_paths: literal_paths.iter().map(|a| a.to_string()).collect(),
+        }
+    }
+
+    /// Pinned 13.59 reads every argument after `--` as a file:
+    /// `-s2 -Make -- normal.jpg -s` and `-s2 -Make normal.jpg -- -s` both
+    /// read `normal.jpg` then `-s`, and `-- -a -b` reads `-a` then `-b`.
+    #[test]
+    fn paths_after_double_dash_are_files_for_every_accessor() {
+        let paths = |args: &CliArgs| {
+            args.files()
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+
+        let args = cli_args(&["-Make"], &["normal.jpg", "-s"]);
+        assert_eq!(paths(&args), ["normal.jpg", "-s"]);
+        assert_eq!(args.file(), Some(PathBuf::from("-s")));
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+        assert!(args.tag_modifications().is_empty());
+
+        let args = cli_args(&["-Make", "normal.jpg"], &["-s"]);
+        assert_eq!(paths(&args), ["normal.jpg", "-s"]);
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        let args = cli_args(&["-Make"], &["-a", "-b"]);
+        assert_eq!(paths(&args), ["-a", "-b"]);
+        assert_eq!(args.file(), Some(PathBuf::from("-b")));
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        // A path that looks like a modification or date shift is still a path.
+        let args = cli_args(&["-Make"], &["-all=", "-AllDates+=1"]);
+        assert!(args.tag_modifications().is_empty());
+        assert!(args.date_shift_operations().is_empty());
+        assert!(!args.is_clear_all_metadata());
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
+
+        // Without `--`, the last argument is still the file.
+        let args = cli_args(&["-Make", "photo.jpg"], &[]);
+        assert_eq!(paths(&args), ["photo.jpg"]);
+        assert_eq!(args.specific_tags(), Some(vec!["Make".to_string()]));
     }
 
     /// Mirrors `exiftool`:1243-1244 (13.59): `-S`/`-veryShort` add 2,

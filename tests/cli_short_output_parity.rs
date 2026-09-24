@@ -382,3 +382,65 @@ fn double_dash_ends_option_recognition() {
         "Make: TestCamera\nModel: TM\n"
     );
 }
+
+/// Every argument after `--` is a file, whatever it is spelled -- including a
+/// name that looks like an option or a tag. Pinned 13.59, in a directory
+/// holding copies of the repository fixture named `normal.jpg`, `-s`, `-a`
+/// and `-b`:
+///
+/// ```text
+/// exiftool -s2 -Make -- normal.jpg -s          (and: -s2 -Make normal.jpg -- -s)
+/// ======== normal.jpg
+/// Make: TestCamera
+/// ======== -s
+/// Make: TestCamera
+///     2 image files read
+/// exiftool -s2 -Make -- normal.jpg -missing -s  (exit 1; stderr: File not found)
+/// ======== normal.jpg ... ======== -s ...
+///     2 image files read
+///     1 files could not be read
+/// ```
+#[test]
+fn every_argument_after_double_dash_is_a_file() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    for name in ["normal.jpg", "-s", "-a", "-b"] {
+        std::fs::copy(REPO_FIXTURE, dir.path().join(name)).expect("copy fixture");
+    }
+    let run_in_dir = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_oxidex"))
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .expect("run oxidex");
+        (
+            output.status.code(),
+            String::from_utf8(output.stdout).expect("UTF-8 stdout"),
+        )
+    };
+    let two = |first: &str, second: &str| {
+        format!(
+            "======== {first}\nMake: TestCamera\n======== {second}\nMake: TestCamera\n    \
+             2 image files read\n"
+        )
+    };
+
+    assert_eq!(
+        run_in_dir(&["-s2", "-Make", "--", "normal.jpg", "-s"]),
+        (Some(0), two("normal.jpg", "-s"))
+    );
+    assert_eq!(
+        run_in_dir(&["-s2", "-Make", "normal.jpg", "--", "-s"]),
+        (Some(0), two("normal.jpg", "-s"))
+    );
+    assert_eq!(
+        run_in_dir(&["-s2", "-Make", "--", "-a", "-b"]),
+        (Some(0), two("-a", "-b"))
+    );
+    assert_eq!(
+        run_in_dir(&["-s2", "-Make", "--", "normal.jpg", "-missing", "-s"]),
+        (
+            Some(1),
+            format!("{}    1 files could not be read\n", two("normal.jpg", "-s"))
+        )
+    );
+}

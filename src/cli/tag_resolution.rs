@@ -928,6 +928,7 @@ mod tests {
             tags_from_file: None,
             date_format: None,
             dry_run: false,
+            literal_paths: Vec::new(),
             strict: false,
             args,
         }
@@ -1185,6 +1186,7 @@ mod tests {
                     tags_from_file: None,
                     date_format: None,
                     dry_run: false,
+                    literal_paths: Vec::new(),
                     strict: false,
                     args: if selected {
                         vec!["-DocumentName".into(), "fixture.webp".into()]
@@ -1549,6 +1551,7 @@ mod tests {
                     tags_from_file: None,
                     date_format: None,
                     dry_run: false,
+                    literal_paths: Vec::new(),
                     strict: false,
                     args: if selected {
                         vec![
