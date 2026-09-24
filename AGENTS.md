@@ -386,6 +386,39 @@ report a blocked item as blocked instead of retrying it forever. A 45-minute
 poll loop that could never exit, and a watcher that died with its ssh
 connection, are both in this repo's history.
 
+## How work lands
+
+Ordinary development reaches `refactor/tag-machinery` through reviewed PRs,
+one change per PR:
+
+1. One agent, one worktree, one `staging/<slug>` branch off the current tip
+   of `refactor/tag-machinery`. Run `tools/preflight.sh --upstream` first.
+2. Verify with the instrument named for the change (a corpus comparison for
+   tag work; see "Closing an ExifTool coverage gap"). A change that touches
+   readers must show 0 proven reads lost (`tools/ci/read_regression_gate.py`,
+   which CI also runs on every PR).
+3. Open the PR against `refactor/tag-machinery`, name the instrument beside
+   every number, and let CI run: build and tests, lint, generated-table
+   verification, the corpus read-regression gate and the parity ratchet.
+4. Squash-merge only when CI is green, no review thread is unresolved, and the
+   PR's central claim has been verified independently of the agent that made
+   it: re-run its instrument yourself, don't trust its report. The maintainer
+   may waive the CI wait explicitly, and only for the PR they name.
+
+**`main` is the maintainer's decision alone.** During ordinary development,
+never push to it, merge into it, or rebase onto it. Release promotion is the
+only path to `main` (see "Release engineering"). `refactor/tag-machinery` and
+`main` carry rulesets that reject force-pushes and deletions.
+
+**Keep the branch on the current tip.** Other sessions land competing fixes
+often. Before starting, and again before merging, fetch and bring the branch
+up to `origin/refactor/tag-machinery` (not `origin/main`). Rebase only before
+the first push; once a branch is pushed, merge the tip with a signed merge,
+because a pushed branch must not be force-pushed. Afterwards, re-check that
+the defect still reproduces at that HEAD. If the tip already contains the
+fix, or the branch's scope has shrunk to nearly nothing, report it superseded
+and stop rather than landing an empty change.
+
 ## Stacking dependent PRs
 
 Stack instead of queueing when review loops pile up or too many PRs are open
@@ -401,11 +434,22 @@ takes one large conflict at the end.
   a rebase — a pushed branch must not be force-pushed. Resolve conflicts in
   favour of the parent's structure.
 - **Land only on the integration branch.** Never merge a child into its parent
-  branch. After the parent squash-merges into `refactor/tag-machinery`, merge
-  that tip into the child, retarget it
-  (`gh pr edit <n> --base refactor/tag-machinery`), let CI rerun, and
-  squash-merge it as usual — the verification and merge rules in
-  `CLAUDE.md` apply unchanged to every PR in the stack.
+  branch. After the parent squash-merges into `refactor/tag-machinery`:
+  1. retarget the child first (`gh pr edit <n> --base refactor/tag-machinery`);
+  2. then merge the new tip into it and push.
+
+  The order matters. Retargeting is a PR `edited` event, which CI's
+  `pull_request` trigger does not subscribe to, so only the push that follows
+  starts a CI run against the new base. If the tip merge was already pushed
+  before retargeting, re-run CI explicitly. Then squash-merge under the rules
+  in "How work lands", which apply unchanged to every PR in the stack.
+- **Keep waiting children out of any automatic integration queue.** The
+  multi-host fleet is stopped, but its train (`tools/fleet/workqueue.py`,
+  `tools/fleet/train.py`) treats every non-withdrawn `staging/*` ref as a
+  landing candidate, whatever its PR base. If the fleet ever runs again, a
+  child selected before its parent would land both changes together. So
+  withdraw children from the queue until their parent lands, or give them a
+  branch name outside `staging/`.
 - **Prefer a stack to a roll-up.** One combined PR means a larger diff for every
   review round, one defect blocking all of it, and no way to verify each
   change's central claim on its own.
