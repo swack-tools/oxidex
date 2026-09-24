@@ -53,6 +53,12 @@ impl Order {
 /// One IFD entry: tag, TIFF type, count, value bytes (already in order).
 type Entry = (u16, u16, u32, Vec<u8>);
 
+/// A dumped entry's TIFF type, count and value bytes.
+type Field = (u16, u32, Vec<u8>);
+
+/// An expected change: the entry key and its new field (`None`: deleted).
+type Change<'a> = (&'a str, Option<(u16, u32, &'a [u8])>);
+
 fn type_size(field_type: u16) -> usize {
     match field_type {
         3 | 8 => 2,
@@ -169,7 +175,7 @@ impl Tiff {
 /// Every entry of a TIFF block, keyed `IFD:0xTAG`, with pointers resolved
 /// (their offsets are layout, not content) and the thumbnail's bytes in
 /// place of its offset.
-fn dump(tiff: &[u8]) -> BTreeMap<String, (u16, u32, Vec<u8>)> {
+fn dump(tiff: &[u8]) -> BTreeMap<String, Field> {
     let order = match &tiff[..2] {
         b"II" => Order::Ii,
         b"MM" => Order::Mm,
@@ -371,9 +377,9 @@ fn full(order: Order) -> Tiff {
 /// Asserts `after` holds exactly `before`'s entries, except those `changed`
 /// maps (to `Some(new)` or, for a deletion, `None`).
 fn assert_only_changed(
-    before: &BTreeMap<String, (u16, u32, Vec<u8>)>,
-    after: &BTreeMap<String, (u16, u32, Vec<u8>)>,
-    changed: &[(&str, Option<(u16, u32, &[u8])>)],
+    before: &BTreeMap<String, Field>,
+    after: &BTreeMap<String, Field>,
+    changed: &[Change<'_>],
 ) {
     let mut expected = before.clone();
     for (key, value) in changed {
