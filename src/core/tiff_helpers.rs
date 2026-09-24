@@ -1105,8 +1105,8 @@ mod document_name_tests {
 /// table does not report: the 0x927c MakerNote row and its dispatch, the
 /// `omitted` (withheld-conversion) ids, the offset class, `Unknown` and
 /// untranscribed ids -- plus [`EXIF_IFD_HAND_KEPT`]; `SubDirectory` edge ids
-/// report nothing when [`EXIF_IFD_SILENCE_EDGES`] is set (0xa005 stays the
-/// hand's pointer). An engine-reported entry whose absence is the engine's
+/// report nothing unless requested (decision D-3; 0xa005 stays the hand's
+/// pointer). An engine-reported entry whose absence is the engine's
 /// own (`DirEngineRows::undecoded`: a refusal ExifTool does not make) falls
 /// back to its hand arm; one ExifTool refuses too (an overlapping or
 /// out-of-block value, an entry past the warning budget) or whose value the
@@ -1235,26 +1235,18 @@ fn parse_exif_subifd_with_optional_options(
 /// STRING, and for a signed 0/-1 that string is `-0` (C's `%.10g` keeps the
 /// sign), which `"$val C"` interpolates verbatim -- `-0 C`, as pinned
 /// ExifTool prints it for OlympusOM-1.jpg and four other OM bodies. The
-/// compiled expression receives the number and prints it with `perl_num`,
-/// Perl's default stringification, which is `0` for a negative-zero NV
-/// (Perl's own `print -1e-300*1e-300` prints `0`); making `perl_num` print
-/// `-0` would break every computed zero instead. The hand arm prints the
-/// rational's sign (`exiftool_compat` rule 16b), so it keeps the row: the
-/// engine made 5 matched corpus rows VALUE (review finding, E-2). Sorted.
+/// generated arm (`conv::exif_main::arm_9400` / `pc_9400`, #850) receives
+/// the value as a number, and Perl's default stringification of a
+/// negative-zero NV is `0` (Perl's own `print -1e-300*1e-300` prints `0`);
+/// printing `-0` there would break every computed zero instead. The hand arm
+/// prints the rational's sign (`exiftool_compat` rule 16b), so it keeps the
+/// row. Re-measured by the Task 18 knockout (0x9400 off this list, against
+/// the #850 arm): the engine prints `0 C` (`-n`: `0`) where pinned 13.59
+/// prints `-0 C` (`-0`) for OlympusE-M1MarkIII, OM-1, OM-1MarkII, OM-3 and
+/// OM-5 in combined-samples -- 5 files differing in both `-j` and
+/// `-j --no-print-conv` -- and `ambient_temperature_channels_match_the_hand_arm`
+/// fails. Sorted.
 const EXIF_IFD_HAND_KEPT: &[u16] = &[0x9400];
-
-/// Whether `SubDirectory` edge ids (other than the 0xa005 pointer) report
-/// nothing in the ExifIFD, as in ExifTool (Exif.pm:7103-7104: a
-/// sub-directory tag is processed, never reported unless requested by name
-/// or with the `MakerNotes` option). Decision D-3 of slice E-2, its own
-/// commit: before it the hand arm reported them (DJI_XT2.jpg's 0x02bc
-/// ApplicationNotes, an XMP edge, was a census EXTRA).
-///
-/// A request-aware caller may restore the physical edge row by passing
-/// [`ReadOptions`]: ExifTool reports an edge requested by name (Exif.pm:7104
-/// `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default listing remains
-/// silent. The legacy wrapper intentionally supplies no request.
-const EXIF_IFD_SILENCE_EDGES: bool = true;
 
 /// The key an engine-produced ExifIFD row is recorded under: ExifTool's
 /// family 1, as the hand arm (`lookup_tag_name(id, "ExifIFD")`) keys it.
@@ -1398,7 +1390,19 @@ fn parse_exif_directory_with_session(
             // of two priority-0 copies).
             let mut priority = SHIM_DEFAULT_PRIORITY;
             if let Some(engine) = engine.as_mut() {
-                let silence = EXIF_IFD_SILENCE_EDGES && *tag_id != INTEROPERABILITY_IFD_POINTER;
+                // `SubDirectory` edge ids (other than the 0xa005 pointer)
+                // report nothing in the ExifIFD, as in ExifTool
+                // (Exif.pm:7103-7104: a sub-directory tag is processed, never
+                // reported unless requested by name or with the `MakerNotes`
+                // option). Decision D-3 of slice E-2: before it the hand arm
+                // reported them (DJI_XT2.jpg's 0x02bc ApplicationNotes, an XMP
+                // edge, was a census EXTRA). A request-aware caller restores
+                // the physical edge row by passing [`ReadOptions`]: ExifTool
+                // reports an edge requested by name (Exif.pm:7104
+                // `$$et{REQ_TAG_LOOKUP}{lc($tagStr)}`), while the default
+                // listing remains silent. The legacy wrapper supplies no
+                // request.
+                let silence = *tag_id != INTEROPERABILITY_IFD_POINTER;
                 let requested_edge = options
                     .is_some_and(|options| requested_subdir_edge(engine.table(), *tag_id, options));
                 match engine.route_entry(
@@ -3393,42 +3397,34 @@ pub(crate) fn parse_ifd1_with_session(
     // `enabled()` re-checks Gate A and the allowlist at runtime. Without the
     // `("Exif", "Main")` line in `enabled_ifd.rs` this is `None` and IFD1 is
     // read by the hand collector alone, as before the slice.
-    let Some(table) = find_ifd_table("Exif", "Main").filter(|table| table.enabled()) else {
-        let mut collected = MetadataMap::new();
-        collect_ifd1_thumbnail(
-            reader,
-            ifd1_offset,
-            byte_order,
-            tiff_base,
-            Ifd1Hand::Thumbnail,
-            None,
-            None,
-            metadata,
-            &mut collected,
-        );
-        metadata.merge(collected);
-        return;
-    };
+    let table = find_ifd_table("Exif", "Main").filter(|table| table.enabled());
 
     // The engine reads `tiff_data`, the residual reads `reader`: for one
     // APP1 payload they are the same bytes at the same offsets.
     debug_assert!(
-        match (
-            usize::try_from(ifd1_offset)
-                .ok()
-                .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
-            reader.read(ifd1_offset, 2).ok(),
-        ) {
-            (Some(slice), Some(read)) => slice == read,
-            _ => true,
-        },
+        table.is_none()
+            || match (
+                usize::try_from(ifd1_offset)
+                    .ok()
+                    .and_then(|start| tiff_data.get(start..start.checked_add(2)?)),
+                reader.read(ifd1_offset, 2).ok(),
+            ) {
+                (Some(slice), Some(read)) => slice == read,
+                _ => true,
+            },
         "IFD1 at {ifd1_offset}: tiff_data and reader address different bytes"
     );
 
-    let Some(physical_indices) = parse_ifd(reader, ifd1_offset, byte_order)
-        .ok()
-        .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries))
-    else {
+    // The table off, or an IFD1 whose entries do not parse or whose physical
+    // entry slots cannot be mapped: the hand collector alone reads IFD1
+    // ([`Ifd1Hand::Thumbnail`]). The entries are parsed only when the table
+    // is in force.
+    let (Some(table), Some(physical_indices)) = (
+        table,
+        table
+            .and_then(|_| parse_ifd(reader, ifd1_offset, byte_order).ok())
+            .and_then(|entries| physical_entry_indices(reader, ifd1_offset, byte_order, &entries)),
+    ) else {
         let mut collected = MetadataMap::new();
         collect_ifd1_thumbnail(
             reader,
@@ -5671,6 +5667,50 @@ mod exif_subifd_tests {
         );
     }
 
+    /// AmbientTemperature's every channel through the ExifIFD walk with the
+    /// generated table in force equals the hand arm's (table off): one
+    /// occurrence, the same priority, and the same print, ValueConv and
+    /// stored projections -- the stored form is what the PNG `eXIf` rebuild
+    /// and `copy_metadata` serialize -- for the signed 0/-1 of OlympusOM-1.jpg
+    /// and an ordinary value.
+    #[test]
+    fn ambient_temperature_channels_match_the_hand_arm() {
+        use crate::core::tag_occurrence::ValueChannel;
+        const SRATIONAL: u16 = 10;
+        let at = tail_at(1);
+        for bytes in [
+            [0u32.to_le_bytes(), u32::MAX.to_le_bytes()].concat(),
+            [43i32.to_le_bytes(), 2i32.to_le_bytes()].concat(),
+            [(-7i32).to_le_bytes(), 2i32.to_le_bytes()].concat(),
+        ] {
+            let data = exif_block(&[(0x9400, SRATIONAL, 1, at)], &bytes);
+            let engine = walk_exif(&data, None, exif_main(), &[]);
+            let hand = walk_exif(&data, None, None, &[]);
+            let engine = engine.occurrences_for("ExifIFD:AmbientTemperature");
+            let hand = hand.occurrences_for("ExifIFD:AmbientTemperature");
+            assert_eq!((engine.len(), hand.len()), (1, 1), "{bytes:?}");
+            assert_eq!(engine[0].priority, hand[0].priority, "{bytes:?}");
+            for channel in [
+                ValueChannel::PrintConv,
+                ValueChannel::ValueConv,
+                ValueChannel::Stored,
+            ] {
+                let print = |occurrence: &crate::core::tag_occurrence::TagOccurrence| {
+                    crate::core::exiftool_compat::format_tag_value(
+                        "ExifIFD:AmbientTemperature",
+                        occurrence.project(channel).as_ref(),
+                    )
+                };
+                assert_eq!(print(engine[0]), print(hand[0]), "{bytes:?} {channel:?}");
+            }
+            assert_eq!(
+                engine[0].project(ValueChannel::Stored),
+                hand[0].project(ValueChannel::Stored),
+                "{bytes:?} stored"
+            );
+        }
+    }
+
     /// Decision D-3: a `SubDirectory` edge id in the ExifIFD reports nothing
     /// (Exif.pm:7103-7104), as pinned ExifTool's `-a -G1` over the census
     /// shows for DJI_XT2.jpg's 0x02bc ApplicationNotes; the hand arm alone
@@ -6428,6 +6468,45 @@ mod ifd1_tests {
         );
         assert!(metadata.get("IFD1:ThumbnailOffset").is_none());
         assert!(metadata.get("IFD1:Compression").is_none());
+    }
+
+    /// An IFD1 whose entry count runs past the data: `parse_ifd` refuses it,
+    /// so `parse_ifd1_with_session` takes its hand-collector fallback
+    /// (`Ifd1Hand::Thumbnail`), whose own `parse_ifd` refuses it too -- no
+    /// IFD1 row, and no panic, with the generated table in force.
+    #[test]
+    fn a_truncated_ifd1_takes_the_hand_fallback_and_emits_nothing() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"II");
+        data.extend_from_slice(&42u16.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes()); // IFD0: no entries
+        data.extend_from_slice(&14u32.to_le_bytes()); // IFD1 at 14
+        data.extend_from_slice(&40u16.to_le_bytes()); // 40 entries, 0 present
+        data.extend_from_slice(&[0u8; 6]);
+        let reader = TestReader::new(data.clone());
+        let mut metadata = MetadataMap::new();
+        parse_ifd1(
+            &reader,
+            &data,
+            8,
+            0,
+            ByteOrder::LittleEndian,
+            0,
+            true,
+            &mut metadata,
+        );
+        assert!(
+            crate::exiftool_tables::find_ifd_table("Exif", "Main")
+                .is_some_and(|table| table.enabled()),
+            "the generated Exif::Main table is in force"
+        );
+        assert!(
+            metadata
+                .all_occurrences()
+                .all(|(key, _)| !key.starts_with("IFD1:")),
+            "no IFD1 row from a directory neither producer can parse"
+        );
     }
 
     // ---------------------------------------------------------------------

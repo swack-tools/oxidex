@@ -205,7 +205,7 @@ pub fn parse_embedded_exif_at(
     }
 
     if let Some(engine) = engine {
-        engine.drain_ifd0(metadata);
+        engine.finish_ifd0(metadata);
     }
 
     if let Some(offset) = exif_ifd_offset {
