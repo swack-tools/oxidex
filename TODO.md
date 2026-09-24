@@ -49,6 +49,19 @@ Changes landed:
 - moved the XP strings 0x9c9b-0x9c9f to their generated arms, after a
   byte-identical knockout trial.
 
+The generated XP arm declines when the UCS-2 holds a surrogate code unit,
+such as an emoji's pair or a lone surrogate. ExifTool's UCS2 `Decode` turns
+it into bytes that are not valid UTF-8. The static fallback behind the arm,
+`exprs::decode_ucs2`, then kept the NUL terminator, a trailing tail and a
+byte-order mark that the hand decoder drops. A review of #940 found this. On
+the IFD0 walks, an XP id whose arm declines an entry now goes back to the hand
+decoder for that directory (`IFD0_HAND_ON_DECLINE`,
+`DirEngineRows::keep_hand_on_decline`), which restores the pre-move output.
+
+Still open: the same decline reaches the static fallback for XP tags in
+ExifIFD. This predates Task 18, because those ids were never hand-kept there.
+Fixing `exprs::decode_ucs2` itself would also change `XP_DIP_XML`.
+
 The 0x9400 AmbientTemperature move was tried and abandoned. The generated arm
 prints `0 C` where ExifTool 13.59 prints `-0 C`, on 5 Olympus files.
 
