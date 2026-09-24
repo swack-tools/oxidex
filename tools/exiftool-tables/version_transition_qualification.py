@@ -544,10 +544,11 @@ def _side_receipt(run_dir: Path, journal: Mapping[str, Any], release: str,
             or str(docx.get("stdout", "")).strip() != "DOCX"
             or not isinstance(perl_capability, dict) or perl_capability.get("available") is not True):
         raise Refused(f"{release} native capability probe is not the ready probe used by read")
-    release_tests = _release_test_receipt(run_dir, journal, release)
     checkout = run_dir / "checkouts" / executor._safe_name(release)
+    # The build first: the release tests are then checked against its compiler.
     build_environment = _build_environment_receipt(_report_for(run_dir, journal, release, "build"), release,
                                                    checkout)
+    release_tests = _release_test_receipt(run_dir, journal, release)
     refusals = stage_adapter.generated_refusal_counts(checkout)
     if not isinstance(refusals.get("total"), int) or refusals["total"] < 0:
         raise Refused("generated refusal accounting is unavailable")
@@ -611,6 +612,17 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
         raise Refused(f"{release} release test suite log differs from its report")
     oracle = _release_test_oracle(report, release)
     corpus = _release_test_corpus(suite, release)
+    # The suite compiled its own target: it must have proved, with its own
+    # environment, the same pinned rustc that built the qualified binaries.
+    compiler = suite.get("compiler")
+    checkout = run_dir / "checkouts" / executor._safe_name(release)
+    try:
+        stage_adapter.validate_pinned_toolchain(compiler, checkout)
+        build_toolchain = _report_for(run_dir, journal, release, "build")["build_environment"]["toolchain"]
+        if compiler["toolchain"] != build_toolchain:
+            raise stage_adapter.Refused("the suite's rustc/cargo differ from the build's")
+    except (stage_adapter.Refused, OSError, KeyError, TypeError) as exc:
+        raise Refused(f"{release} release test suite did not run on the checkout's pinned toolchain: {exc}") from exc
     cargo_config = suite.get("cargo_config")
     if (not isinstance(cargo_config, dict) or cargo_config.get("outside_checkout") != []
             or not isinstance(cargo_config.get("checked"), list) or not cargo_config["checked"]):
@@ -619,7 +631,7 @@ def _release_test_receipt(run_dir: Path, journal: Mapping[str, Any], release: st
             **{key: totals[key] for key in keys},
             "duration_seconds": round(sum(row["duration_seconds"] for row in commands), 3),
             "target_directory": suite["target_directory"], "log": log, "exiftool_oracle": oracle,
-            "fixture_corpus": corpus}
+            "fixture_corpus": corpus, "compiler": compiler}
 
 
 def _fixture_corpus_authority() -> dict[str, Any]:
@@ -727,10 +739,9 @@ def _build_environment_receipt(build: Mapping[str, Any], release: str, checkout:
     if not valid:
         raise Refused(f"{release} build environment is not the allowlisted, identified toolchain build")
     try:
-        pin = stage_adapter.toolchain_pin_for(checkout)
-        if recorded_pin != pin:
-            raise stage_adapter.Refused(f"recorded toolchain pin {recorded_pin} is not the checkout's {pin}")
-        stage_adapter.check_toolchain_against_pin(toolchain, pin["channel"])
+        stage_adapter.validate_pinned_toolchain(
+            {"toolchain": toolchain, "toolchain_pin": recorded_pin, "rustc_path": recorded.get("rustc_path")},
+            checkout)
         stage_adapter.check_binary_compilers(toolchain, compiled_by)
     except (stage_adapter.Refused, OSError) as exc:
         raise Refused(f"{release} build environment is not the checkout's pinned toolchain: {exc}") from exc

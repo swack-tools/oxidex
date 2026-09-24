@@ -362,27 +362,56 @@ fn rustup_executable() -> Option<PathBuf> {
     })
 }
 
-/// The pinned toolchain's own rustc, asked through rustup directly (PATH
-/// order irrelevant). `RUSTUP_AUTO_INSTALL=0`: never download to identify.
+/// The pinned toolchain's own rustc, asked of rustup -- never of PATH.
+/// First `rustup which --toolchain <channel> rustc` (run that executable
+/// directly), then `rustup run <channel> rustc -vV`. `None` when rustup or
+/// the toolchain is absent, or when what rustup returns does not report the
+/// channel's release. `RUSTUP_AUTO_INSTALL=0`: never download to identify.
 pub fn pinned_rustc_identity(channel: &str, repo: &Path) -> Option<RustcIdentity> {
     let rustup = rustup_executable()?;
-    let text = run_stdout(
-        Command::new(&rustup)
-            .args(["run", channel, "rustc", "-vV"])
+    let rustup_cmd = |args: &[&str]| {
+        let mut cmd = Command::new(&rustup);
+        cmd.args(args)
             .current_dir(repo)
             .env("RUSTUP_AUTO_INSTALL", "0")
-            .env_remove("RUSTUP_TOOLCHAIN"),
-    )?;
-    let mut ident = parse_rustc_verbose(&format!("rustup run {channel} rustc"), &text);
-    ident.path = run_stdout(
-        Command::new(&rustup)
-            .args(["which", "--toolchain", channel, "rustc"])
-            .current_dir(repo)
-            .env("RUSTUP_AUTO_INSTALL", "0")
-            .env_remove("RUSTUP_TOOLCHAIN"),
-    )
-    .map(|s| s.trim().to_string());
+            .env_remove("RUSTUP_TOOLCHAIN");
+        run_stdout(&mut cmd)
+    };
+    let path = rustup_cmd(&["which", "--toolchain", channel, "rustc"])
+        .map(|s| s.trim().to_string())
+        .filter(|p| Path::new(p).is_file());
+    let direct = path.as_ref().and_then(|p| {
+        run_stdout(
+            Command::new(p)
+                .arg("-vV")
+                .current_dir(repo)
+                .env("RUSTUP_AUTO_INSTALL", "0"),
+        )
+        .map(|text| parse_rustc_verbose(p, &text))
+    });
+    let mut ident = match direct {
+        Some(ident) => ident,
+        None => parse_rustc_verbose(
+            &format!("rustup run {channel} rustc"),
+            &rustup_cmd(&["run", channel, "rustc", "-vV"])?,
+        ),
+    };
+    if channel_matches(channel, ident.release.as_deref()) == Some(false)
+        || ident.commit_hash.is_none()
+    {
+        return None;
+    }
+    ident.path = path;
     Some(ident)
+}
+
+/// `oxidex` -> `oxidex binary`; a kind that already says "binary" is kept.
+pub fn binary_label(kind: &str) -> String {
+    if kind == "binary" || kind.ends_with(" binary") {
+        kind.to_string()
+    } else {
+        format!("{kind} binary")
+    }
 }
 
 /// Every distinct `/rustc/<commit-hash>/` embedded in `bytes`, sorted.
@@ -431,13 +460,11 @@ pub fn assess_toolchain(
     };
     let mut lines = Vec::new();
     let (mut mismatch, mut unverified) = (false, false);
-    let current_is_pin =
-        current.is_some_and(|c| channel_matches(channel, c.release.as_deref()) == Some(true));
-    let pinned_hash: Option<String> = pinned.and_then(|p| p.commit_hash.clone()).or_else(|| {
-        current
-            .filter(|_| current_is_pin)
-            .and_then(|c| c.commit_hash.clone())
-    });
+    // Only the pinned toolchain itself (resolved through rustup) names the
+    // pin's commit. A PATH compiler reporting the same release is NOT
+    // adopted: it would let an unresolved pin read as a confirmed one.
+    let pinned = pinned.filter(|p| channel_matches(channel, p.release.as_deref()) != Some(false));
+    let pinned_hash: Option<String> = pinned.and_then(|p| p.commit_hash.clone());
     let known: Vec<&RustcIdentity> = [pinned, current].into_iter().flatten().collect();
     let name = |commit: &str| -> String {
         known
@@ -481,8 +508,9 @@ pub fn assess_toolchain(
                 names.join(", ")
             ));
             lines.push(format!(
-                "{WARN}pinned toolchain {channel} is not resolvable here (`rustup run {channel} \
-                 rustc -vV` failed and PATH rustc is not it): cannot confirm the binary's compiler."
+                "{WARN}pinned toolchain {channel} is not resolvable through rustup here \
+                 (`rustup which --toolchain {channel} rustc` / `rustup run {channel} rustc -vV` \
+                 failed): cannot confirm the binary's compiler. PATH is never taken as the pin."
             ));
             unverified = true;
         } else if commits.len() == 1 && Some(commits[0].as_str()) == pinned_hash.as_deref() {
@@ -552,7 +580,7 @@ pub fn toolchain_report(repo: &Path, binary: Option<&BinaryIdentity>) -> Toolcha
             .unwrap_or_default()
     });
     let label = binary
-        .map(|b| format!("{} binary", b.kind))
+        .map(|b| binary_label(&b.kind))
         .unwrap_or_else(|| "binary".to_string());
     assess_toolchain(
         channel.as_deref(),
@@ -805,7 +833,8 @@ mod toolchain_tests {
             Some(&current),
         );
         assert!(unresolved.unverified && !unresolved.mismatch);
-        // Without rustup, a PATH rustc that IS the pin still identifies it.
+        // A PATH rustc that merely reports the pinned release is NOT the pin:
+        // without the pinned toolchain itself resolved, nothing is confirmed.
         let via_path = assess_toolchain(
             Some("1.97.1"),
             Some(&[PIN.to_string()]),
@@ -814,10 +843,32 @@ mod toolchain_tests {
             Some(&ident("1.97.1", PIN, "/usr/local/bin/rustc")),
         );
         assert!(
-            !via_path.mismatch && !via_path.unverified,
+            via_path.unverified && !via_path.mismatch,
             "{:?}",
             via_path.lines
         );
+        assert!(
+            !via_path
+                .lines
+                .join("\n")
+                .contains("built by the pinned toolchain")
+        );
+        // A "pinned" identity whose release is not the channel is not the pin.
+        let wrong = assess_toolchain(
+            Some("1.97.1"),
+            Some(&[BREW.to_string()]),
+            "oxidex binary",
+            Some(&ident("1.98.1", BREW, "/rustup/toolchains/x/bin/rustc")),
+            None,
+        );
+        assert!(wrong.unverified && !wrong.mismatch, "{:?}", wrong.lines);
+    }
+
+    #[test]
+    fn binary_labels_never_repeat_binary() {
+        assert_eq!(binary_label("oxidex"), "oxidex binary");
+        assert_eq!(binary_label("binary"), "binary");
+        assert_eq!(binary_label("test binary"), "test binary");
     }
 
     #[test]

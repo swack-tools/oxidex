@@ -393,7 +393,12 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "toolchain_pin": {"file": "rust-toolchain.toml", "channel": "1.97.1",
                                   "sha256": qualification._sha_file(checkout / "rust-toolchain.toml")},
                 "compiled_by": {"binary": [pin_commit], "writer_binary": [pin_commit]},
+                "rustc_path": "/Users/test/.cargo/bin/rustc",
             }
+            compiler = {"toolchain": dict(build_environment["toolchain"]),
+                        "toolchain_pin": dict(build_environment["toolchain_pin"]),
+                        "rustc_path": "/Users/test/.cargo/bin/rustc"}
+            release_tests["test_suite"]["compiler"] = compiler
             build = {"binary": {"path": "/isolated/target/debug/oxidex", "sha256": "b" * 64, "bytes": 123},
                      "build_environment": build_environment}
             reports = {"generate": {"generated_artifacts": []}, "read": read, "write": {}, "native": native,
@@ -413,6 +418,7 @@ class SideAndRecoveryTests(unittest.TestCase):
                 "filtered_out": 0, "targets": 4, "duration_seconds": 3.0,
                 "target_directory": "/isolated/target/test-suite", "log": log_binding,
                 "exiftool_oracle": exiftool_oracle, "fixture_corpus": fixture_corpus,
+                "compiler": compiler,
             })
             self.assertEqual(side.get("build_environment"), build_environment)
 
@@ -438,6 +444,8 @@ class SideAndRecoveryTests(unittest.TestCase):
             build_refused("cargo config found", lambda r: r["build_environment"]["cargo_config"].update(
                 outside_checkout=["/Users/test/.cargo/config.toml"]))
             build_refused("binary outside the build target", lambda r: r["binary"].update(path="/elsewhere/oxidex"))
+            build_refused("resolved rustc absent", lambda r: r["build_environment"].pop("rustc_path"))
+            build_refused("resolved rustc relative", lambda r: r["build_environment"].update(rustc_path="rustc"))
             build_refused("toolchain pin absent", lambda r: r["build_environment"].pop("toolchain_pin"))
             build_refused("compiler fingerprint absent", lambda r: r["build_environment"].pop("compiled_by"))
             build_refused("PATH resolved Homebrew rustc", lambda r: r["build_environment"]["toolchain"].update(
@@ -471,6 +479,18 @@ class SideAndRecoveryTests(unittest.TestCase):
                         qualification._side_receipt(run_dir, journal, "13.59", identity)
 
             refused("failed tests", lambda r: r["test_suite"]["totals"].update(failed=1))
+            refused("suite compiler absent", lambda r: r["test_suite"].pop("compiler"), "pinned toolchain")
+            refused("suite ran on Homebrew rustc", lambda r: r["test_suite"]["compiler"]["toolchain"].update(
+                rustc=f"rustc 1.98.1 (h 2026-09-01) (Homebrew)\ncommit-hash: {brew_commit}\nrelease: 1.98.1"),
+                "pinned toolchain")
+            refused("suite cargo off the pin", lambda r: r["test_suite"]["compiler"]["toolchain"].update(
+                cargo="cargo 1.98.1 (h 2026-08-05) (Homebrew)"), "pinned toolchain")
+            refused("suite pin is not the checkout's", lambda r: r["test_suite"]["compiler"]["toolchain_pin"].update(
+                channel="1.98.1"), "pinned toolchain")
+            refused("suite rustc unresolved", lambda r: r["test_suite"]["compiler"].update(rustc_path=None),
+                    "pinned toolchain")
+            refused("suite rustc is not the build's", lambda r: r["test_suite"]["compiler"]["toolchain"].update(
+                rustc=f"rustc 1.97.1 (y 2026-01-01)\ncommit-hash: {'1' * 40}\nrelease: 1.97.1"), "pinned toolchain")
             refused("failed command", lambda r: r["test_suite"]["commands"][0].update(exit=101))
             refused("homebrew oracle", lambda r: r["test_suite"]["exiftool_oracle"].update(version="13.55"))
             refused("degraded oracle", lambda r: r["test_suite"]["exiftool_oracle"].update(docx_filetype="ZIP"))

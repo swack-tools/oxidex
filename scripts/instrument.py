@@ -377,23 +377,35 @@ def _rustup_executable(env: dict | None = None) -> str | None:
 
 def pinned_rustc_identity(channel: str, *, cwd: Path | str | None = None,
                           env: dict | None = None) -> RustcIdentity | None:
-    """The pinned toolchain's own rustc, asked through rustup directly --
-    independent of PATH order. None when rustup or the toolchain is absent.
-    ``RUSTUP_AUTO_INSTALL=0``: identifying the pin must never download it."""
+    """The pinned toolchain's own rustc, asked of rustup -- never of PATH.
+
+    First ``rustup which --toolchain <channel> rustc`` (the toolchain's real
+    executable, run directly), then ``rustup run <channel> rustc -vV``. None
+    when rustup or the toolchain is absent, or when what rustup returns does
+    not report the channel's release: a PATH compiler that merely reports the
+    same release is never adopted as the pin. ``RUSTUP_AUTO_INSTALL=0``:
+    identifying the pin must never download it."""
     rustup = _rustup_executable(env)
     if rustup is None:
         return None
     run_env = dict(os.environ if env is None else env)
     run_env["RUSTUP_AUTO_INSTALL"] = "0"
     run_env.pop("RUSTUP_TOOLCHAIN", None)
-    text = _run_text([rustup, "run", channel, "rustc", "-vV"], cwd=cwd, env=run_env)
+    which = _run_text([rustup, "which", "--toolchain", channel, "rustc"], cwd=cwd, env=run_env)
+    path = which.strip() if which else None
+    text = _run_text([path, "-vV"], cwd=cwd, env=run_env) if path and Path(path).is_file() else None
+    command = path or ""
+    if text is None:
+        text = _run_text([rustup, "run", channel, "rustc", "-vV"], cwd=cwd, env=run_env)
+        command = f"rustup run {channel} rustc"
     if text is None:
         return None
     fields = parse_rustc_verbose(text)
-    which = _run_text([rustup, "which", "--toolchain", channel, "rustc"], cwd=cwd, env=run_env)
+    if channel_matches(channel, fields.get("release")) is False or not fields.get("commit-hash"):
+        return None
     return RustcIdentity(
-        command=f"rustup run {channel} rustc",
-        path=which.strip() if which else None,
+        command=command,
+        path=path,
         version=fields.get("version", ""),
         release=fields.get("release"),
         commit_hash=fields.get("commit-hash"),
@@ -444,9 +456,12 @@ def assess_toolchain(
                                mismatch=False, unverified=True)
     lines: list[str] = []
     mismatch = unverified = False
+    # Only the pinned toolchain itself (resolved through rustup) names the
+    # pin's commit. A PATH compiler reporting the same release is NOT
+    # adopted: it would let an unresolved pin read as a confirmed one.
+    if pinned is not None and channel_matches(channel, pinned.release) is False:
+        pinned = None
     pinned_hash = pinned.commit_hash if pinned else None
-    if pinned_hash is None and current is not None and channel_matches(channel, current.release):
-        pinned_hash = current.commit_hash  # PATH already resolves the pin
     known = {}
     for ident in (pinned, current):
         if ident is not None and ident.commit_hash:
@@ -466,8 +481,9 @@ def assess_toolchain(
             unverified = True
         elif pinned_hash is None:
             lines.append(f"rustc:   {label} built by {', '.join(name(c) for c in binary_commits)}; {pin_text}")
-            lines.append(warn + f"pinned toolchain {channel} is not resolvable here (`rustup run {channel} "
-                                "rustc -vV` failed and PATH rustc is not it): cannot confirm the binary's compiler.")
+            lines.append(warn + f"pinned toolchain {channel} is not resolvable through rustup here "
+                                f"(`rustup which --toolchain {channel} rustc` / `rustup run {channel} rustc -vV` "
+                                "failed): cannot confirm the binary's compiler. PATH is never taken as the pin.")
             unverified = True
         elif binary_commits == [pinned_hash]:
             lines.append(f"rustc:   {label} built by the pinned toolchain -- {name(pinned_hash)}")
@@ -505,9 +521,8 @@ def toolchain_report(repo_root: Path | str, binary: BinaryIdentity | Path | str 
     commits = label = None
     if binary is not None:
         path = binary.path if isinstance(binary, BinaryIdentity) else Path(binary)
-        kind = binary.kind if isinstance(binary, BinaryIdentity) else "binary"
         commits = embedded_rustc_commits(path)
-        label = f"{kind} binary"
+        label = f"{binary.kind} binary" if isinstance(binary, BinaryIdentity) else "binary"
     return assess_toolchain(channel=channel, binary_commits=commits, binary_label=label,
                             pinned=pinned, current=current)
 

@@ -103,9 +103,16 @@ class VerdictTests(unittest.TestCase):
         self.assertIn("UNKNOWN", missing.lines[0])
         unresolved = self.assess([BREW], pinned=None)
         self.assertTrue(unresolved.unverified)
-        # With no rustup, a PATH rustc that IS the pin still names the pin.
+        # A PATH rustc that merely reports the pinned release is NOT the pin:
+        # without the pinned toolchain itself resolved, nothing is confirmed.
         via_path = self.assess([PIN], pinned=None, current=ident("1.97.1", PIN, "/usr/local/bin/rustc"))
-        self.assertFalse(via_path.mismatch or via_path.unverified, via_path.lines)
+        self.assertTrue(via_path.unverified, via_path.lines)
+        self.assertFalse(via_path.mismatch)
+        self.assertNotIn("built by the pinned toolchain", "\n".join(via_path.lines))
+        # A "pinned" identity whose release is not the channel is not the pin either.
+        wrong = self.assess([BREW], pinned=ident("1.98.1", BREW, "/rustup/toolchains/x/bin/rustc"))
+        self.assertTrue(wrong.unverified, wrong.lines)
+        self.assertFalse(wrong.mismatch)
 
     def test_without_a_binary_the_path_resolution_is_what_is_judged(self):
         skewed = self.assess(None)
@@ -115,6 +122,60 @@ class VerdictTests(unittest.TestCase):
         unpinned = self.assess(None, channel=None)
         self.assertTrue(unpinned.unverified)
         self.assertFalse(unpinned.mismatch)
+
+
+class LabelTests(unittest.TestCase):
+    def test_a_bare_path_is_labelled_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tool"
+            path.write_bytes(f"/rustc/{PIN}/library".encode())
+            with patch.object(instrument, "rustc_identity", return_value=None), \
+                 patch.object(instrument, "pinned_rustc_identity", return_value=None):
+                (Path(directory) / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.97.1"\n')
+                bare = instrument.toolchain_report(directory, path)
+                named = instrument.toolchain_report(directory, instrument.resolve_binary(str(path)))
+        self.assertNotIn("binary binary", "\n".join(bare.lines))
+        self.assertIn("binary built by", bare.lines[0])
+        self.assertIn("oxidex binary built by", named.lines[0])
+
+
+class PinnedResolutionTests(unittest.TestCase):
+    """The pin's identity comes from rustup's own toolchain, never from PATH."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.toolchain = self.root / "toolchains/1.97.1/bin"
+        self.toolchain.mkdir(parents=True)
+        rustc = self.toolchain / "rustc"
+        rustc.write_text("#!/bin/sh\nprintf '" + vv("1.97.1", PIN).replace("\n", "\\n") + "'\n")
+        rustc.chmod(0o755)
+
+    def rustup(self, body: str) -> dict:
+        path = self.bin / "rustup"
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        return {"PATH": str(self.bin) + os.pathsep + "/usr/bin:/bin", "HOME": str(self.root)}
+
+    def test_rustup_which_is_an_authoritative_second_source(self):
+        env = self.rustup(f'[ "$1" = which ] && echo {self.toolchain / "rustc"} && exit 0\nexit 1\n')
+        pinned = instrument.pinned_rustc_identity("1.97.1", cwd=self.root, env=env)
+        self.assertIsNotNone(pinned)
+        self.assertEqual((pinned.release, pinned.commit_hash), ("1.97.1", PIN))
+        self.assertEqual(pinned.path, str(self.toolchain / "rustc"))
+
+    def test_no_rustup_or_no_toolchain_means_unresolved(self):
+        self.assertIsNone(instrument.pinned_rustc_identity("1.97.1", cwd=self.root,
+                                                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.root)}))
+        env = self.rustup("exit 1\n")
+        self.assertIsNone(instrument.pinned_rustc_identity("1.97.1", cwd=self.root, env=env))
+
+    def test_a_toolchain_reporting_another_release_is_not_the_pin(self):
+        env = self.rustup(f'[ "$1" = which ] && echo {self.toolchain / "rustc"} && exit 0\nexit 1\n')
+        self.assertIsNone(instrument.pinned_rustc_identity("1.80.0", cwd=self.root, env=env))
 
 
 class HeaderTests(unittest.TestCase):

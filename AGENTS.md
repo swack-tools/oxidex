@@ -52,8 +52,12 @@ Fix it once per shell (put it in the profile):
 export PATH="$HOME/.cargo/bin:$PATH"   # rustup proxies first; they honour the pin
 ```
 
-For a single command, use `PATH="$HOME/.cargo/bin:$PATH" cargo …` or
-`RUSTC="$(rustup which --toolchain 1.97.1 rustc)" cargo …`. Check with
+For a single command, use `PATH="$HOME/.cargo/bin:$PATH" cargo …`. Setting
+`$RUSTC` alone is not enough: cargo must be the pinned one too, and
+preflight, the corpus receipt and the rehearsal stages all check
+`cargo -V`. So if you pin by path, pin both:
+`RUSTC="$(rustup which --toolchain 1.97.1 rustc)" "$(rustup which --toolchain 1.97.1 cargo)" …`.
+Check with
 `tools/preflight.sh`, which exits 6 when `rustc` (or `$RUSTC`) or `cargo`
 resolves to anything but the pinned channel. `OXIDEX_ALLOW_TOOLCHAIN_SKEW=1`
 turns that failure into a printed warning. Use it only for work that builds
@@ -270,10 +274,15 @@ instrument keeps lying in a new way, not because the old ways stopped:
     compiler on `PATH` today may not be the one that built a prebuilt binary,
     and it warns loudly on a mismatch. `corpus_read_receipt.py build` passes
     the pinned rustc to Cargo as `$RUSTC`, records it, and refuses anything
-    else. The version-rehearsal build and its qualification also refuse any
-    compiler other than the one the built checkout's own
-    `rust-toolchain.toml` pins, checked against both `rustc -vV` and the
-    binaries' fingerprints. See "Rust toolchain pin" above.
+    else. Two version-rehearsal stages compile: the build and the release
+    test suite. Each re-proves its compiler with its own environment right
+    before Cargo runs and records it. Each refuses any compiler other than
+    the one the built checkout's own `rust-toolchain.toml` pins, and the
+    tests must use the build's exact rustc. The qualification replays both.
+    The build is also checked against the binaries' fingerprints. The pin's
+    identity comes only from rustup (`rustup which`/`rustup run`), never from
+    a PATH compiler that merely reports the same release. See "Rust
+    toolchain pin" above.
 
 Every measurement script under `tools/exiftool-tables/` and
 `src/bin/jpeg-tag-matrix/` prints an `=== instrument: <tool> ===` header

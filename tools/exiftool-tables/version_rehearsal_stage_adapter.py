@@ -451,19 +451,8 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
     if cargo_config["outside_checkout"]:
         raise Refused("build refuses cargo configuration outside the checkout: "
                       + ", ".join(cargo_config["outside_checkout"]))
-    toolchain = {}
-    for name, command in (("rustc", ["rustc", "-vV"]), ("cargo", ["cargo", "-V"])):
-        record = _run(command, cwd=checkout, env=env, run=run)
-        if record["state"] != "ok" or not record["stdout"].strip().startswith(name + " "):
-            raise Refused(f"build toolchain cannot be identified: {' '.join(command)}")
-        toolchain[name] = record["stdout"].strip()
-    # PATH is allowlisted, and only rustup's proxies honour the checkout's
-    # rust-toolchain.toml: a Homebrew rustc ahead of them builds with its own
-    # release, silently. Refuse before building unless the compiler the
-    # allowlisted PATH resolves IS this checkout's pin (read from the
-    # checkout itself -- another release may pin another toolchain).
-    toolchain_pin = toolchain_pin_for(checkout)
-    check_toolchain_against_pin(toolchain, toolchain_pin["channel"])
+    compiler = pinned_toolchain(checkout, env, run)
+    toolchain = compiler["toolchain"]
     records = []
     for command in (["cargo", "build", "--all-features", "--message-format=json", "--bin", "oxidex"],
                     ["cargo", "test", "--lib", "--all-features", "--no-run", "--message-format=json"]):
@@ -488,8 +477,56 @@ def build(args: argparse.Namespace, *, run: Callable[..., subprocess.CompletedPr
               "generated_artifacts": generated, "binary": executable,
               "writer_binary": writer, "raw_report": raw,
               "build_environment": {"environment": env, "toolchain": toolchain, "cargo_config": cargo_config,
-                                    "toolchain_pin": toolchain_pin, "compiled_by": compiled_by}}
+                                    "toolchain_pin": compiler["toolchain_pin"],
+                                    "rustc_path": compiler["rustc_path"], "compiled_by": compiled_by}}
     _atomic(report, result); return result
+
+
+def _resolve_executable(name: str, env: dict[str, str]) -> str | None:
+    """``name`` as ``env``'s PATH resolves it (absolute), or None."""
+    found = shutil.which(name, path=env.get("PATH", os.defpath))
+    return str(Path(found).resolve()) if found else None
+
+
+def pinned_toolchain(checkout: Path, env: dict[str, str],
+                     run: Callable[..., subprocess.CompletedProcess[str]]) -> dict[str, Any]:
+    """Identify the compiler ``env`` resolves in ``checkout``; refuse anything but its pin.
+
+    PATH is allowlisted, and only rustup's proxies honour the checkout's
+    rust-toolchain.toml: a Homebrew rustc ahead of them compiles with its own
+    release, silently. Every stage that compiles (build, release tests) calls
+    this with its own environment immediately before Cargo runs, and records
+    the result. The pin is read from the checkout itself -- another release
+    may pin another toolchain. -> {"toolchain", "toolchain_pin", "rustc_path"}.
+    """
+    toolchain = {}
+    for name, command in (("rustc", ["rustc", "-vV"]), ("cargo", ["cargo", "-V"])):
+        record = _run(command, cwd=checkout, env=env, run=run)
+        if record["state"] != "ok" or not record["stdout"].strip().startswith(name + " "):
+            raise Refused(f"build toolchain cannot be identified: {' '.join(command)}")
+        toolchain[name] = record["stdout"].strip()
+    toolchain_pin = toolchain_pin_for(checkout)
+    check_toolchain_against_pin(toolchain, toolchain_pin["channel"])
+    rustc_path = _resolve_executable("rustc", env)
+    if rustc_path is None:
+        raise Refused("build toolchain rustc is not resolvable on the allowlisted PATH")
+    return {"toolchain": toolchain, "toolchain_pin": toolchain_pin, "rustc_path": rustc_path}
+
+
+def validate_pinned_toolchain(record: Any, checkout: Path) -> dict[str, str]:
+    """Replay a recorded :func:`pinned_toolchain` against the checkout's pin as it is now."""
+    try:
+        toolchain, recorded_pin, rustc_path = record["toolchain"], record["toolchain_pin"], record["rustc_path"]
+    except (KeyError, TypeError) as exc:
+        raise Refused("pinned toolchain is not recorded") from exc
+    if (not isinstance(toolchain, dict) or set(toolchain) != {"rustc", "cargo"}
+            or not all(isinstance(value, str) for value in toolchain.values())
+            or not isinstance(rustc_path, str) or not Path(rustc_path).is_absolute()):
+        raise Refused("pinned toolchain record is malformed")
+    pin = toolchain_pin_for(checkout)
+    if recorded_pin != pin:
+        raise Refused(f"recorded toolchain pin {recorded_pin} is not the checkout's {pin}")
+    return check_toolchain_against_pin(toolchain, pin["channel"])
 
 
 def toolchain_pin_for(checkout: Path) -> dict[str, str]:
@@ -810,6 +847,14 @@ def run_release_tests(args: argparse.Namespace, *,
     corpus["link"] = str(cache / "combined-samples")
     _recheck_fixture_corpus(corpus, "before")
     corpus["verified_before_run"] = True
+    # The suite compiles its own fresh target, so it re-proves the compiler
+    # with its own environment right before Cargo runs: a resumed stage under
+    # another PATH must not run off-pin, nor on a different rustc than the
+    # one that built the qualified binaries.
+    compiler = pinned_toolchain(checkout, env, run)
+    built_by = previous.get("build_environment", {}).get("toolchain") if isinstance(previous, dict) else None
+    if compiler["toolchain"] != built_by:
+        raise Refused("release test compiler differs from the build's recorded toolchain")
     records = []
     for argv in TEST_COMMANDS:
         began = time.monotonic()
@@ -839,7 +884,7 @@ def run_release_tests(args: argparse.Namespace, *,
               "test_suite": {"commands": commands, "totals": totals, "log": raw,
                              "target_directory": str(suite_target), "features": "all", "scope": TEST_SCOPE,
                              "exiftool_oracle": oracle, "environment": env, "fixture_corpus": corpus,
-                             "cargo_config": cargo_config}}
+                             "cargo_config": cargo_config, "compiler": compiler}}
     _atomic(report, result)
     return result
 
