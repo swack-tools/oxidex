@@ -943,3 +943,42 @@ fn deleting_the_last_legacy_tag_while_setting_a_generated_one() {
         }
     }
 }
+
+/// A named deletion of a raw-carried entry -- `-IFD1:Compression=`,
+/// `-InteropIFD:InteropIndex=`, a `MakerNotes:` tag -- which the surgical
+/// writers cannot perform. Pinned ExifTool 13.59 deletes the IFD1 and
+/// Interop entries (and prunes an Interop directory left with nothing); the
+/// PNG reader surfaces no IFD1 row, so the key arrived only as a named
+/// removal and the PNG write reported success with the entry still there.
+/// It is refused, exit 1 from the CLI, file untouched, for PNG and JPEG.
+#[test]
+fn named_removals_of_raw_carried_entries_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli = env!("CARGO_BIN_EXE_oxidex");
+    for order in [Order::Ii, Order::Mm] {
+        let tiff = full(order).build(order);
+        for (name, original) in [
+            ("carried.png", png(&[(b"eXIf", tiff.clone())], &[])),
+            ("carried.jpg", jpeg_with(&tiff)),
+        ] {
+            for key in [
+                "IFD1:Compression",
+                "InteropIFD:InteropIndex",
+                "MakerNotes:MakerNoteUnknownBinary",
+            ] {
+                let path = write(dir.path(), name, &original);
+                let result = remove_tag(&path, key);
+                assert!(result.is_err(), "{order:?} {name} {key}: silent success");
+                assert_eq!(std::fs::read(&path).unwrap(), original, "{name} {key}");
+
+                let status = std::process::Command::new(cli)
+                    .arg(format!("-{key}="))
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+                assert_eq!(status.status.code(), Some(1), "{order:?} {name} -{key}=");
+                assert_eq!(std::fs::read(&path).unwrap(), original, "{name} -{key}=");
+            }
+        }
+    }
+}

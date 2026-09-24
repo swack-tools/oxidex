@@ -247,6 +247,35 @@ pub(crate) fn is_carried_only_key(key: &str) -> bool {
     key.starts_with("IFD1:") || key.starts_with("InteropIFD:") || key.starts_with("MakerNotes:")
 }
 
+/// Whether a named removal `key` names an entry of a raw-carried class that
+/// `scan` holds: an IFD1 or InteropIFD entry with the key's tag id (any entry
+/// of the directory when the name has no id; IFD1's thumbnail pair when a
+/// thumbnail is present), or, for a `MakerNotes:` key, the MakerNote blob.
+fn removal_names_carried_entry(key: &str, scan: &ExifScan) -> bool {
+    let ifd = if key.starts_with("IFD1:") {
+        IfdKind::Ifd1
+    } else if key.starts_with("InteropIFD:") {
+        IfdKind::Interop
+    } else if key.starts_with("MakerNotes:") {
+        return scan
+            .entries
+            .iter()
+            .any(|entry| entry.ifd == IfdKind::ExifIfd && entry.tag_id == MAKERNOTE);
+    } else {
+        return false;
+    };
+    let tag_id = get_tag_descriptor(key).and_then(descriptor_tag_id);
+    if ifd == IfdKind::Ifd1
+        && scan.thumbnail.is_some()
+        && matches!(tag_id, Some(THUMBNAIL_OFFSET | THUMBNAIL_LENGTH))
+    {
+        return true;
+    }
+    scan.entries
+        .iter()
+        .any(|entry| entry.ifd == ifd && tag_id.is_none_or(|id| id == entry.tag_id))
+}
+
 /// The refusal for an added or changed [`is_carried_only_key`] key.
 pub(crate) fn carried_only_edit_refused(key: &str) -> ExifToolError {
     ExifToolError::unsupported_format(format!(
@@ -736,6 +765,26 @@ fn plan_exif_write_inner(
         (is_carried_only_key(key) && original_map.get(key) != Some(value)).then_some(key)
     }) {
         return Err(carried_only_edit_refused(key));
+    }
+
+    // A named removal of a raw-carried entry is refused too. The PNG reader
+    // surfaces no IFD1 row, so `remove_tag("IFD1:Compression")` reaches the
+    // planner only through `removed`: neither the check above nor the
+    // per-entry loop (which compares `original_map` with `desired`) saw it,
+    // the entry was carried and the deletion reported success. Pinned
+    // ExifTool 13.59 deletes IFD1 and Interop entries (pruning directories
+    // left empty or holding only mandatory entries); this writer cannot, so
+    // it refuses instead of doing nothing.
+    if let Some(key) = removed
+        .iter()
+        .find(|key| removal_names_carried_entry(key, scan))
+    {
+        return Err(ExifToolError::unsupported_format(format!(
+            "Removing tag '{}' is not yet supported: it belongs to an \
+             unsurfaced IFD class (InteropIFD/IFD1/MakerNote) that this \
+             writer always raw-carries",
+            key
+        )));
     }
 
     // clear_all_metadata semantics: no EXIF-family keys desired -> drop all
