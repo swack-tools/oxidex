@@ -352,8 +352,11 @@ class AdapterTests(unittest.TestCase):
         built = adapter.build(self.args("build"), run=self.fake_run)
         result = adapter.run_release_tests(self.args("test"), run=self.fake_run)
         self.assertEqual(result["state"], "passed")
-        # One invocation, exactly as CI's required doc-test step runs it.
+        # One invocation, like CI's required step, but over the whole workspace.
         self.assertEqual(adapter.TEST_COMMANDS, (("cargo", "test", "--workspace", "--all-features", "--no-fail-fast"),))
+        self.assertEqual(result["test_suite"]["scope"], adapter.TEST_SCOPE)
+        self.assertIn("superset", adapter.TEST_SCOPE)
+        self.assertIn("cargo test --all-features", adapter.TEST_SCOPE)
         self.assertEqual([argv for argv, _env in self.suite_calls], [list(row) for row in adapter.TEST_COMMANDS])
         suite_target = self.target.resolve() / "test-suite"
         self.assertTrue(all(env["CARGO_TARGET_DIR"] == str(suite_target) and env["CARGO_TERM_COLOR"] == "never"

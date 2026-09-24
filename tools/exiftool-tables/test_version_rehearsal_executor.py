@@ -765,5 +765,112 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("differs from generated source operands", failure["detail"])
 
 
+
+ZOMBIE_GROUP_HELPER = r"""
+import os, sys, time
+b = os.fork()
+if b == 0:
+    os.setpgid(0, 0)                       # B leads a new group in A's session
+    z = os.fork()
+    if z == 0:
+        os._exit(0)                        # Z exits; B never reaps it
+    time.sleep(0.2)
+    os.setpgid(0, os.getpgid(os.getppid()))  # B rejoins A's group: group B is zombie Z only
+    sys.stdout.write(f"{os.getpid()} {z}\n"); sys.stdout.flush()
+    time.sleep(30)
+    os._exit(0)
+time.sleep(30)
+"""
+
+
+class _Reaped:
+    """A registered child already reaped by its Popen (poll() is final)."""
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    def poll(self):
+        return 0
+
+
+class ZombieGroupTests(unittest.TestCase):
+    """A zombie holds no descriptors, so a zombie-only group cannot hold the flock."""
+
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"),
+                         "needs a supported process-group enumeration primitive")
+    def test_zombie_only_group_is_gone_but_a_live_member_is_not(self):
+        helper = subprocess.Popen([sys.executable, "-c", ZOMBIE_GROUP_HELPER], stdout=subprocess.PIPE,
+                                  text=True, start_new_session=True)
+        def cleanup():
+            # Only this test's own helper group; EPERM means only zombies remain.
+            try:
+                os.killpg(helper.pid, __import__("signal").SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            helper.wait(10)
+            helper.stdout.close()
+        self.addCleanup(cleanup)
+        leader_b, zombie = map(int, helper.stdout.readline().split())
+        self.assertIsNone(executor._unproven_state(_Reaped(leader_b)),
+                          "a group holding only zombie members cannot hold the lock")
+        self.assertEqual(executor._group_member_states(leader_b), [(zombie, "zombie")])
+        # Group A still holds live A and B: never proven gone.
+        members = dict(executor._group_member_states(helper.pid))
+        self.assertEqual(members, {helper.pid: "live", leader_b: "live"})
+        self.assertIn("live members", executor._unproven_state(_Reaped(helper.pid)))
+        with TemporaryDirectory() as temporary:
+            lock = Path(temporary) / "zombie.lock"; lock.touch()
+            owned = executor._OwnedChildren(); owned.children[leader_b] = _Reaped(leader_b)
+            with patch.object(executor, "_OWNED", owned):
+                stream = lock.open("r+")
+                capability = executor._HeldHostLock.acquire(lock, stream)
+                began = __import__("time").monotonic()
+                self.assertEqual(executor.release_or_retain(stream, capability), [])
+                self.assertLess(__import__("time").monotonic() - began, 1)
+                stream.close()
+
+    def test_group_classifier_is_fail_closed(self):
+        for members, gone in ((None, False), ([], False), ([(1, "zombie"), (2, "live")], False),
+                              ([(1, "zombie"), (2, "zombie")], True)):
+            with self.subTest(members=members), \
+                 patch.object(executor, "_group_member_states", return_value=members):
+                self.assertIs(executor._zombie_only_group(7), gone)
+        with patch.object(executor.sys, "platform", "freebsd14"):
+            self.assertIsNone(executor._group_member_states(7))
+
+    def test_linux_proc_scan_reads_state_and_pgrp_strictly(self):
+        with TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            rows = {"100": "100 (worker) Z 1 555 555 0", "101": "101 (we)ird) na me) Z 100 555 555 0",
+                    "102": "102 (other) S 1 777 777 0", "104": "104 (live) R 1 555 555 0"}
+            for pid, text in rows.items():
+                (proc / pid).mkdir(); (proc / pid / "stat").write_text(text + "\n")
+            (proc / "self").mkdir(); (proc / "103").mkdir()  # 103 vanished mid-scan
+            self.assertEqual(sorted(executor._linux_group_members(555, proc)),
+                             [(100, "zombie"), (101, "zombie"), (104, "live")])
+            self.assertEqual(executor._linux_group_members(777, proc), [(102, "live")])
+            (proc / "105").mkdir(); (proc / "105" / "stat").write_text("105 no-parens Z 1 555\n")
+            self.assertIsNone(executor._linux_group_members(555, proc))
+        self.assertIsNone(executor._linux_group_members(555, Path("/nonexistent-proc-root")))
+
+    def test_darwin_views_must_agree_and_layout_must_check(self):
+        me = os.getpid()
+        def kinfo(listing, group):
+            def view(mib):
+                return [(me, 2)] if mib[2] == 1 else group
+            return view
+        cases = (([10, 11], [(10, 5)], None),           # the two kernel views disagree
+                 ([10], [(10, 5)], [(10, "zombie")]),
+                 ([10], [(10, 2)], [(10, "live")]),
+                 ([10], None, None))                      # sysctl failed
+        for listing, group, expected in cases:
+            with self.subTest(listing=listing, group=group), \
+                 patch.object(executor, "_darwin_pgrp_listpids", return_value=listing), \
+                 patch.object(executor, "_darwin_kinfo", side_effect=kinfo(listing, group)):
+                self.assertEqual(executor._darwin_group_members(10), expected)
+        with patch.object(executor, "_darwin_pgrp_listpids", return_value=[10]), \
+             patch.object(executor, "_darwin_kinfo", side_effect=lambda mib: [(me + 1, 2)] if mib[2] == 1 else [(10, 5)]):
+            self.assertIsNone(executor._darwin_group_members(10))  # layout self-check failed
+
 if __name__ == "__main__":
     unittest.main()

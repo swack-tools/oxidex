@@ -51,9 +51,14 @@ writer driver are never replaced), exactly one invocation:
 cargo test --workspace --all-features --no-fail-fast
 ```
 
-It is one invocation on purpose, matching CI's required test step: a
-separate `--doc` run self-heals a mid-run lib rebuild that only the combined
-command exposes (see the doc-test step in `.github/workflows/ci.yml`).
+It is one invocation on purpose, like CI's required test step: a separate
+`--doc` run self-heals a mid-run lib rebuild that only the combined command
+exposes (see the doc-test step in `.github/workflows/ci.yml`). It is a
+deliberate superset of that step, not CI's exact command: CI runs
+`cargo test --all-features`, which tests only the root package, while this
+adds `--workspace` because the `oxidex-tags-*` member crates are generated
+from ExifTool for each release and a version transition must test them too.
+The receipt records this as `test_suite.scope`.
 
 The suite runs from an allowlisted environment, not the caller's: only
 `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, locale, `CARGO_HOME`,
@@ -164,10 +169,15 @@ probing it with `flock` could acquire a previously unlocked descriptor.
 Stage children inherit the lock's open file description (`close_fds=False`).
 Because `flock` is per description, an owner's `LOCK_UN` would release the lock
 for a still-live child as well, so the owner unlocks only after every child it
-spawned has been reaped and its process group is empty (a reaped child
-whose group still answers gets a bounded grace of a few seconds: macOS reports
-EPERM while the group's last zombies await reaping). Otherwise the lock
-fails closed: no unlock, the descriptor is retained, and the owner exits
+spawned has been reaped and its process group is empty. A group that still
+answers (or, on macOS, refuses `killpg` with EPERM) counts as gone only when
+every member is verified to be a zombie, which holds no descriptors: on macOS
+libproc's `proc_listpids(PROC_PGRP_ONLY)` and `sysctl(KERN_PROC_PGRP)` must
+list the same members and each `kinfo_proc.p_stat` must be `SZOMB`; on Linux
+every `/proc/<pid>/stat` in the group must show state `Z`. Any enumeration
+failure, live member or other platform leaves it unproven, and a reaped
+child's group gets a bounded grace of a few seconds to clear. Otherwise the
+lock fails closed: no unlock, the descriptor is retained, and the owner exits
 non-zero naming each surviving PID (`LockRetained`; the transition wrapper
 reports it as `LeaseRetained`, exit 5). The lock then frees only when the last
 holder of the description exits. Descendants that leave their process group

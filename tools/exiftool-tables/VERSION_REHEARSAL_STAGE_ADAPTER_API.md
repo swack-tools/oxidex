@@ -35,7 +35,9 @@ nor a failed second compilation can produce a passing build report. The build
 denominator of two counts executables, not tests or tag coverage; the
 `--no-run` compile proves only that the driver builds. `test` then actually
 runs the checkout's suite with one `cargo test --workspace --all-features
---no-fail-fast` in `<target>/test-suite`, from an allowlisted environment
+--no-fail-fast` (a deliberate workspace superset of CI's required
+`cargo test --all-features`, so the generated `oxidex-tags-*` crates are
+tested too) in `<target>/test-suite`, from an allowlisted environment
 whose ExifTool oracle is the side's selected release (probed and recorded
 before the run) and whose combined samples are the bootstrap-verified,
 version-independent corpus (checked against its manifest before and after), parses every target's libtest summary strictly, and reports

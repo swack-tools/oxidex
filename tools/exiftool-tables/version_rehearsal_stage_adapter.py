@@ -32,12 +32,19 @@ import version_rehearsal_executor as executor
 RELEASE = re.compile(r"^[0-9]+\.[0-9]+$")
 OID = rehearsal.GIT_OID_RE
 COMMAND_TIMEOUT_SECONDS = 3600
-# The release's own test suite, run in the regenerated checkout exactly as
-# CI's required test step spells it: ONE invocation, because a separate
-# `--doc` run self-heals a mid-run lib rebuild that only the combined command
-# exposes (see the doc-test step in .github/workflows/ci.yml). All features
-# match the adapter build; --no-fail-fast counts every target.
+# The release's own test suite, run in the regenerated checkout as ONE
+# invocation like CI's required step, because a separate `--doc` run
+# self-heals a mid-run lib rebuild that only the combined command exposes
+# (see the doc-test step in .github/workflows/ci.yml). It is a deliberate
+# superset of that step, not a copy: CI runs `cargo test --all-features`,
+# which tests only the root package, while this adds --workspace because the
+# oxidex-tags-* member crates are generated from ExifTool for each release and
+# a version transition must test them too. All features match the adapter
+# build; --no-fail-fast counts every target.
 TEST_COMMANDS = (("cargo", "test", "--workspace", "--all-features", "--no-fail-fast"),)
+TEST_SCOPE = ("workspace: every member, including the generated oxidex-tags-* crates; a deliberate "
+              "superset of CI's required `cargo test --all-features` (root package only), run as one "
+              "invocation like that step")
 TEST_TARGET_SUBDIRECTORY = "test-suite"
 # The suite runs from an allowlisted environment, never the caller's: an
 # ambient EXIFTOOL, EXIFTOOL_CACHE_DIR, OXIDEX_ALLOW_EXIFTOOL_SKEW, RUSTFLAGS,
@@ -746,7 +753,7 @@ def run_release_tests(args: argparse.Namespace, *,
               "denominator": totals["passed"] + totals["failed"], "generated_artifacts": generated,
               "raw_report": raw,
               "test_suite": {"commands": commands, "totals": totals, "log": raw,
-                             "target_directory": str(suite_target), "features": "all",
+                             "target_directory": str(suite_target), "features": "all", "scope": TEST_SCOPE,
                              "exiftool_oracle": oracle, "environment": env, "fixture_corpus": corpus,
                              "cargo_config": cargo_config}}
     _atomic(report, result)

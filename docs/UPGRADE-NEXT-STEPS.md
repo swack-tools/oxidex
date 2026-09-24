@@ -11,8 +11,10 @@ target, immutable read fixtures, mandatory native write/readback fixtures, a
 live generated-artifact manifest, zero silent EXTRA retention, explicit
 generated-refusal counts, interruption recovery, and caller restoration. Each
 side must also pass the regenerated checkout's own test suite
-(one `cargo test --workspace --all-features --no-fail-fast`, as CI runs it, in
-a dedicated target) with zero failures, graded by that side's selected
+(one `cargo test --workspace --all-features --no-fail-fast` in a dedicated
+target: a deliberate superset of CI's required `cargo test --all-features`,
+which covers only the root package, because the `oxidex-tags-*` crates are
+generated per release and must be tested too) with zero failures, graded by that side's selected
 ExifTool under an allowlisted environment with pinned fixtures required (the
 release's own `t/images` plus the bootstrap-verified, version-independent
 combined-samples corpus); a

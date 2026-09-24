@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -623,8 +624,124 @@ def _spawn(argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
     return child
 
 
+# Process-group membership is read from the kernel, never from `ps` columns
+# (a `ps` column silently wrong on one platform is AGENTS.md incident #9).
+_DARWIN_PROC_PGRP_ONLY = 2          # proc_listpids(PROC_PGRP_ONLY, pgid, ...)
+_DARWIN_KERN_PROC = (1, 14)         # CTL_KERN, KERN_PROC
+_DARWIN_KERN_PROC_PID, _DARWIN_KERN_PROC_PGRP = 1, 2
+_DARWIN_KINFO_PROC_SIZE = 648       # sizeof(struct kinfo_proc), 64-bit
+_DARWIN_P_STAT_OFFSET, _DARWIN_P_PID_OFFSET = 36, 40  # extern_proc.p_stat / p_pid
+_DARWIN_SRUN, _DARWIN_SZOMB = 2, 5
+
+
+def _darwin_pgrp_listpids(pgid: int) -> list[int] | None:
+    """libproc's view of a group's members; None when it cannot be read."""
+    try:
+        import ctypes
+        import ctypes.util
+        library = ctypes.util.find_library("proc")
+        if library is None:
+            return None
+        libproc = ctypes.CDLL(library, use_errno=True)
+        needed = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, None, 0)
+        if needed < 0:
+            return None
+        buffer = (ctypes.c_int * (needed // ctypes.sizeof(ctypes.c_int) + 64))()
+        filled = libproc.proc_listpids(_DARWIN_PROC_PGRP_ONLY, pgid, buffer, ctypes.sizeof(buffer))
+        if filled < 0 or filled >= ctypes.sizeof(buffer):
+            return None  # an error, or possibly truncated: never guess
+        return [pid for pid in buffer[: filled // ctypes.sizeof(ctypes.c_int)] if pid > 0]
+    except (OSError, AttributeError):
+        return None
+
+
+def _darwin_kinfo(mib: list[int]) -> list[tuple[int, int]] | None:
+    """(pid, p_stat) for each kinfo_proc a KERN_PROC sysctl returns."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        names = (ctypes.c_int * len(mib))(*mib)
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(names, len(mib), None, ctypes.byref(size), None, 0) != 0:
+            return None
+        size = ctypes.c_size_t(size.value + _DARWIN_KINFO_PROC_SIZE * 16)
+        buffer = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(names, len(mib), buffer, ctypes.byref(size), None, 0) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    raw = buffer.raw[: size.value]
+    if len(raw) % _DARWIN_KINFO_PROC_SIZE:
+        return None
+    return [(int.from_bytes(raw[start + _DARWIN_P_PID_OFFSET:start + _DARWIN_P_PID_OFFSET + 4], sys.byteorder,
+                            signed=True), raw[start + _DARWIN_P_STAT_OFFSET])
+            for start in range(0, len(raw), _DARWIN_KINFO_PROC_SIZE)]
+
+
+def _darwin_group_members(pgid: int) -> list[tuple[int, str]] | None:
+    """Members only when libproc and sysctl agree and the struct layout checks."""
+    # Validate the kinfo_proc layout against this running process first.
+    me = os.getpid()
+    if _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PID, me]) != [(me, _DARWIN_SRUN)]:
+        return None
+    listed = _darwin_pgrp_listpids(pgid)
+    kinfo = _darwin_kinfo([*_DARWIN_KERN_PROC, _DARWIN_KERN_PROC_PGRP, pgid])
+    if listed is None or kinfo is None or sorted(listed) != sorted(pid for pid, _stat in kinfo):
+        return None
+    return [(pid, "zombie" if stat == _DARWIN_SZOMB else "live") for pid, stat in kinfo]
+
+
+def _linux_group_members(pgid: int, proc_root: Path = Path("/proc")) -> list[tuple[int, str]] | None:
+    """Scan /proc/<pid>/stat: state is field 3, pgrp field 5 (after the last ')')."""
+    members: list[tuple[int, str]] = []
+    try:
+        entries = [entry for entry in proc_root.iterdir() if entry.name.isdigit()]
+    except OSError:
+        return None
+    for entry in entries:
+        try:
+            text = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            continue  # reaped during the scan: gone, holds nothing
+        except OSError:
+            return None
+        _comm, closing, tail = text.rpartition(")")
+        fields = tail.split()
+        if not closing or len(fields) < 3 or re.fullmatch(r"-?[0-9]+", fields[2]) is None:
+            return None
+        if int(fields[2]) == pgid:
+            members.append((int(entry.name), "zombie" if fields[0] == "Z" else "live"))
+    return members
+
+
+def _group_member_states(pgid: int) -> list[tuple[int, str]] | None:
+    """Every member of a process group as (pid, zombie|live); None if unknowable here."""
+    if sys.platform == "darwin":
+        return _darwin_group_members(pgid)
+    if sys.platform.startswith("linux"):
+        return _linux_group_members(pgid)
+    return None
+
+
+def _zombie_only_group(pgid: int) -> bool:
+    """True only when every member is verified to be a zombie.
+
+    A zombie has already closed every descriptor, so a group holding only
+    zombies cannot keep the host lock's file description referenced. Any
+    enumeration failure, an empty answer, a live member or an unsupported
+    platform leaves the group unproven.
+    """
+    members = _group_member_states(pgid)
+    return bool(members) and all(state == "zombie" for _pid, state in members)
+
+
 def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
-    """None only when the child is reaped and its whole process group is gone."""
+    """None only when the child is reaped and its whole process group is gone.
+
+    A group that still answers ``killpg(pgid, 0)`` (or refuses it with EPERM,
+    as macOS does for a zombie-only group) counts as gone only when every
+    member is verified to be a zombie.
+    """
     try:
         if child.poll() is None:
             return "running"
@@ -635,7 +752,11 @@ def _unproven_state(child: subprocess.Popen[Any]) -> str | None:
     except ProcessLookupError:
         return None
     except OSError as exc:
+        if _zombie_only_group(child.pid):
+            return None
         return f"exited; process group {child.pid} cannot be inspected: {exc}"
+    if _zombie_only_group(child.pid):
+        return None
     return f"exited; process group {child.pid} still has live members"
 
 
