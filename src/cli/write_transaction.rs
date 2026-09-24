@@ -1,5 +1,6 @@
 //! One file's `-TAG=VALUE` requests, applied as a single transaction whose
-//! reported outcome is decided by the bytes, not by the absence of an error.
+//! reported outcome is decided by the bytes (or a read-back proof), not by the
+//! absence of an error.
 //!
 //! `main` used to apply each request to the file in place and then print
 //! `1 image files updated` unconditionally. A request no writer performed
@@ -11,10 +12,13 @@
 //! only once all of them succeeded, and only if the copy's bytes differ. Equal
 //! bytes are ExifTool's `image files unchanged` (13.59: `-XPTitle=` on a file
 //! with no XPTitle prints `0 image files updated` / `1 image files unchanged`
-//! and leaves the file alone), never an update.
+//! and leaves the file alone) -- with one exception, matching ExifTool: a set
+//! whose value the file provably already holds is `updated` (13.59 prints
+//! `1 image files updated` for `-Make=<stored value>`), and only after a
+//! read-back of every requested address proves it (see `already_satisfied`).
 
 use crate::cli::value_parser::parse_cli_tag_value;
-use crate::core::operations::{modify_tag, remove_tag};
+use crate::core::operations::{modify_tag, read_metadata, remove_tag, resolve_write_tag};
 use crate::writers::atomic_writer::write_atomic;
 use crate::writers::write_request::undefined_tag_warning;
 use std::fs;
@@ -54,34 +58,103 @@ pub fn partition_defined(
 /// `Err` carries the message the CLI prints after `Error: `; the original
 /// file is then untouched. `on_commit` runs just before an update replaces
 /// the original (the CLI's `--backup` copy), and not at all when unchanged.
+///
+/// Identical bytes are `Unchanged` -- unless a read-back proves the file
+/// already holds every requested value ([`already_satisfied`]), which
+/// ExifTool 13.59 reports as `1 image files updated` (`-Make=<stored value>`
+/// rewrites to the same bytes and still counts as an update there).
 pub fn write_file(
     path: &Path,
     modifications: &[(String, String)],
     on_commit: impl FnOnce() -> Result<(), String>,
 ) -> Result<WriteOutcome, String> {
-    transact(path, on_commit, |scratch| {
-        for (tag_name, value) in modifications {
-            if value.is_empty() {
-                // Empty value = delete tag (ExifTool -TAG= syntax)
-                remove_tag(scratch, tag_name)
-                    .map_err(|e| format!("Failed to remove tag '{}': {}", tag_name, e))?;
-            } else {
-                // Typed as the tag's registry entry declares; wrapping every
-                // value as a String made Integer/Rational/DateTime tags
-                // unsettable from the CLI.
-                let tag_value = parse_cli_tag_value(tag_name, value)
-                    .map_err(|e| format!("Invalid value for {}: {}", tag_name, e))?;
-                modify_tag(scratch, tag_name, tag_value).map_err(|e| {
-                    let text = e.to_string();
-                    if text.contains("invalid") || text.contains("Invalid") {
-                        format!("Invalid value for {}: {}", tag_name, e)
-                    } else {
-                        format!("Failed to modify tag '{}': {}", tag_name, e)
-                    }
-                })?;
+    let mut on_commit = Some(on_commit);
+    let outcome = transact(
+        path,
+        || on_commit.take().map_or(Ok(()), |commit| commit()),
+        |scratch| {
+            for (tag_name, value) in modifications {
+                if value.is_empty() {
+                    // Empty value = delete tag (ExifTool -TAG= syntax)
+                    remove_tag(scratch, tag_name)
+                        .map_err(|e| format!("Failed to remove tag '{}': {}", tag_name, e))?;
+                } else {
+                    // Typed as the tag's registry entry declares; wrapping
+                    // every value as a String made Integer/Rational/DateTime
+                    // tags unsettable from the CLI.
+                    let tag_value = parse_cli_tag_value(tag_name, value)
+                        .map_err(|e| format!("Invalid value for {}: {}", tag_name, e))?;
+                    modify_tag(scratch, tag_name, tag_value).map_err(|e| {
+                        let text = e.to_string();
+                        if text.contains("invalid") || text.contains("Invalid") {
+                            format!("Invalid value for {}: {}", tag_name, e)
+                        } else {
+                            format!("Failed to modify tag '{}': {}", tag_name, e)
+                        }
+                    })?;
+                }
             }
+            Ok(())
+        },
+    )?;
+    if outcome == WriteOutcome::Unchanged && already_satisfied(path, modifications) {
+        // Nothing was rewritten, but the request is exactly what the file
+        // holds: report it as ExifTool does. The `--backup` copy still
+        // accompanies an update.
+        if let Some(commit) = on_commit.take() {
+            commit()?;
         }
-        Ok(())
+        return Ok(WriteOutcome::Updated);
+    }
+    Ok(outcome)
+}
+
+/// Whether a read-back of `path` proves every request is already in effect:
+/// at least one set, each set's resolved address holding exactly the
+/// requested value, and each deletion's address absent.
+///
+/// This is the only way a byte-identical write is reported as an update, and
+/// it fails closed: a request that cannot be resolved, a value that cannot be
+/// parsed, a stored value that differs in type or spelling, or a
+/// deletion-only request (ExifTool 13.59: `-XPTitle=` with no XPTitle is
+/// `0 image files updated` / `1 image files unchanged`) all leave the answer
+/// `unchanged`. A dropped or refused request never reaches here: refusals are
+/// errors, and the resolved address is the one the writer was handed.
+fn already_satisfied(path: &Path, modifications: &[(String, String)]) -> bool {
+    if !modifications.iter().any(|(_, value)| !value.is_empty()) {
+        return false;
+    }
+    let Ok(stored) = read_metadata(path) else {
+        return false;
+    };
+    modifications.iter().all(|(tag_name, value)| {
+        let Ok(key) = resolve_write_tag(path, tag_name) else {
+            return false;
+        };
+        // `EXIF:<name>` names the family: the writer edits the entry in
+        // whichever EXIF IFD holds it (`exif_surgical`'s alias fold), so the
+        // proof looks there too.
+        let addresses: Vec<String> = match key.strip_prefix("EXIF:") {
+            Some(name) => ["IFD0", "ExifIFD", "GPS"]
+                .iter()
+                .map(|group| format!("{group}:{name}"))
+                .chain(std::iter::once(key.clone()))
+                .collect(),
+            None => vec![key],
+        };
+        if value.is_empty() {
+            return addresses
+                .iter()
+                .all(|address| !stored.contains_key(address));
+        }
+        let Ok(requested) = parse_cli_tag_value(tag_name, value) else {
+            return false;
+        };
+        addresses.iter().any(|address| {
+            stored
+                .get(address)
+                .is_some_and(|held| *held == requested || held.as_string() == Some(value.as_str()))
+        })
     })
 }
 

@@ -1160,6 +1160,14 @@ fn resolve_write_address(path: &Path, tag_name: &str, baseline: &MetadataMap) ->
     Ok(key)
 }
 
+/// The key [`modify_tag`]/[`remove_tag`] would write for `tag_name` in the
+/// file at `path`, or the error they would refuse it with. Lets a caller read
+/// back exactly the address a write request names.
+pub fn resolve_write_tag(path: &Path, tag_name: &str) -> Result<String> {
+    let metadata = read_metadata(path)?;
+    resolve_write_address(path, tag_name, &metadata)
+}
+
 /// Modifies a single tag in a file's metadata.
 ///
 /// This is a convenience function that:

@@ -294,17 +294,16 @@ fn updated_count_never_increments_without_a_byte_change() {
             let changed = sha(&file) != before;
             let text = stdout(&out);
             if text.contains("    1 image files updated") {
-                assert!(
-                    changed,
-                    "{fixture} {arg}: claimed an update, bytes identical"
-                );
                 assert_eq!(out.status.code(), Some(0), "{fixture} {arg}");
-            }
-            if !changed {
-                assert!(
-                    !text.contains("    1 image files updated"),
-                    "{fixture} {arg}: {text}"
-                );
+                if !changed {
+                    // Only a set whose value the file provably already holds
+                    // may be reported as updated without a byte change.
+                    let (tag, value) = arg[1..].split_once('=').unwrap();
+                    assert!(
+                        !value.is_empty() && read_back(&file, tag) == value,
+                        "{fixture} {arg}: claimed an update, bytes identical, value unproven"
+                    );
+                }
             }
             if out.status.code() != Some(0) {
                 assert!(!changed, "{fixture} {arg}: failed but modified the file");
@@ -363,4 +362,85 @@ fn backup_is_made_only_for_an_update() {
     let out = write(&file, &["--backup", "-XPTitle=v"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(sha(&backup), original, "backup holds the pre-write bytes");
+}
+
+/// ExifTool counts a write of the value already stored as an update even
+/// when its rewrite leaves the bytes identical. Pinned 13.59 (fixtures as
+/// named; `xp.jpg` is synthetic_001.jpg after `-XPTitle=v`):
+///
+/// | command                                        | ExifTool 13.59                      |
+/// |------------------------------------------------|-------------------------------------|
+/// | `-Make='Synthetic Camera Co'` (stored value)   | bytes same; `1 image files updated` |
+/// | `-XPTitle=v` / `-IFD0:XPTitle=v` (xp.jpg)      | bytes same; `1 image files updated` |
+/// | `-Artist='Synthetic Artist 1'` (stored value)  | bytes same; `1 image files updated` |
+/// | `-Make=TestCamera` (sample.tif, stored value)  | `1 image files updated`             |
+/// | `-Make=<stored> -XPTitle=` (XPTitle absent)    | bytes same; `1 image files updated` |
+/// | `-Make=<stored> -XPTitle=v` (one new value)    | `1 image files updated`             |
+/// | `-XPTitle=` (absent; deletion only)            | `0 image files updated` / `1 image files unchanged` |
+///
+/// oxidex leaves the bytes alone for these and reports `updated` only when a
+/// read-back proves every requested value is stored and every requested
+/// deletion absent.
+#[test]
+fn rewriting_a_stored_value_reports_updated_like_exiftool() {
+    let dir = TempDir::new().unwrap();
+    let xp = copy_into(&dir, JPEG, "xp.jpg");
+    assert_eq!(write(&xp, &["-XPTitle=v"]).status.code(), Some(0));
+    let cases: &[(&Path, &str, &[&str])] = &[
+        (Path::new(JPEG), "a.jpg", &["-Make=Synthetic Camera Co"]),
+        (&xp, "a.jpg", &["-XPTitle=v"]),
+        (&xp, "a.jpg", &["-IFD0:XPTitle=v"]),
+        (&xp, "a.jpg", &["-EXIF:XPTitle=v"]),
+        (Path::new(JPEG), "a.jpg", &["-Artist=Synthetic Artist 1"]),
+        (Path::new(TIFF), "a.tif", &["-Make=TestCamera"]),
+        (
+            Path::new(JPEG),
+            "a.jpg",
+            &["-Make=Synthetic Camera Co", "-XPTitle="],
+        ),
+    ];
+    for (fixture, name, args) in cases {
+        let work = TempDir::new().unwrap();
+        let file = work.path().join(name);
+        fs::copy(fixture, &file).unwrap();
+        let before = sha(&file);
+        let out = write(&file, args);
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", stderr(&out));
+        assert_eq!(stdout(&out), "    1 image files updated\n", "{args:?}");
+        assert_eq!(sha(&file), before, "{args:?}: nothing needed rewriting");
+    }
+
+    // One stored value beside one new value: a real byte change.
+    let file = copy_into(&dir, JPEG, "mixed.jpg");
+    let out = write(&file, &["-Make=Synthetic Camera Co", "-XPTitle=v"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "    1 image files updated\n");
+    assert_eq!(read_back(&file, "IFD0:XPTitle"), "v");
+    assert_eq!(read_back(&file, "IFD0:Make"), "Synthetic Camera Co");
+
+    // Multi-file: ExifTool counts each file.
+    let a = copy_into(&dir, JPEG, "m1.jpg");
+    let b = copy_into(&dir, JPEG, "m2.jpg");
+    let out = oxidex(&[
+        "-Make=Synthetic Camera Co",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "    2 image files updated\n");
+}
+
+/// The read-back is a proof, not a courtesy: a stored value that differs
+/// from the request (only in case here) is a real rewrite, and a deletion
+/// beside it that names something present is not "already satisfied".
+#[test]
+fn a_value_the_file_does_not_hold_is_never_proven() {
+    let dir = TempDir::new().unwrap();
+    let file = copy_into(&dir, JPEG, "a.jpg");
+    let before = sha(&file);
+    let out = write(&file, &["-Make=synthetic camera co"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "    1 image files updated\n");
+    assert_ne!(sha(&file), before, "the case change must be written");
+    assert_eq!(read_back(&file, "IFD0:Make"), "synthetic camera co");
 }
